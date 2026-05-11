@@ -2918,6 +2918,49 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (17.221, 8643 → 8644, +1) — TS2674 for
+  `new` on a class whose protected constructor is inherited from
+  a base, from outside the class hierarchy.** Closes
+  `noCrashOnMixin_ts`. Pattern: `class Abstract { protected
+  constructor() {} }` + `class Concrete extends Abstract {}` +
+  `class CrashTrigger extends Mixin(Empty) { trigger() { new
+  Concrete(); } }` — Concrete inherits Abstract's protected ctor,
+  CrashTrigger doesn't extend Abstract anywhere, so TS2674 must
+  fire on the `new Concrete()`.
+
+  Three pieces in coordination:
+  1. **New tracking field** `callWalkerClassStack: ArrayDeque<Symbol>`
+     pushed/popped around the ClassDeclaration descent in
+     `checkCallTypesInStatement` (Checker.kt ~50149). This gives the
+     `new`-walker visibility into the lexical class chain that the
+     existing `enclosingClassType` parameter in the property-access
+     walker doesn't extend to.
+  2. **Helper `findEffectiveConstructorVisibility(classSym)`** walks
+     the class's extends chain via `globals[baseIdent.text]` until it
+     finds the first class with an own Constructor declaration.
+     Returns `(Private | Protected, declaringClassSym)` if the ctor
+     has that modifier, null otherwise. Cycle-guarded via visited
+     set.
+  3. **Helper `classExtendsOrIs(subClassSym, targetSym)`** walks the
+     sub-class's extends chain checking identity-or-extends. Used to
+     determine whether any enclosing class on the stack reaches the
+     declaring class (and thus has protected-access privilege).
+
+  Emission inserted at the top of `checkSingleNewExpressionTypes`
+  (Checker.kt ~51204), BEFORE the args/calleeType resolution gate so
+  it fires even for `new Foo()` (empty arglist) and matches the test
+  pattern. Narrow gate: callee must be a bare Identifier resolving
+  via `globals` to a symbol with a `ClassDeclaration`; emits only for
+  Protected (Private/TS2673 not emitted — no generated tests would
+  exercise it; `classConstructorAccessibility_ts` isn't currently
+  generated).
+
+  Also adds the missing TS2674 to `noCrashOnMixin2_ts` (which still
+  needs TS2370 + TS2545 to fully flip — out of scope, three-feature
+  test).
+
+  Verified +1 with zero regressions across 10,078 suite.
+
   **Session 2026-05-11 (17.220, 8642 → 8643, +1) — TS2538 for
   class-instance-typed index via the `new Foo[a, b, c]` syntax
   artifact.** Closes `objectCreationOfElementAccessExpression_ts`.

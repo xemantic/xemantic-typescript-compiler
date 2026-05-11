@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,643 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,644 / 10,078 tests passing (~85%).
+
+**17.221 (2026-05-11, +1)** — TS2674 "Constructor of class 'X' is
+protected and only accessible within the class declaration." for
+`new ClassName(...)` where ClassName has (or inherits) a `protected`
+constructor and the call site is outside the declaring-class
+hierarchy. Closes `noCrashOnMixin_ts`. Also adds the missing TS2674
+to `noCrashOnMixin2_ts` (not flipped — still needs TS2370 + TS2545).
+
+New `callWalkerClassStack: ArrayDeque<Symbol>` tracks enclosing
+classes for the call/new walker; push/pop around ClassDeclaration
+member-body descent in `checkCallTypesInStatement`. New helper
+`findEffectiveConstructorVisibility` walks the class's extends
+chain looking for the first own Constructor declaration and returns
+its accessibility modifier + declaring-class symbol. New helper
+`classExtendsOrIs` walks subClass's extends chain checking
+identity-or-extends against the declaring class. The TS2674 emission
+inserted at the top of `checkSingleNewExpressionTypes` (before
+arguments/calleeType resolution): fires when callee is a bare
+Identifier resolving to a class symbol whose effective constructor
+is `Protected` AND none of the enclosing classes on the stack
+extends-or-is the declaring class. Squiggle covers the full
+`new` expression via `expressionTrueEnd`.
+
+Private modifier (TS2673) is tracked in the helper but not yet
+emitted — `classConstructorAccessibility_ts` (which would exercise
+both codes) isn't currently generated.
 
 **17.220 (2026-05-11, +1)** — TS2538 "Type 'X' cannot be used as an
 index type." for the `new Foo[a, b, c]` syntax artifact. Closes

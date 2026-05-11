@@ -268,6 +268,13 @@ class Checker(
      *  `PropertyAccess(super, methodName)`. */
     private var currentSuperBaseType: Type? = null
 
+    /** 17.221: Stack of enclosing class symbols for call/new walks.
+     *  Pushed/popped by [checkCallTypesInStatement]'s ClassDeclaration branch
+     *  when descending into member bodies. Consumed by
+     *  [checkSingleNewExpressionTypes] for the TS2674 protected-constructor
+     *  accessibility check. */
+    private val callWalkerClassStack: ArrayDeque<Symbol> = ArrayDeque()
+
     /** Global Array interface — used as target for `Type.Reference` in array types.
      *  Initialized from built-in lib during init; falls back to empty interface if not found. */
     private var globalArrayType: Type.Interface = Type.Interface().also {
@@ -50147,6 +50154,7 @@ interface DataView {
                     }
                     currentTypeParamScope = newScope
                 }
+                val pushedClass = classSym?.also { callWalkerClassStack.addLast(it) }
                 try {
                     // 17.19/17.20: Resolve the base class's symbol + heritage type args
                     // once per class. Used by both `super(...)` arg checking (17.19, via
@@ -50233,6 +50241,7 @@ interface DataView {
                     }
                 } finally {
                     currentTypeParamScope = savedClassScope
+                    if (pushedClass != null) callWalkerClassStack.removeLast()
                 }
             }
             is TryStatement -> {
@@ -51192,6 +51201,38 @@ interface DataView {
             ))
             return
         }
+        // 17.221: TS2674 — protected constructor accessibility. When `new ClassName(...)`
+        // resolves to a class whose effective constructor (own or inherited) is declared
+        // `protected`, the call must be inside the declaring class or one of its subclasses.
+        // Squiggle covers the full `new` expression. Only fires for bare Identifier callees
+        // with a resolvable class symbol.
+        if (expr.expression is Identifier) {
+            val ident = expr.expression as Identifier
+            val classSym = globals[ident.text]
+            if (classSym != null && classSym.declarations.any { it is ClassDeclaration }) {
+                val ctorInfo = findEffectiveConstructorVisibility(classSym)
+                if (ctorInfo != null && ctorInfo.first == ModifierFlag.Protected) {
+                    val declaringClass = ctorInfo.second
+                    val accessible = callWalkerClassStack.any { enclosing ->
+                        classExtendsOrIs(enclosing, declaringClass)
+                    }
+                    if (!accessible) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                        val length = expressionTrueEnd(expr) - expr.pos
+                        diagnostics.add(Diagnostic(
+                            message = "Constructor of class '${declaringClass.name}' is protected and only accessible within the class declaration.",
+                            category = DiagnosticCategory.Error,
+                            code = 2674,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = expr.pos,
+                            length = length,
+                        ))
+                    }
+                }
+            }
+        }
         val args = expr.arguments ?: return
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
@@ -51775,6 +51816,55 @@ interface DataView {
             is ParenthesizedExpression -> getCalleeType(expr.expression)
             else -> anyType
         }
+    }
+
+    /**
+     * 17.221: Walks the class's extends chain to find the effective constructor's
+     * accessibility modifier and its declaring class symbol. Returns null when no
+     * constructor with `private` or `protected` is found (public or no explicit
+     * constructor anywhere in chain).
+     */
+    private fun findEffectiveConstructorVisibility(classSym: Symbol): Pair<ModifierFlag, Symbol>? {
+        val visited = mutableSetOf<Int>()
+        var currentSym: Symbol? = classSym
+        while (currentSym != null && visited.add(currentSym.id)) {
+            val classDecl = currentSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                ?: return null
+            val ownCtor = classDecl.members.firstOrNull { it is Constructor } as? Constructor
+            if (ownCtor != null) {
+                val mods = ownCtor.modifiers
+                return when {
+                    ModifierFlag.Private in mods -> ModifierFlag.Private to currentSym
+                    ModifierFlag.Protected in mods -> ModifierFlag.Protected to currentSym
+                    else -> null
+                }
+            }
+            // No own constructor — walk to base class
+            val extendsClause = classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            val baseExpr = extendsClause?.types?.firstOrNull()?.expression
+            val baseIdent = baseExpr as? Identifier ?: return null
+            currentSym = globals[baseIdent.text]
+        }
+        return null
+    }
+
+    /**
+     * 17.221: Returns true when `subClassSym` is `targetSym` itself, or extends it
+     * (directly or transitively). Used for TS2674 protected-constructor accessibility.
+     */
+    private fun classExtendsOrIs(subClassSym: Symbol, targetSym: Symbol): Boolean {
+        val visited = mutableSetOf<Int>()
+        var current: Symbol? = subClassSym
+        while (current != null && visited.add(current.id)) {
+            if (current.id == targetSym.id) return true
+            val classDecl = current.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                ?: return false
+            val extendsClause = classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            val baseExpr = extendsClause?.types?.firstOrNull()?.expression
+            val baseIdent = baseExpr as? Identifier ?: return false
+            current = globals[baseIdent.text]
+        }
+        return false
     }
 
     /**
