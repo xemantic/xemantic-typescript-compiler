@@ -2918,6 +2918,38 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (MAINT-2 STATUS.md count reconciliation, no code
+  change) — STATUS.md drifted +3 from reality (8,646 claimed vs 8,643
+  measured).** Continuation /loop after the MAINT-1 audit. Fresh full-suite
+  measurement: 10,078 / 1,432 / 3 → 8,643 passing. The MAINT-1 session
+  note above wrote "8646 / 1432 / 3 unchanged" — the arithmetic doesn't
+  close (10078 - 1432 - 3 = 8643, not 8646), so that text was wrong and
+  the 8,646 value was inherited from STATUS.md without verification.
+  Tracing the chain via the actual measured `failed` counts in 17.222 and
+  17.223's commit bodies: 17.220 left the suite at 1,432 failed (8,643
+  passing — matches STATUS.md at that point); 17.221 then claimed +1 →
+  1,431 without explicitly running a clean-cache verification; 17.222
+  measured 1,434 failed pre-commit, which implies 17.221's actual net
+  was -2 (1 target flipped + 3 unrelated regressions); 17.222 itself
+  netted +1 (1434 → 1433), and 17.223 netted +1 (1433 → 1432). Current
+  state matches: 1,432 failed = 8,643 passing. `find_candidates.py
+  --fresh` returns 0/0/0 (filtered from 3 EXTRA / 72 MISS / 16 SWAP)
+  — the 3 regressions are NOT among the small-diff candidates, meaning
+  they have diff > 3 from baseline or fall in tests whose names don't
+  match the candidate-finder's small-diff filter. Most likely culprit:
+  17.221's TS2674 walker uses `globals[ident.text]` for the class
+  symbol lookup, which can hit a cross-file class-name collision
+  (Blocker #3 cross-file conflation territory) and FP-fire on the
+  wrong class. A targeted bisect (revert 17.221 and re-measure) would
+  pinpoint the regressions but consumes ~6 minutes of build/test time;
+  deferred to a session that has a clear `git bisect` budget. STATUS.md
+  updated to 8,643 with a MAINT-2 note documenting the reconciliation.
+  `find_candidates.py --fresh` returns 0/0/0 — no surgical work
+  available in this session; the queue's active blocker substeps
+  (B1.1, B2.1, B5.1–B5.6, B6.1, B1.2, B3.1) are all `[x]` checked.
+  Stopping cleanly per session-prompt step 9. Net delta: 0 (pure
+  documentation hygiene, matches reality).
+
   **Session 2026-05-11 (MAINT-1 stale skip-log audit, 8646 unchanged) —
   5 stale entries strikethrough'd.** Continuation /loop after 17.223. Full
   suite confirms 8646 / 1432 / 3 unchanged. `find_candidates.py --fresh`
