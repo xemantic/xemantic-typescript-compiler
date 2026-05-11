@@ -2918,6 +2918,39 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (17.222, 8644 → 8645, +1) — TS2306 "File 'X'
+  is not a module." for `import * as Y from 'pkg'` where the bare
+  specifier resolves via node_modules walk to a script-shaped `.d.ts`.**
+  Closes `duplicatePackage_globalMerge_ts`. The test layout has
+  `/node_modules/@types/react/index.d.ts` (containing only
+  `declare global { }`) and `/tests/node_modules/@types/react/index.d.ts`
+  (empty). Two source files do `import * as React from 'react'`, each
+  resolves to its nearest `node_modules/@types/react/index.d.ts` — both
+  resolve to script files (no imports/exports), so each gets TS2306
+  with the absolute resolved path as the display name.
+
+  Two-piece change in Checker.kt:
+  - New `checkNamespaceImportOfNonModule()` (~15500): iterates
+    `ImportDeclaration` with `NamespaceImport` named binding and
+    non-relative specifier in non-`.d.ts` source files. Resolves the
+    specifier via the new helper, checks the target binderResult's
+    `isModuleFile(statements)`, emits TS2306 if not. Squiggle: full
+    `'spec'` span (`moduleName.length + 2` for quotes).
+  - New `resolveBareSpecifierViaNodeModules(specifier, contextFileName)`
+    (~15555): walks up from `contextFileName.substringBeforeLast('/')`,
+    checks at each level for `<dir>/node_modules/<spec>/index.{d.ts,ts}`
+    and `<dir>/node_modules/@types/<spec>/index.{d.ts,ts}` in
+    `fileResults`. Closer node_modules dirs win (Node-style nearest-
+    wins resolution).
+
+  Wired into init pipeline right after
+  `checkImportEqualsRequireOfNonModule` (Checker.kt ~530). Multi-file
+  mode only (gated identically to the sibling function). Conservative
+  scope — only NamespaceImport binding form (`* as X`) — leaves default
+  imports and named imports as TODO if a future failing test needs them.
+  Zero regressions across 10078-test suite (1434 → 1433 failed). Surgical
+  pool re-recheck via `find_candidates.py --fresh` after this commit.
+
   **Session 2026-05-11 (17.221, 8643 → 8644, +1) — TS2674 for
   `new` on a class whose protected constructor is inherited from
   a base, from outside the class hierarchy.** Closes

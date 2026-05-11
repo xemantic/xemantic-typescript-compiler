@@ -528,6 +528,9 @@ class Checker(
         checkUnresolvedModules()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
+        // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
+        // node_modules to a script-shaped .d.ts (no imports/exports) — TS2306
+        checkNamespaceImportOfNonModule()
         // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
         checkNullTypeAssertionOverlap()
         // 14''b. Check same-target Reference cast bidirectional non-overlap for TS2352
@@ -15493,6 +15496,72 @@ class Checker(
                 ))
             }
         }
+    }
+
+    /**
+     * TS2306: "File 'X' is not a module." for `import * as Y from 'pkg'` where the
+     * bare specifier resolves via node_modules walk-up to a file in `fileResults` that
+     * has no imports/exports (script-shaped). Mirror of [checkImportEqualsRequireOfNonModule]
+     * but for the namespace-import-of-bare-specifier path that requires node_modules
+     * resolution rather than relative resolution. Display name is the absolute resolved
+     * path (matching TypeScript's baseline format for this diagnostic).
+     */
+    private fun checkNamespaceImportOfNonModule() {
+        if (binderResults.size <= 1 && !isMultiFileSource) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
+                if (stmt !is ImportDeclaration) continue
+                val clause = stmt.importClause ?: continue
+                if (clause.namedBindings !is NamespaceImport) continue
+                val specifier = stmt.moduleSpecifier as? StringLiteralNode ?: continue
+                val moduleName = specifier.text
+                if (moduleName.startsWith("./") || moduleName.startsWith("../")) continue
+                val resolved = resolveBareSpecifierViaNodeModules(moduleName, fileName) ?: continue
+                val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == resolved } ?: continue
+                if (isModuleFile(targetResult.sourceFile.statements)) continue
+                val start = specifier.pos
+                val length = moduleName.length + 2
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "File '$resolved' is not a module.",
+                    category = DiagnosticCategory.Error,
+                    code = 2306,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * Walk up from [contextFileName]'s directory looking for `node_modules/<specifier>/index.d.ts`
+     * or `node_modules/@types/<specifier>/index.d.ts` (or `.ts` variants). Returns the first
+     * matching entry in [fileResults], or null. Closer (more-deeply-nested) node_modules
+     * directories win, matching Node-style resolution.
+     */
+    private fun resolveBareSpecifierViaNodeModules(specifier: String, contextFileName: String): String? {
+        var dir = contextFileName.substringBeforeLast('/', "")
+        while (true) {
+            val prefix = dir
+            val candidates = listOf(
+                "$prefix/node_modules/$specifier/index.d.ts",
+                "$prefix/node_modules/$specifier/index.ts",
+                "$prefix/node_modules/@types/$specifier/index.d.ts",
+                "$prefix/node_modules/@types/$specifier/index.ts",
+            )
+            for (c in candidates) {
+                if (c in fileResults) return c
+            }
+            if (dir.isEmpty()) break
+            dir = dir.substringBeforeLast('/', "")
+        }
+        return null
     }
 
     private fun emitTS2307(specifier: Expression, moduleName: String, source: String, fileName: String) {
