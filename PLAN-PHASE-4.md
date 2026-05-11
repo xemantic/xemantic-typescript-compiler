@@ -2918,6 +2918,50 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (17.223, 8645 → 8646, +1) — TS2352 for
+  `/** @type {T} */ (void 0)` cast to named non-primitive type in
+  JS-like files.** Closes `checkJsTypeDefNoUnusedLocalMarked_ts`,
+  previously classified by 17.217 as "out of scope" (needed TS2352
+  emission for a JSDoc `@type` cast in a `.js` file). Surprise: the
+  parser already had `jsdocCastType` field on
+  `ParenthesizedExpression` (17.140b infrastructure) — so only the
+  Checker-side emission was missing. Squiggle is at the type name
+  INSIDE the JSDoc comment (col 29 of `module.exports = /** @type
+  {FooFun} */(void 0);`), not on the cast expression — TypeScript's
+  convention for JSDoc-derived diagnostics.
+
+  Implementation in Checker.kt:
+  - `checkJSDocVoidCastNonOverlap()` (~30930): top-level walker
+    iterating `binderResults` for `.js`/`.jsx`/`.cjs`/`.mjs` files.
+    Recurses through `ExpressionStatement` and `VariableStatement`
+    initializer; for `BinaryExpression`, drops into `.right` (the
+    `module.exports = X` assignment pattern). No deeper recursion —
+    narrow gate intentionally.
+  - `emitTS2352IfJSDocVoidCast()`: gate is (a) `jsdocCastType` non-null,
+    (b) `expr.expression` is `VoidExpression`, (c) `jsdocCastType` is
+    a `TypeReference` to a single `Identifier` whose name starts
+    uppercase and is NOT in `JSDOC_VOID_CAST_SKIP_NAMES`
+    (`Object`/`Function`/`Any`/`Unknown` — types that legitimately
+    accept undefined-like values).
+  - Position calculation: `jsdocCastType` TypeNode positions reference
+    the JSDoc-internal substring (from sub-Parser `parseTypeFromText`)
+    and aren't useful for the original source. Instead, scan source
+    backwards 256 chars from the ParenthesizedExpression's `(` for the
+    most recent `@type {NAME` substring; `nameStart = match +
+    "@type {".length`. Mirrors the technique used by other JSDoc
+    walkers (e.g., 17.71's `checkJSDocParamTags`).
+  - New `JSDOC_VOID_CAST_SKIP_NAMES` set in companion object.
+
+  Foundation: any future test exercising `/** @type {Class} */ (void
+  0)` or `/** @type {InterfaceName} */ (void 0)` patterns in JS files
+  will now emit TS2352 correctly. Default/named-import forms not
+  covered — `(undefined)` as inner is also not covered (only
+  VoidExpression). Tighter scope reduces FP risk; loosen when a
+  failing test demands it.
+
+  Net delta: 1433 → 1432 failed (8645 → 8646 passing). Zero
+  regressions across 10078-test suite.
+
   **Session 2026-05-11 (17.222, 8644 → 8645, +1) — TS2306 "File 'X'
   is not a module." for `import * as Y from 'pkg'` where the bare
   specifier resolves via node_modules walk to a script-shaped `.d.ts`.**
