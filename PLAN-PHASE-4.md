@@ -2918,6 +2918,45 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-11 (MAINT-1 stale skip-log audit, 8646 unchanged) —
+  5 stale entries strikethrough'd.** Continuation /loop after 17.223. Full
+  suite confirms 8646 / 1432 / 3 unchanged. `find_candidates.py --fresh`
+  returns 0/0/0 (filtered from 3/72/16). Spot-checked ~25 SKIP-bucket and
+  skip-log candidates against current pass/fail via targeted runs.
+  Confirmed stale (now passing, marked ~~strikethrough~~):
+  (1) `overloadOnConstNoAnyImplementation_ts` (line 9734) — was MISS TS2394;
+  passing post-17.211's break-after-first-TS2394 emission plus earlier
+  function-overload TS2394 wiring.
+  (2) `classMemberWithMissingIdentifier_ts` (line 9516) — was SWAP TS1005;
+  flipped 17.152 (TS1146 + TS1005 at class-body `{` after access modifier).
+  (3) `jsFileCompilationLetDeclarationOrder2_ts` (line 9544) — was
+  MISS TS2448 cross-file `let`; passing via earlier cross-file infrastructure.
+  (4) `pathMappingBasedModuleResolution6_classic_ts` (line 9488) — was
+  TS2792 FP via missing `rootDirs`; flipped 16.4fs.
+  (5) `declarationEmitBundleWithAmbientReferences_ts` (line 9555) — was
+  MISS TS2322 generic-null; passing via B2.1 generic argument inference.
+  Other spot-checks still failing as documented (booleanAssignment,
+  declarationEmitExpressionInExtends4, errorWithSameNameType,
+  intersectionWithConflictingPrivates, mutuallyRecursiveCallbacks,
+  relationComplexityError, recursiveTypeRelations, arrayAssignmentTest4,
+  arrowFunctionErrorSpan, elaboratedErrorsOnNullableTargets01,
+  errorMessageOnIntersectionsWithDiscriminants01, genericArrayExtenstions,
+  jsFileCompilationDuplicateVariableErrorReported,
+  jsFunctionWithPrototypeNoErrorTruncationNoCrash,
+  namespaceDisambiguationInUnion, unionTypeWithRecursiveSubtypeReduction3,
+  doNotElaborateAssignabilityToTypeParameters, controlFlowAliasedDiscriminants,
+  moduleAugmentationsImports3/4, narrowingOfQualifiedNames,
+  assigningFromObjectToAnythingElse, assignmentCompat1, grammarAmbiguities1,
+  functionsMissingReturnStatementsAndExpressionsStrictNullChecks). Last
+  `chore(maint)` was ~150 commits ago (well past the ≤5-session limit per
+  CLAUDE.md anti-loop policy). Anti-loop check: surgical pool confirmed
+  empty for diff≤3; visible candidates after this audit remain all
+  architectural / multi-piece (Blocker #1 narrowing, Blocker #2 generic
+  inference TypeParam-bipartition, Blocker #3 cross-file scope, lib
+  subsetting for arrayAssignmentTest4-class tests, display engine for
+  namespace-qualified union targets). Net delta: 0 tests, 5 skip-log
+  entries strikethrough'd. No code changes this session.
+
   **Session 2026-05-11 (17.223, 8645 → 8646, +1) — TS2352 for
   `/** @type {T} */ (void 0)` cast to named non-primitive type in
   JS-like files.** Closes `checkJsTypeDefNoUnusedLocalMarked_ts`,
@@ -9485,7 +9524,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`superCallArgsMustMatch_ts`~~ → flipped 17.19 (`super(...)` arg checking via base ctor sig instantiated with heritage clause type args).
 - `complicatedPrivacy_ts` → TS2693 on `[number]` computed-property-name inside type-literal (`[number]: C1`). Not handled by current TS2693 walker (only value expressions, not type annotations).
 - ~~`taggedTemplatesWithIncompleteTemplateExpressions6_ts`~~ → TS2345 for tagged template argument checking. Not implemented.
-- `pathMappingBasedModuleResolution6_classic_ts` → false-positive TS2792 because `rootDirs` config is not honored.
+- ~~`pathMappingBasedModuleResolution6_classic_ts` → false-positive TS2792 because `rootDirs` config is not honored.~~ **STALE 2026-05-11: passing — flipped 16.4fs (paths-mapped-but-missing-extension TS2307 fix).**
 - ~~`pathMappingBasedModuleResolution_withExtension_failedLookup_ts`~~ → missing TS2307 when `paths` points to a non-existent file; our resolver treats `paths`-mapped specifiers as resolved.
 - `shorthand-property-es5-es6_ts` / `nodeNextModuleResolution1_ts` → TS2307 skipped in multi-file node-resolution mode (see `checkUnresolvedModules`; adding TS2307 unconditionally here would FP on index-file/symlink/json patterns our resolver doesn't handle).
 - ~~`privacyCheckAnonymousFunctionParameter2_ts`~~: flipped 17.40 (TS2345 null-vs-anonymous-function-type-param with sig-TypeParam mapping for display).
@@ -9513,7 +9552,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 **Session 2026-04-17 (16.4ch/ci) additional explored-but-skipped:**
 - ~~`enumBasics1_ts`~~ → flipped 17.22. New `tryEmitEnumMemberAccessTs2339` helper; gated on `enumSym.declarations.any { it is EnumDeclaration }` (avoids namespace-with-nested-const-enum FP — those pick up `SymbolFlags.ConstEnum` from `ModuleInstanceState.ConstEnumOnly`) and `memberSym.flags.hasAny(SymbolFlags.EnumMember)`; prop must also be absent from both Number and String wrapper apparent types.
 - `overloadOnConstantsInvalidOverload1_ts` → MISS TS2394 ("This overload signature is not compatible with its implementation signature") + literal-type widening bug (`'string'` vs `'"HI"'`) + extra TS2793 on the single-overload path. Three-bug test — TS2394 not implemented; narrowing the TS2793 gate to require impl-sig match is doable but yields nothing alone.
-- `classMemberWithMissingIdentifier_ts` → SWAP TS1005 `'}' expected.` vs `';' expected.` at `{` in `public {};`. Parser error-recovery path for malformed class member after a modifier.
+- ~~`classMemberWithMissingIdentifier_ts` → SWAP TS1005 `'}' expected.` vs `';' expected.` at `{` in `public {};`. Parser error-recovery path for malformed class member after a modifier.~~ **STALE 2026-05-11: passing — flipped 17.152 (TS1146 + TS1005 emission at class-body `{` after access modifier).**
 - `elaboratedErrorsOnNullableTargets01_ts` → target-type display order (`null | { … } | undefined` vs canonical `{ … } | undefined`) + missing nested property-elaboration chain. Display + elaboration refactor — out of scope.
 - ~~`importedModuleAddToGlobal_ts`~~ → two bugs: (a) TS2503 missing spelling suggestion → TS2833; fix is trivial (add `collectNamespaceNames` + `getSpellingSuggestionFromNames` in the `!scope.has(lname)` branch at Checker.kt:8531). (b) FP TS2322 for `return null` against an unresolvable `b.B` qualified type — we resolve to just `B` instead of bailing to `errorType`. Fixing (a) alone still fails the test because of (b).
 - `typecheckIfCondition_ts` / `moduleKeywordRepeatError_ts` / `parser519458_ts` / `typingsSuggestion1/2_ts` → TS2591 for node-specific identifiers (`module`, `process`, `require`, `Buffer`, …) when @types/node isn't present. Currently these are in `KNOWN_GLOBALS` which silently suppresses TS2304. Would need to move them out of `KNOWN_GLOBALS` and emit TS2591 instead — broad regression risk because many tests today compile code like `module.exports = X` without expecting any diagnostic.
@@ -9541,7 +9580,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 **Session 2026-04-18 (16.4da) additional explored-but-skipped:**
 - ~~`widenToAny1_ts` / `widenToAny2_ts` → MISS TS2322 `Type 'string | undefined' is not assignable to type 'number'` for `var z: number = foo({x: undefined, y: "def"})` where `foo<T>` infers T = string|undefined. Blocker #1 — generic type inference (best-common-type from arg literals).~~ **STALE 2026-04-27: widenToAny2 flipped 17.31f, widenToAny1 flipped 17.38.**
-- `jsFileCompilationLetDeclarationOrder2_ts` → MISS TS2448 across files: `a.ts` references `a` declared as `let a` in `b.js`. Blocker #5 — cross-file block-scoped resolution and use-before-declaration tracking.
+- ~~`jsFileCompilationLetDeclarationOrder2_ts` → MISS TS2448 across files: `a.ts` references `a` declared as `let a` in `b.js`. Blocker #5 — cross-file block-scoped resolution and use-before-declaration tracking.~~ **STALE 2026-05-11: passing — flipped by cross-file infrastructure landed in earlier 17.x sessions.**
 - `jsFileCompilationDuplicateVariableErrorReported_ts` → MISS TS2403 across files: `var x = "hello"` in `b.js` + `var x = 10` in `a.ts`. Blocker #5 — cross-file `var` merge with type incompatibility check.
 - ~~`jsExportMemberMergedWithModuleAugmentation_ts` → MISS TS2564 for `class Abcde { /** @type {string} */ x; }` in `.js`. Blocker #2 — JSDoc `@type` annotation parsing required to give the property a type for TS2564 to fire.~~ **Flipped 17.58 (2026-05-01)** — JSDoc `@type {T}` bridge for PropertyDeclaration in JS files.
 - `jsFunctionWithPrototypeNoErrorTruncationNoCrash_ts` → MISS TS2339 for `this.rgb()` inside method on `Color.prototype = { ... }`. Blocker #2 — JS prototype assignment pattern + `this` typing inside prototype-method.
@@ -9552,7 +9591,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`importAliasFromNamespace_ts` → MISS TS2845 "This condition will always return 'false'." for `Internal.WhichThing.A ? "foo" : "bar"` where `Internal.WhichThing.A` resolves through an alias chain to const enum value `0`. New TS2845 diagnostic + namespace-alias chain + const enum value resolution.~~ **Flipped 17.52 (2026-04-27)** — new `checkEnumReferenceFalsyCondition` helper in ConditionalExpression branch of `checkAlwaysTruthyInExpr`.
 - ~~`lambdaArgCrash_ts`~~ → flipped 17.24. Two-part fix: (a) `checkArgumentsAgainstSignature` now allows fn-vs-fn arg comparison when source's `minArgumentCount > target.parameters.size` even if `sigHasOnlySimpleTypes` fails (arity gap is definitive regardless of param/return type complexity — handles `errorType`/`anyType` cases); (b) `formatParameter` falls back to `formatTypeForDisplay(decl.type)` when the resolved type is `errorType`, preserving the AST name (`ItemSet`) instead of rendering `error`.
 - `recursiveTypeRelations_ts` → MISS TS2345 for `(obj, key: keyof S) => obj` callback. Generic function-to-function with `keyof S` parameter-type substitution.
-- `declarationEmitBundleWithAmbientReferences_ts` → MISS TS2322 for `null` to `T<string>` (generic). Blocker #1.
+- ~~`declarationEmitBundleWithAmbientReferences_ts` → MISS TS2322 for `null` to `T<string>` (generic). Blocker #1.~~ **STALE 2026-05-11: passing — flipped by generic argument inference infrastructure (B2.1 series).**
 - `crashInEmitTokenWithComment_ts` → SWAP TS2345 with destructured arrow-param display `({[foo.bar]: c}: {}) => any` (we emit `() => undefined`) + MISS TS2537. Function-display with destructured/computed-key params not implemented.
 - `conditionalAnyCheckTypePicksBothBranches_ts` → SWAP TS2322 same code; needs conditional type evaluation (`type T = any extends number ? 1 : 0` resolves to `1 | 0`). Conditional types not implemented.
 - `errorWithSameNameType_ts` → SWAP TS2741 expects qualified `import("a").F` display (we emit `F`). Cross-module type display needs source-file-of-symbol tracking.
@@ -9731,7 +9770,7 @@ Other small-diff candidates re-examined this session (all classified as architec
 **Session 2026-04-26 (post-16.4gl recon, 8329 passing) — surgical pool re-confirmed empty for the third consecutive session:** Full-suite run reproduces 8329 passing / 1746 failed / 3 skipped (one more than 16.4gl baseline thanks to `--fresh` showing 0 across all buckets, filtered from 7 / 109 / 29). Investigated `inferSimpleReturnTypeFromBody`'s current state (handles single-stmt `return new X<...>()` + primitive literal returns from 16.4dg+16.4dm) and `structuredTypeRelatedTo`'s same-target Reference shortcut (already implemented). Step (c) extension candidates: `simpleRecursionWithBaseCase1_ts` and `trivialSubtypeReductionNoStructuralCheck_ts__target_es5__` need TS7023 for **indirect-self-reference-via-type-alias** patterns (`get steps() { return { wizard: this } as WizardStepProps; }` where `WizardStepProps` references the enclosing class) — 16.4fk's narrow rule handles syntactic self-reference in function bodies but doesn't cover this class+interface mutual recursion pattern, which would require resolving the recursive cycle through the class's interface declaration (out of scope for narrow extension). Step (d) (named→named cross-target Reference comparison) remains untackled — a multi-session investigation. Found one **fixed stale skip-log entry**: `genericCloneReturnTypes_ts` and `genericCloneReturnTypes2_ts` (line ~3421) were listed as Blocker #1 stuck cases but have actually been passing since 16.4dc (same-target ref args, +2 inc. genericCloneReturnTypes) and 16.4dg (single-stmt `return new X<...>()` body inference, +1 for genericCloneReturnTypes2). Skip log corrected. Stopping cleanly without code changes — no surgical wins available within this session's budget; recommend next session commit to either a new-diagnostic family (TS2394 / TS6212 pair / TS2802 broader patterns) or step (d) per session-prompt status block guidance.
 
 **Session 2026-04-25 (post-16.4gk, 8328 passing) additional explored-but-skipped:**
-- `overloadOnConstNoAnyImplementation_ts` → MISS TS2394 at (1,10) "This overload signature is not compatible with its implementation signature." Test expects TS2394 + TS2345 (we already emit the TS2345). Implementing TS2394 narrowly requires function-to-function signature compatibility check: for each overload, the implementation must be assignable to it (parameter contravariance). For `function x1(a: number, cb: (x: 'hi') => number)` vs impl `function x1(a: number, cb: (x: string) => number)`, the impl's `cb` param is `(x: string) => number` but the overload's `cb` is `(x: 'hi') => number` — contravariance fails because `'hi' → string` doesn't allow `string → 'hi'`. Needs full signature variance check (parameters contravariant, return covariant) which we don't fully implement for overload-vs-impl pairs. Surfaced as fresh candidate by 16.4gj's multi-overload contextual typing — pre-fix, the test had more diagnostic mismatches and was filtered. **2026-04-26 follow-up:** the `isOverloadCompatibleWithImpl` infrastructure already exists at Checker.kt ~34269 but `isParamTypeCompatible` only handles `KeywordTypeNode` — `FunctionType` params return `true` (compatible). Extending to recursively compare nested function-type params with proper variance is the narrow extension, but the direction analysis (overload→impl assignability via TypeScript's `isImplementationCompatibleWithOverload`'s `isSignatureAssignableTo(overload, impl, ignoreReturnTypes=true)`) doesn't obviously match the baseline's "TS2394 fires only on overload 1 not overload 2" pattern when both overloads have structurally identical incompatibility. Direction-of-variance verification would need a TypeScript-source deep-dive before implementation; skipped this session.
+- ~~`overloadOnConstNoAnyImplementation_ts` → MISS TS2394 at (1,10) "This overload signature is not compatible with its implementation signature." Test expects TS2394 + TS2345 (we already emit the TS2345). Implementing TS2394 narrowly requires function-to-function signature compatibility check: for each overload, the implementation must be assignable to it (parameter contravariance). For `function x1(a: number, cb: (x: 'hi') => number)` vs impl `function x1(a: number, cb: (x: string) => number)`, the impl's `cb` param is `(x: string) => number` but the overload's `cb` is `(x: 'hi') => number` — contravariance fails because `'hi' → string` doesn't allow `string → 'hi'`. Needs full signature variance check (parameters contravariant, return covariant) which we don't fully implement for overload-vs-impl pairs. Surfaced as fresh candidate by 16.4gj's multi-overload contextual typing — pre-fix, the test had more diagnostic mismatches and was filtered. **2026-04-26 follow-up:** the `isOverloadCompatibleWithImpl` infrastructure already exists at Checker.kt ~34269 but `isParamTypeCompatible` only handles `KeywordTypeNode` — `FunctionType` params return `true` (compatible). Extending to recursively compare nested function-type params with proper variance is the narrow extension, but the direction analysis (overload→impl assignability via TypeScript's `isImplementationCompatibleWithOverload`'s `isSignatureAssignableTo(overload, impl, ignoreReturnTypes=true)`) doesn't obviously match the baseline's "TS2394 fires only on overload 1 not overload 2" pattern when both overloads have structurally identical incompatibility. Direction-of-variance verification would need a TypeScript-source deep-dive before implementation; skipped this session.~~ **STALE 2026-05-11: passing — flipped by 17.211 (`break` after first TS2394 ctor emission) and adjacent TS2394 work for function overloads in earlier 17.x sessions; verified via targeted run.**
 - `overloadOnConstNoAnyImplementation2_ts` → MISS 3 (TS2394 at (6,5), 2× TS2345 for callback param-type mismatch in `x1(1, (x: 'bye') => 1)` and `x1(1, (x: number) => 1)`). Multi-piece: same TS2394 gap as above + TS2345 emissions for argument-against-overload signature comparison when arg is a function literal whose param type doesn't match any overload's expected callback param type. The TS2345 cases need contravariant param comparison for callback args during overload resolution. Three coordinated diagnostics — out of scope for narrow surgical fix.
 
 **Session 2026-04-25 (post-16.4gi, 8323 passing) additional explored-but-skipped:**
