@@ -495,6 +495,17 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             nextToken()
             null
         }
+        CloseParen, CloseBracket -> {
+            // Stray `)` / `]` at statement-start position is leftover after a
+            // broken paren / bracket expression (e.g. `(y = 1; 2)` parses `(y=1`
+            // with TS1005 `)' expected, then `2` as ExpressionStatement, and is
+            // left at `)`). TypeScript emits TS1005 ";' expected." here rather
+            // than TS1109 "Expression expected." — the closing delimiter signals
+            // a missing statement terminator, not a missing expression.
+            reportError("';' expected.", code = 1005, overrideLength = 1)
+            nextToken()
+            null
+        }
         DefaultKeyword -> parseDefaultStartedStatement(fromDecorated = false)
         At -> {
             // Capture leading comments (e.g. JSDoc) that appear before the first decorator.
