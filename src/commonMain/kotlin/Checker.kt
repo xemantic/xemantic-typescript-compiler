@@ -1056,18 +1056,53 @@ class Checker(
      * [checkTypeUsedAsValue] — namespaces used as values should fire TS2708
      * "Cannot use namespace 'X' as a value", a different diagnostic that
      * isn't yet wired through this path.
+     *
+     * 17.232: also handles the ambient external module form
+     * `declare module "X" { ... export = Y; namespace Y { ... } }` —
+     * when file-based resolution fails (bare specifier like `"foo"`),
+     * walk all script-file ambient module blocks matching the specifier
+     * and look for `export = Identifier` inside whose target is a
+     * `ModuleDeclaration` in the same block.
      */
     private fun exportEqualsIsNamespace(moduleSpecifier: String): Boolean {
-        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
-        val targetResult = fileResults[targetFile] ?: return false
-        for (stmt in targetResult.sourceFile.statements) {
-            if (stmt is ExportAssignment && stmt.isExportEquals) {
-                val expr = stmt.expression as? Identifier ?: continue
-                // Find the named declaration in the target file's statements.
-                for (s in targetResult.sourceFile.statements) {
-                    if (s is ModuleDeclaration && s.name is Identifier
-                        && (s.name as Identifier).text == expr.text) {
-                        return true
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null)
+        if (targetFile != null) {
+            val targetResult = fileResults[targetFile] ?: return false
+            for (stmt in targetResult.sourceFile.statements) {
+                if (stmt is ExportAssignment && stmt.isExportEquals) {
+                    val expr = stmt.expression as? Identifier ?: continue
+                    // Find the named declaration in the target file's statements.
+                    for (s in targetResult.sourceFile.statements) {
+                        if (s is ModuleDeclaration && s.name is Identifier
+                            && (s.name as Identifier).text == expr.text) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+        // File-based resolution failed — check ambient external modules
+        // (declare module "specifier"). Mirrors isTypeOnlyImportRequire's
+        // ambient fallback.
+        for (result in binderResults) {
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if (stmt.name !is StringLiteralNode) continue
+                if ((stmt.name as StringLiteralNode).text != moduleSpecifier) continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s is ExportAssignment && s.isExportEquals) {
+                        val expr = s.expression as? Identifier ?: continue
+                        // Look for a ModuleDeclaration with the matching name
+                        // inside the same ambient module's body.
+                        for (inner in body.statements) {
+                            if (inner is ModuleDeclaration && inner.name is Identifier
+                                && (inner.name as Identifier).text == expr.text) {
+                                return true
+                            }
+                        }
                     }
                 }
             }
