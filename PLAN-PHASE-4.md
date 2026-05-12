@@ -2922,6 +2922,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.229, 8651 unchanged — net-zero foundation) —
+  Check `ComputedPropertyName` expression in `TypeLiteral` members for
+  unresolved identifiers.** Two new `checkUnresolvedInExpr` calls in
+  the TypeLiteral branch of `checkUnresolvedInTypeCore` (PropertyDeclaration
+  ~10808 + MethodDeclaration ~10812) — gated on `member.name is
+  ComputedPropertyName`. Mirrors the class-member walker at ~10357
+  which already does this.
+
+  Half-closes `propertyAssignment_ts`: TS2304 'index' at (4,22) now
+  fires for `declare var foo2: { [index]; }`. Remaining gap is two
+  missing TS2322s with "provides no match for the signature 'X'."
+  elaboration chain at lines 12 + 14 (anonymous TypeLiteral target with
+  construct sig `{ new(): any }` and call sig `{ (): void }`) — requires
+  non-constructable / non-callable structural-comparison elaboration,
+  a separate feature gap. Net delta: 1424 → 1424 failed (no flip).
+  Foundation for future tests that exercise this pattern.
+
   **Session 2026-05-12 (17.228, 8649 → 8651, +2) — TS2693 for
   `import X = require("./m")` where m has `export = X` and X is a
   type-only entity (interface / type alias).** Closes both target

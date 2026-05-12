@@ -10806,10 +10806,20 @@ class Checker(
                     when (member) {
                         is PropertyDeclaration -> {
                             checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            // 17.229: ComputedPropertyName whose expression is a regular
+                            // Identifier should resolve in the value-position scope
+                            // (mirrors class-member walker at ~10357). Without this,
+                            // `{ [index]; }` silently passes when `index` is unbound.
+                            if (member.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
+                            }
                             member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
                         }
                         is MethodDeclaration -> {
                             checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            if (member.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
+                            }
                             val methodScope = scope.child()
                             member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                             member.typeParameters?.forEach { tp ->
