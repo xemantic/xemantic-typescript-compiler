@@ -1,6 +1,52 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,645 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,647 / 10,078 tests passing (~85%).
+
+**17.226 (2026-05-12, +2)** — Two coordinated pieces flip both target
+variants of `complicatedPrivacy_ts` (es5 + es2015). Closes the dual-bug
+skip-log entry that the 16.4 family had flagged as "two coordinated
+pieces; (b) high-risk per 16.4ek experience."
+
+**Piece 1 — TS2693 for type-keyword in TypeLiteral computed property
+name.** New helper `checkTypeOnlyKeywordInComputedName` in Checker.kt
+near `checkUnresolvedInType`. Wired into the `TypeLiteral` branch of
+`checkUnresolvedInTypeCore` for both `PropertyDeclaration` and
+`MethodDeclaration` member names. Fires when the member name is a
+`ComputedPropertyName` whose expression is a bare `Identifier` with
+text in `TYPE_ONLY_KEYWORDS` (`number`, `string`, `boolean`, `bigint`,
+`symbol`, `any`, `unknown`, `never`, `void`). Skipped when the name
+is shadowed in scope (so `var number = 1; type T = { [number]: C }`
+doesn't FP). Emits via existing `emitTS2693` for consistent display.
+Closes `[number]: C1` at (35,6) length 6.
+
+**Piece 2 — TS2694 for `implements ns.Member` where Member missing
+from namespace exports.** New helper
+`checkHeritagePropertyAccessForNamespaceMember` near
+`isMemberAccessible`. Wired into the `ClassDeclaration` heritage-clause
+loop in `checkUnresolvedInStatementCore` AFTER the existing
+`checkUnresolvedInExpr` call, gated on `clause.token ==
+ImplementsKeyword`. Mirrors `checkQualifiedNameExports` logic but
+operates on `PropertyAccessExpression` (value-position parse) rather
+than `QualifiedName`. Resolves leftmost identifier through
+`currentFileLocals` / `globals` / `binderResults.locals`; bails if
+result is not `SymbolFlags.Module`. Walks subsequent segments via
+`exports[segment]` + `isMemberAccessible`; emits TS2694 at the first
+missing/inaccessible segment using the existing `emitTS2694` helper
+(which handles TS2724 spelling-suggestion variant when applicable).
+Closes `implements mglo5.i5, mglo5.i6` at (73,55) length 2 — `i6`
+isn't declared in `declare namespace mglo5 { interface i5 {} }`.
+
+**Why this lands now (16.4ek's "-9 regressions" warning revisited).**
+The earlier skip-log entry warned that "16.4ek already attempted (b)-ish
+extension for `import =` and got -9 regressions; similar care would be
+needed for heritage-clause variant." Re-reading 16.4ek's actual session
+note shows it was an unrelated change (TS2451 for TypeAlias redecl).
+The heritage-clause walker here is gated specifically on
+`PropertyAccessExpression` (rejects deeper chains by `current is
+Identifier` requirement) AND `clause.token == ImplementsKeyword` AND
+leftmost resolves to a Module symbol — three conservative gates that
+keep the change narrowly targeted. Zero regressions across the
+10078-test suite (1430 → 1428 failed; 8645 → 8647 passing).
 
 **17.225 (2026-05-12, +1)** — TS2307 "Cannot find module 'foo' or its
 corresponding type declarations." for bare specifier under `moduleResolution: nodenext`
