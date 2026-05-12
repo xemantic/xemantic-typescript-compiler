@@ -2,6 +2,29 @@
 
 **Phase 4 — Checker buildout.** 8,651 / 10,078 tests passing (~85%).
 
+**17.229 (2026-05-12, +0 foundation)** — Check `ComputedPropertyName`
+expressions in `TypeLiteral` members for unresolved identifiers.
+Mirrors the class-member walker (Checker.kt ~10357) which already calls
+`checkUnresolvedInExpr` on the ComputedPropertyName's expression — the
+TypeLiteral PropertyDeclaration / MethodDeclaration branches at
+~10807/~10811 only called `checkTypeOnlyKeywordInComputedName` (handles
+`number`/`string` type-only keywords) but didn't walk arbitrary
+identifiers.
+
+Closes a half of `propertyAssignment_ts` (line 4 col 22 `[index]` — `index`
+is a regular identifier not in scope). The test still fails because of
+two missing pieces unrelated to ComputedPropertyName resolution: TS2322
+"Type '{x:number}' is not assignable to type 'new () => any'." with
+"provides no match for the signature 'X'." chain at lines 12 and 14
+(anonymous TypeLiteral target with construct/call signature only —
+requires non-constructable / non-callable structural-comparison
+elaboration). Tracked as a follow-on substep.
+
+Net delta: 1424 → 1424 failed (8651 unchanged). Foundation for any
+future test that exercises an unresolved identifier in a TypeLiteral
+ComputedPropertyName — currently zero such tests in the failing corpus,
+so no immediate flip.
+
 **17.228 (2026-05-12, +2)** — TS2693 "'X' only refers to a type, but is
 being used as a value here." for `import X = require("./m")` where `m`
 has `export = X` and that X is a type-only entity (interface / type
