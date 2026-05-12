@@ -21499,6 +21499,7 @@ interface DataView {
             // Skip names that also have a class/function/variable declaration (merged)
             val typeOnlyNames = mutableSetOf<String>()
             val valueNames = mutableSetOf<String>()
+            val namespaceOnlyNames = mutableSetOf<String>()
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
                     is ClassDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
@@ -21530,24 +21531,28 @@ interface DataView {
                         // those are `any`-typed at runtime, so the local name
                         // is value-side. `isAmbientModuleTypeOnly` treats
                         // body-less as type-only (used by Transformer elision)
-                        // but for TS2693 emission we need the opposite. Also
-                        // skip when the spec resolves to a Module symbol whose
-                        // export = is a namespace (TS2708 should fire instead
-                        // of TS2693 — out of scope for this fix).
+                        // but for TS2693 emission we need the opposite.
+                        //
+                        // 17.231: When `export = X` resolves to a type-only
+                        // namespace (no value exports), the local name should
+                        // fire TS2708 "Cannot use namespace 'X' as a value"
+                        // instead of TS2693. Route to `namespaceOnlyNames`.
                         val ref = stmt.moduleReference
-                        val typeOnly = if (ref is ExternalModuleReference) {
-                            val spec = (ref.expression as? StringLiteralNode)?.text
-                            spec != null && isTypeOnlyImportRequire(spec, fileName) &&
-                                !isBodylessAmbientModule(spec) &&
-                                !exportEqualsIsNamespace(spec)
-                        } else false
-                        if (typeOnly) typeOnlyNames.add(stmt.name.text)
-                        else valueNames.add(stmt.name.text)
+                        val spec = (ref as? ExternalModuleReference)?.expression?.let {
+                            (it as? StringLiteralNode)?.text
+                        }
+                        val isBodyless = spec != null && isBodylessAmbientModule(spec)
+                        val isTypeOnly = spec != null && isTypeOnlyImportRequire(spec, fileName) && !isBodyless
+                        val isTypeOnlyNamespace = isTypeOnly && exportEqualsIsNamespace(spec!!)
+                        when {
+                            isTypeOnlyNamespace -> namespaceOnlyNames.add(stmt.name.text)
+                            isTypeOnly -> typeOnlyNames.add(stmt.name.text)
+                            else -> valueNames.add(stmt.name.text)
+                        }
                     }
                     else -> {}
                 }
             }
-            val namespaceOnlyNames = mutableSetOf<String>()
             // When @lib explicitly excludes es2015+, user-declared interfaces matching
             // well-known forward-declarable lib types (Promise, Symbol, Map, …) ARE
             // type-only — the lib doesn't provide a value-side counterpart for them.

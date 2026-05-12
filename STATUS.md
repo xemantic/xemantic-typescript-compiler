@@ -1,6 +1,37 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,652 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,653 / 10,078 tests passing (~85%).
+
+**17.231 (2026-05-12, +1)** — Wire TS2708 emission for `import X = require()`
+where `export = X` resolves to a type-only namespace. Completes the
+17.230 half-fix on `typeUsedAsValueError2_ts`: the test now emits both
+expected diagnostics — TS2693 for the type-only-interface case (`HelloInterface.world`,
+already firing post-17.228) and TS2708 "Cannot use namespace 'HelloNamespace'
+as a value" for the namespace-via-export-equals case at world.ts(5,1).
+
+Implementation: in `checkTypeUsedAsValue`'s ImportEqualsDeclaration arm
+(Checker.kt ~21520), restructured the routing decision into a `when`
+block keyed on three predicates over the resolved module spec:
+
+- `isBodyless` (17.230) — body-less ambient module, `any`-typed, → valueNames
+- `isTypeOnly` — `isTypeOnlyImportRequire` returns true AND not body-less
+- `isTypeOnlyNamespace` — `isTypeOnly` AND `exportEqualsIsNamespace` returns
+  true (the export = target is a ModuleDeclaration)
+
+Routing: isTypeOnlyNamespace → namespaceOnlyNames; isTypeOnly → typeOnlyNames;
+else → valueNames. The existing TS2708 emission at the Identifier arm of
+`checkTypeAsValueInExpr` (Checker.kt ~21760) then fires when a property
+access receiver matches a name in namespaceOnlyNames. Conjunction with
+`isTypeOnly` is the safety gate: only fires when the namespace has no
+value exports, so namespaces with `export function`/`export const` keep
+falling through to valueNames (no FP TS2708 for value-side namespaces).
+
+Side fix: moved `val namespaceOnlyNames = mutableSetOf<String>()` declaration
+to the top of `checkTypeUsedAsValue`'s per-file loop alongside `typeOnlyNames`
+and `valueNames`. Was previously declared after the first scan loop; the new
+routing needs to write into it during that loop.
+
+Net delta: 1423 → 1422 failed (8652 → 8653 passing). Zero regressions.
 
 **17.230 (2026-05-12, +1)** — Carve-outs in 17.228's
 ImportEqualsDeclaration → typeOnly routing for two FP cases revealed
