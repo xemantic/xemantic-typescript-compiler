@@ -2922,6 +2922,36 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.228, 8649 → 8651, +2) — TS2693 for
+  `import X = require("./m")` where m has `export = X` and X is a
+  type-only entity (interface / type alias).** Closes both target
+  variants (es5 + es2015) of `errorsOnImportedSymbol_ts`. Pattern:
+  `import Sammy = require("./errorsOnImportedSymbol_0");` where
+  errorsOnImportedSymbol_0.ts has `interface Sammy {...} export = Sammy;`
+  — then `new Sammy.Sammy()` / `Sammy.Sammy()` should fire TS2693 at
+  the leftmost `Sammy` (col 13 / col 9, length 5).
+
+  Pre-fix: `checkTypeUsedAsValue`'s pre-scan added every
+  ImportEqualsDeclaration's local name to `valueNames` unconditionally,
+  so the standard TS2693 emitter never fired on these uses. Fix: when
+  `stmt.moduleReference is ExternalModuleReference`, consult the
+  existing `isTypeOnlyImportRequire(specifier, fileName)` helper
+  (Checker.kt ~998) — when true, route the name into `typeOnlyNames`
+  instead of `valueNames`. Other ImportEquals forms (QualifiedName,
+  Identifier module references) stay value-side unchanged.
+
+  `isTypeOnlyImportRequire` already walks `export = X` and calls
+  `isSymbolTypeOnly` on the target symbol — it returns true only for
+  Interface / TypeAlias / NonInstantiated namespace with no value
+  exports. So this fix reuses existing infrastructure with a 1-line
+  routing change.
+
+  Net delta: 1426 → 1424 failed (8649 → 8651 passing). Zero regressions
+  across the 10078-test suite. Spot-checked sibling tests that use
+  `import X = require()` with value targets (no regressions expected
+  there since `isTypeOnlyImportRequire` returns false for them, so
+  they stay in `valueNames`).
+
   **Session 2026-05-12 (17.227, 8647 → 8649, +2) — TS2702 "'X' only
   refers to a type, but is being used as a namespace here." for default
   imports of a class/interface/type-alias used in qualified-name type
