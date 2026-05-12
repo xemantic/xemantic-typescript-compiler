@@ -2922,6 +2922,37 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.231, 8652 → 8653, +1) — TS2708 for `import X
+  = require()` of type-only-namespace `export = X`.** Closes the 17.230
+  half-fix on `typeUsedAsValueError2_ts` — line 5 `HelloNamespace.world`
+  now fires the expected TS2708 "Cannot use namespace 'HelloNamespace'
+  as a value" at world.ts(5,1) length 14. Pre-fix: that emission was
+  missing because 17.230's `exportEqualsIsNamespace` carve-out routed
+  the import name into `valueNames` (suppressing both TS2693 and the
+  existing TS2708 path); post-fix it routes into `namespaceOnlyNames`
+  so the existing TS2708 emission at the Identifier arm of
+  `checkTypeAsValueInExpr` (Checker.kt ~21760) fires on the property-
+  access receiver.
+
+  Implementation in `checkTypeUsedAsValue` (Checker.kt ~21520):
+  restructured the ImportEqualsDeclaration routing into a `when` over
+  three predicates over the resolved module spec — `isBodyless` (17.230
+  body-less ambient module gate), `isTypeOnly` (`isTypeOnlyImportRequire`
+  AND not body-less), `isTypeOnlyNamespace` (`isTypeOnly` AND
+  `exportEqualsIsNamespace`). The conjunction with `isTypeOnly` is the
+  FP safety gate — `exportEqualsIsNamespace` alone returns true for ANY
+  ModuleDeclaration target (including value-side namespaces with
+  `export function` / `export const`), but `isTypeOnly` requires the
+  symbol to be type-only via `isSymbolTypeOnly`. So namespaces with
+  value exports still route to valueNames and don't fire TS2708.
+
+  Side fix: moved `val namespaceOnlyNames = mutableSetOf<String>()`
+  declaration up to alongside `typeOnlyNames` / `valueNames` at the top
+  of the per-file loop (was previously declared after the first scan
+  loop, but the new routing needs to write into it during that loop).
+
+  Net delta: 1423 → 1422 failed (8652 → 8653 passing). Zero regressions.
+
   **Session 2026-05-12 (17.230, 8651 → 8652, +1) — Carve-outs in 17.228's
   ImportEqualsDeclaration → typeOnlyNames routing.** Post-17.229 recon
   revealed two FPs introduced by 17.228 (the test count didn't reflect
