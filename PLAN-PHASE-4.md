@@ -2936,20 +2936,34 @@ the live plan focused. Quick reference:
   routing now fires correctly at (5,16) for `foo.bar(...)`. Test still
   fails on EXTRA TS2694 at (5,12) for `foo.A` — `foo` is the import
   alias to ambient module "foo" which has `export = B` where B is a
-  merged namespace+interface. `resolveAlias` for `ImportEqualsDeclaration`
-  with `ExternalModuleReference` doesn't currently handle the ambient
-  case: when `resolveModuleSpecifier(specifier, decl)` returns null,
-  the branch `continue`s and `foo` stays as the unresolved alias —
-  `checkQualifiedNameExports` then can't find `A` in `foo.exports`
-  (alias has no exports). The follow-on substep is to extend the
-  `ExternalModuleReference` branch of `resolveAlias` (Checker.kt ~2402)
-  with the same `globals[specifier].Module` + `resolveAmbientModuleExportEquals`
-  pattern that the `ImportSpecifier` branch uses (Checker.kt ~2499-2516).
-  Risk: `resolveAlias` is core machinery — fully fixing this test
-  requires a follow-on session with care.
+  merged namespace+interface. The TS2694 FP requires fixing
+  `checkQualifiedNameExports` to find `A` through the import alias →
+  ambient module → `export = B` → `B.exports.A` chain. See "attempted
+  17.233" note below.
+
+  **17.233 ATTEMPTED + REVERTED 2026-05-12 (-2 net regressions, no
+  commit).** Tried to extend the `ExternalModuleReference` branch of
+  `resolveAlias` (Checker.kt ~2402) with the same
+  `globals[specifier].Module` + `resolveAmbientModuleExportEquals`
+  pattern that the `ImportSpecifier` branch uses (Checker.kt
+  ~2499-2516). Targeted test `aliasOnMergedModuleInterface_ts`
+  flipped to passing (+1) but full-suite went 1422 → 1424
+  (-1 net). Root cause: when `import x = require("file1")` resolves
+  through `export = foo`, the alias `x` now points to `foo` instead
+  of the ambient module `file1`. Module augmentations attached to
+  `file1` (via `declare module "file1" { ... }` in another file)
+  become invisible — `x.<augmentedMember>` can no longer find them.
+  Regressed `augmentExportEquals3_1_ts` (and likely 1-2 other
+  augment-export tests). A correct fix would need to merge the
+  ambient module's augmentations into the resolved `export = X`
+  target's symbol, OR resolve to a synthetic symbol that combines
+  both. Out of scope for a single-session surgical fix. Reverted
+  the resolveAlias change while keeping the 17.232 routing
+  foundation. Logged here so future agents don't re-tread.
 
   Net delta: 1422 / 1422 unchanged. Zero regressions across 10078-test
-  suite. Foundation for the follow-on `resolveAlias` extension.
+  suite. Foundation for the (now-deferred) follow-on `resolveAlias`
+  extension that would require augmentation merging.
 
   **Session 2026-05-12 (17.231, 8652 → 8653, +1) — TS2708 for `import X
   = require()` of type-only-namespace `export = X`.** Closes the 17.230
