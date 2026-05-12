@@ -1,6 +1,34 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,644 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,645 / 10,078 tests passing (~85%).
+
+**17.225 (2026-05-12, +1)** — TS2307 "Cannot find module 'foo' or its
+corresponding type declarations." for bare specifier under `moduleResolution: nodenext`
+when the matching `.d.ts` lives directly under `node_modules/` without a
+containing package directory. Closes `nodeNextModuleResolution1_ts`.
+Pattern: `import {x} from "foo";` where `/a/node_modules/foo.d.ts` exists
+but no `/a/node_modules/foo/{package.json,index.d.ts}` does — nodenext
+resolution requires a directory, not a bare `.d.ts` file. Our generic
+`dtsFileBaseNames` check treated every `.d.ts` basename as resolvable;
+the fix adds a nodenext-specific guard gated on "every matching .d.ts
+lives directly under `/node_modules/`" (no subdirectory). A sibling
+project-level `<name>.d.ts` would still suppress TS2307 since it provides
+a legitimate declaration.
+
+New branch in `checkUnresolvedModules` (Checker.kt ~15258), inserted
+after the existing paths-with-explicit-extension branch. Gate stack:
+`!isRelative` + `effectiveModuleRes == "nodenext"` +
+`moduleName !in ambientModuleNames` + `!hasNodeModulesPackage(moduleName)`
++ `moduleName in dtsFileBaseNames` + `matchingDts.all { in /node_modules/ at bare level }`.
+The `allBareInNodeModules` check uses `lastIndexOf("/node_modules/")`
+and verifies the suffix after it contains no `/` — distinguishes
+`/a/node_modules/foo.d.ts` (bare, fires) from `/a/node_modules/foo/index.d.ts`
+(directory-based, valid). Only `nodeNextModuleResolution1.ts` in the test
+corpus matches this pattern; `nodeNextModuleResolution2.ts` uses the
+directory form and is unaffected.
+
+Net delta: 1431 → 1430 failed (8644 → 8645 passing). Zero regressions
+across 10078-test suite.
 
 **17.224 (2026-05-11, +1)** — TS1005 ";' expected." at stray `)` / `]` in
 statement-start position (instead of TS1109 "Expression expected."). Closes

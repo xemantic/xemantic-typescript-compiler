@@ -15255,6 +15255,34 @@ class Checker(
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
                         }
+                    } else if (!isRelative && effectiveModuleRes == "nodenext"
+                        && moduleName !in ambientModuleNames
+                        && !hasNodeModulesPackage(moduleName)
+                        && moduleName in dtsFileBaseNames
+                    ) {
+                        // 17.225: NodeNext rejects a bare `node_modules/<name>.d.ts` as a
+                        // resolvable module — under nodenext rules the resolver requires
+                        // a `node_modules/<name>/` DIRECTORY with package.json (exports/main)
+                        // or `index.{d.ts,ts}`. A `.d.ts` file directly under `node_modules/`
+                        // is a stray declaration to be picked up some other way (e.g.
+                        // `typeRoots`), not a target for a bare specifier. Our generic
+                        // `dtsFileBaseNames` check would otherwise treat every `.d.ts`
+                        // basename as resolvable; add a nodenext-specific guard so the
+                        // `foo` import in `nodeNextModuleResolution1_ts` still emits TS2307.
+                        // Gated on EVERY matching `.d.ts` for the bare name living directly
+                        // under `node_modules/` (not in a subdirectory) — a sibling
+                        // project-level `<name>.d.ts` is still a valid declaration and
+                        // must keep suppressing the diagnostic.
+                        val matchingDts = fileResults.keys.filter { fn ->
+                            isDtsFile(fn) && fn.substringAfterLast("/").removeSuffix(".d.ts") == moduleName
+                        }
+                        val allBareInNodeModules = matchingDts.isNotEmpty() && matchingDts.all { fn ->
+                            val idx = fn.lastIndexOf("/node_modules/")
+                            idx >= 0 && !fn.substring(idx + "/node_modules/".length).contains('/')
+                        }
+                        if (allBareInNodeModules) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
                     }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.

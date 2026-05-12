@@ -2922,6 +2922,50 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.225, 8644 → 8645, +1) — TS2307 for nodenext
+  bare-d.ts in `node_modules/` without containing package directory.**
+  Closes `nodeNextModuleResolution1_ts`. Fresh full-suite confirms 8644
+  baseline (1431 failed). `find_candidates.py --fresh` returns 0/0/0
+  (filtered from 3/72/15) — all visible candidates skip-logged. Looked
+  past `--fresh` to the all-buckets view and picked `nodeNextModuleResolution1`
+  from the MISS bucket (skip-classified at line ~5558 of plan as
+  "requires NodeNext-aware resolver that rejects `node_modules/foo.d.ts`
+  lookups without a proper package.json").
+
+  Test layout: `/a/node_modules/foo.d.ts` exists (bare, no `foo/`
+  directory); `app.ts` does `import {x} from "foo";` with
+  `moduleResolution: nodenext`. Our `dtsFileBaseNames` collects "foo"
+  as a basename → existing branches treat the import as resolvable →
+  no TS2307. TypeScript under nodenext requires
+  `node_modules/<name>/package.json` (or `index.{d.ts,ts}`) — a bare
+  `.d.ts` directly under `node_modules/` is NOT a valid module target.
+
+  Fix is a new branch in `checkUnresolvedModules` (Checker.kt ~15258),
+  inserted after the existing paths-with-explicit-extension branch.
+  Gate: `!isRelative` + `effectiveModuleRes == "nodenext"` +
+  `!hasNodeModulesPackage(moduleName)` + `moduleName in dtsFileBaseNames`,
+  then computes `matchingDts = fileResults.keys.filter { it is .d.ts
+  whose basename matches moduleName }` and verifies
+  `allBareInNodeModules = matchingDts.all { lastIndexOf("/node_modules/")
+  >= 0 && suffix-after-it contains no '/' }`. Emits TS2307 only when
+  every match is bare in node_modules — a sibling project-level
+  `<name>.d.ts` would set `allBareInNodeModules = false` and keep
+  the current suppression.
+
+  Test corpus survey: only `nodeNextModuleResolution1.ts` matches the
+  bare pattern under nodenext. `nodeNextModuleResolution2.ts` uses
+  `/a/node_modules/foo/index.d.ts` (directory form) with a sibling
+  `package.json` — `lastIndexOf("/node_modules/")` matches but the
+  suffix `foo/index.d.ts` contains `/`, so `allBareInNodeModules =
+  false`, no false-positive TS2307. Other nodenext tests
+  (`nodeNextEsmImportsOfPackagesWithExtensionlessMains_ts`,
+  `nodeColonModuleResolution*_ts`, etc.) all use the directory form.
+
+  Net delta: 1431 → 1430 failed (8644 → 8645 passing). Zero
+  regressions across 10078-test suite. Skip-log entry at line ~5558
+  remains accurate as-written but the specific test it covered is now
+  flipped.
+
   **Session 2026-05-11 (MAINT-2 STATUS.md count reconciliation, no code
   change) — STATUS.md drifted +3 from reality (8,646 claimed vs 8,643
   measured).** Continuation /loop after the MAINT-1 audit. Fresh full-suite
