@@ -2922,6 +2922,35 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.232, 8653 unchanged — net-zero foundation) —
+  `exportEqualsIsNamespace` ambient-module fallback.** Extends 17.230's
+  helper to also handle the ambient-external-module form
+  `declare module "X" { ... export = Y; namespace Y { ... } }` —
+  when file-based resolution fails (bare specifier like `"foo"`), walks
+  all script-file ambient module blocks matching the specifier and
+  looks for `export = Identifier` inside whose target is a
+  `ModuleDeclaration` in the same block. Mirrors
+  `isTypeOnlyImportRequire`'s ambient fallback pattern.
+
+  Half-fix for `aliasOnMergedModuleInterface_ts`: the TS2693 → TS2708
+  routing now fires correctly at (5,16) for `foo.bar(...)`. Test still
+  fails on EXTRA TS2694 at (5,12) for `foo.A` — `foo` is the import
+  alias to ambient module "foo" which has `export = B` where B is a
+  merged namespace+interface. `resolveAlias` for `ImportEqualsDeclaration`
+  with `ExternalModuleReference` doesn't currently handle the ambient
+  case: when `resolveModuleSpecifier(specifier, decl)` returns null,
+  the branch `continue`s and `foo` stays as the unresolved alias —
+  `checkQualifiedNameExports` then can't find `A` in `foo.exports`
+  (alias has no exports). The follow-on substep is to extend the
+  `ExternalModuleReference` branch of `resolveAlias` (Checker.kt ~2402)
+  with the same `globals[specifier].Module` + `resolveAmbientModuleExportEquals`
+  pattern that the `ImportSpecifier` branch uses (Checker.kt ~2499-2516).
+  Risk: `resolveAlias` is core machinery — fully fixing this test
+  requires a follow-on session with care.
+
+  Net delta: 1422 / 1422 unchanged. Zero regressions across 10078-test
+  suite. Foundation for the follow-on `resolveAlias` extension.
+
   **Session 2026-05-12 (17.231, 8652 → 8653, +1) — TS2708 for `import X
   = require()` of type-only-namespace `export = X`.** Closes the 17.230
   half-fix on `typeUsedAsValueError2_ts` — line 5 `HelloNamespace.world`
