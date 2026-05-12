@@ -1028,6 +1028,54 @@ class Checker(
     }
 
     /**
+     * 17.230: returns true when there's an ambient external module
+     * `declare module "X";` with no body block in the file corpus. Used to
+     * carve out the TS2693 routing in [checkTypeUsedAsValue] — body-less
+     * ambient modules are `any`-typed (everything from them is value-side),
+     * so importing them with `import X = require("X")` produces a value
+     * alias, not a type-only one.
+     */
+    private fun isBodylessAmbientModule(moduleName: String): Boolean {
+        for (result in binderResults) {
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode
+                    && (stmt.name as StringLiteralNode).text == moduleName
+                    && stmt.body == null) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * 17.230: returns true when the module resolved by [moduleSpecifier] has
+     * `export = X` where X is a namespace (ModuleDeclaration with no Module
+     * flag — pure type-side namespace). Used to skip TS2693 routing in
+     * [checkTypeUsedAsValue] — namespaces used as values should fire TS2708
+     * "Cannot use namespace 'X' as a value", a different diagnostic that
+     * isn't yet wired through this path.
+     */
+    private fun exportEqualsIsNamespace(moduleSpecifier: String): Boolean {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        for (stmt in targetResult.sourceFile.statements) {
+            if (stmt is ExportAssignment && stmt.isExportEquals) {
+                val expr = stmt.expression as? Identifier ?: continue
+                // Find the named declaration in the target file's statements.
+                for (s in targetResult.sourceFile.statements) {
+                    if (s is ModuleDeclaration && s.name is Identifier
+                        && (s.name as Identifier).text == expr.text) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /**
      * Check if an ambient external module (declare module "X") exports only types.
      * Searches all files for matching `declare module` blocks and checks their exports.
      */
@@ -21476,10 +21524,22 @@ interface DataView {
                         // using `X` as a value is TS2693 just like a local
                         // type-only declaration. Other forms (QualifiedName,
                         // Identifier module reference) stay value-side.
+                        //
+                        // 17.230: Exclude body-less ambient modules
+                        // (`declare module "foo";` with no `{...}` block) —
+                        // those are `any`-typed at runtime, so the local name
+                        // is value-side. `isAmbientModuleTypeOnly` treats
+                        // body-less as type-only (used by Transformer elision)
+                        // but for TS2693 emission we need the opposite. Also
+                        // skip when the spec resolves to a Module symbol whose
+                        // export = is a namespace (TS2708 should fire instead
+                        // of TS2693 — out of scope for this fix).
                         val ref = stmt.moduleReference
                         val typeOnly = if (ref is ExternalModuleReference) {
                             val spec = (ref.expression as? StringLiteralNode)?.text
-                            spec != null && isTypeOnlyImportRequire(spec, fileName)
+                            spec != null && isTypeOnlyImportRequire(spec, fileName) &&
+                                !isBodylessAmbientModule(spec) &&
+                                !exportEqualsIsNamespace(spec)
                         } else false
                         if (typeOnly) typeOnlyNames.add(stmt.name.text)
                         else valueNames.add(stmt.name.text)
