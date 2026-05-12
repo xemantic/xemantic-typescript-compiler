@@ -10690,6 +10690,44 @@ class Checker(
         emitTS2693(expr.text, expr, source, fileName)
     }
 
+    /**
+     * 17.227: Narrow helper for the TS2702 alias-resolution branch. Used only
+     * when [resolveAlias] returns the same Alias symbol (resolution failed via
+     * the general paths) — looks for an `export default class X {}` /
+     * `export default interface X {}` / `export default function X() {}` in
+     * the target file and returns its symbol. Limited to default imports of
+     * a Class/Interface/TypeAlias declaration so the TS2702 emission can
+     * fire on the underlying type-only target. Returns null when the import
+     * isn't a default-import-of-named-default-declaration pattern.
+     */
+    private fun resolveDefaultImportTargetForTs2702(alias: Symbol): Symbol? {
+        for (decl in alias.declarations) {
+            if (decl !is ImportDeclaration) continue
+            val clauseName = decl.importClause?.name ?: continue
+            if (clauseName.text != alias.name) continue
+            val specifier = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+            val targetResult = fileResults[targetFile] ?: continue
+            for (stmt in targetResult.sourceFile.statements) {
+                val hasDefault = when (stmt) {
+                    is ClassDeclaration -> ModifierFlag.Default in stmt.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Default in stmt.modifiers
+                    is InterfaceDeclaration -> ModifierFlag.Default in stmt.modifiers
+                    else -> false
+                }
+                if (!hasDefault) continue
+                val name = when (stmt) {
+                    is ClassDeclaration -> stmt.name?.text
+                    is FunctionDeclaration -> stmt.name?.text
+                    is InterfaceDeclaration -> stmt.name.text
+                    else -> null
+                } ?: continue
+                return targetResult.locals[name] ?: continue
+            }
+        }
+        return null
+    }
+
     private fun checkUnresolvedInTypeCore(
         type: TypeNode,
         scope: NameScope,
@@ -10936,14 +10974,25 @@ class Checker(
                             }
                             // 16.4cz: TS2702 — leftmost resolves to a type-only entity
                             // (Class/Interface/TypeAlias) being used as a namespace qualifier.
-                            // Excluded: aliases (an invalid import like `import X from "./y"`
-                            // where y has no default export still resolves to a class via
-                            // fallback; firing TS2702 there double-reports atop TS2613/TS2305).
-                            // Enums allow qualified type access (`E.A` is a literal type), so
-                            // exclude enum-flagged symbols.
+                            // 17.227: aliases now walk through to their target so
+                            // `import X from './m'` / `import { X } from './m'` /
+                            // `import X = require('./m')` of a Class/Interface/TypeAlias
+                            // fire TS2702 just like a local declaration would. Unresolved
+                            // imports (resolveAlias returns the alias unchanged) stay
+                            // suppressed so TS2305/TS2613 isn't double-reported.
+                            // Namespace imports (`* as M`) resolve to a Module symbol and
+                            // are correctly excluded by the Module flag check.
+                            // Enums allow qualified type access (`E.A` is a literal type),
+                            // so exclude enum-flagged symbols.
                             val nonNamespaceTypeFlags = SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias
-                            val isTypeOnly = leftSym.flags.hasAny(nonNamespaceTypeFlags) &&
-                                !leftSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias)
+                            val effectiveSym: Symbol? = if (leftSym.flags.hasAny(SymbolFlags.Alias)) {
+                                val resolved = resolveAlias(leftSym)
+                                if (resolved !== leftSym) resolved
+                                else resolveDefaultImportTargetForTs2702(leftSym)
+                            } else leftSym
+                            val isTypeOnly = effectiveSym != null &&
+                                effectiveSym.flags.hasAny(nonNamespaceTypeFlags) &&
+                                !effectiveSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum)
                             if (isTypeOnly) {
                                 val (line, character) = getLineAndCharacterOfPosition(source, leftmost.pos)
                                 diagnostics.add(Diagnostic(

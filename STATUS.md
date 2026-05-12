@@ -1,6 +1,48 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,647 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,649 / 10,078 tests passing (~85%).
+
+**17.227 (2026-05-12, +2)** — TS2702 "'X' only refers to a type, but is being
+used as a namespace here." for default imports of a class/interface/type-alias
+used in qualified-name type position. Closes both target variants
+(es5 + es2015) of `decoratorMetadataWithImportDeclarationNameCollision7_ts`.
+
+Pattern: `import db from './db'` where db.ts has `export default class db {}`,
+then `let x: db.db` or `constructor(p: db.db)`. The leftmost `db` resolves to
+an Alias symbol whose target is the class — `db.member` in TYPE position is
+invalid (a class isn't a namespace), so TS2702 should fire at the qualifier
+position with length = name length.
+
+Two coordinated changes in `Checker.kt` `checkTypeNameResolved`'s
+QualifiedName branch (~10937):
+
+(1) When the leftmost symbol is an `Alias`, walk through to the resolved
+target via `resolveAlias`. The pre-fix code excluded all Alias-flagged
+symbols outright (citing FP risk from unresolved invalid imports), but
+this also missed valid default-class imports. The new check uses
+`resolved !== leftSym` to detect successful resolution — when resolveAlias
+returns the same Alias symbol, no TS2702 fires (TS2305/TS2613 handles
+the unresolved case). Then a new `resolveDefaultImportTargetForTs2702`
+helper handles the gap where `export default class X {}` lacks a
+`locals["default"]` entry in the binder (the class is bound under its
+own name `X`, not `default`). The helper scans the target file for a
+`ClassDeclaration`/`FunctionDeclaration`/`InterfaceDeclaration` with
+`ModifierFlag.Default` and returns its symbol from `targetResult.locals`.
+
+(2) Outer Module-flag check on `leftSym` is preserved — namespace imports
+(`import * as M from './m'`) still bail before the alias-resolve step
+because their alias resolves to a module symbol (via `createModuleSymbol`),
+which the inner check excludes via `Module` flag.
+
+Squiggle position: `leftmost.pos`, `length = lname.length` — matches
+TypeScript baseline for both class member `db: db.db` (col 9, 2 chars)
+and constructor param `constructor(db: db.db)` (col 21, 2 chars).
+
+Net delta: 1428 → 1426 failed (8647 → 8649 passing). Zero regressions
+across the 10078-test suite. Spot-checked sibling tests that emit
+TS2702 today (`errorForUsingPropertyOfTypeAsType01`,
+`invalidUseOfTypeAsNamespace`, `invalidImportAliasIdentifiers`) — none
+exercise the alias-resolution path, so no behavior change there.
 
 **17.226 (2026-05-12, +2)** — Two coordinated pieces flip both target
 variants of `complicatedPrivacy_ts` (es5 + es2015). Closes the dual-bug
