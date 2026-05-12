@@ -21459,7 +21459,21 @@ interface DataView {
                             else -> {}
                         }
                     }
-                    is ImportEqualsDeclaration -> valueNames.add(stmt.name.text)
+                    is ImportEqualsDeclaration -> {
+                        // 17.228: `import X = require("./m")` where m has
+                        // `export = X` and that X is a type-only entity
+                        // (interface/type alias) imports a type-only name —
+                        // using `X` as a value is TS2693 just like a local
+                        // type-only declaration. Other forms (QualifiedName,
+                        // Identifier module reference) stay value-side.
+                        val ref = stmt.moduleReference
+                        val typeOnly = if (ref is ExternalModuleReference) {
+                            val spec = (ref.expression as? StringLiteralNode)?.text
+                            spec != null && isTypeOnlyImportRequire(spec, fileName)
+                        } else false
+                        if (typeOnly) typeOnlyNames.add(stmt.name.text)
+                        else valueNames.add(stmt.name.text)
+                    }
                     else -> {}
                 }
             }

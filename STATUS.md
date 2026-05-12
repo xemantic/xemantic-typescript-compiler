@@ -1,6 +1,33 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,649 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,651 / 10,078 tests passing (~85%).
+
+**17.228 (2026-05-12, +2)** — TS2693 "'X' only refers to a type, but is
+being used as a value here." for `import X = require("./m")` where `m`
+has `export = X` and that X is a type-only entity (interface / type
+alias). Closes both target variants of `errorsOnImportedSymbol_ts`.
+
+Pattern: `import Sammy = require("./errorsOnImportedSymbol_0");
+var x = new Sammy.Sammy();`. The target module has `interface Sammy {
+new(): any; (): number; } export = Sammy;` — `Sammy` is type-only.
+Currently we add the local name `Sammy` to `valueNames` in
+`checkTypeUsedAsValue` (Checker.kt ~21462), so the value-position uses
+`new Sammy.Sammy()` and `Sammy.Sammy()` silently pass.
+
+The fix consults the existing `isTypeOnlyImportRequire(specifier,
+sourceFileName)` helper (Checker.kt ~998) which already walks
+`export = X` and checks `isSymbolTypeOnly` on the target. When true,
+the local name lands in `typeOnlyNames` instead, so the standard TS2693
+emitter fires on every value-position use. Other ImportEquals forms
+(QualifiedName / Identifier module references) stay value-side
+unchanged.
+
+Squiggle position: at the leftmost identifier of the PropertyAccess
+chain (`Sammy` in `Sammy.Sammy()`), length = name length. Matches
+TypeScript baseline (col 13 / col 9, length 5).
+
+Net delta: 1426 → 1424 failed (8649 → 8651 passing). Zero regressions
+across the 10078-test suite.
 
 **17.227 (2026-05-12, +2)** — TS2702 "'X' only refers to a type, but is being
 used as a namespace here." for default imports of a class/interface/type-alias
