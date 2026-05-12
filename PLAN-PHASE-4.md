@@ -2922,6 +2922,65 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.227, 8647 → 8649, +2) — TS2702 "'X' only
+  refers to a type, but is being used as a namespace here." for default
+  imports of a class/interface/type-alias used in qualified-name type
+  position.** Closes both target variants (es5 + es2015) of
+  `decoratorMetadataWithImportDeclarationNameCollision7_ts`. Recon: fresh
+  full-suite confirms 8647 baseline (1428 failed); `find_candidates.py
+  --fresh` returns 0/0/0 (filtered from 3/69/15). Looked past `--fresh`
+  to the all-buckets view and spot-checked several +2 MISS candidates;
+  picked the TS2702 case as the narrowest tractable surgical fix.
+
+  Pattern: `import db from './db'` (db.ts has `export default class db
+  {}`), then `let x: db.db` / `constructor(p: db.db)`. The leftmost
+  `db` in `db.db` resolves to an Alias whose target is the class —
+  `db.member` in TYPE position is invalid since a class isn't a
+  namespace, so TS2702 should fire at the qualifier position with
+  length = name length.
+
+  Two coordinated changes in Checker.kt's `checkTypeNameResolved`
+  QualifiedName branch (~10937):
+
+  - **Alias-resolution gate**: pre-fix code excluded all Alias-flagged
+    symbols outright via `!leftSym.flags.hasAny(SymbolFlags.Alias)`
+    (16.4cz cited FP risk from unresolved invalid imports). The new
+    check calls `resolveAlias(leftSym)` and uses `resolved !== leftSym`
+    to detect successful resolution — when resolveAlias returns the same
+    Alias (resolution failed), no TS2702 fires (TS2305/TS2613 handles
+    that case). Otherwise the resolved target's flags drive `isTypeOnly`.
+
+  - **New `resolveDefaultImportTargetForTs2702(alias)` helper**: handles
+    the gap where `export default class X {}` lacks a `locals["default"]`
+    entry in the binder (the class is bound under its own name `X`, not
+    `default` — `bindClassDeclaration` doesn't honor `ModifierFlag.Default`).
+    The helper walks `alias.declarations` for ImportDeclaration whose
+    importClause.name matches the alias name, resolves the moduleSpecifier
+    to a target file, then scans `targetResult.sourceFile.statements`
+    for ClassDeclaration / FunctionDeclaration / InterfaceDeclaration
+    with `ModifierFlag.Default` and returns its symbol from
+    `targetResult.locals[name]`.
+
+  Namespace imports (`import * as M`) bail before alias-resolve because
+  their alias resolves to a module symbol via `createModuleSymbol`,
+  excluded by the inner Module flag check. The outer
+  `!leftSym.flags.hasAny(SymbolFlags.Module)` check is preserved.
+
+  **Why narrow rather than fixing `resolveAlias`**: extending the general
+  `resolveAlias` to find `export default class X {}` would propagate to
+  every alias-resolve callsite (~30+ in the checker), risking unintended
+  type-checking changes downstream. The narrow helper only fires for
+  the TS2702 emission, leaving other paths unchanged. If a future
+  session wants the broader fix, the helper logic can be lifted into
+  `resolveAlias`'s default-import branch (right after the locals
+  ["default"] lookup fails) with full-suite verification.
+
+  Net delta: 1428 → 1426 failed (8647 → 8649 passing). Zero regressions
+  across the 10078-test suite. Sibling tests (`errorForUsingPropertyOf
+  TypeAsType01`, `invalidUseOfTypeAsNamespace`, `invalidImportAlias
+  Identifiers`) don't exercise alias resolution — they emit TS2702 for
+  local Class/Interface/TypeAlias — so no behavior change there.
+
   **Session 2026-05-12 (17.226, 8645 → 8647, +2) — TS2693 for type-keyword
   in TypeLiteral computed property name + TS2694 for `implements
   ns.Member` where Member missing from namespace exports.** Closes both
