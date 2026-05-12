@@ -2922,6 +2922,36 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.230, 8651 → 8652, +1) — Carve-outs in 17.228's
+  ImportEqualsDeclaration → typeOnlyNames routing.** Post-17.229 recon
+  revealed two FPs introduced by 17.228 (the test count didn't reflect
+  it because the +2 net hid 1 regression + 2 flips + 0 = +1 — actually
+  STATUS.md said +2 which was correct because the regression on
+  `moduleNodeImportRequireEmit_ts__target_es5__` was hidden in the
+  arithmetic; finally confirmed by 17.230 restoring it). 17.230 carves
+  out two cases:
+
+  - **Body-less ambient module** (`declare module "X";` no `{...}`
+    block): `isAmbientModuleTypeOnly` returns true for body-less
+    (used by Transformer elision intentionally), but for TS2693
+    emission body-less modules are `any`-typed so the local name is
+    value-side. New `isBodylessAmbientModule(moduleName)` helper.
+    Fixes `moduleNodeImportRequireEmit_ts__target_es5__` regression.
+
+  - **`export = X` where X is a Namespace**: TS2708 "Cannot use
+    namespace 'X' as a value" is the correct diagnostic for namespace
+    used as value — not TS2693. New `exportEqualsIsNamespace(spec)`
+    helper resolves the target file and looks for `export = NS` where
+    NS is a ModuleDeclaration. Prevents wrong-code FP on
+    `typeUsedAsValueError2_ts` line 5 (test still fails because TS2708
+    isn't yet wired — half-fix).
+
+  Both gates fire only in `checkTypeUsedAsValue`'s ImportEqualsDeclaration
+  arm — `isAmbientModuleTypeOnly` itself is unchanged so Transformer
+  elision behavior is preserved.
+
+  Net delta: 1424 → 1423 failed (8651 → 8652 passing). Zero regressions.
+
   **Session 2026-05-12 (17.229, 8651 unchanged — net-zero foundation) —
   Check `ComputedPropertyName` expression in `TypeLiteral` members for
   unresolved identifiers.** Two new `checkUnresolvedInExpr` calls in

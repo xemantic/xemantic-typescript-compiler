@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,651 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,652 / 10,078 tests passing (~85%).
+
+**17.230 (2026-05-12, +1)** — Carve-outs in 17.228's
+ImportEqualsDeclaration → typeOnly routing for two FP cases revealed
+post-recon: (a) body-less ambient module `declare module "X";` —
+`any`-typed at runtime, so `import X = require("X"); X;` is a value use
+that shouldn't fire TS2693 (restores
+`moduleNodeImportRequireEmit_ts__target_es5__` regression introduced by
+17.228); (b) `export = X` where X is a Namespace — TS2708 "Cannot use
+namespace 'X' as a value" is the correct diagnostic, not TS2693.
+
+Implementation: two narrow helpers in Checker.kt:
+
+- `isBodylessAmbientModule(moduleName)`: walks script files for
+  `declare module "X"` with `body == null`. Mirrors
+  `isAmbientModuleTypeOnly`'s file-scoping (skips module files) so
+  augmentations don't trip it.
+
+- `exportEqualsIsNamespace(moduleSpecifier)`: resolves the specifier
+  to a target file, scans `ExportAssignment` with `isExportEquals=true`
+  whose expression is an Identifier, then looks for a
+  `ModuleDeclaration` in the target file's statements matching that
+  name. Returns true only when `export = X` resolves to a namespace.
+
+Both gates fire in `checkTypeUsedAsValue`'s `ImportEqualsDeclaration`
+arm. `isAmbientModuleTypeOnly` itself is unchanged — Transformer
+elision (which uses the same helper) keeps its current behavior since
+this is a routing-specific carve-out.
+
+Note: `typeUsedAsValueError2_ts` still fails — half-fixed by 17.228
+(TS2693 for `HelloInterface.world` fires correctly), but the namespace
+case `HelloNamespace.world` needs TS2708 emission which isn't wired
+here. Tracked as a follow-on.
+
+Net delta: 1424 → 1423 failed (8651 → 8652 passing). Zero regressions.
 
 **17.229 (2026-05-12, +0 foundation)** — Check `ComputedPropertyName`
 expressions in `TypeLiteral` members for unresolved identifiers.
