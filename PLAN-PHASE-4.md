@@ -2922,6 +2922,53 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-12 (17.226, 8645 → 8647, +2) — TS2693 for type-keyword
+  in TypeLiteral computed property name + TS2694 for `implements
+  ns.Member` where Member missing from namespace exports.** Closes both
+  target variants of `complicatedPrivacy_ts` (the dual-bug skip-log entry
+  at line ~9895 that had been flagged as "two coordinated pieces; (b)
+  high-risk per 16.4ek experience"). Re-reading 16.4ek's session note
+  (line ~8968) showed it was an unrelated TS2451 fix, NOT the
+  PropertyAccessExpression heritage walker — the warning was based on a
+  misread. Implemented both pieces under conservative gates:
+
+  - **Piece 1 (TS2693 ComputedPropertyName)**: new helper
+    `checkTypeOnlyKeywordInComputedName` (Checker.kt near
+    `checkUnresolvedInType`) — fires when a TypeLiteral
+    PropertyDeclaration / MethodDeclaration has `name is
+    ComputedPropertyName` whose expression is a bare `Identifier` with
+    text in `TYPE_ONLY_KEYWORDS`. Skipped when `scope.has(name)` (so
+    `var number = 1; type T = { [number]: C }` doesn't FP). Wired into
+    both branches of TypeLiteral member walk in `checkUnresolvedInTypeCore`.
+
+  - **Piece 2 (TS2694 heritage namespace member)**: new helper
+    `checkHeritagePropertyAccessForNamespaceMember` (Checker.kt near
+    `isMemberAccessible`) — mirrors `checkQualifiedNameExports` for
+    value-position PropertyAccess. Three conservative gates: (a)
+    `clause.token == ImplementsKeyword` (extends not yet covered), (b)
+    expression is `PropertyAccessExpression` with `Identifier` base
+    (no QualifiedName-mode entries), (c) leftmost resolves to a symbol
+    with `SymbolFlags.Module`. Walks subsequent segments via
+    `exports[segment]` + `isMemberAccessible`; emits TS2694 via the
+    existing `emitTS2694` (which handles TS2724 spelling-suggestion
+    variant) at the first missing/inaccessible segment. Bails silently
+    on any non-Module leftmost so existing class.member / value.field
+    heritage patterns are unaffected.
+
+  **Spot-checked failing-test corpus for collateral.** No other failing
+  test has `[<type-keyword>]:` in a TypeLiteral (verified via `grep` of
+  baselines). Several class-implements-PropertyAccess tests in the
+  corpus (`moduleAugmentationsImports*`, `genericClassWithStaticFactory`,
+  etc.) — verified post-fix that none gain or lose diagnostics: their
+  leftmost identifiers resolve to non-Module symbols (class, interface,
+  type alias), so my new helper bails early.
+
+  Net delta: 1430 → 1428 failed (8645 → 8647 passing). Zero regressions
+  across 10078-test suite. Both target=es5 (TS5107 deprecation line
+  preserved) and target=es2015 variants flip cleanly. Surgical pool
+  recheck post-fix: `find_candidates.py --fresh` returns 0/0/0 (filtered
+  from 3/69/15) — no surgical follow-ups visible at this baseline.
+
   **Session 2026-05-12 (17.225, 8644 → 8645, +1) — TS2307 for nodenext
   bare-d.ts in `node_modules/` without containing package directory.**
   Closes `nodeNextModuleResolution1_ts`. Fresh full-suite confirms 8644
@@ -9892,7 +9939,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - ~~`errorMessagesIntersectionTypes01_ts` / `errorMessagesIntersectionTypes02_ts` → SWAP TS2322 vs our TS2741 at (14,5). Expected: `Type '{ fooProp: string; } & Bar' is not assignable to type 'FooBar'` with chain `Types of property 'fooProp' are incompatible. Type 'string' is not assignable to type 'boolean'.`. Actual: `Property 'fooProp' is missing in type 'T & Bar' but required in type 'Foo'.`. Root cause: `declare function mixBar<T>(obj: T): T & Bar;` called with `mixBar({fooProp: "frizzlebizzle"})` — we don't infer T from the argument, so return type stays as un-substituted `T & Bar`. Then comparing `T & Bar` to `FooBar` (which extends `Foo, Bar`), we find property `fooProp` missing from `T`. Needs generic inference (Blocker #1 — infer T from object-literal arg) AND intersection elaboration (substitute T and walk per-property). Three pieces need to land coordinated: inference, substitution, intersection-aware property comparison.~~ **Both flipped 2026-04-27** — 01 via 17.41/17.42 (split-call-site forReturnType + intersection-source property elaboration); 02 via 17.43 (contextual literal preservation for substituted-T property types).
 - `pathMappingBasedModuleResolution_rootImport_aliasWithRoot_realRootFile_ts` / `pathMappingBasedModuleResolution_rootImport_noAliasWithRoot_realRootFile_ts` → MISS TS5055 (no location — header error "Cannot write file '/bar.js' because it would overwrite input file.") + TS5011 at (8,9) (outDir position) + TS6059 × 2 at (1,21) and (2,21) (import specifier positions). Our existing 16.4cp TS5011 implementation only fires when `outDir` AND (`declaration` OR `composite`) are set; these tests have only `outDir`, so TS5011 doesn't fire. Also, we don't implement TS6059 (file-not-under-rootDir) at all. Even implementing both would leave TS5055 missing (allowJs input-file-overwrite detection). Three-diagnostic cross-file test — not surgical for a single session; would need coordinated multi-file/rootDir/outDir validation work.
 - `didYouMeanElaborationsForExpressionsWhichCouldBeCalled_ts` → MISS TS2741 at (10,8) + TS2740 at (11,8) + TS2322 at (26,5), all three needing TS6212/TS6213 related info ("Did you mean to use 'new' with this expression?" / "Did you mean to call this expression?"). Our checker currently emits only 1 of 4 expected (TS2345 at 17,4 — but without the TS6212 related info). Requires new diagnostic family (TS6212/TS6213) PLUS value-as-object-literal-value TS2741/TS2740 elaboration at object-literal property positions. Three-to-four-piece implementation.
-- `complicatedPrivacy_ts__target_es5/es2015__` → MISS TS2693 at (35,6) for `[number]:` computed-property-name inside a type literal + MISS TS2694 at (73,55) for `implements mglo5.i6` where `i6` is declared but NOT exported from `mglo5`. Two separate gaps: (a) extend TS2693 walker to check computed-property-names inside TypeLiteral — narrow; (b) extend `checkHeritageExprForNamespace` to handle PropertyAccessExpression (currently only Identifier) and run `checkQualifiedNameExports` on namespace-qualified heritage. Note: 16.4ek already attempted (b)-ish extension for `import =` and got -9 regressions; similar care would be needed for heritage-clause variant. Both narrow individually but two coordinated pieces to flip the test.
+- ~~`complicatedPrivacy_ts__target_es5/es2015__` → MISS TS2693 at (35,6) for `[number]:` computed-property-name inside a type literal + MISS TS2694 at (73,55) for `implements mglo5.i6` where `i6` is declared but NOT exported from `mglo5`.~~ **Flipped 17.226 (2026-05-12, +2)** — both pieces landed together with conservative gates. Piece 1: `checkTypeOnlyKeywordInComputedName` helper wired into TypeLiteral PropertyDeclaration/MethodDeclaration name walk. Piece 2: `checkHeritagePropertyAccessForNamespaceMember` helper called from ClassDeclaration heritage loop with three gates (`clause.token == ImplementsKeyword`, PropertyAccessExpression form, leftmost is `SymbolFlags.Module`). The 16.4ek "-9 regressions" warning was based on a misread session note (16.4ek was an unrelated TS2451 fix). Zero regressions at full-suite level.
 
 **Conclusion**: surgical-fix pool for single-diagnostic / single-test wins is fully drained. Next gains require either (a) a blocker #1 sub-step (return-type-from-body for broader patterns than 16.4dg's single-statement `return new X<...>()`, OR named→named cross-target comparison) or (b) a new-diagnostic family implementation (TS6212/TS6213 pair, rootDir validation, iterator-protocol typing for TS2802/TS2495/TS2488) that requires coordinated multi-piece landing.
 

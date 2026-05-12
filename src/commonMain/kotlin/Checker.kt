@@ -9930,6 +9930,12 @@ class Checker(
                         // requires a value, but T resolves only to an enclosing type
                         // parameter (no value-side binding in any outer scope).
                         emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, scope, source, fileName)
+                        // 17.226: TS2694 for `implements ns.Member` where ns is a namespace and
+                        // Member is missing from its exports. Limited to implements clause +
+                        // single-level PropertyAccess to keep regression risk low.
+                        if (clause.token == SyntaxKind.ImplementsKeyword) {
+                            checkHeritagePropertyAccessForNamespaceMember(type.expression, source, fileName)
+                        }
                     }
                 }
                 val ctorParamNames = extractCtorParamNames(stmt.members)
@@ -10664,6 +10670,26 @@ class Checker(
         finally { checkDepth-- }
     }
 
+    /**
+     * In a TypeLiteral member like `[number]: C1`, the bracketed expression is parsed
+     * as a ComputedPropertyName. When the expression is a bare type-keyword Identifier
+     * (`number`, `string`, etc.), emit TS2693 — type-only keywords have no runtime value.
+     * Skip when the name is shadowed by a value-position binding in scope.
+     */
+    private fun checkTypeOnlyKeywordInComputedName(
+        name: NameNode,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (name !is ComputedPropertyName) return
+        val expr = name.expression
+        if (expr !is Identifier) return
+        if (expr.text !in TYPE_ONLY_KEYWORDS) return
+        if (scope.has(expr.text)) return
+        emitTS2693(expr.text, expr, source, fileName)
+    }
+
     private fun checkUnresolvedInTypeCore(
         type: TypeNode,
         scope: NameScope,
@@ -10741,9 +10767,11 @@ class Checker(
                 for (member in type.members) {
                     when (member) {
                         is PropertyDeclaration -> {
+                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
                             member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
                         }
                         is MethodDeclaration -> {
+                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
                             val methodScope = scope.child()
                             member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                             member.typeParameters?.forEach { tp ->
@@ -11160,6 +11188,62 @@ class Checker(
                     length = length,
                 ))
             }
+        }
+    }
+
+    /**
+     * 17.226: For `class C implements ns.Member` where `expr` is a PropertyAccessExpression,
+     * verify that the rightmost name is exported from the leftmost namespace. Mirrors the
+     * type-position [checkQualifiedNameExports] but operates on the value-position
+     * PropertyAccessExpression that heritage clauses parse as. Limited to single-level
+     * (`A.B`) and double-level (`A.B.C`) chains to keep regression risk low; wider chains
+     * fall through silently.
+     */
+    private fun checkHeritagePropertyAccessForNamespaceMember(
+        expr: Expression, source: String, fileName: String,
+    ) {
+        if (expr !is PropertyAccessExpression) return
+        // Collect segment identifiers left-to-right; bail on any non-Identifier base.
+        val segments = mutableListOf<Identifier>()
+        var current: Expression = expr
+        while (current is PropertyAccessExpression) {
+            segments.add(0, current.name)
+            current = current.expression
+        }
+        if (current !is Identifier) return
+        val leftmost = current
+        segments.add(0, leftmost)
+        if (segments.size < 2) return
+        // Resolve leftmost — only proceed when it's a namespace symbol.
+        var symbol: Symbol? = currentFileLocals?.get(leftmost.text) ?: globals[leftmost.text]
+        if (symbol == null) {
+            for (result in binderResults) {
+                symbol = result.locals[leftmost.text]
+                if (symbol != null) break
+            }
+        }
+        if (symbol == null) return
+        symbol = resolveAlias(symbol)
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return
+        // Walk segments. For each non-leftmost segment, look it up in the current
+        // namespace's exports. If absent → TS2694 at that segment. If present but
+        // not accessible (non-declare namespace, no export) → TS2694 at segment.
+        for (i in 1 until segments.size) {
+            val segIdent = segments[i]
+            val exports = symbol!!.exports ?: return
+            val next = exports[segIdent.text]
+            if (next == null) {
+                val namespacePath = symbolToQualifiedName(symbol!!, fileName)
+                emitTS2694(namespacePath, segIdent.text, segIdent, source, fileName, exports = exports)
+                return
+            }
+            val accessible = next.flags.hasAny(SymbolFlags.Module) || isMemberAccessible(next, symbol!!)
+            if (!accessible) {
+                val namespacePath = symbolToQualifiedName(symbol!!, fileName)
+                emitTS2694(namespacePath, segIdent.text, segIdent, source, fileName)
+                return
+            }
+            symbol = resolveAlias(next)
         }
     }
 
