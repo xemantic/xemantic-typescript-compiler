@@ -42288,8 +42288,18 @@ interface DataView {
     ): Type? {
         val body = expr.body ?: return null
         val stmts = body.statements
-        if (stmts.size != 1) return null
-        val retStmt = stmts[0] as? ReturnStatement ?: return null
+        // B4.4: mirror B4.1 — accept multi-statement bodies with exactly one top-level
+        // ReturnStatement. Skips bodies with zero or 2+ top-level returns (returns
+        // nested in if/while/for branches don't count — those have multiple paths
+        // that LUB-aware inference can't handle yet).
+        var retStmt: ReturnStatement? = null
+        for (s in stmts) {
+            if (s is ReturnStatement) {
+                if (retStmt != null) return null
+                retStmt = s
+            }
+        }
+        if (retStmt == null) return null
         val retExpr = retStmt.expression ?: return null
         if (retExpr is Identifier) {
             val match = params.firstOrNull { it.name == retExpr.text }
