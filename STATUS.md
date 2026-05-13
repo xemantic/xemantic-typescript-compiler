@@ -1,6 +1,36 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,656 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,657 / 10,078 tests passing (~85%).
+
+**17.237 (2026-05-13, +1)** — TS2315 "Type 'D' is not generic." for
+`class C extends fn()<T,U>` heritage pattern where `fn` is a sibling
+`FunctionDeclaration` whose body returns a non-generic `ClassExpression`.
+Closes `declarationEmitExpressionInExtends4_ts` — emits TS2315 at the full
+span of `getSomething()<number, string>` (col 17 length 30 on line 5)
+because `function getSomething() { return class D {} }` returns a class
+with empty `typeParameters`.
+
+Implementation: extended `checkConstraintsInExprWithTypeArgs` (Checker.kt
+~47631) with a new `CallExpression` branch on `node.expression`. Narrow
+surgical gates:
+- callee is `Identifier` (no member-access / nested-call patterns);
+- callee name resolves to a sibling `FunctionDeclaration` via the new
+  `siblings: List<Statement>?` parameter (threaded through from the
+  `ClassDeclaration` and `InterfaceDeclaration` arms of
+  `checkConstraintsInStatements`);
+- function body has a `ReturnStatement` whose expression is a
+  `ClassExpression` with empty `typeParameters`;
+- returned class has a name (anonymous classes don't emit — TypeScript's
+  behavior is to name them in this diagnostic).
+
+Span: `start = node.pos`, `length = (index of '>' >= lastArg.end - 1) + 1
+- start` — mirrors `checkHeritageTypeArgCount`'s existing computation
+which handles `node.end` overshoot per CLAUDE.md scanner gotcha.
+
+Net delta: 1419 → 1418 failed (8656 → 8657 passing). Zero regressions
+across 10078-test suite. Only failing test in the TS2315 family flips;
+the entire test corpus has exactly one heritage `class X extends fn()<...>`
+pattern so the surgical scope is bounded.
 
 **17.236 (2026-05-13, +1)** — B1.3 first emission: TS2532 "Object is possibly
 'undefined'." for `typeof X.Y.Z.W` chains in TypeAlias bodies where an

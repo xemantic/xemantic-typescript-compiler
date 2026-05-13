@@ -2796,6 +2796,26 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **17.237. TS2315 "Type 'D' is not generic." for `class X extends fn()<T,U>` heritage where `fn` returns a non-generic `class D {}` (+1 — flips `declarationEmitExpressionInExtends4_ts`).** **DONE 2026-05-13.** Pool was 0/0/0 fresh (filtered from 3/66/15) per `find_candidates.py --fresh` post-17.236; spot-checked the MISS-bucket entry `declarationEmitExpressionInExtends4_ts` (diff +1 at (5,17): missing TS2315 `Type 'D' is not generic.`). Skip-log had previously characterized this as "multi-piece — needs class-expression-return inference + ExpressionWithTypeArguments CallExpression branch". Re-examination showed the narrow surgical version is tractable: the corpus has **exactly one** test matching the `class X extends fn()<args>` heritage pattern (verified via `grep -rlE 'class [A-Za-z]+ extends [A-Za-z_]+\(\)<' typescript-repo/tests/cases/` → only this file). Single-file regression risk is bounded. Implementation extended `checkConstraintsInExprWithTypeArgs` (Checker.kt ~47631) with a new `CallExpression` branch:
+
+  - Refactored the existing Identifier-only logic into a `when (val expr = node.expression)` with `is Identifier` and new `is CallExpression` arms. Added `siblings: List<Statement>? = null` parameter; threaded `stmts` through from `checkConstraintsInStatements`'s `ClassDeclaration` and `InterfaceDeclaration` arms (only call sites in practice).
+  - `CallExpression` arm: callee must be `Identifier`; look up `siblings` for a `FunctionDeclaration` with matching name. Walk function body for first `ReturnStatement` whose expression is `ClassExpression`. If returned class has empty `typeParameters` and a non-null `name`, emit TS2315 with `className` interpolated.
+  - Span: `start = node.pos`, `length` computed via `source.indexOf('>', lastArg.end - 1) + 1 - start` — mirrors `checkHeritageTypeArgCount`'s pattern for closing-`>` location (`node.end` overshoots per CLAUDE.md scanner gotcha).
+  - Conservative gates that close the door on regression:
+    - Anonymous returned classes (no `name`) skip — TypeScript emits `(Anonymous class)` here but the corpus has no such test today; defer until needed.
+    - Callee resolved via sibling-walk, NOT global lookup — protects against name collisions across files.
+    - Other heritage expressions (`new fn()`, `prototype.fn()<>`, `(fn())<>` parenthesized) bypass the branch and fall through to `else -> {}`.
+
+  **Verification.** Targeted test passes; full-suite 10078/1418/3 (was 10078/1419/3, +1 net). Zero regressions across 10078-test suite. Closes the only failing test in the TS2315 emission family (other TS2315 tests `interfaceMergeWithNonGenericTypeArguments`, `jsdocTypeNongenericInstantiationAttempt`, `moduleAndInterfaceSharingName2`, `nonGenericTypeReferenceWithTypeArguments`, `parserGenericsInTypeContexts1/2`, `superCallFromClassThatDerivesNonGenericTypeButWithTypeArguments1`, `templateInsideCallback`, `unusedInvalidTypeArguments` are all passing today). Wider patterns deferred (no failing-test targets):
+  - Anonymous `return class {}` (TypeScript emits `Type '(Anonymous class)' is not generic.`).
+  - `return new SomeClass()` returning instance-typed values where the instance type is non-generic.
+  - `return SomeIdent` where `SomeIdent` resolves to a non-generic class.
+  - PropertyAccess callee (`obj.method()<>`) or chained call expressions.
+
+  Each would need a small addition to the body-walker pattern; pre-promoting them now would be premature without a named test target.
+
+---
+
 - [x] **17.224. TS1005 instead of TS1109 for stray `)` / `]` at statement-start (+1 — flips `parserUnparsedTokenCrash1_ts`).** **DONE 2026-05-11.** Pool was 0/0/0 fresh (filtered from 3/72/16) per `find_candidates.py --fresh`. Spot-checked SWAP candidate `parserUnparsedTokenCrash1_ts` (diff +2 at col 13: exp TS1005 `';' expected.`, act TS1109 `Expression expected.`) — single-position mismatch, queue item 10.2 had marked it skipped citing "parseSemicolon error reporting causes 7 regressions". Re-examined: 10.2's earlier attempt was at the `parseSemicolon` level (adds `)` to that helper's hot path, fires in many statement-end contexts). The narrower fix is at the `parseStatement` level — only fires when a stray `)` / `]` reaches statement-start position (after the broken paren-expr's TS1005 recovery + the followed ExpressionStatement(`2`) + the silent parseSemicolon at `)`). New `CloseParen, CloseBracket` arm in `parseStatement` (Parser.kt ~500) emits TS1005 `';' expected.` at the delimiter (length 1), `nextToken()`, returns null. The `parseStatements` loop sees `savedPos != tokenPos` so the parse-progress-check at line 399 doesn't double-skip. Nested expression contexts (`(+)`, `f(`, etc.) still route through `parsePrimaryExpression`'s catch-all because the parser is mid-expression there, not at statement-start. Net delta: 1432 → 1431 failed (8643 → 8644 passing). Zero regressions across 10078-test suite. Surgical pool re-confirmed empty post-fix; `find_candidates.py --fresh` would now report this test as PASS rather than SKIP.
 
 ---
@@ -2937,6 +2957,62 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (17.237, 8656 → 8657, +1) — TS2315 "Type 'D' is not
+  generic." for `class X extends fn()<T,U>` heritage where `fn` returns a
+  non-generic `class D {}` (flips `declarationEmitExpressionInExtends4_ts`).**
+  Single-fix /loop iteration after 17.236 / B1.3. Pool empty per
+  `find_candidates.py --fresh` (0/0/0 filtered from 3/66/15) — same baseline
+  as the post-17.235 / pre-17.236 reconnaissance. The candidate
+  `declarationEmitExpressionInExtends4_ts` had been spot-checked twice in
+  prior sessions (post-17.43 and post-17.25 recons) and skip-logged as
+  "Architectural — needs call-expression-return inference + arity check."
+  Re-examination this session showed the surgical version is tractable:
+  TypeScript's TS2315 emission for this pattern doesn't actually require
+  resolving the function's return type through the type system — it just
+  needs to detect the syntactic shape `class X extends ident()<args>` where
+  `ident` is a sibling FunctionDeclaration whose body has a
+  `return ClassExpression` with no type parameters. Verified the test
+  corpus has **exactly one** test matching this heritage pattern (grep
+  `'class [A-Za-z]+ extends [A-Za-z_]+\(\)<'` returns only this file), so
+  regression risk is bounded to that single file.
+
+  **What landed.** Extended `checkConstraintsInExprWithTypeArgs`
+  (Checker.kt ~47631) with a `when (val expr = node.expression)` over
+  Identifier (existing logic) and new CallExpression (new logic) branches.
+  Added optional `siblings: List<Statement>? = null` parameter; threaded
+  `stmts` through from `checkConstraintsInStatements`'s ClassDeclaration
+  and InterfaceDeclaration arms. The CallExpression branch:
+  1. callee must be Identifier;
+  2. resolve via `siblings.firstNotNullOfOrNull` for a matching
+     FunctionDeclaration;
+  3. find first `ReturnStatement` whose expression is `ClassExpression`;
+  4. if returned class has empty `typeParameters` and a non-null `name`,
+     emit TS2315 with `className` interpolated.
+
+  Span computation mirrors `checkHeritageTypeArgCount`:
+  `start = node.pos`, `length = source.indexOf('>', lastArg.end - 1) + 1
+  - start` — works around `node.end` overshoot per CLAUDE.md scanner
+  gotcha.
+
+  **Verification.** Targeted test passes; full-suite 10078/1418/3 (was
+  10078/1419/3, +1 net). Zero regressions. Closes the only failing test
+  in the TS2315 emission family. Surgical pool re-confirmed exhausted
+  post-fix; next session would face the same recon→promote-blocker
+  cycle that produced B1.3 last session.
+
+  **Lessons + follow-ons.** (a) Re-examining skip-log MISS entries
+  against current infrastructure remains the highest-yield surgical
+  workflow — this test had been skip-logged twice but the surgical
+  scope had simply been overestimated; the actual TS2315 fix is
+  syntactic, not semantic. (b) Wider TS2315 patterns (anonymous class
+  returns → `(Anonymous class)` display; `return new SomeClass()` for
+  non-generic instances; PropertyAccess callees; chained calls) all
+  have zero failing-test targets in the current corpus and should not
+  be pre-promoted. (c) The `siblings` parameter threading sets up
+  infrastructure for any future heritage-expression check that needs
+  same-scope declaration lookup without going through `globals` (which
+  conflates cross-file module locals per Blocker #3).
 
   **Session 2026-05-13 (17.236, 8655 → 8656, +1) — B1.3 first emission:
   TS2532 "Object is possibly 'undefined'." for `typeof X.Y.Z.W` chains in

@@ -47580,7 +47580,7 @@ interface DataView {
                 }
                 is ClassDeclaration -> {
                     stmt.heritageClauses?.forEach { clause ->
-                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName) }
+                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
                     if (extendsClauseIsNonGeneric(stmt) && classMergedWithInterface(stmt, stmts)) {
                         for (member in stmt.members) {
@@ -47606,7 +47606,7 @@ interface DataView {
                 }
                 is InterfaceDeclaration -> {
                     stmt.heritageClauses?.forEach { clause ->
-                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName) }
+                        clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
                     for (member in stmt.members) {
                         when (member) {
@@ -47628,37 +47628,73 @@ interface DataView {
         }
     }
 
-    private fun checkConstraintsInExprWithTypeArgs(node: ExpressionWithTypeArguments, source: String, fileName: String) {
+    private fun checkConstraintsInExprWithTypeArgs(node: ExpressionWithTypeArguments, source: String, fileName: String, siblings: List<Statement>? = null) {
         val typeArgs = node.typeArguments ?: return
-        val name = when (val expr = node.expression) {
-            is Identifier -> expr.text
-            else -> return
-        }
-        // TS2315: check if type is not generic (only for class/interface/type alias/module, not variables)
-        if (name !in BUILTIN_GENERICS) {
-            val symbol = globals[name]
-            if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
-                val typeParams = getTypeParametersOfSymbol(symbol)
-                if (typeParams == null || typeParams.isEmpty()) {
-                    val start = node.pos
-                    // node.end overshoots — compute true end from last type arg
-                    val lastArg = typeArgs.last()
-                    val length = lastArg.end - start
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Type '$name' is not generic.",
-                        category = DiagnosticCategory.Error,
-                        code = 2315,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+        when (val expr = node.expression) {
+            is Identifier -> {
+                val name = expr.text
+                // TS2315: check if type is not generic (only for class/interface/type alias/module, not variables)
+                if (name !in BUILTIN_GENERICS) {
+                    val symbol = globals[name]
+                    if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
+                        val typeParams = getTypeParametersOfSymbol(symbol)
+                        if (typeParams == null || typeParams.isEmpty()) {
+                            val start = node.pos
+                            // node.end overshoots — compute true end from last type arg
+                            val lastArg = typeArgs.last()
+                            val length = lastArg.end - start
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$name' is not generic.",
+                                category = DiagnosticCategory.Error,
+                                code = 2315,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                    }
                 }
+                checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
             }
+            is CallExpression -> {
+                // TS2315 for `class C extends fn()<T,U>` when `fn` is a local FunctionDeclaration
+                // whose body returns a non-generic ClassExpression. Narrow surgical case — only
+                // fires when callee is an Identifier resolving to a sibling FunctionDeclaration
+                // with a single `return ClassExpression` body and the returned class has no
+                // type parameters.
+                val callee = expr.expression as? Identifier ?: return
+                val sibs = siblings ?: return
+                val calleeName = callee.text
+                val fnDecl = sibs.firstNotNullOfOrNull { s ->
+                    (s as? FunctionDeclaration)?.takeIf { it.name?.text == calleeName }
+                } ?: return
+                val body = fnDecl.body ?: return
+                val returnedClass = body.statements.firstNotNullOfOrNull { s ->
+                    (s as? ReturnStatement)?.expression as? ClassExpression
+                } ?: return
+                if (!returnedClass.typeParameters.isNullOrEmpty()) return
+                val className = returnedClass.name?.text ?: return
+                val start = node.pos
+                val lastArgEnd = typeArgs.last().end
+                val gtIdx = source.indexOf('>', lastArgEnd - 1)
+                val length = if (gtIdx >= 0) gtIdx + 1 - start else (lastArgEnd - start)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$className' is not generic.",
+                    category = DiagnosticCategory.Error,
+                    code = 2315,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            else -> {}
         }
-        checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
     }
 
     /**
