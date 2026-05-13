@@ -39622,7 +39622,7 @@ interface DataView {
                                 }
                             }
                             val rawReturn = md.type?.let { getTypeFromTypeNode(it) }
-                                ?: inferSimpleReturnTypeFromBody(md)
+                                ?: inferSimpleReturnTypeFromBody(md, target)
                                 ?: md.body?.let {
                                     if (!bodyHasReturnValue(it)) voidType else null
                                 }
@@ -39691,7 +39691,7 @@ interface DataView {
      * `(other: number) => number` and downstream parameter-mismatch chain lines
      * are suppressed by the trivial-any return-type compatibility shortcut).
      */
-    private fun inferSimpleReturnTypeFromBody(md: MethodDeclaration): Type? {
+    private fun inferSimpleReturnTypeFromBody(md: MethodDeclaration, enclosingClass: Type.Interface? = null): Type? {
         val stmts = md.body?.statements ?: return null
         // B4.1: locate the body's single top-level ReturnStatement. Multi-statement
         // bodies like `function clone() { console.log("..."); return new MyList<T>(...) }`
@@ -39755,6 +39755,36 @@ interface DataView {
                 } catch (_: StackOverflowError) {
                     null
                 }
+            }
+            is PropertyAccessExpression -> {
+                // B4.3: `return this.field` — look up the field on the enclosing class.
+                // Only fires when (a) caller passed `enclosingClass`, (b) the receiver is
+                // `ThisExpression`, (c) the field is a PropertyDeclaration on the same
+                // class with an explicit type annotation. Conservative scope: skips
+                // inherited properties (which would need base-chain mapper application)
+                // and accessor declarations (get/set semantics differ).
+                if (enclosingClass == null) return null
+                val receiver = retExpr.expression as? Identifier ?: return null
+                if (receiver.text != "this") return null
+                val fieldName = retExpr.name.text
+                val classDecls = enclosingClass.symbol?.declarations ?: return null
+                for (cDecl in classDecls) {
+                    val members = when (cDecl) {
+                        is ClassDeclaration -> cDecl.members
+                        is InterfaceDeclaration -> cDecl.members
+                        else -> continue
+                    }
+                    val match = members.firstOrNull {
+                        it is PropertyDeclaration &&
+                            (it.name as? Identifier)?.text == fieldName
+                    } as? PropertyDeclaration ?: continue
+                    val annotation = match.type ?: return null
+                    return try {
+                        val raw = getTypeFromTypeNode(annotation)
+                        if (raw === errorType || raw === anyType) null else raw
+                    } catch (_: StackOverflowError) { null }
+                }
+                null
             }
             else -> null
         }
