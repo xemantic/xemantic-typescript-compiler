@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,653 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,654 / 10,078 tests passing (~85%).
+
+**17.234 (2026-05-13, +1)** — Ambient module `export = X` fallback in
+`checkQualifiedNameExports`'s final-segment check. Closes
+`aliasOnMergedModuleInterface_ts` — the residual FP TS2694
+"Namespace 'foo' has no exported member 'A'." at (5,12) is now
+suppressed because `foo.A` correctly walks through foo's
+`export = B` to find `B.exports["A"]`.
+
+Implementation: in Checker.kt's `checkQualifiedNameExports` final-segment
+lookup (~11290), when the direct `exports[rightId.text]` lookup returns
+null AND `symbol` is an ambient module with `export = X`, fall back to
+`X.exports[rightId.text]` via the existing 17.232
+`resolveAmbientModuleExportEquals` helper. Accessibility check
+(`isMemberAccessible(candidate, ambientTarget)`) applies on the
+fallback path. The fallback only fires when the direct lookup fails
+— preserves augmentation resolution via the primary path. Avoids
+the 17.233 revert pattern (mutating `resolveAlias` to walk through
+ambient `export = X` broke `augmentExportEquals3_1_ts` because the
+alias's identity changed; the fallback here only adds a secondary
+lookup at the diagnostic site).
+
+Net delta: 1422 → 1421 failed (8653 → 8654 passing). Zero
+regressions across 10078-test suite. Closes one previously-skipped
+candidate ("TS2708 vs TS2694 swap, multi-piece") with a single-
+location fix made tractable by the 17.232 foundation.
 
 **17.231 (2026-05-12, +1)** — Wire TS2708 emission for `import X = require()`
 where `export = X` resolves to a type-only namespace. Completes the

@@ -2922,6 +2922,41 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-13 (17.234, 8653 → 8654, +1) — Ambient module
+  `export = X` fallback in `checkQualifiedNameExports` final-segment
+  lookup.** Closes `aliasOnMergedModuleInterface_ts` (the residual after
+  17.232's foundation). Pre-fix state: TS2708 at (5,16) fires correctly
+  (since 17.231) but EXTRA TS2694 "Namespace 'foo' has no exported
+  member 'A'." at (5,12) still fired for `var x: foo.A` where `foo`
+  is `import foo = require("foo")` and `"foo"` is an ambient module
+  with `export = B` (B = merged namespace+interface containing
+  `export interface A {}`).
+
+  Root cause traced: in `checkQualifiedNameExports`, `symbol = globals["foo"]`
+  returns the merged Module+Alias symbol (ambient module decl + import
+  equals merged in `mergeSymbolTable`). `resolveAlias(symbol)` returns
+  symbol unchanged because `resolveModuleSpecifier("foo", ...)` returns
+  null (ambient module, no file). Then `symbol.exports["A"]` is null
+  because A is in `B.exports`, not `foo.exports` — TS2694 emitted.
+
+  Fix: in Checker.kt's `checkQualifiedNameExports` (~11290), when the
+  direct `exports[rightId.text]` lookup returns null, fall back to
+  `resolveAmbientModuleExportEquals(symbol, mutableSetOf())` (17.232
+  helper). If the resolved target's `.exports[rightId.text]` returns
+  an accessible candidate, use it as the member. Accessibility is
+  checked against the ambient target (not the original symbol). The
+  fallback ONLY fires when the direct lookup fails — preserves
+  augmentation resolution via the primary path (avoids the 17.233
+  revert pattern where mutating `resolveAlias` broke
+  `augmentExportEquals3_1_ts`).
+
+  Verification: `aliasOnMergedModuleInterface_ts` flips clean.
+  Full-suite re-run 10078/1421/3 (was 10078/1422/3, +1 net). Zero
+  regressions. Two-session arc closure: 17.232 landed the foundation
+  (`exportEqualsIsNamespace` + `resolveAmbientModuleExportEquals`
+  ambient fallback helpers, net-zero), 17.234 wires the fallback into
+  the TS2694 emission site with a 7-line addition.
+
   **Session 2026-05-12 (17.232, 8653 unchanged — net-zero foundation) —
   `exportEqualsIsNamespace` ambient-module fallback.** Extends 17.230's
   helper to also handle the ambient-external-module form
@@ -10088,7 +10123,7 @@ Flips `genericSpecializations2_ts` (the targeted test) plus 2 other tests that b
 - 16.4gn (+1, `signatureLengthMismatchCall_ts`): arity-mismatch branch in `getFunctionMismatchElaboration` — `Target signature provides too few arguments. Expected N or more, but got M.` when `source.minArgumentCount > target.parameters.size`. Branch taken before per-param comparison since arity gap is more fundamental.
 - 16.4go (+1, `typeArgumentConstraintResolution1_ts`): TS2793 ("implementation would have succeeded") gate for the explicit-type-args overload path. `getOverloadImplementationRelated` was generating implRelated unconditionally; now gated on `allArgumentsMatch(args, implSig)` AND new `implTypeArgConstraintsSatisfied(implSig, resolvedTypeArgs)` helper that walks the impl's own type-param constraint nodes and rejects when supplied type-args don't satisfy them.
 
-Other small-diff candidates re-examined this session (all classified as architectural or multi-piece): `aliasDoesNotDuplicateSignatures_ts` (cross-file `export = alias` named import), `circularConstraintYieldsAppropriateError_ts` (TS2310 through default-type-arg cycles), `inheritedGenericCallSignature_ts` / `superCallArgsMustMatch_ts` (Blocker #1 generic param-type substitution at call sites), `parserUnparsedTokenCrash1_ts` (Blocker #4 parser error-recovery), ~~`typeGuardConstructorDerivedClass_ts` (control-flow narrowing)~~ (flipped 17.5a), `arrayAssignmentTest4_ts` (lib-version subset, "29 more" vs "25 more" Array members), `aliasOnMergedModuleInterface_ts` (TS2708 vs TS2694 swap, multi-piece), `deepElaborationsIntoArrowExpressions_ts` / `contextualTyping11_ts` (deep-elaboration: leaf-position emission inside arrow bodies / array literals — outer-position TS2322 emitted instead of innermost-leaf), `arrayconcat_ts` (TS18048 strict null check).
+Other small-diff candidates re-examined this session (all classified as architectural or multi-piece): `aliasDoesNotDuplicateSignatures_ts` (cross-file `export = alias` named import), `circularConstraintYieldsAppropriateError_ts` (TS2310 through default-type-arg cycles), `inheritedGenericCallSignature_ts` / `superCallArgsMustMatch_ts` (Blocker #1 generic param-type substitution at call sites), `parserUnparsedTokenCrash1_ts` (Blocker #4 parser error-recovery), ~~`typeGuardConstructorDerivedClass_ts` (control-flow narrowing)~~ (flipped 17.5a), `arrayAssignmentTest4_ts` (lib-version subset, "29 more" vs "25 more" Array members), ~~`aliasOnMergedModuleInterface_ts` (TS2708 vs TS2694 swap, multi-piece)~~ (flipped 17.234), `deepElaborationsIntoArrowExpressions_ts` / `contextualTyping11_ts` (deep-elaboration: leaf-position emission inside arrow bodies / array literals — outer-position TS2322 emitted instead of innermost-leaf), `arrayconcat_ts` (TS18048 strict null check).
 
 **Session 2026-04-25 (17.5b, 8343 → 8343, net-zero infra) — ElementAccessExpression form + negative-direction correctness fix in `narrowByConstructorEquals`:** Two narrow extensions of 17.5a:
 1. `isConstructorAccessOf` now also matches `ElementAccessExpression` whose `argumentExpression` is a `StringLiteralNode` or `NoSubstitutionTemplateLiteralNode` with text `"constructor"`. Mirrors the existing `PropertyAccessExpression` shape so `var1["constructor"] === C1` narrows the same as `var1.constructor === C1`.
