@@ -39693,8 +39693,20 @@ interface DataView {
      */
     private fun inferSimpleReturnTypeFromBody(md: MethodDeclaration): Type? {
         val stmts = md.body?.statements ?: return null
-        if (stmts.size != 1) return null
-        val retStmt = stmts[0] as? ReturnStatement ?: return null
+        // B4.1: locate the body's single top-level ReturnStatement. Multi-statement
+        // bodies like `function clone() { console.log("..."); return new MyList<T>(...) }`
+        // should still produce inferred return type when exactly one top-level
+        // ReturnStatement carries an expression. No recursion into nested blocks /
+        // if-bodies / loops — those have multiple paths that LUB-aware inference
+        // can't handle yet, and falling back to anyType is correct there.
+        var retStmt: ReturnStatement? = null
+        for (s in stmts) {
+            if (s is ReturnStatement) {
+                if (retStmt != null) return null  // 2+ top-level returns: bail
+                retStmt = s
+            }
+        }
+        if (retStmt == null) return null
         val retExpr = retStmt.expression ?: return null
         return when (retExpr) {
             is StringLiteralNode -> stringType
