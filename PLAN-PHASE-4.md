@@ -2796,6 +2796,7 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B4.1. Blocker #4 — Extend `inferSimpleReturnTypeFromBody` to multi-statement bodies with single ReturnStatement (+0 foundation).** **DONE 2026-05-13.** Promoted 2026-05-13 post-17.239 after a recon session confirmed surgical pool genuinely empty (0/0/0 fresh; 7+ SKIP candidates spot-checked, all confirmed architectural per existing skip-log entries — `aliasAssignments_ts`, `recursiveTypeRelations_ts`, `getAndSetNotIdenticalType2/3_ts`, `errorWithSameNameType_ts`, `intersectionWithConflictingPrivates_ts`, `relationComplexityError_ts`, `inferFromGenericFunctionReturnTypes1_ts`, `trivialSubtypeReductionNoStructuralCheck_ts`, etc.). Current `inferSimpleReturnTypeFromBody` (Checker.kt:39694) bails on `stmts.size != 1` — extending to multi-statement bodies with exactly one top-level ReturnStatement (others being side-effect statements, no nested-function/loop traversal) would unlock generic-method return-type elaboration depth for body patterns like `function clone() { console.log("..."); return new MyList<T>(...) }`. Listed in "Known architectural blockers" section as a Blocker #4 sub-case. Narrow scope, bounded risk — gated to MethodDeclaration only, falls back to anyType for unhandled patterns. Specific failing-test targets unverified at promotion time; the substep is a foundation/depth-extension that may flip 0-3 tests depending on what bodies in the corpus match this shape. **Implementation outline:** in `inferSimpleReturnTypeFromBody`, replace the `if (stmts.size != 1) return null` early-return with a top-level walk that (a) collects `ReturnStatement`s found at the statements top level (does NOT recurse into IfStatement/ForStatement/Block/etc. — those branches have multiple paths that LUB-aware inference can't handle yet); (b) bails when zero or 2+ returns; (c) when exactly one, processes its expression via the existing simple-shape `when` matcher. Risk: extending past the single-statement gate might surface MethodDeclaration bodies where the existing "null return → anyType fallback" was load-bearing (similar to 17.69's discovery that anyType-passthrough is sometimes load-bearing). Full-suite verification needed; if any regressions, revert and re-scope to a narrower pattern (e.g. require all preceding statements to be `ExpressionStatement` with a side-effect-free expression — `console.log(...)`, `void 0`, etc.). **Why narrow scope first:** the Blocker #4 description lists multi-statement bodies as one of four small sub-cases (≤ 10 tests across all); extending the existing helper is the smallest standalone substep. Other Blocker #4 sub-cases (Identifier returns `return param` / `return this.field`, overload-aware TS2416 for lib generic interfaces, different-target TS2352 with elaboration) are separate substeps.
 - [x] **17.239. Generalize 17.238's multi-line ArrowFunction body squiggle clip from `body.pos + 1` to end-of-line of body open brace (+0 foundation).** **DONE 2026-05-13.** Net-zero infra commit. 17.238's clip used `body.pos + 1 - start` (one char past `{`), which is correct when `{` is immediately followed by `\n` (the common case) but off-by-one when `{` has trailing same-line whitespace (e.g. `{ \n`). Replaced with `source.indexOf('\n', body.pos).coerceAtMost(fullEnd) - start`, falling back to `fullEnd` when no `\n` is found. Same result for `{\n`; extends to include trailing whitespace for `{ \n` etc. Closes the line-32 off-by-one piece of `arrowFunctionErrorSpan_ts`'s 3-piece diff (verified targeted: `multi line with a comment 2` block-body squiggle now matches expected 8-char `() => { ` span). Test still fails on TS1200 line-terminator-before-arrow at line 18 (parser; no other test in corpus emits TS1200 — net-0 alone) and multi-line comment-3 position issue at line 43+ (the arrow's `() =>` and body `{` straddle comment lines, our squiggle spans both at start-and-body-`{`; TypeScript clips to end-of-line of `=>` line; deferred). The `{ \n` pattern is unique to `arrowFunctionErrorSpan.ts` in the whole corpus (grep verified), so the foundation has no other immediate consumers but corrects a subtle off-by-one that any future TS2345 fn-vs-fn callback with multi-line arrow bodies featuring leading-line trailing whitespace will benefit from. **Verification.** Targeted tests pass: `undeclaredModuleError_ts` (17.238's target), `assignmentCompatBug5_ts` (the single-line carve-out test 17.238 used as regression guard), and the line-32 piece of `arrowFunctionErrorSpan_ts`. Full-suite 10078/1417/3 (unchanged from 17.238 baseline). Zero regressions.
 
 ---
@@ -2973,6 +2974,100 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (B4.1, 8658 unchanged — net-zero foundation) —
+  Extend `inferSimpleReturnTypeFromBody` to multi-statement bodies with
+  single top-level ReturnStatement.** Continuation /loop iteration after
+  17.239. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered
+  from 3/64/15) — same baseline as post-17.239. Spot-checked 10+ candidates
+  from SKIP-MISS and SKIP-SWAP buckets without finding fresh surgical
+  scope this session: `aliasAssignments_ts` (cross-file `typeof import("...")`
+  display + module-typing — architectural), `getAndSetNotIdenticalType2_ts`
+  / `getAndSetNotIdenticalType3_ts` (multi-piece: `this` typing in methods
+  + setter-param-aware prop type for assignment context — architectural),
+  `recursiveTypeRelations_ts` (Blocker #2 + parameter contravariance —
+  keyof S substitution), `errorWithSameNameType_ts` (module-qualified
+  display + TS2367 emission for cross-module Interface equality —
+  multi-piece), `varianceAnnotationValidation_ts` (TS2636 + `out T` /
+  `sub-T` / `super-T` synthetic display — new TypeScript 4.7 feature),
+  `inferFromGenericFunctionReturnTypes1_ts` (Blocker #1 generic inference
+  + chain narrowing), `intersectionWithConflictingPrivates_ts` (intersection
+  reduce-to-never rule — multi-piece), `relationComplexityError_ts` (TS2859
+  new diagnostic), `trivialSubtypeReductionNoStructuralCheck_ts` (TS7023
+  implicit-return-any-via-self-ref — new diagnostic),
+  `deeplyNestedAssignabilityErrorsCombined_ts` (class-as-value `typeof Ctor2`
+  display + construction-path property chain — multi-piece),
+  `namespaceDisambiguationInUnion_ts` (namespace-qualified type-alias
+  display in union — multi-piece), `aliasUsageInOrExpression_ts`
+  (`typeof import("...")` display + ternary union elaboration —
+  architectural), `inferFromNestedSameShapeTuple_ts` (recursive tuple
+  + `as const` satisfies — multi-piece), `jsFileCompilationTypeAssertions_ts`
+  (JSX-in-JS parsing — out of scope), `intersectionWithConflictingPrivates_ts`
+  (intersection-conflicting-privates → never reduction — multi-piece).
+  All confirmed architectural per existing skip-log entries. Spot-running
+  5 directly (`conditionalAnyCheckTypePicksBothBranches_ts`,
+  `augmentExportEquals2_1_ts`, `errorMessageOnIntersectionsWithDiscriminants01_ts`,
+  `ambientPropertyDeclarationInJs_ts`, `augmentExportEquals1_1_ts`)
+  confirmed all 5 still fail — no stale skip-log entries surfaced.
+
+  Per anti-loop rule, surgical pool genuinely empty with no unchecked
+  Blocker substep in queue at session start. Promoted **B4.1** to the
+  queue as the smallest standalone Blocker #4 sub-case from the
+  documented sub-case list, then implemented it in the same session.
+
+  **What landed.** `inferSimpleReturnTypeFromBody` (Checker.kt:39694)
+  no longer bails on `stmts.size != 1`. New top-level walk over
+  `md.body.statements` (no recursion into nested blocks/if-bodies/
+  loops) collects ReturnStatements; bails when zero or 2+ are found;
+  when exactly one, dispatches to the existing simple-shape `when`
+  matcher on its expression. Other statements (side-effect
+  ExpressionStatements like `console.log("...")` etc.) are simply
+  skipped — they don't affect return type inference. Bodies with
+  nested returns (e.g. `if (x) return a; return b;`) still bail
+  because they have multiple top-level returns OR no top-level return
+  (the if-body's return doesn't count at top level).
+
+  **Verification.** Full-suite 10078/1417/3 (unchanged from 17.239
+  baseline). Zero regressions, zero flips. The corpus has no failing
+  MethodDeclaration in this exact shape (multi-stmt body + single
+  top-level return with the simple-shape return expression
+  `new X<...>()`, `<lit>`, `<unary minus><lit>`, `true`/`false`) —
+  the extension is genuinely foundation work that future agents will
+  benefit from when:
+  - a generic-method body has a side-effect statement before a
+    `return new MyList<T>(...)` (the helper's call site at
+    Checker.kt:39625 in `getTypeOfSymbolWorker`'s MethodDeclaration
+    arm will then get the inferred Type.Reference instead of falling
+    through to `anyType`, which affects downstream relation-engine
+    elaboration depth via `resolveGenericPropertyType`);
+  - similar shapes appear in interface-method return-type elaboration
+    where the cached return type cascades through structural
+    comparison.
+
+  **Lessons.** (a) Extending narrow inference helpers is generally
+  safe when the fallback (`anyType` here) was a graceful-degradation
+  default rather than a load-bearing wrong-but-tolerable behavior.
+  17.69's revert showed the opposite: pushing typeParameters into
+  body scope replaced graceful errorType degradation with active
+  TypeParam comparison that other checks weren't ready to handle
+  (-25 regressions). This change is the safe direction. (b) The
+  "extend a narrow helper to a broader shape" pattern often has +0
+  immediate yield because the corpus tests that would gate on the
+  broader shape already pass via other mechanisms (e.g. var-decl
+  initializer inference, default-anyType fallback chain length).
+  The value is forward-compatibility: future relation-engine changes
+  that need richer inferred return types will benefit. (c) The
+  multi-statement-body pattern is genuinely common in user code
+  (`console.log` for debugging, assertions, etc.) but uncommon in
+  TypeScript's test corpus — most test methods use single-statement
+  bodies for clarity. (d) Wide-side-effect-statement
+  patterns like `return obj.method(); ` are already covered by
+  the existing MethodDeclaration arm's call to
+  `inferSimpleReturnTypeFromBody`'s caller site
+  (`getTypeOfSymbolWorker`) which falls through to `bodyHasReturnValue`
+  → voidType when no return value present. So the safety floor for
+  this helper is well-defined: handle simple shapes for narrow yield;
+  fall through cleanly otherwise.
 
   **Session 2026-05-13 (17.239, 8658 unchanged — net-zero foundation) —
   Generalize 17.238's multi-line ArrowFunction body squiggle clip from
