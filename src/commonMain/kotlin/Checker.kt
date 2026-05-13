@@ -53274,10 +53274,11 @@ interface DataView {
                 val paramTypeStr = typeToString(paramType)
                 val start = arg.pos
                 // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
-                // body's `{` inclusive. TypeScript clips at the body open brace only when
-                // the body spans multiple source lines; single-line bodies like `() => {}`
-                // keep the full arrow span. Detect multi-line by checking the body's
-                // text contains a newline.
+                // end of source line containing the body's `{`. TypeScript clips at the
+                // body open brace line only when the body spans multiple source lines;
+                // single-line bodies like `() => {}` keep the full arrow span. End-of-line
+                // includes any trailing same-line whitespace after `{` (e.g. `{ \n` keeps
+                // the trailing space in the squiggle, matching baseline 8-char span).
                 val length = if (arg is ArrowFunction && arg.body is Block) {
                     val body = arg.body as Block
                     val fullEnd = expressionTrueEnd(arg)
@@ -53285,7 +53286,8 @@ interface DataView {
                         body.pos < fullEnd &&
                         source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
                     if (isMultiLine) {
-                        (body.pos + 1 - start).coerceAtLeast(1)
+                        val eolPos = source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
+                        (eolPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
                     } else {
                         fullEnd - start
                     }

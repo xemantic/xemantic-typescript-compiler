@@ -2,6 +2,36 @@
 
 **Phase 4 — Checker buildout.** 8,658 / 10,078 tests passing (~85.9%).
 
+**17.239 (2026-05-13, +0 foundation)** — Generalize 17.238's multi-line
+ArrowFunction Block-body squiggle clip from `body.pos + 1` (right after
+`{`) to end-of-line of body opening brace. Captures trailing same-line
+whitespace after `{` (e.g. `{ \n` → clip includes the trailing space)
+matching TypeScript's actual end-of-line clip rule for multi-line bodies.
+
+- **`body.pos + 1` (old)**: clipped immediately after `{` — correct for
+  `{\n` (newline immediately after `{`) but off-by-one for `{ \n`
+  (whitespace then newline). Cause: TypeScript clips at end of source
+  line, not at the brace position.
+- **`source.indexOf('\n', body.pos)` (new)**: scans forward from `{` to
+  the first `\n`, falling back to `fullEnd` if not found, clamped to
+  `fullEnd` and `coerceAtLeast(1)`. Produces the same result as
+  `body.pos + 1` when `{` is immediately followed by `\n`, and extends
+  one or more characters for trailing same-line whitespace.
+
+Net delta: 1417 → 1417 failed (8658 unchanged). Zero regressions across
+10078-test suite. Closes the line-32 off-by-one piece of `arrowFunctionErrorSpan_ts`'s
+3-piece diff (verified targeted: `multi line with a comment 2` block-body
+squiggle now matches expected 8-char `() => { ` span). Test still fails
+on the remaining 2 pieces (TS1200 line-terminator-before-arrow missing
+at line 18, multi-line comment-3 position issue at line 43+) per
+8bddcfb's 3-piece characterization. The arrow-function `{ \n` pattern is
+unique to this test in the entire corpus (verified via grep — only
+`arrowFunctionErrorSpan.ts` and `declarationEmitUsingTypeAlias2.ts`
+match, and the latter doesn't trigger TS2345 callback args), so the
+foundation has no other immediate consumers but corrects a subtle
+off-by-one that future TS2345 callback diagnostics on multi-line
+arrow bodies with leading-line trailing whitespace will benefit from.
+
 **17.238 (2026-05-13, +1)** — TS2345 emission for `() => void` callback
 passed where target sig has errorType-typed params + display fix for
 unresolved QualifiedName + multi-line ArrowFunction body squiggle clip.
