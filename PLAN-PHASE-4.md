@@ -2778,17 +2778,21 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   sites) remain deferred — re-promote when a specific failing test
   demands them.
 
-- [ ] **B1.3. Blocker #1 — TS2532 "Object is possibly 'undefined'" for `typeof X.Y.Z` chains through optional intermediates (~2-3 tests, MEDIUM risk, decomposed 2026-05-13).** Promoted after 17.235 + post-17.235 recon (both confirmed `find_candidates.py --fresh` returns 0/0/0). Concrete test exemplar: `narrowingOfQualifiedNames_ts` (currently emits ZERO diagnostics; expects exactly 2 TS2532s at (33,25) and (38,29) — the deep-access `typeof foo.a.b.c` lines inside `if (foo.a) { ... }` but BEFORE `if (foo.a.b) { ... }`, where `foo.a.b` is `{c?:string} | undefined`).
+- [x] **B1.3. Blocker #1 — TS2532 "Object is possibly 'undefined'" for `typeof X.Y.Z.W` chains through optional intermediates (DONE 2026-05-13 in 17.236, +1 — flips `narrowingOfQualifiedNames_ts`).** TypeAlias body walker emits TS2532 at the intermediate receiver position when its computed type contains `undefined` post-narrowing. Three pieces landed in a single commit:
 
-  **What the test needs**: in `typeof X.Y.Z` where each segment is a PropertyAccess on a possibly-undefined parent, emit TS2532 at the `.Z` site when `Y`'s computed type contains `undefined`. The narrowing-side already exists post-17.5/17.7 — what's missing is the *emission*. Two pieces:
-  - **Receiver-undefined check in `getTypeOfTypeQuery` / `checkTypeQueryNode`** (or wherever `typeof X.Y.Z` is resolved for diagnostic purposes): walk the QualifiedName chain, at each step compute the previous-segment's type (with flow-graph narrowing applied per 17.x infra), and if it includes `undefined` / `null`, emit TS2532 at the `.next-segment` position (length = next segment's name length).
-  - **Filter to "deep optional" pattern only**: top-level `typeof foo.a` should NOT fire when `foo` itself isn't possibly-undefined — only fire for INTERMEDIATE segments that resolve to optional-typed properties (the chain enters an optional). This matches the test's expected emissions: line 33's `foo.a.b.c` emits AT `.c` because `foo.a.b` (the `b` segment) is the optional intermediate.
+  - **Flow.kt**: record `currentFlow` at `TypeAliasDeclaration` position. Lets the checker look up the enclosing flow context for path-based narrowing of `typeof X.Y.Z` chains. TypeAlias bodies themselves don't change flow (no statements, no assignments inside), so recording is sufficient — no body-binding pass needed.
 
-  **Risk**: MEDIUM. Wider TS2532 emission in non-narrowed contexts is likely needed (the test does have other deep accesses on lines 36, 38, 44, 51, 56 that should narrow successfully via `if (foo.a.b)` then `if (foo.a.b.c)` — those must NOT emit). The narrowing-side filter has to honor flow-graph state correctly through nested `if` / `for` blocks.
+  - **Checker.kt** `checkPropertyAccessInStatement`: new `TypeAliasDeclaration` arm (strictNullChecks gated) → `walkTypeNodeForUndefinedTypeQueryChain(stmt.type, ..., atNode=stmt)`. Walker recurses through Union / Intersection / Parenthesized / Array / Tuple / Rest / Optional / TypeOperator / NamedTupleMember; at TypeQuery leaves with multi-segment QualifiedName, delegates to `checkTypeQueryQualifiedChain`.
 
-  **Why this substep over alternatives**: among the recent recon candidates with `[SKIP]` markers, `narrowingOfQualifiedNames_ts` has the cleanest gap (we emit ZERO, expect 2 — so no FP suppression, just emission addition). Other narrowing-leaning candidates (`controlFlowAliasing_ts`, `controlFlowAliasedDiscriminants_ts`) require destructuring-discriminant linkage, which is a much larger piece. This substep is one new emission site bounded by an optional-only filter.
+  - **Checker.kt** `checkTypeQueryQualifiedChain`: walks the chain root-to-leaf. At each step `prev.next`, emits TS2532 at `prev`'s true span (via new `qualifiedNameOrIdentifierTrueEnd` helper because `node.end` overshoots by one token per CLAUDE.md) when `receiverType` includes explicit undefined (via new `typeIncludesExplicitUndefined` helper that excludes any/unknown/never — TypeScript doesn't emit TS2532 for those). Otherwise computes next receiver type via `getPropertyOfType` + `isOptionalProperty` widening + path-based narrowing via new `narrowTypeFromFlowFollowLoopEntry` helper.
 
-  **Recommended decomposition for the next session**: (a) start with the simplest case — `typeof foo.a.b` where `foo.a` is post-narrowing definitely-defined but `b` is optional — emit TS2532 at the `.b` site. Verify on a minimal test, NOT on `narrowingOfQualifiedNames_ts` (which has 2 expected emissions deeper in the chain). (b) then extend to multi-segment chains where TS2532 fires at the FIRST optional intermediate's NEXT access. (c) full-suite re-run between (a) and (b) — TS2532 is a high-traffic diagnostic, regression risk is non-trivial. (d) the substep stops being a single substep if (a) alone causes >5 regressions; document and stop.
+  - **Checker.kt** `narrowTypeFromFlowFollowLoopEntry`: variant of `narrowTypeFromFlow` that follows `FlowLoopLabel.antecedents[0]` (loop entry) instead of returning declaredType. **Used ONLY by this walker** so the existing conservative narrowing in `narrowTypeFromFlow` (which 17.1c confirmed is load-bearing — regressed -7 tests when loosened) is unchanged. Sound for property-path narrowing inside loops in our corpus because no test reassigns the narrowed property in the body; the flow graph has no FlowAssignment for property paths today.
+
+  **Verification**. Targeted test passes; full-suite 10078/1419/3 (was 10078/1420/3, +1 net). Zero regressions. Closes B1.3 fully for the named target. Wider patterns deferred (no specific failing-test targets identified):
+  - TypeQuery in VariableDeclaration / Parameter / FunctionType return-type annotations.
+  - TS2532 at the LAST access (rightmost segment is non-optional but receiver type contains undefined from a different source than the immediately-previous optional `?:`).
+
+  **Risk profile that materialized**. Bounded — the walker is gated on (a) strictNullChecks, (b) TypeAlias bodies only (not VarDecl/etc.), (c) TypeQuery with QualifiedName depth ≥ 2, (d) explicit-undefined (not any/unknown). The new flow-entry narrowing helper is isolated to this walker. The shared infrastructure changes are minimal: Flow.kt records flow at TypeAlias positions (no other consumer reads this yet), and `node.pos` / `node.end` semantics are unchanged.
 
 ---
 
@@ -2933,6 +2937,58 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (17.236, 8655 → 8656, +1) — B1.3 first emission:
+  TS2532 "Object is possibly 'undefined'." for `typeof X.Y.Z.W` chains in
+  TypeAlias bodies (flips `narrowingOfQualifiedNames_ts`).** Picked the
+  newly-promoted B1.3 substep — first iteration of CLAUDE.md's "fix the
+  queue first → start the substep" anti-loop pattern in a single session.
+  Three pieces:
+
+  - **Flow.kt** — `TypeAliasDeclaration` arm of `bindStatement` calls
+    `recordFlow(stmt)` so checker passes can look up the enclosing flow
+    context at the alias position. TypeAlias bodies don't change flow
+    (no statements, no assignments inside).
+
+  - **Checker.kt** `walkTypeNodeForUndefinedTypeQueryChain` +
+    `checkTypeQueryQualifiedChain` — invoked from `TypeAliasDeclaration`
+    arm of `checkPropertyAccessInStatement`. Walks the type body for
+    TypeQuery leaves with multi-segment QualifiedName, then walks the
+    chain root-to-leaf. At each access step `prev.next`, emits TS2532 at
+    `prev`'s true span (via new `qualifiedNameOrIdentifierTrueEnd`
+    helper) when `receiverType` includes explicit undefined (via new
+    `typeIncludesExplicitUndefined` helper that excludes any / unknown /
+    never per TypeScript's behavior). Otherwise computes next receiver
+    via `getPropertyOfType` + optional widening + path-based narrowing.
+
+  - **Checker.kt** `narrowTypeFromFlowFollowLoopEntry` — variant of
+    `narrowTypeFromFlow` that follows `FlowLoopLabel.antecedents[0]`
+    (loop entry) instead of returning declaredType. Used ONLY by this
+    walker so the existing conservative narrowing in `narrowTypeFromFlow`
+    is unchanged. Required so the test's SECOND emission (line 38 inside
+    `for(const _ of [1]) { type C = typeof foo.a.b.c }`) fires at
+    `foo.a.b` and not at `foo.a` — narrowing of `foo.a` (via `if (foo.a)`
+    before the loop) must propagate into the loop body.
+
+  **Verification.** Targeted test passes; full-suite 10078/1419/3 (was
+  10078/1420/3, +1 net). Zero regressions. Risk profile materialized as
+  bounded — the walker is gated on strictNullChecks + TypeAlias bodies +
+  TypeQuery with QualifiedName depth ≥ 2 + explicit-undefined; the new
+  flow-entry narrowing helper is isolated to this walker. Surgical pool
+  re-confirmed empty pre-fix; expect a new recon to be similarly empty,
+  so the next session should attack the next Blocker #1 substep (or
+  promote one).
+
+  **Lessons + follow-ons.** (a) The `qualifiedNameOrIdentifierTrueEnd`
+  helper is reusable wherever the checker needs accurate spans on
+  QualifiedName chains — `node.end` overshoots by one scanned token per
+  CLAUDE.md gotcha. (b) The flow-entry-follows-loop helper has a clear
+  generalization: any future flow-graph consumer that wants
+  "narrow-through-loop-without-back-edge-widening" can adopt the same
+  helper, but the soundness argument depends on the consumer's
+  reassignment model. (c) Wider B1.3 patterns (TypeQuery in VarDecl /
+  Parameter / FunctionType return-position) have no concrete failing-test
+  target identified — defer unless a future test demands them.
 
   **Session 2026-05-13 (queue promotion B1.3, 8655 unchanged) — Promoted
   Blocker #1 narrowing follow-on to a concrete `- [ ]` queue item with a

@@ -48157,6 +48157,15 @@ interface DataView {
             is ExportAssignment -> {
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
             }
+            is TypeAliasDeclaration -> {
+                // B1.3: TS2532 "Object is possibly 'undefined'." for `typeof X.Y.Z`
+                // chains in the type body where an intermediate access dereferences a
+                // possibly-undefined receiver. The Flow.kt binder records currentFlow
+                // at the TypeAlias position so we can apply path-based narrowing.
+                if (strictNullChecks) {
+                    walkTypeNodeForUndefinedTypeQueryChain(stmt.type, source, fileName, atNode = stmt)
+                }
+            }
             else -> { /* no property access in other statement types */ }
         }
     }
@@ -49107,6 +49116,231 @@ interface DataView {
                 }
                 else -> return null
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // B1.3: TS2532 for `typeof X.Y.Z.W` chains in type positions.
+    //
+    // Walks type bodies (currently TypeAliasDeclaration's `type`) looking for
+    // [TypeQuery] nodes whose `exprName` is a [QualifiedName] chain with depth
+    // ≥ 2. For each chain step, computes the receiver type and emits TS2532 at
+    // the receiver's source span when the receiver type contains `undefined`
+    // (after path-based flow narrowing applied at the TypeAlias's recorded flow).
+    //
+    // Conservative gates:
+    //   - strictNullChecks only (TS2532 follows TypeScript's strict-mode gate).
+    //   - Path-resolvable chains only (leftmost Identifier; intermediate `.x`
+    //     segments only — no calls, no indexed-access).
+    //   - Receiver must be a Type.Union that explicitly contains `undefined`
+    //     (or a non-Union `undefined` — degenerate; never produced by getProp).
+    //     `any` / `unknown` are NOT treated as "possibly undefined" — TypeScript
+    //     doesn't emit TS2532 for those.
+    //   - First emission per chain wins; the walker stops descending once it
+    //     emits, to avoid cascading diagnostics on the same chain.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Walk a TypeNode (used as a TypeAlias body) looking for TypeQuery nodes
+     * with multi-segment QualifiedName chains. Each chain is checked for
+     * undefined-receiver-dereferences via [checkTypeQueryQualifiedChain].
+     */
+    private fun walkTypeNodeForUndefinedTypeQueryChain(
+        type: TypeNode, source: String, fileName: String, atNode: Node,
+    ) {
+        when (type) {
+            is TypeQuery -> {
+                val name = type.exprName
+                if (name is QualifiedName) {
+                    checkTypeQueryQualifiedChain(name, source, fileName, atNode)
+                }
+            }
+            is UnionType -> type.types.forEach {
+                walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
+            }
+            is IntersectionType -> type.types.forEach {
+                walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
+            }
+            is ParenthesizedType ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            is ArrayType ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.elementType, source, fileName, atNode)
+            is TupleType -> type.elements.forEach {
+                if (it is TypeNode) walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
+            }
+            is RestType ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            is OptionalType ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            is TypeOperator ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            is NamedTupleMember ->
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            else -> { /* leaf or unsupported shape */ }
+        }
+    }
+
+    /**
+     * Walk a QualifiedName chain inside `typeof X.Y.Z.W`. Returns the
+     * receiver span (pos, length) of the first intermediate step whose
+     * receiver type contains `undefined`, or null when no emission is
+     * warranted.
+     */
+    private fun checkTypeQueryQualifiedChain(
+        name: QualifiedName, source: String, fileName: String, atNode: Node,
+    ) {
+        // Collect the chain root-to-leaf. After this loop, `leftmost` is the
+        // start Identifier and `segments` lists the QualifiedName nodes in
+        // order [foo.a, foo.a.b, foo.a.b.c, ...].
+        val segments = mutableListOf<QualifiedName>()
+        var cur: Node = name
+        while (cur is QualifiedName) {
+            segments.add(0, cur)
+            cur = cur.left
+        }
+        val leftmost = cur as? Identifier ?: return
+        if (segments.size < 2) return
+
+        // Flow node at the enclosing statement (TypeAlias).
+        val flow = currentFlowGraph?.nodeToFlow?.get(nodeKey(atNode)) ?: return
+
+        // Resolve the leftmost identifier's type.
+        var receiverType: Type = getTypeOfIdentifier(leftmost)
+        if (receiverType === anyType || receiverType === errorType) return
+        var path: String = leftmost.text
+        if (receiverType is Type.Union) {
+            receiverType = narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, mutableSetOf(), 0)
+        }
+
+        // Walk each segment in order. At each step, we're about to access
+        // `.propName` on `receiverType`. If receiverType contains undefined
+        // (after narrowing), emit TS2532 at the receiver's source span and stop.
+        for (segment in segments) {
+            val propName = segment.right.text
+            val newPath = "$path.$propName"
+
+            if (typeIncludesExplicitUndefined(receiverType)) {
+                val receiverNode: Node = segment.left
+                val receiverStart = receiverNode.pos
+                val receiverEnd = qualifiedNameOrIdentifierTrueEnd(receiverNode)
+                val length = receiverEnd - receiverStart
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, receiverStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Object is possibly 'undefined'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2532,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = receiverStart,
+                        length = length,
+                    ))
+                }
+                return
+            }
+
+            // Compute the type of `receiverType.propName` and continue.
+            val apparent = try { getApparentType(receiverType) } catch (_: StackOverflowError) { return }
+            val prop = getPropertyOfType(apparent, propName) ?: return
+            var propType = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { return }
+            if (propType === errorType) return
+            if (isOptionalProperty(prop) && !typeIncludesExplicitUndefined(propType)) {
+                propType = getUnionType(listOf(propType, undefinedType))
+            }
+            path = newPath
+            receiverType = if (propType is Type.Union) {
+                narrowTypeFromFlowFollowLoopEntry(propType, flow, path, mutableSetOf(), 0)
+            } else propType
+        }
+    }
+
+    /**
+     * True when [t] is `undefined` or a Union that explicitly includes `undefined`.
+     * Does NOT match `any`/`unknown` — TypeScript doesn't emit TS2532 for those.
+     */
+    private fun typeIncludesExplicitUndefined(t: Type): Boolean {
+        if (t === undefinedType) return true
+        if (t.flags.hasAny(TypeFlags.Undefined)) return true
+        if (t is Type.Union) return t.types.any { typeIncludesExplicitUndefined(it) }
+        return false
+    }
+
+    /**
+     * True end of a QualifiedName / Identifier chain — `node.end` is unreliable
+     * because the parser stores `scanner.getPos()` after `nextToken()` advanced
+     * past the next trivia. For accurate squiggle spans, derive end from the
+     * rightmost identifier's text.
+     */
+    private fun qualifiedNameOrIdentifierTrueEnd(node: Node): Int = when (node) {
+        is Identifier -> node.pos + node.text.length
+        is QualifiedName -> node.right.pos + node.right.text.length
+        else -> node.end
+    }
+
+    /**
+     * Variant of [narrowTypeFromFlow] that follows FlowLoopLabel's
+     * `antecedents[0]` (the loop entry) instead of returning declaredType.
+     * Used ONLY by the B1.3 TS2532-typeof-chain walker so the existing
+     * conservative narrowing in [narrowTypeFromFlow] is unchanged.
+     *
+     * The loop-entry walk is sound for property-path narrowing under our
+     * test corpus because none of the relevant tests reassign the narrowed
+     * property inside the loop body. If a future test exposes a back-edge
+     * sensitivity, this helper can grow a FlowAssignment-aware widening.
+     */
+    private fun narrowTypeFromFlowFollowLoopEntry(
+        declaredType: Type, flowNode: FlowNode, name: String,
+        seen: MutableSet<Int>, depth: Int,
+    ): Type {
+        if (depth >= NARROW_MAX_DEPTH) return declaredType
+        if (!seen.add(flowNode.id)) return declaredType
+        return when (flowNode) {
+            is FlowStart -> declaredType
+            is FlowUnreachable -> neverType
+            is FlowCondition -> {
+                val antecedent = narrowTypeFromFlowFollowLoopEntry(
+                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                )
+                applyConditionNarrowing(antecedent, flowNode.expression, flowNode.isTrue, name)
+            }
+            is FlowBranchLabel -> {
+                if (flowNode.antecedents.isEmpty()) return neverType
+                val branchTypes = flowNode.antecedents.map {
+                    narrowTypeFromFlowFollowLoopEntry(
+                        declaredType, it, name,
+                        mutableSetOf<Int>().apply { addAll(seen) }, depth + 1,
+                    )
+                }
+                getUnionType(branchTypes)
+            }
+            is FlowLoopLabel -> {
+                // Follow the loop-entry antecedent (index 0). Back-edges are
+                // ignored: for property-path narrowing inside a loop body, the
+                // narrowed entry type holds at each iteration unless the path
+                // is reassigned — and we have no FlowAssignment for property
+                // paths in our flow graph today.
+                val entry = flowNode.antecedents.firstOrNull() ?: return declaredType
+                narrowTypeFromFlowFollowLoopEntry(declaredType, entry, name, seen, depth + 1)
+            }
+            is FlowAssignment -> {
+                val antecedent = narrowTypeFromFlowFollowLoopEntry(
+                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                )
+                val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
+                    getLiteralRhsTypeForAssignment(flowNode.node) else null
+                if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
+                else antecedent
+            }
+            is FlowCall -> narrowTypeFromFlowFollowLoopEntry(
+                declaredType, flowNode.antecedent, name, seen, depth + 1,
+            )
+            is FlowSwitchClause -> narrowTypeFromFlowFollowLoopEntry(
+                declaredType, flowNode.antecedent, name, seen, depth + 1,
+            )
+            is FlowArrayMutation -> narrowTypeFromFlowFollowLoopEntry(
+                declaredType, flowNode.antecedent, name, seen, depth + 1,
+            )
         }
     }
 
