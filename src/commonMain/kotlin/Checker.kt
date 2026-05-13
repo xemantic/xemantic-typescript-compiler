@@ -39208,17 +39208,22 @@ interface DataView {
                         // (Checker.kt:35168), short-circuiting the standard relation
                         // path so TS2322 never fires. Detect the construct-sig mismatch
                         // directly and emit TS2322 + "provides no match for the
-                        // signature 'new ...'" chain. Tight gate: source MUST have
-                        // callSignatures (clearly callable function, not a constructor)
-                        // but NOT constructSignatures — this excludes opaque sources
-                        // like import-aliased `export = Class` whose effective type
-                        // we can't resolve here. Skip when target is a class/iface
-                        // instance (its construct sigs are static-side; instance
-                        // structural compares should follow the regular path).
+                        // signature 'new ...'" chain. Source must be a "concrete
+                        // shape": either callable (has callSignatures) or has at
+                        // least one declared property — both forms clearly lack
+                        // construct sigs. This excludes opaque sources like
+                        // import-aliased `export = Class` whose effective type
+                        // resolves to an empty Type.Object we can't introspect.
+                        // 17.235 (2026-05-13): widened to also accept property-only
+                        // sources (e.g. `{x:number}` against `{new():any}`). Skip
+                        // when target is a class/iface instance (its construct sigs
+                        // are static-side; instance structural compares should
+                        // follow the regular path).
                         if (tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
                             !isClassOrInterfaceInstanceType(tt) &&
                             sourceType is Type.Object &&
-                            !sourceType.callSignatures.isNullOrEmpty() &&
+                            (!sourceType.callSignatures.isNullOrEmpty() ||
+                                (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
                             sourceType.constructSignatures.isNullOrEmpty()) {
                             val srcCtorElab = getNonConstructibleElaboration(sourceType, tt)
                             if (srcCtorElab != null) {
@@ -39241,16 +39246,22 @@ interface DataView {
                                 return
                             }
                         }
-                        // 17.112: Symmetric to 17.111 — source has constructSignatures
-                        // (clearly a constructor type) but no callSignatures; target
-                        // has callSignatures (function type) but no constructSignatures.
-                        // canUseTypeEngine returns false (Checker.kt:35170), so emit
-                        // TS2322 + "provides no match for the signature '(): T'" chain
-                        // directly via getCallableMismatchElaboration.
+                        // 17.112: Symmetric to 17.111 — target has callSignatures
+                        // (function type) but no constructSignatures; source is a
+                        // concrete-shape Type.Object lacking callSignatures (either
+                        // constructible or property-only). canUseTypeEngine may or
+                        // may not short-circuit depending on source shape, but
+                        // emitting the chain here directly via getCallableMismatchElaboration
+                        // ensures "  Type 'X' provides no match for the signature '(): T'."
+                        // is added regardless of whether the standard path would
+                        // have produced an empty chain. 17.235 (2026-05-13): widened
+                        // to also accept property-only sources (e.g. `{x:number}`
+                        // against `{():void}`).
                         if (tt is Type.Object && !tt.callSignatures.isNullOrEmpty() &&
                             tt.constructSignatures.isNullOrEmpty() &&
                             sourceType is Type.Object &&
-                            !sourceType.constructSignatures.isNullOrEmpty() &&
+                            (!sourceType.constructSignatures.isNullOrEmpty() ||
+                                (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
                             sourceType.callSignatures.isNullOrEmpty()) {
                             val srcCallElab = getCallableMismatchElaboration(sourceType, tt)
                             if (srcCallElab != null) {
