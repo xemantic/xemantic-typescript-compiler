@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,654 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,655 / 10,078 tests passing (~85%).
+
+**17.235 (2026-05-13, +1)** — Widen 17.111 + 17.112 assignment-expression
+gates to fire for property-only Type.Object sources (in addition to the
+existing callable / constructible source requirement). Closes
+`propertyAssignment_ts` — `foo1 = bar1` where foo1 is `{ new ():any; }`
+and bar1 is `{ x: number; }` now emits TS2322 + "  Type '{ x: number; }'
+provides no match for the signature 'new (): any'."; same pattern for
+`foo3 = bar3` against `{ ():void; }`.
+
+Implementation: in `checkAssignmentExpression`'s Identifier-target
+construct/call-sig mismatch gates (Checker.kt ~39218 and ~39250),
+relaxed the source-side gate from
+`!sourceType.callSignatures.isNullOrEmpty()` (or its symmetric construct
+form) to
+`(!sourceType.callSignatures.isNullOrEmpty() || (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty()))`.
+The `!isClassOrInterfaceInstanceType(sourceType)` guard preserves the
+original 17.111 carve-out for opaque-import sources (`import ext = require("X")` where
+"X" has `export = Class`) — those resolve to a Type.Interface with the
+class symbol, which is excluded by this guard. Without the guard,
+`externalModuleAssignToVar_ts` regressed (FP TS2322 on
+`y2 = ext2` / `y3 = ext3` where ext2/ext3 are class-instance-typed
+imports of `export = Class`).
+
+Net delta: 1421 → 1420 failed (8654 → 8655 passing). Zero regressions
+across 10078-test suite. Closes one previously-half-closed candidate
+(propertyAssignment_ts MISS bucket entry, line ~3072 of skip log).
 
 **17.234 (2026-05-13, +1)** — Ambient module `export = X` fallback in
 `checkQualifiedNameExports`'s final-segment check. Closes

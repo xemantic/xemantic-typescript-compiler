@@ -2922,6 +2922,49 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-13 (17.235, 8654 → 8655, +1) — Widen 17.111 + 17.112
+  assignment-expression construct/call-sig mismatch gates to accept
+  property-only Type.Object sources.** Closes the previously half-closed
+  `propertyAssignment_ts` skip-log entry. Pre-fix state: `foo1 = bar1`
+  (target `{ new ():any; }`, source `{ x: number; }`) emitted NO
+  diagnostic; `foo3 = bar3` (target `{ ():void; }`, source `{ x: number; }`)
+  emitted TS2322 but WITHOUT the "  Type '{ x: number; }' provides no
+  match for the signature '(): void'." chain line. Both expected TS2322 +
+  chain per TypeScript's baseline.
+
+  Root cause traced: the existing 17.111 gate at Checker.kt ~39218
+  required `!sourceType.callSignatures.isNullOrEmpty()` — a source must
+  be "clearly callable" to qualify. For `bar1` (a plain `{x:number}` with
+  no signatures), the gate didn't fire. canUseTypeEngine then returns
+  false on construct-sig-target without source-construct-sigs (line
+  37613-37614), so TS2322 never fires at all. For the call-sig-target
+  case (`foo3 = bar3`), canUseTypeEngine returns true, TS2322 fires via
+  the standard path, but the chain construction (line 39379+) only adds
+  function→function chain when source has callSignatures — for our
+  property-only source, no fallback `getCallableMismatchElaboration`
+  call is made, leaving chain empty.
+
+  Fix: widen both 17.111 and 17.112 source-side gates to also accept
+  "concrete-shape" property-only sources via
+  `(!sourceType.callSignatures.isNullOrEmpty() || (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty()))`.
+  The `!isClassOrInterfaceInstanceType` guard is critical — without it,
+  `externalModuleAssignToVar_ts` regresses with FP TS2322 on
+  `y2 = ext2` / `y3 = ext3` where ext2/ext3 are class-instance-typed
+  imports of `export = Class` (their Type.Interface source has
+  populated `properties` but TypeScript treats the value as `typeof
+  Class` which IS constructible).
+
+  Both gates already invoke `getNonConstructibleElaboration` /
+  `getCallableMismatchElaboration` after passing — those helpers handle
+  the chain line. The widening just lets the property-only source path
+  reach them.
+
+  Verification: `propertyAssignment_ts` flips clean (2 sub-tests: errors
+  + JS emit, the JS emit was already passing). Full-suite re-run
+  10078/1420/3 (was 10078/1421/3, +1 net). Zero regressions across
+  10078-test suite. `find_candidates.py` EXTRA bucket stays at 3 (no new
+  EXTRA entries). One previously-half-closed candidate closed.
+
   **Session 2026-05-13 (17.234, 8653 → 8654, +1) — Ambient module
   `export = X` fallback in `checkQualifiedNameExports` final-segment
   lookup.** Closes `aliasOnMergedModuleInterface_ts` (the residual after
@@ -10259,7 +10302,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `varianceAnnotationValidation_ts` → MISS TS2636 variance annotation check (`out T` / `in T`). New diagnostic; variance feature not implemented.
 - `strictModeReservedWord2_ts` → MISS TS7051 "Parameter has a name but no type. Did you mean 'arg0: package'?" + TS7006 for `foo(package, protected);` in interface. Parser treats both names as types in bare parameter position — parser-level feature.
 - ~~`methodChainError_ts` → MISS TS2554 (arity) + TS2349 ("not callable, Type 'String' has no call signatures") on method-chain calls. Needs method-chain type resolution for TS2554/TS2349 — not surgical.~~ **STALE 2026-05-04: passing — method-chain resolution sufficient for current baseline.**
-- `propertyAssignment_ts` → MISS TS2304 `index` inside `{ [index]; }` computed type property + TS2322 for `bar1 = foo1` where foo1 is `{ new(): any; }`. Two different gaps; neither surgical.
+- ~~`propertyAssignment_ts` → MISS TS2304 `index` inside `{ [index]; }` computed type property + TS2322 for `bar1 = foo1` where foo1 is `{ new(): any; }`. Two different gaps; neither surgical.~~ **Flipped 17.235 (2026-05-13)** — widened 17.111 + 17.112 assignment-expression gates to accept property-only Type.Object sources (with `!isClassOrInterfaceInstanceType` guard to preserve the original opaque-import carve-out).
 - ~~`inheritedGenericCallSignature_ts` → MISS TS2345 for arg of inherited generic call signature. Blocker #1.~~ **Flipped 17.153 (2026-05-10)** — push interface typeParameters into scope for call/construct sig resolution + drop hasSigTp gate on null/undefined-vs-Reference TS2345 emission for concrete refs.
 - `ambientPropertyDeclarationInJs_ts` → MISS TS2322 + TS2339 for `declare prop: string` in JS file. Blocker #2 (JSDoc/.js property declarations).
 - `moduleExports1_ts` → MISS 2× TS2591 for `module.exports`. Need to move `module` out of KNOWN_GLOBALS and emit TS2591; broad regression risk (see 16.4ci note).
