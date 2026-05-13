@@ -1,6 +1,58 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,655 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,656 / 10,078 tests passing (~85%).
+
+**17.236 (2026-05-13, +1)** — B1.3 first emission: TS2532 "Object is possibly
+'undefined'." for `typeof X.Y.Z.W` chains in TypeAlias bodies where an
+intermediate access dereferences a possibly-undefined receiver. Closes
+`narrowingOfQualifiedNames_ts` — emits the expected 2 TS2532s at (33,25)
+and (38,29) inside `function init2(foo: DeepOptional)`, both pointing at
+`foo.a.b` (length 7) which is the receiver of `.c` when `foo.a.b` is
+`{c?:string} | undefined`.
+
+Three pieces:
+
+- **Flow.kt** — record `currentFlow` at `TypeAliasDeclaration` position
+  (`bindStatement` arm split out of the type-only no-op group). Lets the
+  checker look up the enclosing flow context for path-based narrowing of
+  identifiers referenced in `typeof X.Y.Z` chains.
+
+- **Checker.kt** (`checkPropertyAccessInStatement`) — new
+  `TypeAliasDeclaration` arm (strictNullChecks gated) calling
+  `walkTypeNodeForUndefinedTypeQueryChain(stmt.type, ..., atNode=stmt)`.
+  Walker recurses through Union / Intersection / Parenthesized / Array /
+  Tuple / Rest / Optional / TypeOperator / NamedTupleMember; at TypeQuery
+  leaves with a multi-segment QualifiedName, delegates to
+  `checkTypeQueryQualifiedChain`.
+
+- **Checker.kt** (`checkTypeQueryQualifiedChain`) — walks the chain
+  root-to-leaf. At each step `prev.next`:
+    - emits TS2532 at `prev`'s true span (computed via
+      `qualifiedNameOrIdentifierTrueEnd` since `node.end` overshoots by
+      one token per CLAUDE.md) when `receiverType` includes explicit
+      undefined (via new `typeIncludesExplicitUndefined` helper that
+      mirrors `typeIncludesUndefinedOrTop` but excludes any/unknown/never
+      — TypeScript doesn't emit TS2532 for those);
+    - otherwise computes the next receiver type via `getPropertyOfType`
+      + `isOptionalProperty` widening + path-based narrowing via new
+      `narrowTypeFromFlowFollowLoopEntry` helper.
+
+- **Checker.kt** (`narrowTypeFromFlowFollowLoopEntry`) — variant of
+  `narrowTypeFromFlow` that follows `FlowLoopLabel.antecedents[0]` (loop
+  entry) instead of returning declaredType. Used ONLY by this walker so
+  the existing conservative narrowing in `narrowTypeFromFlow` (which the
+  17.1c attempt confirmed is load-bearing — regressed -7 tests when
+  loosened) is unchanged. Sound for property-path narrowing inside loops
+  in our test corpus because no test reassigns the narrowed property in
+  the body; the flow graph has no FlowAssignment for property paths
+  today.
+
+Net delta: 1420 → 1419 failed (8655 → 8656 passing). Zero regressions
+across 10078-test suite. Closes one of the named Blocker #1 substep
+targets (B1.3); follow-on substeps could extend the walker to TypeQuery
+in VariableDeclaration / Parameter / FunctionType return-position type
+annotations (not yet attempted — no concrete failing-test target
+identified).
 
 **17.235 (2026-05-13, +1)** — Widen 17.111 + 17.112 assignment-expression
 gates to fire for property-only Type.Object sources (in addition to the

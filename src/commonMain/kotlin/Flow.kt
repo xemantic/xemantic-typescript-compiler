@@ -276,9 +276,13 @@ class FlowGraphBuilder {
             is ClassDeclaration -> bindClassDeclaration(stmt)
             is ModuleDeclaration -> bindModuleDeclaration(stmt)
             is ExportAssignment -> stmt.expression?.let { bindExpression(it) }
+            // B1.3: record the current flow at the TypeAlias position so a
+            // checker pass that wants to know "what's the flow context at
+            // `type X = typeof a.b.c;`" can look it up via `nodeToFlow`.
+            // TypeAlias bodies themselves don't change flow.
+            is TypeAliasDeclaration -> recordFlow(stmt)
             // Type-only statements / no flow effect:
             is InterfaceDeclaration,
-            is TypeAliasDeclaration,
             is EnumDeclaration,
             is ImportDeclaration,
             is ImportEqualsDeclaration,
