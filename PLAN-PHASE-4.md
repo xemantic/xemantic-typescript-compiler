@@ -2778,6 +2778,18 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   sites) remain deferred — re-promote when a specific failing test
   demands them.
 
+- [ ] **B1.3. Blocker #1 — TS2532 "Object is possibly 'undefined'" for `typeof X.Y.Z` chains through optional intermediates (~2-3 tests, MEDIUM risk, decomposed 2026-05-13).** Promoted after 17.235 + post-17.235 recon (both confirmed `find_candidates.py --fresh` returns 0/0/0). Concrete test exemplar: `narrowingOfQualifiedNames_ts` (currently emits ZERO diagnostics; expects exactly 2 TS2532s at (33,25) and (38,29) — the deep-access `typeof foo.a.b.c` lines inside `if (foo.a) { ... }` but BEFORE `if (foo.a.b) { ... }`, where `foo.a.b` is `{c?:string} | undefined`).
+
+  **What the test needs**: in `typeof X.Y.Z` where each segment is a PropertyAccess on a possibly-undefined parent, emit TS2532 at the `.Z` site when `Y`'s computed type contains `undefined`. The narrowing-side already exists post-17.5/17.7 — what's missing is the *emission*. Two pieces:
+  - **Receiver-undefined check in `getTypeOfTypeQuery` / `checkTypeQueryNode`** (or wherever `typeof X.Y.Z` is resolved for diagnostic purposes): walk the QualifiedName chain, at each step compute the previous-segment's type (with flow-graph narrowing applied per 17.x infra), and if it includes `undefined` / `null`, emit TS2532 at the `.next-segment` position (length = next segment's name length).
+  - **Filter to "deep optional" pattern only**: top-level `typeof foo.a` should NOT fire when `foo` itself isn't possibly-undefined — only fire for INTERMEDIATE segments that resolve to optional-typed properties (the chain enters an optional). This matches the test's expected emissions: line 33's `foo.a.b.c` emits AT `.c` because `foo.a.b` (the `b` segment) is the optional intermediate.
+
+  **Risk**: MEDIUM. Wider TS2532 emission in non-narrowed contexts is likely needed (the test does have other deep accesses on lines 36, 38, 44, 51, 56 that should narrow successfully via `if (foo.a.b)` then `if (foo.a.b.c)` — those must NOT emit). The narrowing-side filter has to honor flow-graph state correctly through nested `if` / `for` blocks.
+
+  **Why this substep over alternatives**: among the recent recon candidates with `[SKIP]` markers, `narrowingOfQualifiedNames_ts` has the cleanest gap (we emit ZERO, expect 2 — so no FP suppression, just emission addition). Other narrowing-leaning candidates (`controlFlowAliasing_ts`, `controlFlowAliasedDiscriminants_ts`) require destructuring-discriminant linkage, which is a much larger piece. This substep is one new emission site bounded by an optional-only filter.
+
+  **Recommended decomposition for the next session**: (a) start with the simplest case — `typeof foo.a.b` where `foo.a` is post-narrowing definitely-defined but `b` is optional — emit TS2532 at the `.b` site. Verify on a minimal test, NOT on `narrowingOfQualifiedNames_ts` (which has 2 expected emissions deeper in the chain). (b) then extend to multi-segment chains where TS2532 fires at the FIRST optional intermediate's NEXT access. (c) full-suite re-run between (a) and (b) — TS2532 is a high-traffic diagnostic, regression risk is non-trivial. (d) the substep stops being a single substep if (a) alone causes >5 regressions; document and stop.
+
 ---
 
 - [x] **17.224. TS1005 instead of TS1109 for stray `)` / `]` at statement-start (+1 — flips `parserUnparsedTokenCrash1_ts`).** **DONE 2026-05-11.** Pool was 0/0/0 fresh (filtered from 3/72/16) per `find_candidates.py --fresh`. Spot-checked SWAP candidate `parserUnparsedTokenCrash1_ts` (diff +2 at col 13: exp TS1005 `';' expected.`, act TS1109 `Expression expected.`) — single-position mismatch, queue item 10.2 had marked it skipped citing "parseSemicolon error reporting causes 7 regressions". Re-examined: 10.2's earlier attempt was at the `parseSemicolon` level (adds `)` to that helper's hot path, fires in many statement-end contexts). The narrower fix is at the `parseStatement` level — only fires when a stray `)` / `]` reaches statement-start position (after the broken paren-expr's TS1005 recovery + the followed ExpressionStatement(`2`) + the silent parseSemicolon at `)`). New `CloseParen, CloseBracket` arm in `parseStatement` (Parser.kt ~500) emits TS1005 `';' expected.` at the delimiter (length 1), `nextToken()`, returns null. The `parseStatements` loop sees `savedPos != tokenPos` so the parse-progress-check at line 399 doesn't double-skip. Nested expression contexts (`(+)`, `f(`, etc.) still route through `parsePrimaryExpression`'s catch-all because the parser is mid-expression there, not at statement-start. Net delta: 1432 → 1431 failed (8643 → 8644 passing). Zero regressions across 10078-test suite. Surgical pool re-confirmed empty post-fix; `find_candidates.py --fresh` would now report this test as PASS rather than SKIP.
@@ -2921,6 +2933,74 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (queue promotion B1.3, 8655 unchanged) — Promoted
+  Blocker #1 narrowing follow-on to a concrete `- [ ]` queue item with a
+  named test exemplar.** Per the anti-loop rule (CLAUDE.md § Anti-loop
+  rule), with the active blocker queue (B1.1–B6.1) fully checked off AND
+  `find_candidates.py --fresh` returning 0/0/0 (filtered from 3/66/15)
+  AND the previous session having already committed a `chore(skip-log)`
+  recon-only commit (6a36a4e), this session's mandate is to "fix the
+  queue first" — decompose the highest-yield blocker without a `- [ ]`
+  queue item into the smallest standalone substep, insert at the top of
+  the queue, and commit as `chore(queue): promote ...`.
+
+  **Recon (no code change this session):** Full suite reproduces 8655 /
+  1420 / 3 (matches STATUS.md exactly). `find_candidates.py --fresh`
+  returns 0/0/0 (3/66/15 with [SKIP] markers). Spot-checked 9 candidates
+  from the SKIP buckets, with running diff inspection via single-test
+  Gradle runs:
+  - `aliasUsageInOrExpression_ts` → missing TS2322 + chain "Type '{ x:
+    typeof import("aliasUsageInOrExpression_moduleA"); } | null' is not
+    assignable to type '{ x: IHasVisualizationModel; }'." — needs
+    `typeof import("...")` display + ternary-result union elaboration.
+    Architectural.
+  - `elaboratedErrorsOnNullableTargets01_ts` → SWAP TS2322 display:
+    actual "null | { foo: …; } | undefined" vs expected
+    "{ foo: …; } | undefined" — TypeScript filters source's null/undef
+    constituents from the displayed target type in some `x = y` contexts
+    but not in `y = x`. Display refactor.
+  - `recursiveTypeRelations_ts` → 4 expected diagnostics including
+    TS2552 + TS2345 with `keyof S` substitution through `compose(filter,
+    map)` chain. `keyof S` substitution is Blocker #2 follow-on.
+  - `crashInEmitTokenWithComment_ts` → SWAP TS2345 actual
+    `'() => undefined'` vs expected `'({ [foo.bar]: c }: {}) => any'` +
+    MISS TS2537. Three pieces: destructured-param display, `=> undefined`
+    → `=> any` for un-annotated arrows, new TS2537 emission. Multi-piece.
+  - `varianceAnnotationValidation_ts` → TS2636 with `out T` / `sub-T` /
+    `super-T` synthetic display. New TypeScript 4.7 feature.
+  - `controlFlowAliasedDiscriminants_ts` → discriminant-union narrowing
+    through destructuring binding patterns AND `&&`-chain stored
+    aliases. Multi-piece, major control-flow narrowing extension.
+  - `moduleAugmentationsImports3_ts` / `moduleAugmentationsImports4_ts`
+    → cross-file `interface A` augmentations of `class A`. Blocker #3.
+  - `unionTypeWithRecursiveSubtypeReduction3_ts` → SWAP TS2322 actual
+    `{ prop: error }` vs expected `{ prop: number; } | { prop: { prop:
+    number; } | any; }` — recursive type expansion (`type T = typeof
+    a` where `a: ... | { prop: T }`). Needs proper recursive type
+    handling.
+  - `namespaceDisambiguationInUnion_ts` → SWAP TS2322 actual
+    `Yep | Yep` vs expected `Foo.Yep | Bar.Yep` + MISS inner-Union
+    elaboration chain + MISS TS2322 tuple-length mismatch at (13,7).
+    Three pieces.
+  - `narrowingOfQualifiedNames_ts` (FINAL PICK) → ZERO actual
+    diagnostics, 2 expected TS2532 emissions. Cleanest gap of the lot
+    — emission-only (no FP suppression), narrowing-side already exists
+    post-17.5/17.7. Promoted to **B1.3** queue item with concrete
+    decomposition plan.
+
+  Every other spot-checked candidate had multi-piece architectural
+  scope. B1.3 is the smallest single-substep promotion that has a
+  named test exemplar AND aligns with the post-17.235 session's
+  recommendation ("Blocker #1 step 2 follow-ons: TS2454 / TS2339 /
+  TS2774 narrowing extensions remain") — TS2532 is a sibling of those
+  three codes for the same "object-possibly-undefined / narrowed-to-
+  defined" narrowing-emission boundary.
+
+  **No code change this session.** Net delta: 1420 / 1420 unchanged.
+  Queue restructure only. Recommended next-session entry point: B1.3
+  substep (a) per the decomposition plan, with a minimal stub test
+  before attempting `narrowingOfQualifiedNames_ts` itself.
 
   **Session 2026-05-13 (post-17.235 stale-skip-log hygiene, 8655 unchanged) —
   Spot-checked + strikethrough'd 4 stale "Explored-but-skipped" entries against
