@@ -2796,6 +2796,10 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **17.239. Generalize 17.238's multi-line ArrowFunction body squiggle clip from `body.pos + 1` to end-of-line of body open brace (+0 foundation).** **DONE 2026-05-13.** Net-zero infra commit. 17.238's clip used `body.pos + 1 - start` (one char past `{`), which is correct when `{` is immediately followed by `\n` (the common case) but off-by-one when `{` has trailing same-line whitespace (e.g. `{ \n`). Replaced with `source.indexOf('\n', body.pos).coerceAtMost(fullEnd) - start`, falling back to `fullEnd` when no `\n` is found. Same result for `{\n`; extends to include trailing whitespace for `{ \n` etc. Closes the line-32 off-by-one piece of `arrowFunctionErrorSpan_ts`'s 3-piece diff (verified targeted: `multi line with a comment 2` block-body squiggle now matches expected 8-char `() => { ` span). Test still fails on TS1200 line-terminator-before-arrow at line 18 (parser; no other test in corpus emits TS1200 — net-0 alone) and multi-line comment-3 position issue at line 43+ (the arrow's `() =>` and body `{` straddle comment lines, our squiggle spans both at start-and-body-`{`; TypeScript clips to end-of-line of `=>` line; deferred). The `{ \n` pattern is unique to `arrowFunctionErrorSpan.ts` in the whole corpus (grep verified), so the foundation has no other immediate consumers but corrects a subtle off-by-one that any future TS2345 fn-vs-fn callback with multi-line arrow bodies featuring leading-line trailing whitespace will benefit from. **Verification.** Targeted tests pass: `undeclaredModuleError_ts` (17.238's target), `assignmentCompatBug5_ts` (the single-line carve-out test 17.238 used as regression guard), and the line-32 piece of `arrowFunctionErrorSpan_ts`. Full-suite 10078/1417/3 (unchanged from 17.238 baseline). Zero regressions.
+
+---
+
 - [x] **17.238. TS2345 emission + display fix + squiggle clip for `() => void` callback vs anon-func target with errorType params (+1 — flips `undeclaredModuleError_ts`).** **DONE 2026-05-13.** Pool was 0/0/0 fresh; re-investigated `undeclaredModuleError_ts` from the SKIP MISS bucket (single missing TS2345 at (8,29) for `readdir(covFileDir, () => {}, ...)` where readdir's param is `accept: (stat: fs.Stats, name: string) => boolean` and `fs` is unresolved). Three coordinated pieces — landing any subset alone regresses or is net-zero:
 
   - **Piece 1: `formatParameter` errorType branch (Checker.kt ~43190).** Display fix for parameters typed with an unresolved QualifiedName TypeReference (no type args): use full dotted path (`fs.Stats`) via new `formatTypeReferenceName` helper instead of just rightmost segment (`Stats`). Tightly scoped to the errorType fallback — widening to all `formatTypeForDisplay` callers regresses 15 tests (`moduleAndInterfaceSharingName_ts` etc.) where resolved namespace types display as just the rightmost interface name per TypeScript's convention.
@@ -2969,6 +2973,65 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (17.239, 8658 unchanged — net-zero foundation) —
+  Generalize 17.238's multi-line ArrowFunction body squiggle clip from
+  `body.pos + 1` to end-of-line of body open brace.** Continuation /loop
+  iteration after 17.238. Pool empty per `find_candidates.py --fresh`
+  (0/0/0 filtered from 3/64/15) — every visible candidate is in the
+  skip-log and architectural-classified. Spot-checked 7+ MISS / SWAP
+  candidates without finding fresh surgical scope:
+  `arrowFunctionErrorSpan_ts` (TS1200 line-terminator + 2 other issues —
+  net-0 alone), `aliasUsageInOrExpression_ts` (cross-file `typeof
+  import("...")` display — architectural per 17.113 skip-log),
+  `promiseDefinitionTest` (TS2300 lib-clash for `class Promise<T>` —
+  needs lib-file-symbol partitioning), `varianceAnnotationValidation_ts`
+  (TS2636 variance — new diagnostic family),
+  `trivialSubtypeReductionNoStructuralCheck` (TS7023 implicit-return-any-
+  via-self-ref — new diagnostic), `isolatedDeclarationsAllowJs_ts`
+  (multi-diagnostic TS5053+TS5055+TS9010 — broad), `arrayAssignmentTest4`
+  (lib-version drift — architectural at lib level).
+
+  **What landed.** During investigation of `arrowFunctionErrorSpan_ts`,
+  noticed the line-32 (file line 38, `*/() => { ` with trailing space
+  before newline) squiggle was off-by-one short: 17.238's clip used
+  `body.pos + 1 - start` which excludes trailing same-line whitespace
+  after `{`, but TypeScript's actual rule is end-of-line of the body-
+  opening-brace line. Replaced `body.pos + 1` with `source.indexOf('\n',
+  body.pos).coerceAtMost(fullEnd)`, same fallback to `fullEnd` when no
+  `\n` found, same `coerceAtLeast(1)` floor. For the common case `{\n`
+  the new code produces the same result (`indexOf` returns `body.pos+1`
+  position). For `{ \n` it extends the clip by 1 (or more for additional
+  whitespace).
+
+  **Verification.** Targeted: `undeclaredModuleError_ts` (17.238's
+  target) passes; `assignmentCompatBug5_ts` (17.238's regression guard)
+  passes; `arrowFunctionErrorSpan_ts` errors_txt diff shrinks from 3
+  pieces to 2 (line-32 piece resolved). Full-suite 10078/1417/3 unchanged
+  from 17.238 baseline. Zero regressions.
+
+  **Why no test flips.** `arrowFunctionErrorSpan_ts` is the only test
+  in the corpus with the `{ \n` (whitespace-then-newline) ArrowFunction
+  body pattern (verified via grep), and it has 2 remaining diff pieces
+  (TS1200 parser + multi-line-comment-3 position) plus a separate JS
+  emit failure for the same file (counts as 2 tests). The 17.239 change
+  is a net-zero foundation — corrects a subtle off-by-one in our clip
+  rule to match TypeScript's actual end-of-line convention. Reusable for
+  any future TS2345 fn-vs-fn callback emission where the multi-line
+  arrow body's first line carries trailing whitespace after `{`.
+
+  **Lessons.** (a) Even after 17.238 explicitly cited `assignmentCompatBug5_ts`
+  / `signatureLengthMismatchCall_ts` as regression guards for the
+  single-line carve-out, the multi-line branch had its own subtle
+  off-by-one for the trailing-space case — the single-line case was
+  correctly carved out but the multi-line clip formula needed refinement.
+  Pattern: every "match TypeScript's exact rule" diagnostic-position fix
+  benefits from a follow-up generalization pass once the narrow test
+  flips, because TypeScript's actual rule is often more general than the
+  immediate failing case reveals. (b) End-of-line as a clip rule is
+  worth remembering for other TypeScript diagnostic-positioning conventions
+  — many TS error spans clip at line boundaries rather than at token
+  boundaries.
 
   **Session 2026-05-13 (17.238, 8657 → 8658, +1) — TS2345 emission + display
   fix + squiggle clip for `() => void` callback vs anon-func target with
