@@ -39716,7 +39716,26 @@ interface DataView {
                 if (retExpr.operand is NumericLiteralNode) numberType else null
             is Identifier -> when (retExpr.text) {
                 "true", "false" -> booleanType
-                else -> null
+                else -> {
+                    // B4.2: `return paramName` where param has explicit type annotation.
+                    // `currentTypeParamScope` is already set up by the caller
+                    // (`resolveGenericPropertyType` arm at Checker.kt ~39548) to include
+                    // both the class's type params and the method's own type params, so
+                    // `getTypeFromTypeNode` correctly resolves `T` references. The caller
+                    // then substitutes via `instantiateType(rawReturn, mapper)` to map
+                    // class TypeParams to the target's concrete type args. Only fires
+                    // when (a) the identifier matches a parameter name exactly and
+                    // (b) the parameter has an explicit type annotation — un-annotated
+                    // params fall through to `null` so the caller falls back to anyType.
+                    // errorType resolution (unresolvable type names) is also filtered to
+                    // null at the caller via `if (rawReturn === errorType) anyType`.
+                    val matchedParam = md.parameters.find {
+                        (it.name as? Identifier)?.text == retExpr.text
+                    }
+                    val annotation = matchedParam?.type ?: return null
+                    val resolved = try { getTypeFromTypeNode(annotation) } catch (_: StackOverflowError) { null }
+                    if (resolved === errorType || resolved === anyType) null else resolved
+                }
             }
             is NewExpression -> {
                 val callee = retExpr.expression as? Identifier ?: return null
