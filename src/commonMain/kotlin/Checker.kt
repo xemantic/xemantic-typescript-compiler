@@ -43193,8 +43193,18 @@ interface DataView {
         // 17.24: When the resolved type is errorType (e.g. unresolved name like
         // `items: ItemSet`), prefer rendering from the AST type-node so the displayed
         // form preserves the source name (e.g. `ItemSet`) instead of `error`.
+        // 17.238: For an unresolved TypeReference with a QualifiedName typeName
+        // (e.g. `fs.Stats`), render the full dotted path — TypeScript's TS2345
+        // baseline shows `fs.Stats`, not just `Stats`. Resolved-type displays go
+        // through `typeToString` which uses the rightmost segment, matching
+        // TypeScript's convention for known types like `X.Y.Z` → `Z`.
         val pType = if (resolvedType === errorType) {
-            decl?.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val tn = decl?.type
+            if (tn is TypeReference && tn.typeName is QualifiedName && tn.typeArguments.isNullOrEmpty()) {
+                formatTypeReferenceName(tn.typeName) ?: formatTypeForDisplay(tn) ?: "any"
+            } else {
+                tn?.let { formatTypeForDisplay(it) } ?: "any"
+            }
         } else {
             resolvedType.let { if (it === anyType) "any" else typeToString(it) }
         }
@@ -53242,14 +53252,46 @@ interface DataView {
                     val paramSig = (paramType as Type.Object).callSignatures!!.first()
                     argSig.minArgumentCount > paramSig.parameters.size
                 }
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch) continue
+                // 17.238: Zero-param void-return source vs anon-func target with a simple
+                // non-void return — assign-incompatible regardless of target's param types.
+                // void-return-is-special applies only when TARGET returns void; the reverse
+                // direction must fail.
+                val allowVoidReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                    val argSig = (argType as Type.Object).callSignatures!!.first()
+                    val paramSig = (paramType as Type.Object).callSignatures!!.first()
+                    val argReturn = argSig.resolvedReturnType
+                    val paramReturn = paramSig.resolvedReturnType
+                    argSig.parameters.isEmpty() && argReturn === voidType &&
+                        paramReturn != null && paramReturn !== voidType &&
+                        paramReturn !== anyType && paramReturn !== errorType &&
+                        isSimpleCheckableType(paramReturn)
+                }
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch) continue
             }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
                 val argTypeStr = typeToString(argType)
                 val paramTypeStr = typeToString(paramType)
                 val start = arg.pos
-                val length = expressionTrueEnd(arg) - start
+                // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
+                // body's `{` inclusive. TypeScript clips at the body open brace only when
+                // the body spans multiple source lines; single-line bodies like `() => {}`
+                // keep the full arrow span. Detect multi-line by checking the body's
+                // text contains a newline.
+                val length = if (arg is ArrowFunction && arg.body is Block) {
+                    val body = arg.body as Block
+                    val fullEnd = expressionTrueEnd(arg)
+                    val isMultiLine = body.pos in 0..<source.length &&
+                        body.pos < fullEnd &&
+                        source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
+                    if (isMultiLine) {
+                        (body.pos + 1 - start).coerceAtLeast(1)
+                    } else {
+                        fullEnd - start
+                    }
+                } else {
+                    expressionTrueEnd(arg) - start
+                }
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 // TS6213: If the argument type has construct signatures but no call signatures,
@@ -56686,6 +56728,18 @@ interface DataView {
         return when (node) {
             is Identifier -> node.text
             is QualifiedName -> node.right.text
+            else -> null
+        }
+    }
+
+    /** 17.238: Format full dotted name `a.b.c` for QualifiedName. */
+    private fun formatTypeReferenceName(node: Node): String? {
+        return when (node) {
+            is Identifier -> node.text
+            is QualifiedName -> {
+                val l = formatTypeReferenceName(node.left) ?: return null
+                "$l.${node.right.text}"
+            }
             else -> null
         }
     }

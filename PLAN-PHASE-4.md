@@ -2796,6 +2796,18 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **17.238. TS2345 emission + display fix + squiggle clip for `() => void` callback vs anon-func target with errorType params (+1 — flips `undeclaredModuleError_ts`).** **DONE 2026-05-13.** Pool was 0/0/0 fresh; re-investigated `undeclaredModuleError_ts` from the SKIP MISS bucket (single missing TS2345 at (8,29) for `readdir(covFileDir, () => {}, ...)` where readdir's param is `accept: (stat: fs.Stats, name: string) => boolean` and `fs` is unresolved). Three coordinated pieces — landing any subset alone regresses or is net-zero:
+
+  - **Piece 1: `formatParameter` errorType branch (Checker.kt ~43190).** Display fix for parameters typed with an unresolved QualifiedName TypeReference (no type args): use full dotted path (`fs.Stats`) via new `formatTypeReferenceName` helper instead of just rightmost segment (`Stats`). Tightly scoped to the errorType fallback — widening to all `formatTypeForDisplay` callers regresses 15 tests (`moduleAndInterfaceSharingName_ts` etc.) where resolved namespace types display as just the rightmost interface name per TypeScript's convention.
+
+  - **Piece 2: `checkArgumentsAgainstSignature` void-return-mismatch gate (Checker.kt ~53234).** New `allowVoidReturnMismatch` arm next to existing `allowFuncToFunc` / `allowArityMismatch` arms. Fires when source is anonymous `() => void` (zero params + voidType return) and target is anonymous function with a simple-checkable non-void return type. Bypasses `sigHasOnlySimpleTypes` (which returns false when target sig has errorType-typed params). Soundness: void-return-is-special applies only when TARGET returns void (caller ignores result); the reverse direction must fail.
+
+  - **Piece 3: TS2345 squiggle length clip for multi-line ArrowFunction Block bodies (Checker.kt ~53270).** When arg is `ArrowFunction` with a `Block` body and the body's text spans multiple source lines, clip the squiggle length to `body.pos + 1 - start` (the body's open `{` inclusive). Single-line bodies like `() => {}` keep the full `expressionTrueEnd(arg)` length. Detect multi-line by checking `source.substring(body.pos, fullEnd)` contains `\n`. Without the single-line carve-out, `assignmentCompatBug5_ts` / `signatureLengthMismatchCall_ts` regress (-2 on existing TS2345 callback emissions).
+
+  **Verification.** Targeted test passes; full-suite 10078/1417/3 (was 10078/1418/3, +1 net). Zero regressions across 10078-test suite. Closes the only failing test from this 3-piece interaction; the infrastructure is reusable for any future fn-vs-fn callback case where target sig has errorType params (Piece 2) or multi-line arrow bodies (Piece 3) or unresolved namespace-prefixed param types (Piece 1).
+
+---
+
 - [x] **17.237. TS2315 "Type 'D' is not generic." for `class X extends fn()<T,U>` heritage where `fn` returns a non-generic `class D {}` (+1 — flips `declarationEmitExpressionInExtends4_ts`).** **DONE 2026-05-13.** Pool was 0/0/0 fresh (filtered from 3/66/15) per `find_candidates.py --fresh` post-17.236; spot-checked the MISS-bucket entry `declarationEmitExpressionInExtends4_ts` (diff +1 at (5,17): missing TS2315 `Type 'D' is not generic.`). Skip-log had previously characterized this as "multi-piece — needs class-expression-return inference + ExpressionWithTypeArguments CallExpression branch". Re-examination showed the narrow surgical version is tractable: the corpus has **exactly one** test matching the `class X extends fn()<args>` heritage pattern (verified via `grep -rlE 'class [A-Za-z]+ extends [A-Za-z_]+\(\)<' typescript-repo/tests/cases/` → only this file). Single-file regression risk is bounded. Implementation extended `checkConstraintsInExprWithTypeArgs` (Checker.kt ~47631) with a new `CallExpression` branch:
 
   - Refactored the existing Identifier-only logic into a `when (val expr = node.expression)` with `is Identifier` and new `is CallExpression` arms. Added `siblings: List<Statement>? = null` parameter; threaded `stmts` through from `checkConstraintsInStatements`'s `ClassDeclaration` and `InterfaceDeclaration` arms (only call sites in practice).
@@ -2957,6 +2969,63 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-13 (17.238, 8657 → 8658, +1) — TS2345 emission + display
+  fix + squiggle clip for `() => void` callback vs anon-func target with
+  errorType params (flips `undeclaredModuleError_ts`).** Continuation /loop
+  after 17.237. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered
+  from 3/65/15). Spot-checked 7 SKIP-bucket candidates this session:
+  `elaboratedErrorsOnNullableTargets01_ts`, `arrayAssignmentTest4_ts`,
+  `errorWithSameNameType_ts`, `relationComplexityError_ts`,
+  `intersectionWithConflictingPrivates_ts`, `namespaceDisambiguationInUnion_ts`
+  — each multi-piece architectural per existing skip-log entries.
+  `undeclaredModuleError_ts` initially looked multi-piece (3 separate
+  issues) but each piece turned out narrow enough to land atomically as
+  a single commit:
+
+  **What landed (3-piece coordinated change).** Mirrored TypeScript's
+  TS2345 emission for callback args where target sig has errorType
+  params: (1) full-qualified-name display for unresolved TypeReference
+  params via new `formatTypeReferenceName` helper, tightly scoped to
+  `formatParameter`'s errorType branch; (2) void-return-mismatch gate
+  in `checkArgumentsAgainstSignature` for anon-func args vs anon-func
+  targets with simple non-void returns; (3) multi-line ArrowFunction
+  Block-body squiggle clip at body's open `{` inclusive.
+
+  **Investigation cost.** Three pieces, each requiring a full-suite run
+  to isolate regression source:
+  - Baseline (no changes): 1418 failed.
+  - All 3 pieces + over-broad display: 1434 failed (+16 regressions).
+  - Just display fix (`formatTypeForDisplay` change): 1433 failed (+15
+    regressions — `moduleAndInterfaceSharingName_ts` etc. expected
+    rightmost-segment-only display for resolved `X.Y.Z` types).
+  - Narrowed display fix to `formatParameter` errorType branch only +
+    void-return gate + length clip without single-line carve-out:
+    1419 failed (+1 regression — single-line `() => {}` callbacks).
+  - Final form with single-line carve-out: 1417 failed (+1 net).
+
+  Five full-suite runs to land safely. The display-fix scope-narrowing
+  was the critical learning: TypeScript uses the rightmost-segment-only
+  convention for resolved namespace-prefixed types (`X.Y.Z` → `Z`), but
+  the FULL dotted path for unresolved types (`fs.Stats` → `fs.Stats`).
+  Our `formatTypeForDisplay` doesn't know which case it's in, so the
+  branching must happen at the caller level (`formatParameter`).
+
+  **Verification.** Targeted test passes; full-suite 10078/1417/3
+  (was 10078/1418/3, +1 net). Zero regressions across 10078-test suite.
+
+  **Lessons + follow-ons.** (a) The 3-piece pattern (display + gate +
+  position) is common for "TS2345 emission lands but format mismatches"
+  candidates — each piece needs separate verification. (b) Always
+  verify the regression-source piece-by-piece via full-suite cycles
+  before widening scope — the 15-test regression from over-broad display
+  would have been a silent landmine. (c) The single-line vs multi-line
+  ArrowFunction body distinction is TypeScript convention worth
+  remembering: single-line bodies use the full arrow expression for
+  squiggle, multi-line bodies clip at body `{` inclusive. (d) The
+  full-qualified-name display fix may be useful for other unresolved-
+  namespace tests in the SKIP MISS bucket — re-examine after this
+  session.
 
   **Session 2026-05-13 (17.237, 8656 → 8657, +1) — TS2315 "Type 'D' is not
   generic." for `class X extends fn()<T,U>` heritage where `fn` returns a

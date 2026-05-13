@@ -1,6 +1,52 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,657 / 10,078 tests passing (~85%).
+**Phase 4 — Checker buildout.** 8,658 / 10,078 tests passing (~85.9%).
+
+**17.238 (2026-05-13, +1)** — TS2345 emission for `() => void` callback
+passed where target sig has errorType-typed params + display fix for
+unresolved QualifiedName + multi-line ArrowFunction body squiggle clip.
+Closes `undeclaredModuleError_ts` — emits the expected TS2345 at (8,29)
+length 7 covering `() => {` with message
+`'(stat: fs.Stats, name: string) => boolean'` (full qualified-name
+path) and chain `'Type 'void' is not assignable to type 'boolean'.'`.
+
+Three pieces all needed together; landing any subset alone yielded net
++0 or regressions:
+
+- **`formatParameter` errorType branch** (Checker.kt ~43190): for an
+  unresolved TypeReference whose typeName is a QualifiedName (no type
+  args), render the FULL dotted path via new `formatTypeReferenceName`
+  helper — `fs.Stats` not `Stats`. Scoped tightly to the errorType
+  fallback so resolved `X.Y.Z`-style namespace types continue to display
+  as just `Z` per TypeScript's convention (15-test regression confirmed
+  if widened to all `formatTypeForDisplay` paths).
+
+- **`checkArgumentsAgainstSignature` void-return-mismatch gate**
+  (Checker.kt ~53234): new `allowVoidReturnMismatch` arm next to the
+  existing `allowFuncToFunc` / `allowArityMismatch` arms. Fires when
+  source is anonymous `() => void` (zero params + voidType return) and
+  target is anonymous function with a simple-checkable non-void return.
+  Guards the case where target sig has errorType-typed params (so
+  `sigHasOnlySimpleTypes` returns false). void-return-is-special applies
+  only when TARGET returns void (caller ignores result); the reverse
+  direction must fail.
+
+- **TS2345 squiggle length clip for multi-line ArrowFunction Block
+  bodies** (Checker.kt ~53270): when arg is `ArrowFunction` with a
+  `Block` body and the body's text spans multiple source lines, clip
+  the squiggle length to `body.pos + 1 - start` (the body's open `{`
+  inclusive). Single-line bodies like `() => {}` keep the full
+  `expressionTrueEnd(arg)` length. Detect multi-line by checking
+  `source.substring(body.pos, fullEnd)` contains `\n` — without this,
+  `assignmentCompatBug5_ts` / `signatureLengthMismatchCall_ts` regress
+  (-2) on single-line callback args.
+
+Net delta: 1418 → 1417 failed (8657 → 8658 passing). Zero regressions
+across 10078-test suite. Single-test flip — but the three pieces are
+reusable infrastructure: full-qualified-name display works for any
+unresolved-namespace-prefixed parameter type, the void-return gate
+fires for any sig with errorType params, and the squiggle-clip is the
+TypeScript-baseline-matching format for fn-vs-fn callback args.
 
 **17.237 (2026-05-13, +1)** — TS2315 "Type 'D' is not generic." for
 `class C extends fn()<T,U>` heritage pattern where `fn` is a sibling
