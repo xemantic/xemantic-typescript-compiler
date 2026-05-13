@@ -2922,6 +2922,43 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-13 (post-17.235 stale-skip-log hygiene, 8655 unchanged) —
+  Spot-checked + strikethrough'd 4 stale "Explored-but-skipped" entries against
+  the current passing-test corpus.** Full suite reproduces 8655 / 1420 / 3
+  (matches STATUS.md exactly). `find_candidates.py --fresh` returns 0/0/0
+  (filtered from 3/66/15) — surgical pool confirmed empty. Of the 3 EXTRA / 66
+  MISS / 15 SWAP entries visible with `[SKIP]` markers, every one is
+  pre-classified as architectural-blocker or new-feature work. Spot-checked
+  four skip-log entries against recent flips and marked them strikethrough
+  (test-corpus verified passing via test-results XMLs):
+  - `errorsOnImportedSymbol_ts` (line ~9926) — flipped 17.228.
+  - `complicatedPrivacy_ts → TS2693 on [number]` (line ~9940) — duplicate
+    active entry of the strikethrough'd full version at line ~10230; flipped
+    17.226.
+  - `shorthand-property-es5-es6_ts / nodeNextModuleResolution1_ts` (line
+    ~9944) — `nodeNextModuleResolution1_ts` flipped 17.225; the
+    `shorthand-property-es5-es6_ts` sibling was already passing too.
+  - `decoratorMetadataWithImportDeclarationNameCollision7_ts` (line ~10289)
+    — flipped 17.227.
+
+  No code change. Net delta: 1420 / 1420 unchanged. Documentation hygiene
+  only — these tests were already filtered out of `find_candidates.py`'s
+  output because they're passing, so this commit does not surface new
+  candidates. The motivation is to keep the skip log truthful so the next
+  agent's `--fresh` runs aren't misled by entries that misrepresent test
+  state. **Recommendation for next session:** active-blocker queue (PLAN
+  line ~2506) is fully checked off and surgical pool is genuinely
+  exhausted (16+ consecutive empty-pool sessions confirmed via session
+  notes 17.220–17.235). Next session should follow the anti-loop protocol:
+  promote the next architectural-blocker substep to a queue item (`chore(queue):
+  promote ...`), then start work on it. Per PLAN-PHASE-4.md's "Known
+  architectural blockers" section, the highest-yield blocker without a
+  decomposed queue item is Blocker #1 step 2 follow-ons (TS2454 / TS2339
+  / TS2774 narrowing extensions remain) or Blocker #2 substeps for
+  remaining generic-inference gaps (multi-TypeParam bipartition, `keyof S`
+  substitution). Both have specific failing-test exemplars in the skip-log
+  for triage.
+
   **Session 2026-05-13 (17.235, 8654 → 8655, +1) — Widen 17.111 + 17.112
   assignment-expression construct/call-sig mismatch gates to accept
   property-only Type.Object sources.** Closes the previously half-closed
@@ -9923,7 +9960,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 **Blocker #5 — cross-file global conflation / module-visibility:**
 - ~~`classMemberInitializerWithLamdaScoping4_ts`~~: ~~we emit TS2301 instead of TS2663 ("Did you mean `this.field1`?"). **Attempted 2026-04-19**: naïve "TS2663 whenever inside a lambda AND name is a param-property" flip GAINS scoping4 (+1) but REGRESSES `classMemberInitializerWithLamdaScoping`, `scoping2`, `scoping3` (all expect TS2301 because their `var field1` IS in scope either via script-file-leak or same-file-module-leak). Net -2. True fix requires distinguishing "name is in file's enclosing scope" from "name is not" — same as blocker #5 root cause (cross-file global conflation).~~ **Flipped 17.26 (2026-04-26)** — narrow fix: emit TS2663 only when (a) the matched name is a parameter property AND (b) `ctorParamShadowsRealOuterBinding` returns false (no real outer binding in current file's locals, KNOWN_GLOBALS, or any non-MODULE file's locals). The non-module filter is the key — module exports require explicit imports, so file 1's `export var field1` in test4 is NOT a real outer binding from file 2's perspective. scoping/scoping2/scoping3 remain TS2301 because their outer `var field1` lives in a non-module file (script-file-leak via globals merge) so the function returns true.
 - `moduleAugmentationsImports4_ts`: TS2339 FP on nested `module "a"` augmentation inside `declare module "D"`.
-- `errorsOnImportedSymbol_ts`: `import Sammy = require("./mod")` where `mod` has `export = Sammy` (type-only interface) — need to flag `Sammy` as type-only across files.
+- ~~`errorsOnImportedSymbol_ts`: `import Sammy = require("./mod")` where `mod` has `export = Sammy` (type-only interface) — need to flag `Sammy` as type-only across files.~~ **Flipped 17.228 (2026-05-12, +2)** — TS2693 wired for `import X = require()` of type-only entity at use-site (both es5 and es2015 variants pass).
 
 **Needs a new diagnostic / feature (non-blocker, but non-surgical):**
 - ~~`genericArrayAssignmentCompatErrors_ts`~~ → TS2351 ("This expression is not constructable"). Not implemented.
@@ -9937,11 +9974,11 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - ~~`noImplicitReturnsExclusions_ts`~~ → TS7030 with nuanced exclusions for `void`/`any`/`undefined` return types.
 - ~~`typeParameterCompatibilityAccrossDeclarations_ts`~~ → generic-signature compat, `<T>(y:T)=>T` vs `(y:any)=>any`.
 - ~~`superCallArgsMustMatch_ts`~~ → flipped 17.19 (`super(...)` arg checking via base ctor sig instantiated with heritage clause type args).
-- `complicatedPrivacy_ts` → TS2693 on `[number]` computed-property-name inside type-literal (`[number]: C1`). Not handled by current TS2693 walker (only value expressions, not type annotations).
+- ~~`complicatedPrivacy_ts` → TS2693 on `[number]` computed-property-name inside type-literal (`[number]: C1`). Not handled by current TS2693 walker (only value expressions, not type annotations).~~ **Flipped 17.226 (2026-05-12, +2)** — `checkTypeOnlyKeywordInComputedName` walker wired into TypeLiteral PropertyDeclaration/MethodDeclaration name walk (duplicate entry of the strikethrough'd line further down).
 - ~~`taggedTemplatesWithIncompleteTemplateExpressions6_ts`~~ → TS2345 for tagged template argument checking. Not implemented.
 - ~~`pathMappingBasedModuleResolution6_classic_ts` → false-positive TS2792 because `rootDirs` config is not honored.~~ **STALE 2026-05-11: passing — flipped 16.4fs (paths-mapped-but-missing-extension TS2307 fix).**
 - ~~`pathMappingBasedModuleResolution_withExtension_failedLookup_ts`~~ → missing TS2307 when `paths` points to a non-existent file; our resolver treats `paths`-mapped specifiers as resolved.
-- `shorthand-property-es5-es6_ts` / `nodeNextModuleResolution1_ts` → TS2307 skipped in multi-file node-resolution mode (see `checkUnresolvedModules`; adding TS2307 unconditionally here would FP on index-file/symlink/json patterns our resolver doesn't handle).
+- ~~`shorthand-property-es5-es6_ts` / `nodeNextModuleResolution1_ts` → TS2307 skipped in multi-file node-resolution mode (see `checkUnresolvedModules`; adding TS2307 unconditionally here would FP on index-file/symlink/json patterns our resolver doesn't handle).~~ **Both flipped:** `nodeNextModuleResolution1_ts` flipped 17.225 (2026-05-11, +1) via narrow node_modules-bare-`<name>.d.ts` TS2307 path; `shorthand-property-es5-es6_ts` confirmed passing 2026-05-13.
 - ~~`privacyCheckAnonymousFunctionParameter2_ts`~~: flipped 17.40 (TS2345 null-vs-anonymous-function-type-param with sig-TypeParam mapping for display).
 - ~~`aliasDoesNotDuplicateSignatures_ts`~~ → TS2322 `() => void` to `string`; was actually blocked on `import { f } from 'mod'` resolving through `declare module 'mod' { export = X }` ambient-module export-equals. **Flipped 17.16 (2026-04-26).**
 - ~~`assignmentCompatWithOverloads_ts`~~ → `typeof C` vs `new (x:number)=>void`; needs construct-signature elaboration. **Flipped 17.8c (2026-04-26)** — confirmed passing via spot-check 2026-04-26 post-17.25.
@@ -10286,7 +10323,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `classTypeParametersInStatics_ts` → MISS 2× TS2345 null→T/U for `new List<T>(true, null)` inside method `MakeHead2<T>()` on the enclosing class List. Blocked: `getCalleeType(List)` inside a method of List (self-reference in static method context) returns `anyType` in our checker. `checkSingleNewExpressionTypes` early-exits on `calleeType === anyType`, so the argument walk never reaches the TS2345-null-to-TypeParam check. Infrastructure gap — self-reference class resolution inside static methods. Prerequisite for a generalized null→T-arg TS2345 check behind `hasExplicitTypeArgs`.
 - ~~`superWithTypeArgument3_ts`~~ → flipped 17.20 (super-method callee resolution + null-vs-bare-TypeParam TS2345 emission). Duplicate of strikethrough'd entry near line 3804.
 - ~~`superWithTypeArgument2_ts`~~ → MISS TS2554 "Expected 0 arguments, but got 1" for `super<T>(x)` — same super-resolution gap as above (`super` returns `anyType` so arity check is skipped).
-- `decoratorMetadataWithImportDeclarationNameCollision7_ts` → MISS 2× TS2702 for `db.db` in type position where `db` is a default-imported class. Attempted extending 16.4cz's `isTypeOnly` check to include Alias symbols with a type-only resolved target. But: for `import db from "./db"` (default import of a class), our binder produces a SINGLE symbol with merged `Class + Alias + ExportValue` flags (cross-file declaration merge). That makes NameCollision3 (valid `import = require`), NameCollision4 (invalid default import), and NameCollision7 (valid default import of a class) structurally indistinguishable by flags alone. Cannot distinguish "valid default import of type-only entity → TS2702" from "import= of a module → no TS2702" from "invalid import → TS2613/2305 already fires" using `leftSym.flags` or `resolveAlias` output. Would need to inspect `leftSym.declarations` (ImportEqualsDeclaration vs ImportDeclaration) AND cross-file check whether default export exists. Reverted attempt; logged for future refactor of alias symbol tracking.
+- ~~`decoratorMetadataWithImportDeclarationNameCollision7_ts` → MISS 2× TS2702 for `db.db` in type position where `db` is a default-imported class. Attempted extending 16.4cz's `isTypeOnly` check to include Alias symbols with a type-only resolved target. But: for `import db from "./db"` (default import of a class), our binder produces a SINGLE symbol with merged `Class + Alias + ExportValue` flags (cross-file declaration merge). That makes NameCollision3 (valid `import = require`), NameCollision4 (invalid default import), and NameCollision7 (valid default import of a class) structurally indistinguishable by flags alone. Cannot distinguish "valid default import of type-only entity → TS2702" from "import= of a module → no TS2702" from "invalid import → TS2613/2305 already fires" using `leftSym.flags` or `resolveAlias` output. Would need to inspect `leftSym.declarations` (ImportEqualsDeclaration vs ImportDeclaration) AND cross-file check whether default export exists. Reverted attempt; logged for future refactor of alias symbol tracking.~~ **Flipped 17.227 (2026-05-12, +2)** — TS2702 emission via declaration-kind disambiguation (ImportClause default import of class/interface/type-alias). Both es5 and es2015 variants pass.
 
 **Session 2026-04-18 (16.4dg) additional explored-but-skipped:**
 - `getAndSetNotIdenticalType2_ts` / `getAndSetNotIdenticalType3_ts` → MISS 2× TS2322 for `this.data = v` (inside setter body) and `x.x = r` (top-level). Both assignments to a get/set accessor property. Root causes: (a) `this` inside method bodies resolves to `anyType` so `this.data = v` never reaches `checkPropertyAccessAssignment`; (b) the checker uses the getter's return type as the property type instead of the setter's parameter type, so `x.x = r` sees target `A<number>` (matches source `A<number>`) when it should see `A<string>` (setter param). Both need focused fixes (proper `this` typing in methods; setter-param-aware prop type for assignment context) — not step (c) or (d).
