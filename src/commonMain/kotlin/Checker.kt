@@ -11287,7 +11287,22 @@ class Checker(
         // Now check the final segment (rightmost identifier)
         val exports = symbol!!.exports
         if (exports == null) return // not a namespace, can't check
-        val member = exports[rightId.text]
+        var member = exports[rightId.text]
+        // 17.234: Ambient module `export = X` fallback. When `declare module "foo" { ... export = Y }`,
+        // a type-name qualified access `foo.A` should also walk through Y's exports — `foo`
+        // effectively aliases Y at type-name positions. Only fires when direct lookup fails so
+        // augmentation resolution via the primary path is preserved (17.233 regression lesson:
+        // mutating resolveAlias broke augmentation visibility; the fallback here keeps both
+        // paths active).
+        if (member == null) {
+            val ambientTarget = resolveAmbientModuleExportEquals(symbol!!, mutableSetOf())
+            if (ambientTarget != null && ambientTarget !== symbol) {
+                val candidate = ambientTarget.exports?.get(rightId.text)
+                if (candidate != null && isMemberAccessible(candidate, ambientTarget)) {
+                    member = candidate
+                }
+            }
+        }
         // Use resolved symbol's qualified name, not source-level alias
         val namespacePath = symbolToQualifiedName(symbol!!, fileName)
         if (member == null) {
