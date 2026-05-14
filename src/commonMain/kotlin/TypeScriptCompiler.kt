@@ -1888,6 +1888,11 @@ private fun isIsolatedDeclTriviallyDeclarable(expr: Expression): Boolean = when 
     is BigIntLiteralNode -> true
     is StringLiteralNode -> true
     is NoSubstitutionTemplateLiteralNode -> true
+    // Template literals with substitutions have type `string` regardless of
+    // what they interpolate, so they're trivially declarable at the param-
+    // default level. TypeScript labels these "templateParamOk" in the
+    // isolatedDeclarations corpus.
+    is TemplateExpression -> true
     is Identifier -> expr.text == "true" || expr.text == "false" ||
         expr.text == "null" || expr.text == "undefined"
     is PrefixUnaryExpression ->
