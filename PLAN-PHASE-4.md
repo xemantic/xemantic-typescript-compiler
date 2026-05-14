@@ -2796,6 +2796,34 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.13. TS9008 walker for exported `ClassDeclaration` MethodDeclaration without explicit return-type annotation (DONE 2026-05-14, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassMethodTs9008` walker called from the `is ClassDeclaration` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, after `emitIsolatedDeclClassPropertyTs9012`.
+
+  Walker gate (skip if any apply):
+  - `member.type != null` (annotated return type)
+  - `member.body == null` (overload-only / body-less; interface methods parse as `MethodSignature` not `MethodDeclaration` and are implicitly excluded — body-null guard conservatively covers any rare body-less class method shape)
+  - `name` is neither `Identifier` nor `ComputedPropertyName`
+
+  Span:
+  - Identifier → `name.pos + name.text.length`
+  - ComputedPropertyName → entire `[...]` via `name.pos + (isolatedDeclExprTrueEnd(name.expression) + 1 - name.pos)`, matching the TS9038 walker's span computation so the dual diagnostics share start + length.
+
+  Emission: TS9008 at the computed span; TS9034 related at the same position with "Add a return type to the method" message.
+
+  **Adjacent partial progress (no flip but emissions firing).**
+  - `isolatedDeclarationErrorsClasses_ts` 15 → 17 emissions (+2 — lines 4,5 and 42,5; the latter adds TS9008 alongside existing TS9038 at the same span).
+  - No effect on `isolatedDeclarationErrorsObjects_ts` (its 4 TS9008 emissions are on object-literal method shorthand — different syntactic shape with TS9027 + TS9034 related infos instead of TS9034-only).
+
+  **Verification.** Full-suite 10078/1405/3 (unchanged from B7.12; zero regressions).
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`. Body-null guard is the conservative filter against future grammar shapes. ComputedPropertyName span matches the existing TS9038 walker exactly so dual diagnostics on the same node render correctly in the baseline format.
+
+  **Foundation for follow-ons:**
+  - **B7.14 candidate**: TS9008 + TS9027 + TS9034 for object-literal method shorthand. Adds 4 emissions in `isolatedDeclarationErrorsObjects_ts`. Same shape as B7.13 but the parent is ObjectLiteralExpression (in a `VariableStatement` with Export modifier) and the related infos differ.
+  - **B7.15 candidate**: TS9011 class MethodDeclaration unannotated parameters + non-trivial parameter defaults. Stacks on B7.5's FunctionDeclaration version. Adds ~3 emissions in `isolatedDeclarationErrorsClasses_ts`.
+  - **B7.16 candidate**: TS9009 single-accessor (get-only / set-only) and asymmetric-pair walker. Adds 2 emissions in `isolatedDeclarationErrorsClasses_ts` + 1 in `isolatedDeclarationErrorsObjects_ts`.
+
+---
+
 - [x] **B7.12. TS9012 walker for exported `ClassDeclaration` PropertyDeclaration with non-trivially-declarable initializer (DONE 2026-05-14, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassPropertyTs9012` walker called from the `is ClassDeclaration` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, after `emitIsolatedDeclClassComputedNameDiags`.
 
   Mirrors B7.9's TS9010 trigger set (CallExpression / NewExpression / PropertyAccessExpression / ElementAccessExpression / BinaryExpression / Identifier excluding boolean keywords) onto class-member PropertyDeclarations. Walker gate (skip if any apply):
@@ -3222,6 +3250,21 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.13, 8670 → 8670, net-zero infra) — TS9008 walker for exported `ClassDeclaration` MethodDeclaration without explicit return-type annotation.** Continuation of the same /loop session that landed B7.12. With surgical pool empty and every remaining isolatedDeclarations error-baseline test 5+ shapes from flipping, stacking standalone net-zero walker pieces is the rational session cadence. B7.13 is the natural next shape on the class-member axis after B7.12's TS9012 PropertyDeclaration walker.
+
+  **Implementation.** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassMethodTs9008(stmt, ...)` walker called from the `is ClassDeclaration` arm of pass 3's statement switch, after `emitIsolatedDeclClassPropertyTs9012`. Iterates `stmt.members`; for each `MethodDeclaration` with `type == null` and `body != null`:
+  - Identifier name → squiggle is `name.pos + name.text.length`.
+  - ComputedPropertyName name → squiggle is the entire `[...]` span via `isolatedDeclExprTrueEnd(name.expression) + 1`. Matches the existing TS9038 walker's span exactly so the dual diagnostics on computed-named methods render at the same start + length per the baseline format.
+  - Other name kinds (string-/numeric-named methods, rare in tests) → skipped.
+
+  Emission: TS9008 at the computed span; TS9034 related at the same position with "Add a return type to the method" message.
+
+  **Test impact (no flip but emissions firing).** `isolatedDeclarationErrorsClasses_ts` 15 → 17 (+2 emissions; lines 4,5 `method() {}` and 42,5 `[noAnnotationStringName]() { }`). No effect on `isolatedDeclarationErrorsObjects_ts` (4 TS9008 emissions there are object-literal method shorthand, a different parent + related-info shape — deferred to a follow-on B7.14).
+
+  **Verification.** Full-suite 10078/1405/3 (unchanged from B7.12; zero regressions).
+
+  **Lessons.** (a) Class-member axis lends itself to small, well-bounded walker pieces — each PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor shape is a separate `if (member is X)` branch. Stack them as individual substeps; cumulative test flips come once the stack covers enough shapes of a specific failing test. (b) For dual-diagnostic shapes (TS9008 + TS9038 on the same computed-named method), span agreement between walkers is load-bearing — baseline format renders both squiggles at the same start with the same length. Sharing `isolatedDeclExprTrueEnd(name.expression) + 1` (added in B7.11) keeps the walker pieces aligned.
 
   **Session 2026-05-14 (B7.12, 8670 → 8670, net-zero infra) — TS9012 walker for exported `ClassDeclaration` PropertyDeclaration with non-trivially-declarable initializer.** Continuation /loop after B7.11. `find_candidates.py --fresh` 0/0/0 (filtered from 3/63/15) — same baseline as post-B7.11. Per anti-loop rule the protocol requires picking the next item, and all queue items above 16.4 are checked. The B7.x series is the natural continuation. Survey of the four remaining isolatedDeclarations error-baseline tests showed every one is >=5 walker shapes away from flipping:
   - `isolatedDeclarationErrorsReturnTypes_ts`: 0/31 emissions (entirely new TS9007 walker scope — too big).
