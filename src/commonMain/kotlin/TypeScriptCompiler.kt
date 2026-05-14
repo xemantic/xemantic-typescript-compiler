@@ -1500,12 +1500,13 @@ private fun collectNamespaceBodyExports(
 }
 
 /**
- * Emits TS9010 + TS9027 for top-level `export var x;` (untyped, uninitialized)
- * declarations when `isolatedDeclarations: true`. JS files are skipped — only
- * `.ts`/`.tsx` files emit. Narrow gate: name is Identifier, type==null,
- * initializer==null. Other isolated-declarations patterns (initializers whose
- * type isn't trivially inferable, function returns, class members, etc.) are
- * not yet implemented.
+ * Emits isolated-declarations diagnostics for top-level `.ts`/`.tsx` exports.
+ * Currently handles:
+ *  - TS9010 (+ TS9027 related) for `export var x;` (untyped, uninitialized).
+ *  - TS9022 (+ TS9027 + TS9035 related) for `export const x = class {...}`
+ *    and elements of `export const x = [class {}, class{}] as const`.
+ *  - TS9021 for `export class C extends fn(...)` where the extends expression
+ *    is a CallExpression or NewExpression (not a simple identifier path).
  */
 private fun emitIsolatedDeclarationsDiagnostics(
     sourceFile: SourceFile,
@@ -1520,38 +1521,196 @@ private fun emitIsolatedDeclarationsDiagnostics(
     if (isDtsFile) return emptyList()
     val results = mutableListOf<Diagnostic>()
     for (stmt in sourceFile.statements) {
-        if (stmt !is VariableStatement) continue
-        if (ModifierFlag.Export !in stmt.modifiers) continue
-        for (decl in stmt.declarationList.declarations) {
-            val name = decl.name
-            if (name !is Identifier) continue
-            if (decl.type != null) continue
-            if (decl.initializer != null) continue
-            val (line, character) = positionToLineCharacter(source, name.pos)
-            val related = Diagnostic(
-                message = "Add a type annotation to the variable ${name.text}.",
-                category = DiagnosticCategory.Message,
-                code = 9027,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = name.pos,
-                length = name.text.length,
-            )
-            results.add(Diagnostic(
-                message = "Variable must have an explicit type annotation with --isolatedDeclarations.",
-                category = DiagnosticCategory.Error,
-                code = 9010,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = name.pos,
-                length = name.text.length,
-                relatedInformation = listOf(related),
-            ))
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    val name = decl.name
+                    if (name !is Identifier) continue
+                    if (decl.type != null) continue
+                    if (decl.initializer == null) {
+                        val (line, character) = positionToLineCharacter(source, name.pos)
+                        val related = Diagnostic(
+                            message = "Add a type annotation to the variable ${name.text}.",
+                            category = DiagnosticCategory.Message,
+                            code = 9027,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                        )
+                        results.add(Diagnostic(
+                            message = "Variable must have an explicit type annotation with --isolatedDeclarations.",
+                            category = DiagnosticCategory.Error,
+                            code = 9010,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                            relatedInformation = listOf(related),
+                        ))
+                    } else {
+                        emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
+                    }
+                }
+            }
+            is ClassDeclaration -> {
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
+            }
+            else -> {}
         }
     }
     return results
+}
+
+/**
+ * For `export const x = class {...}` and `export const x = [class {}, ...] as const`,
+ * emits TS9022 at each ClassExpression's `class` keyword. The array-as-const form
+ * also attaches TS9035 (satisfies suggestion); both forms attach TS9027 pointing
+ * at the variable name.
+ */
+private fun emitIsolatedDeclClassExprDiags(
+    decl: VariableDeclaration,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val initializer = decl.initializer ?: return
+    when (initializer) {
+        is ClassExpression -> {
+            emitTs9022(initializer, varName, fileName, source, addSatisfies = false, results)
+        }
+        is AsExpression -> {
+            val t = initializer.type
+            val isAsConst = t is TypeReference &&
+                t.typeName.let { it is Identifier && it.text == "const" } &&
+                t.typeArguments == null
+            if (!isAsConst) return
+            val inner = initializer.expression
+            if (inner !is ArrayLiteralExpression) return
+            for (el in inner.elements) {
+                if (el is ClassExpression) {
+                    emitTs9022(el, varName, fileName, source, addSatisfies = true, results)
+                }
+            }
+        }
+        else -> {}
+    }
+}
+
+private fun emitTs9022(
+    classExpr: ClassExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    addSatisfies: Boolean,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, classExpr.pos)
+    val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+    val related = mutableListOf(
+        Diagnostic(
+            message = "Add a type annotation to the variable ${varName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9027,
+            fileName = fileName,
+            line = varLine,
+            character = varChar,
+            start = varName.pos,
+            length = varName.text.length,
+        )
+    )
+    if (addSatisfies) {
+        related.add(Diagnostic(
+            message = "Add satisfies and a type assertion to this expression (satisfies T as T) to make the type explicit.",
+            category = DiagnosticCategory.Message,
+            code = 9035,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = classExpr.pos,
+            length = 5,
+        ))
+    }
+    results.add(Diagnostic(
+        message = "Inference from class expressions is not supported with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9022,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = classExpr.pos,
+        length = 5, // "class"
+        relatedInformation = related,
+    ))
+}
+
+/**
+ * For each `extends` clause expression on an exported class, emits TS9021 when
+ * the expression is not a simple identifier path (e.g. `extends fn(...)`,
+ * `extends new C()`).
+ */
+private fun emitIsolatedDeclExtendsDiags(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val clauses = stmt.heritageClauses ?: return
+    for (clause in clauses) {
+        if (clause.token != SyntaxKind.ExtendsKeyword) continue
+        for (typeExpr in clause.types) {
+            val expr = typeExpr.expression
+            if (isAllowedExtendsExpression(expr)) continue
+            val start = expr.pos
+            val end = isolatedDeclExprTrueEnd(expr)
+            val length = (end - start).coerceAtLeast(1)
+            val (line, character) = positionToLineCharacter(source, start)
+            results.add(Diagnostic(
+                message = "Extends clause can't contain an expression with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9021,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+}
+
+private fun isAllowedExtendsExpression(expr: Expression): Boolean {
+    return when (expr) {
+        is Identifier -> true
+        is PropertyAccessExpression -> isAllowedExtendsExpression(expr.expression)
+        else -> false
+    }
+}
+
+private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
+    is Identifier -> expr.pos + expr.text.length
+    is PropertyAccessExpression -> {
+        val n = expr.name
+        if (n is Identifier) n.pos + n.text.length else expr.end
+    }
+    is CallExpression -> {
+        if (expr.arguments.isNotEmpty()) isolatedDeclExprTrueEnd(expr.arguments.last()) + 1
+        else expr.end
+    }
+    is NewExpression -> {
+        val args = expr.arguments
+        when {
+            args == null -> isolatedDeclExprTrueEnd(expr.expression)
+            args.isEmpty() -> isolatedDeclExprTrueEnd(expr.expression) + 2 // ()
+            else -> isolatedDeclExprTrueEnd(args.last()) + 1
+        }
+    }
+    else -> expr.end
 }
 
 /** 1-based line + character for a position in `source`. */
