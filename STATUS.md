@@ -1,6 +1,62 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,671 / 10,078 tests passing (~86.0%).
+
+**B7.17 (2026-05-14, +1 — flips `isolatedDeclarationErrorsObjects_ts`)** —
+TS7032 / TS7006 / TS9009 walker for single-setter accessors in
+ObjectLiteralExpression initializers under exported `VariableStatement`.
+Single-file change in `TypeScriptCompiler.kt`. New
+`emitIsolatedDeclObjLitAccessor` walker called from the `is VariableStatement`
+arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`,
+alongside the existing `emitIsolatedDeclObjLitSpreadShorthand` walker (gated
+on `Export` + `init is ObjectLiteralExpression`).
+
+Walker iterates `objLit.properties` twice:
+1. First pass collects Identifier-named `GetAccessor` names into a
+   `hasGetter` set.
+2. Second pass: for each `SetAccessor` whose name Identifier is NOT in
+   `hasGetter`, whose first parameter has NO type annotation, and whose
+   first-parameter name is an Identifier — emit three diagnostics. When a
+   peer getter exists, TypeScript treats the setter param type as supplied
+   by the getter's return type (even if that is itself implicit-any) and
+   suppresses all three — matched by the `hasGetter` gate.
+
+Emissions:
+- **TS7032** at the accessor NAME position (length = name.length):
+  "Property 'X' implicitly has type 'any', because its set accessor lacks
+   a parameter type annotation."
+- **TS7006** at the param NAME position (length = param-name.length):
+  "Parameter 'value' implicitly has an 'any' type."
+- **TS9009** at the param NAME position (length = param-name.length):
+  "At least one accessor must have an explicit type annotation with
+   --isolatedDeclarations." with related TS9033 at the accessor NAME
+  position: "Add a type to parameter of the set accessor declaration."
+
+Recurses into nested ObjectLiteralExpression initializers via
+PropertyAssignment so deep object literals are covered uniformly with the
+other B7.x walkers.
+
+**Verification.** Full-suite 10078/1404/3 (was 10078/1405/3, +1 net). Zero
+regressions across 10078-test suite. Closes
+`isolatedDeclarationErrorsObjects_ts` at 19/19 expected emissions
+(previously 16/19 after B7.16).
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+AND `init is ObjectLiteralExpression` (call-site gates). Within that scope
+the `hasGetter`-peer gate suppresses emissions on accessor pairs even when
+both are unannotated, matching TypeScript's asymmetric baseline behavior
+(`get/set getSetBad` pair fires nothing despite both unannotated).
+ComputedPropertyName / StringLiteralNode / NumericLiteralNode accessor
+names are conservatively skipped (no failing-test target exercises them).
+
+**Foundation for follow-ons.**
+- **B7.18 candidate**: TS9011 class MethodDeclaration unannotated parameters
+  + non-trivial parameter defaults. Stacks on B7.5's FunctionDeclaration
+  version. Adds ~3 emissions in `isolatedDeclarationErrorsClasses_ts`.
+- **B7.19 candidate**: TS9009 / TS7032 / TS7006 for class-side
+  `set X(value)` single-setter accessors (mirror of B7.17 for
+  `isolatedDeclarationErrorsClasses_ts`). Would add ~2 emissions there.
 
 **B7.16 (2026-05-14, net-zero infra)** — TS9015 / TS9016 walker for
 SpreadAssignment / ShorthandPropertyAssignment in ObjectLiteralExpression
