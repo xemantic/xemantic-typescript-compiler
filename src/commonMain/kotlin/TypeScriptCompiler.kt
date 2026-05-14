@@ -1675,6 +1675,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 if (ModifierFlag.Export !in stmt.modifiers) continue
                 emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
                 emitIsolatedDeclClassComputedNameDiags(stmt, fileName, source, results)
+                emitIsolatedDeclClassPropertyTs9012(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2713,6 +2714,82 @@ private fun emitIsolatedDeclObjLitComputedNameDiags(
             character = character,
             start = start,
             length = length,
+            relatedInformation = listOf(related),
+        ))
+    }
+}
+
+/**
+ * Walks an exported `ClassDeclaration`'s members and emits TS9012 on each
+ * un-annotated PropertyDeclaration whose initializer is a non-trivially-
+ * declarable expression. Mirrors B7.9's trigger set from
+ * `emitIsolatedDeclVarInitTs9010` (VariableStatement → TS9010): the same
+ * runtime-only expression kinds that prevent inferring a declaration type
+ * apply at the property-declaration level.
+ *
+ * Squiggle = property name (Identifier `text.length`). TS9029 related at the
+ * same position with message "Add a type annotation to the property X."
+ *
+ * Skipped:
+ *   - `member.type != null` (annotated → declarable as written)
+ *   - `member.initializer == null` (no value → handled by other walkers / no
+ *     TS9012 required)
+ *   - `name !is Identifier` (ComputedPropertyName handled by the dedicated
+ *     `emitIsolatedDeclClassComputedNameDiags`; string-named / numeric-named
+ *     properties are rare in tests and require additional name-text extraction)
+ *   - Initializer is trivially declarable (literals, etc.) per
+ *     `isIsolatedDeclTriviallyDeclarable`.
+ *   - Initializer is `ArrowFunction` / `FunctionExpression` / `ClassExpression`
+ *     (separate walkers handle missing return type — TS9007 — / class-expr
+ *     inference — TS9022).
+ *   - Initializer is `ObjectLiteralExpression` / `ArrayLiteralExpression`
+ *     (deferred to a future substep that mirrors B7.9's deferred object-/array-
+ *     literal sub-expression walker for VariableStatement).
+ */
+private fun emitIsolatedDeclClassPropertyTs9012(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        if (member !is PropertyDeclaration) continue
+        if (member.type != null) continue
+        val init = member.initializer ?: continue
+        val name = member.name
+        if (name !is Identifier) continue
+        if (isIsolatedDeclTriviallyDeclarable(init)) continue
+        val triggers = when (init) {
+            is CallExpression -> true
+            is NewExpression -> true
+            is PropertyAccessExpression -> true
+            is ElementAccessExpression -> true
+            is BinaryExpression -> true
+            is Identifier -> init.text != "true" && init.text != "false" &&
+                init.text != "null" && init.text != "undefined"
+            else -> false
+        }
+        if (!triggers) continue
+        val (line, character) = positionToLineCharacter(source, name.pos)
+        val related = Diagnostic(
+            message = "Add a type annotation to the property ${name.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9029,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
+        )
+        results.add(Diagnostic(
+            message = "Property must have an explicit type annotation with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9012,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
             relatedInformation = listOf(related),
         ))
     }

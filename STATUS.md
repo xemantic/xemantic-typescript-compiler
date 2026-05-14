@@ -2,6 +2,76 @@
 
 **Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
 
+**B7.12 (2026-05-14, net-zero infra)** — TS9012 walker for exported
+`ClassDeclaration` PropertyDeclaration with non-trivially-declarable
+initializer. Single-file change in `TypeScriptCompiler.kt`. Mirrors B7.9's
+TS9010 trigger set (CallExpression / NewExpression / PropertyAccessExpression
+/ ElementAccessExpression / BinaryExpression / Identifier excluding boolean
+keywords) onto class-member PropertyDeclarations. New
+`emitIsolatedDeclClassPropertyTs9012` walker called from the
+`is ClassDeclaration` arm of pass 3's statement switch, after
+`emitIsolatedDeclClassComputedNameDiags`.
+
+Walker gate (skip if any apply):
+- `member.type != null` (annotated — declarable as written)
+- `member.initializer == null` (no value)
+- `member.name !is Identifier` (ComputedPropertyName handled by the
+  dedicated `emitIsolatedDeclClassComputedNameDiags`; string-/numeric-named
+  properties rare in tests and require separate name-text extraction)
+- Initializer is trivially declarable per `isIsolatedDeclTriviallyDeclarable`
+- Initializer is ArrowFunction / FunctionExpression / ClassExpression
+  (TS9007 / TS9022 handle these separately — checked implicitly via the
+  triggers `when` falling through to `else -> false`)
+- Initializer is ObjectLiteralExpression / ArrayLiteralExpression
+  (deferred to a future substep mirroring B7.9's deferred shape)
+
+Emission: TS9012 at name.pos + name.text.length; TS9029 related at same
+position with "Add a type annotation to the property X." message.
+
+**Adjacent partial progress (no flip but emissions firing).** 15 new TS9012
+emissions land across two tests:
+- `isolatedDeclarationErrorsClasses_ts` 14 → 15 (line 3,5 `field = 1 + 1;`).
+- `isolatedDeclarationErrorsExpressions_ts` 21 → 35 (14 emissions across
+  `class Exported`'s `public` and `readonly` fields with BinaryExpression /
+  CallExpression / Identifier initializers — lines 59-69, 78-88). Template-
+  with-substitution shapes (lines 91-93, 102-104) deferred to a follow-on
+  substep that mirrors B7.9's deferred TemplateExpression handling for
+  VariableStatement.
+
+Neither test flips with B7.12 alone — each needs further walker shapes
+(TS9008 method-shorthand, TS9011 method params, TS9009 accessor pairs,
+TS9013 interface methods, TS7032 / TS7006 / TS7010 checker emissions for
+computed-named accessors / interfaces, and a TS9012 template / as-const-
+template extension for the Expressions test). Foundation for stacking
+those shapes in subsequent substeps.
+
+**Verification.** Targeted tests run; full-suite 10078/1405/3 (unchanged
+from B7.11; zero regressions). Net-zero on the suite — first net-zero
+infra commit in the B7.x series, departing from the prior +1-per-substep
+pattern because every remaining single-shape candidate is similarly net-
+zero (no remaining isolatedDeclarations error-baseline test can flip in
+fewer than ~5-10 walker shapes).
+
+**Risk profile that materialized.** Bounded — the walker is gated on
+`options.isolatedDeclarations` AND on `ModifierFlag.Export in stmt.modifiers`
+(at the call site). The trigger gate is the same intersection that B7.9
+proved safe across the suite. Identifier triggers exclude `true`/`false`/
+`null`/`undefined` (boolean / nullish-like keywords parsed as Identifier
+nodes). Implicit-public, `public`, `protected`, `private`, `readonly`,
+and `static` modifiers all qualify (no visibility filter). The conservative
+approach skips ArrowFunction / FunctionExpression / ClassExpression init
+shapes (handled by TS9007 / TS9022) and Object/Array literals (deferred).
+
+**Lessons.** (a) Mirroring an existing well-tested trigger set onto a new
+declaration kind is the safest expansion strategy in the B7.x walker
+family — no novel classification logic, identical regression surface to
+the prior commit. (b) Net-zero infra commits are part of the protocol's
+acceptable outcomes; the previous B7.x sub-series happened to have +1-
+per-substep momentum because each individual test was 1 walker shape
+away from flipping. After B7.11 closed the last such test, the next
+flippable targets are all multi-shape — net-zero commits are now the
+expected cadence until ~5-10 shapes are stacked.
+
 **B7.11 (2026-05-14, +1)** — ElementAccessExpression-LHS TS9023 + class /
 object-literal `ComputedPropertyName` TS9038 + TS1166 walker (closes
 `isolatedDeclarationLazySymbols_ts`). Single-file change in
