@@ -990,10 +990,18 @@ class TypeScriptCompiler {
             diagnostics.addAll(checker.getDiagnostics())
 
             if (options.isolatedDeclarations) {
+                // Cross-file augmentation map: for each target file name (basename
+                // without extension), list of file names that contain a
+                // `declare module './<target>' { ... }` augmentation. Used to emit
+                // TS9026 on imports that bring augmentations of the importing file.
+                val augmenterMap = buildAugmenterMap(parsedSourceFiles)
                 for ((tsFileName, sourceFile) in parsedSourceFiles) {
                     val original = parsed.files.firstOrNull { it.fileName == tsFileName }?.content
                         ?: continue
                     diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, tsFileName, original))
+                    diagnostics.addAll(
+                        emitIsolatedDeclarationsAugmentImports(sourceFile, tsFileName, original, augmenterMap)
+                    )
                 }
             }
 
@@ -1894,6 +1902,82 @@ private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
         }
     }
     else -> expr.end
+}
+
+/**
+ * Build map: target file basename (no extension) → list of files that contain a
+ * `declare module './<target>' { ... }` augmentation. Only relative specifiers
+ * (`./X` / `../X`) are considered — non-relative augmentations target ambient
+ * modules, not sibling files.
+ */
+private fun buildAugmenterMap(files: Map<String, SourceFile>): Map<String, List<String>> {
+    val result = mutableMapOf<String, MutableList<String>>()
+    for ((fileName, sourceFile) in files) {
+        for (stmt in sourceFile.statements) {
+            if (stmt !is ModuleDeclaration) continue
+            val name = stmt.name as? StringLiteralNode ?: continue
+            val spec = name.text
+            if (!spec.startsWith("./") && !spec.startsWith("../")) continue
+            val baseSpec = spec.removePrefix("./").removePrefix("../")
+                .substringAfterLast('/')
+                .substringBeforeLast('.')
+            result.getOrPut(baseSpec) { mutableListOf() }.add(fileName)
+        }
+    }
+    return result
+}
+
+/**
+ * For each relative `import ... from './X'` in [sourceFile] where the imported
+ * file augments the current file (per [augmenterMap]), emit TS9026 covering
+ * the full import statement.
+ */
+private fun emitIsolatedDeclarationsAugmentImports(
+    sourceFile: SourceFile,
+    fileName: String,
+    source: String,
+    augmenterMap: Map<String, List<String>>,
+): List<Diagnostic> {
+    val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+    if (isJsFile) return emptyList()
+    val isDtsFile = fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") ||
+        fileName.endsWith(".d.cts")
+    if (isDtsFile) return emptyList()
+    val currentBase = fileName.substringAfterLast('/').substringBeforeLast('.')
+    val augmenters = augmenterMap[currentBase] ?: return emptyList()
+    val augmenterBases = augmenters.map { it.substringAfterLast('/').substringBeforeLast('.') }
+        .toSet()
+    val results = mutableListOf<Diagnostic>()
+    for (stmt in sourceFile.statements) {
+        if (stmt !is ImportDeclaration) continue
+        val spec = stmt.moduleSpecifier as? StringLiteralNode ?: continue
+        val specifier = spec.text
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue
+        val specBase = specifier.removePrefix("./").removePrefix("../")
+            .substringAfterLast('/')
+            .substringBeforeLast('.')
+        if (specBase !in augmenterBases) continue
+        val start = stmt.pos
+        // Find `;` after the module-specifier closing quote (rawText.length + 2 for quotes).
+        val specEnd = spec.pos + (spec.rawText?.length ?: spec.text.length) + 2
+        var end = stmt.end
+        val semiPos = source.indexOf(';', specEnd)
+        if (semiPos in 0..<source.length) end = semiPos + 1
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = positionToLineCharacter(source, start)
+        results.add(Diagnostic(
+            message = "Declaration emit for this file requires preserving this import for augmentations. This is not supported with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9026,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+    return results
 }
 
 /** 1-based line + character for a position in `source`. */

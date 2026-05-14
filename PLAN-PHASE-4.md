@@ -2796,6 +2796,14 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.4. TS2720 self-implements FP suppression + TS9026 cross-file augmentation walker (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsAugmentation_ts`).** Two-piece change required for the target's net-zero diff (`+1 TS9026 missing, -1 TS2720 extra`):
+
+  - **Checker.kt** `checkImplementsClauses` — new self-implements short-circuit: `if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) continue@typeExprLoop`. Suppresses spurious TS2720 for `class X implements X {}` (tautology at declaration; augmentation members satisfied at runtime via prototype mutation, which TypeScript accepts).
+
+  - **TypeScriptCompiler.kt** — new `buildAugmenterMap(files)` builds a `Map<targetBasename, List<augmenterFileName>>` by scanning each file's `ModuleDeclaration` with relative-string-literal name. New `emitIsolatedDeclarationsAugmentImports(sourceFile, fileName, source, map)` walks `ImportDeclaration` statements; emits TS9026 on imports whose target file augments the current file. Multi-file path only.
+
+  **Verification.** Targeted test passes; full-suite 10078/1412/3 (was 10078/1413/3, +1 net). Zero regressions.
+
 - [x] **B7.3. Extend isolatedDeclarations walker with TS9023 (expando assignments) + TS9007 (FunctionDeclaration / arrow-FE missing return type) (DONE 2026-05-14, +2 — flips `isolatedDeclarationErrors_ts` AND `isolatedDeclarationErrorsExpandoFunctions_ts`).** Stacks on B7.1 + B7.2. Three-pass restructure of `emitIsolatedDeclarationsDiagnostics`:
 
   - **Pass 1** — `funcDecls: Map<String, FunctionDeclaration>` and `funcVarDecls: Map<String, Pair<VariableDeclaration, Expression>>` collected by walking top-level FunctionDeclarations and VariableStatements with arrow/FE initializers.
@@ -3022,6 +3030,18 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.4, 8662 → 8663, +1) — TS2720 self-implements suppression in `checkImplementsClauses` + TS9026 cross-file augmentation walker.** Continued /loop iteration after B7.3. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 3/61/15). Post-survey of remaining isolatedDeclarations tests showed `isolatedDeclarationErrorsAugmentation_ts` had the smallest diff: missing TS9026 ×1 + extra TS2720 ×1. The TS2720 was an obvious FP (`class X implements X` is tautological), and TS9026 cross-file augmentation detection turned out to be tractable via a simple basename-matching map.
+
+  **Implementation.** Two-piece change:
+  - **Checker.kt** `checkImplementsClauses` (~line 45788) — new short-circuit at the top of the `typeExprLoop@ for (typeExpr in clause.types)` body: `if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) continue@typeExprLoop`. Suppresses TS2720 when the class implements itself (same identifier, no type arguments to discriminate). Narrow gate preserves `class X<T> implements X<number>` (different instantiation) and other legitimate self-references with type-arg differences.
+  - **TypeScriptCompiler.kt** — new `buildAugmenterMap(files)` helper scans every `parsedSourceFiles` entry's top-level `ModuleDeclaration` whose name is a relative `StringLiteralNode` (`./X` / `../X`); maps target basename (after stripping path + extension) to list of augmenter filenames. New `emitIsolatedDeclarationsAugmentImports(sourceFile, fileName, source, augmenterMap)` walks the current file's top-level `ImportDeclaration` statements: for each relative specifier, computes the same basename and checks if the imported file augments the current file (via `augmenterMap[currentBasename]`). If yes, emits **TS9026** covering the full import statement (start = `stmt.pos`, end = `;` position + 1 via `source.indexOf(';', specEnd)`). Wired into the multi-file path's `isolatedDeclarations` block at TypeScriptCompiler.kt:992-1004.
+
+  **Verification.** Targeted test passes; full-suite 10078/1412/3 (was 10078/1413/3, +1 net). Zero regressions across the 10078-test suite.
+
+  **Risk profile.** Bounded — the TS2720 self-implements check ONLY fires for `class X implements X` with no type arguments, and only ONE corpus test (`isolatedDeclarationErrorsAugmentation_ts`) has this pattern in a failing-test context. The other two corpus tests using the same pattern (`bluebirdStaticThis.ts` uses `implements Promise.Thenable<R>` — different name; `declarationEmitForModuleImportingModuleAugmentationRetainsImport.ts` has no errors_txt baseline so test stays passing). The TS9026 walker is `isolatedDeclarations`-gated so non-isolated multi-file tests are unaffected; basename-matching is purely lexical (no module resolution dependency).
+
+  **Lessons.** (a) When a target test has a `diff = +N missing, -M extra` pattern, the extras must be addressed too — landing only the additions would leave the test failing. The TS2720 self-impls FP in our checker was the missing piece that prevented earlier sessions from flipping this test. (b) Cross-file analysis in TypeScriptCompiler.kt's multi-file path is feasible without going through the Checker — a simple basename-matching map suffices for relative-specifier augmentations. The Checker's `resolveModuleSpecifier` would handle non-relative / extension-aware cases, but for the corpus's relative augmentation pattern, lexical matching is sufficient and avoids cross-cutting Checker changes. (c) Two-piece commits are appropriate when both pieces are necessary for a single test to flip; bisecting them would leave the repo in a half-fixed state.
 
   **Session 2026-05-14 (B7.3, 8660 → 8662, +2) — Extend isolatedDeclarations walker with TS9023 (expando assignments) + TS9007 (FunctionDeclaration / arrow/FE missing return type).** Stacks on B7.1 + B7.2. Same session as B7.2 (continued /loop iteration). Targeted both `isolatedDeclarationErrors_ts` (4 emissions: 3 TS9023 + 1 TS9007) and `isolatedDeclarationErrorsExpandoFunctions_ts` (7 emissions: 6 TS9023 + 1 TS9007 with TS9023 dedup on duplicated `foo.length = 10`).
 
