@@ -2796,6 +2796,38 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.9. TS9010 for `export const/let/var X = nonTriviallyDeclarableExpr` (DONE 2026-05-14, +1 — flips `declarationEmitIsolatedDeclarationErrorNotEmittedForNonEmittedFile_ts`).** Extension of B7.1's TS9010 walker — previously only fired for `export X;` without initializer; now also fires when initializer is one of a conservative set of runtime-only expression kinds that cannot be preserved as a literal type in the emitted .d.ts. Single-file change in `TypeScriptCompiler.kt`:
+
+  - New `emitIsolatedDeclVarInitTs9010(varName, init, ...)` helper called from the `VariableStatement` arm of pass 3 in `emitIsolatedDeclarationsDiagnostics`, right after `emitIsolatedDeclClassExprDiags`, gated on `ModifierFlag.Export in stmt.modifiers`.
+
+  - Trigger expression kinds (deliberately narrow — only those where TypeScript's baseline definitively expects TS9010 AND no currently-passing isolated-decl test puts them under `export const X = …`):
+    - `CallExpression` / `NewExpression`
+    - `PropertyAccessExpression` / `ElementAccessExpression`
+    - `BinaryExpression`
+    - `Identifier` (excluding the literal-keyword identifiers `true` / `false` / `null` / `undefined`).
+
+  - Squiggle at the variable name; TS9027 "Add a type annotation to the variable X." related info attached, mirroring the existing no-initializer TS9010 emission. No TS9035 (the satisfies hint) — that's for sub-expression TS9013 cases, not the variable-level TS9010 case.
+
+  - **Intentionally NOT triggered** (each deferred to a follow-on substep): `ObjectLiteralExpression` (needs recursive sub-expr walker → TS9013 on non-trivial leaves; `isolatedDeclarationErrorsObjects_ts`'s `oBad`/`oBad2` pattern), `ArrayLiteralExpression` (needs TS9017), `TemplateExpression` (needs const-vs-let distinction — TypeScript emits TS9010 for `const` template-with-substitutions but accepts `let`), `AsExpression` non-`as const` (separate diagnostic family), `ArrowFunction` / `FunctionExpression` (separate TS9007 walker handles missing return types).
+
+  **Verification.** Targeted test passes; full-suite 10078/1407/3 (was 10078/1408/3, +1 net). Zero regressions across 10078-test suite.
+
+  **Target diff details.** The flipped test `declarationEmitIsolatedDeclarationErrorNotEmittedForNonEmittedFile_ts` is a multi-file test with all expected diagnostics in `index.ts`:
+  ```
+  index.ts(5,14): error TS9010  // export const middleware = trpc.middleware;
+  index.ts(6,14): error TS9010  // export const router = trpc.router;
+  index.ts(7,14): error TS9010  // export const publicProcedure = trpc.procedure;
+  ```
+  All three initializers are `PropertyAccessExpression` (covered by the trigger list). The local `const trpc = initTRPC.create();` line is NOT in the emission set because it lacks the `export` modifier — gated correctly by the existing `ModifierFlag.Export` check.
+
+  **Risk profile that materialized**. Bounded — the trigger gate is intentionally narrow. The currently-passing isolated-declaration corpus has no `export const X = identifier` / `export const X = call()` / `export const X = obj.prop` patterns (verified via grep of all `// @isolatedDeclarations: true` test sources). The wider corpus is unaffected because the walker is gated on `options.isolatedDeclarations`. Foundation for follow-on substeps:
+  - **B7.10 candidate**: `ObjectLiteralExpression` sub-expr walker (TS9013 on non-trivial leaves with TS9027 + TS9035 related) — would knock out 4 emissions in `isolatedDeclarationErrorsObjects_ts` (`oBad`, `oBad2.a.b`, `oBad2.c.e`).
+  - **B7.11 candidate**: Method shorthand TS9008 + TS9034 in ObjectLiteralExpression initializers — 4 emissions in `isolatedDeclarationErrorsObjects_ts`.
+  - **B7.12 candidate**: `TemplateExpression` (with substitutions) under `const` — TS9010 — multiple emissions in `isolatedDeclarationErrorsExpressions_ts`.
+  - **B7.13 candidate**: `ArrayLiteralExpression` (non-`as const`) → TS9017 — exercised by `isolatedDeclarationErrorsExpressions_ts` line 53.
+
+  Each is a standalone substep yielding +1 to +2 tests.
+
 - [x] **B7.8. TS9020 for enum members with non-computable initializers under `--isolatedDeclarations` (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsEnums_ts` errors-baseline).** Stacks on the existing pass-3 statement switch in `emitIsolatedDeclarationsDiagnostics`. Single-file change in `TypeScriptCompiler.kt`:
 
   - New `is EnumDeclaration` arm calls `emitIsolatedDeclEnumChecks(enumDecl, ...)`. No `Export` gate — TS9020 applies to all enums in the file.
