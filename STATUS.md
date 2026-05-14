@@ -1,6 +1,90 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,669 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
+
+**B7.11 (2026-05-14, +1)** — ElementAccessExpression-LHS TS9023 + class /
+object-literal `ComputedPropertyName` TS9038 + TS1166 walker (closes
+`isolatedDeclarationLazySymbols_ts`). Single-file change in
+`TypeScriptCompiler.kt`. Three coordinated walker pieces:
+
+- **Pass 2 extension** — ElementAccessExpression LHS expando branch alongside
+  the existing PropertyAccessExpression branch. Emits TS9023 when
+  `funcName[idx] = X` and the index isn't a statically-known string-literal
+  pattern (new `isIsolatedDeclElementAccessIndexLiteralName` helper rejects
+  `idx is StringLiteralNode` and `idx is ElementAccessExpression(_, StringLiteralNode)`).
+  Span = full LHS (start = receiver.pos, end =
+  `isolatedDeclExprTrueEnd(argumentExpression) + 1`). Deduped by
+  `(receiver, source.substring(idx.pos, isolatedDeclExprTrueEnd(idx)))`.
+
+- **`is ClassDeclaration` Pass-3 extension** (new
+  `emitIsolatedDeclClassComputedNameDiags` after the existing extends-clause
+  walker) — iterates class members (PropertyDeclaration / MethodDeclaration /
+  GetAccessor / SetAccessor). For each member with `name is ComputedPropertyName`
+  whose inner expression isn't trivially literal (numeric / signed-numeric /
+  string), emits TS9038. Additionally emits TS1166 when the inner expression
+  is `AsExpression` or `ElementAccessExpression` (the "lazy symbol" patterns
+  TypeScript treats as not resolvable to a simple literal type without the
+  full type checker). PropertyAccessExpression inner shapes intentionally
+  emit nothing (TypeScript resolves `as const` chains to literal types in
+  this position).
+
+- **`is VariableStatement` Pass-3 extension** — new
+  `emitIsolatedDeclObjLitComputedNameDiags` called when `init is
+  ObjectLiteralExpression` and the variable is exported. For each
+  PropertyAssignment with `name is ComputedPropertyName`, emits TS9038
+  unless inner is trivially literal. TS9027 related at the variable name.
+
+- **`isolatedDeclExprTrueEnd`** extended with `is ElementAccessExpression
+  -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1` so the
+  one-past-`]` position is computed correctly for downstream span math.
+
+**Verification.** Targeted test passes; full-suite 10078/1405/3 (was
+10078/1406/3, +1 net). Zero regressions across the 10078-test suite. The
+walker is `isolatedDeclarations`-gated so non-isolated tests are unaffected.
+
+**Adjacent partial progress (no flip but emissions firing correctly):**
+
+- `isolatedDeclarationErrorsClasses_ts`: was 5/26 emissions, now 14/26
+  (+9 TS9038 / TS1166 from the new class member walker). Still missing
+  ~12 emissions across TS9012 / TS9008 / TS9011 / TS9009 / TS7010 / TS9013
+  shapes — separate walker work.
+- `isolatedDeclarationErrorsObjects_ts`: was 0/19 emissions, now 5/19
+  (+5 TS9038 from the new object-literal walker on
+  `oWithComputedProperties`'s 5 computed names). Still missing 14
+  emissions across TS9013 / TS9008 / TS9009 / TS9015 / TS9016 shapes.
+- `computedPropertiesNarrowed_ts`: was 0/10 emissions, now ~7/10
+  (+7 TS9038 from the new object-literal walker). Two span mismatches
+  remain (one for empty-args CallExpression like `[Symbol()]` and one
+  for `AsExpression` like `[("A" + "B") as "AB"]`) — `isolatedDeclExprTrueEnd`
+  falls through to overshooting `expr.end` for these two shapes; deferred
+  to a follow-on substep (a tightening would risk breaking other consumers
+  of the same helper).
+
+**Risk profile that materialized.** Bounded — the walker is gated on
+`options.isolatedDeclarations`. The TS9023 ElementAccess branch only
+fires when (a) LHS is `ElementAccessExpression`, (b) receiver is in
+`funcDecls`/`funcVarDecls`, and (c) index isn't a known-literal pattern.
+The class / object-literal walkers gate on `name is ComputedPropertyName`
+which is a syntactically narrow shape. PropertyAccessExpression exclusion
+in the class walker matches the LazySymbols expected baseline (the
+`[o.prop.inner]` case correctly emits nothing).
+
+**Lessons.** (a) Class vs object-literal asymmetry on PropertyAccess
+inner shapes: class accepts (TS resolves `as const` chains to literal
+types), object literal rejects (always emits TS9038). My initial
+"class allows PropertyAccess" rule was an unintuitive observation
+specifically demanded by the LazySymbols baseline; without it, my
+walker would have emitted a spurious TS9038 at line 23 and the test
+wouldn't flip. (b) `isolatedDeclExprTrueEnd` is missing cases for
+ElementAccessExpression (added in this substep) and for
+empty-args-CallExpression / AsExpression (still missing — fall through
+to overshooting `expr.end`). Both gaps surface as off-by-one squiggle
+lengths in adjacent failing tests; safe to tighten in a follow-on
+once a specific failing test depends on the fix. (c) The existing
+Pass-2 expando walker had a single PropertyAccess branch; restructuring
+to a `when (lhs)` block with PropertyAccess and ElementAccess arms
+required `continue` to bind to the enclosing `for` loop — works
+under Kotlin 2.0+ which this project targets (2.3).
 
 **B7.10 (2026-05-14, +1)** — Enum-emission constant folding for top-level
 `const X = numericLiteral` references AND cross/same-enum string-valued

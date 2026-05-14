@@ -2796,7 +2796,7 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
-- [ ] **B7.11. ElementAccessExpression-LHS TS9023 + class/object-literal ComputedPropertyName TS9038/TS1166 walker (target: flip `isolatedDeclarationLazySymbols_ts`, +1).** Adds three coordinated walker pieces to `emitIsolatedDeclarationsDiagnostics` in `TypeScriptCompiler.kt`:
+- [x] **B7.11. ElementAccessExpression-LHS TS9023 + class/object-literal ComputedPropertyName TS9038/TS1166 walker (DONE 2026-05-14, +1 — flips `isolatedDeclarationLazySymbols_ts`).** Adds three coordinated walker pieces to `emitIsolatedDeclarationsDiagnostics` in `TypeScriptCompiler.kt`:
   - **Pass 2 extension**: ElementAccessExpression LHS expando (`func[idx] = X`) emits TS9023 when `idx` is NOT statically a string-literal pattern (not `StringLiteralNode` directly, and not `ElementAccessExpression(_, StringLiteralNode)`). Squiggle = full LHS span via `isolatedDeclExprTrueEnd(argumentExpression) + 1` (one past `]`). Deduped by `(receiver, source-text-of-index)`.
   - **`is ClassDeclaration` Pass 3 extension** (after `emitIsolatedDeclExtendsDiags`): walk class members (PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor) and for each with `name is ComputedPropertyName`, emit TS9038 + optionally TS1166. TS1166 fires when inner expression is `AsExpression` or `ElementAccessExpression`. Both diagnostics share span = inner expression's true span (computed via `isolatedDeclExprTrueEnd(inner) + (1 if start of `[` was eaten)`).
   - **`is VariableStatement` Pass 3 extension** (after existing init handling, gated on `Export`): walk `ObjectLiteralExpression` initializer's PropertyAssignment list and for each with `name is ComputedPropertyName`, emit TS9038 (with TS9027 related at variable name) unless inner is `NumericLiteralNode` or `PrefixUnary(+|-, NumericLiteralNode)` or `StringLiteralNode`.
@@ -3195,6 +3195,32 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.11, 8669 → 8670, +1) — ElementAccessExpression-LHS TS9023 + class/object-literal `ComputedPropertyName` TS9038/TS1166 walker.** Continuation /loop after B7.10. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 3/63/15) — same baseline as post-B7.10. Per anti-loop rule + last-N commits being feature commits in the B7.x series (not recon-only), continued the natural B7.x progression. Survey of remaining 5 failing isolatedDeclarations error-baseline tests ranked by minimum-flippable diff size: `isolatedDeclarationLazySymbols_ts` had the smallest gap (5 missing emissions across 3 distinct walker shapes), and all three shapes were tractable in a single substep.
+
+  **Implementation.** Single-file change in `TypeScriptCompiler.kt`. Three coordinated walker pieces inside the existing `emitIsolatedDeclarationsDiagnostics`:
+
+  - **Pass 2 extension** — restructured the LHS dispatch from a single `if (lhs !is PropertyAccessExpression) continue` to a `when (lhs)` block with `PropertyAccessExpression` (existing) and `ElementAccessExpression` (new) arms. ElementAccess branch emits TS9023 when `funcName[idx] = X` and `idx` is NOT a statically-known string-literal pattern (helper `isIsolatedDeclElementAccessIndexLiteralName` rejects `StringLiteralNode` and `ElementAccessExpression(_, StringLiteralNode)` — those resolve to literal property names without type-checker support, so TypeScript accepts them). Squiggle = full LHS (start = `receiver.pos`, end = `isolatedDeclExprTrueEnd(argumentExpression) + 1` for past `]`). Deduped by `(receiver, source-text-of-index)`.
+
+  - **`is ClassDeclaration` Pass-3 extension** (new `emitIsolatedDeclClassComputedNameDiags` called after `emitIsolatedDeclExtendsDiags`). Iterates class members (PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor). For each with `name is ComputedPropertyName`:
+    - Skip if inner is trivially literal (numeric / `+`/`-` numeric / string).
+    - Skip if inner is `PropertyAccessExpression` (TypeScript resolves `as const` property-chains to literal types in this position — the `[o.prop.inner]` class case in LazySymbols).
+    - Otherwise emit TS9038; also emit TS1166 when inner is `AsExpression` or `ElementAccessExpression` (the "lazy symbol" patterns).
+    - Span = ComputedPropertyName.pos to `isolatedDeclExprTrueEnd(inner) + 1` (past `]`).
+
+  - **`is VariableStatement` Pass-3 extension** — new `emitIsolatedDeclObjLitComputedNameDiags` called when `init is ObjectLiteralExpression` and the variable is exported. For each PropertyAssignment with `name is ComputedPropertyName`, emit TS9038 unless inner is trivially literal. TS9027 related at variable name. Note: unlike the class walker, the object-literal walker does NOT exclude `PropertyAccessExpression` inner shapes (TypeScript fires TS9038 even on `[obj.field]: 1` in object literals).
+
+  - **`isolatedDeclExprTrueEnd`** extended with `is ElementAccessExpression -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1`.
+
+  - **New helpers**: `isIsolatedDeclElementAccessIndexLiteralName`, `isIsolatedDeclTrivialComputedName`.
+
+  **Verification.** Targeted test passes; full-suite 10078/1405/3 (was 10078/1406/3, +1 net). Zero regressions across the 10078-test suite.
+
+  **Adjacent partial progress (no flip but emissions firing).** `isolatedDeclarationErrorsClasses_ts` advanced from 5/26 to 14/26 emissions (+9 TS9038/TS1166 from class walker). `isolatedDeclarationErrorsObjects_ts` from 0/19 to 5/19 (+5 TS9038 on `oWithComputedProperties`'s 5 computed names). `computedPropertiesNarrowed_ts` from 0/10 to ~7/10 (+7 TS9038 on object-literal computed names). None flip — each needs separate walker shapes for the remaining missing emissions (TS9012, TS9008, TS9009, TS9013, TS9015, TS9016, TS7032, TS7010, TS9011, etc.). Two off-by-one span issues observed in computedPropertiesNarrowed / ErrorsClasses: `[Symbol()]` empty-args CallExpression and `[("A" + "B") as "AB"]` AsExpression both produce +1 char too long because `isolatedDeclExprTrueEnd` falls through to overshooting `expr.end` for these shapes. Deferred — tightening would risk affecting other consumers (B7.5's TS9013 walker uses the same helper).
+
+  **Risk profile that materialized.** Tightly scoped — walker gated on `options.isolatedDeclarations`. The TS9023 ElementAccess branch fires only when (a) LHS is `ElementAccessExpression`, (b) receiver is in `funcDecls`/`funcVarDecls`, (c) index isn't a known-literal pattern. The class / object-literal walkers gate on `name is ComputedPropertyName` (syntactically narrow). PropertyAccessExpression exclusion in the class walker was critical — without it, `[o.prop.inner]` in LazySymbols class context would have produced a spurious TS9038 and the test wouldn't flip. Verified via test pass.
+
+  **Lessons.** (a) Class vs object-literal asymmetry on PropertyAccessExpression inner shapes is the key non-obvious rule: class accepts `[obj.field]`, object literal rejects. Without consulting the actual baseline for both contexts side-by-side, the natural assumption would have been "same rule in both places" — wrong. (b) `isolatedDeclExprTrueEnd` was missing both ElementAccessExpression (added) and empty-args-CallExpression / AsExpression (still missing — observable as off-by-one squiggle lengths in adjacent failing tests but not blocking the targeted flip). (c) The existing Pass-2 PropertyAccess-only LHS dispatch restructured cleanly into a `when (lhs)` block with `continue` binding to the enclosing `for` (supported under Kotlin 2.0+, and this project targets 2.3).
 
   **Session 2026-05-14 (B7.5, 8663 → 8664, +1) — TS9011 + TS9013 for exported FunctionDeclaration parameter defaults.** Continued /loop after B7.4. Pool empty per `find_candidates.py --fresh` (0/0/0). Survey of remaining isolatedDeclarations failures showed `isolatedDeclarationErrorsFunctionDeclarations_ts` had a small well-bounded diff: TS9007 already firing post-B7.3, need 5 more emissions (TS9011 ×2 + TS9013 ×3) for parameter-default classification.
 

@@ -1550,6 +1550,11 @@ private fun emitIsolatedDeclarationsDiagnostics(
     }
     // Pass 2: walk top-level expando assignments; emit TS9023 (deduped by
     // (name, property)) and collect which function names have expando assignments.
+    // Two LHS shapes:
+    //  - `foo.prop = X`             — PropertyAccessExpression
+    //  - `foo[idx] = X`             — ElementAccessExpression (idx not statically
+    //                                   a string-literal pattern; idx that resolves
+    //                                   to a literal name does NOT fire TS9023)
     val expandoNames = mutableSetOf<String>()
     val seenExpandoPairs = mutableSetOf<Pair<String, String>>()
     for (stmt in sourceFile.statements) {
@@ -1557,31 +1562,62 @@ private fun emitIsolatedDeclarationsDiagnostics(
         val expr = stmt.expression
         if (expr !is BinaryExpression || expr.operator != SyntaxKind.Equals) continue
         val lhs = expr.left
-        if (lhs !is PropertyAccessExpression) continue
-        val receiver = lhs.expression
-        if (receiver !is Identifier) continue
-        val recvName = receiver.text
-        val isFunc = recvName in funcDecls || recvName in funcVarDecls
-        if (!isFunc) continue
-        val propName = lhs.name
-        if (propName !is Identifier) continue
-        expandoNames.add(recvName)
-        val key = recvName to propName.text
-        if (!seenExpandoPairs.add(key)) continue
-        val start = receiver.pos
-        val end = propName.pos + propName.text.length
-        val length = end - start
-        val (line, character) = positionToLineCharacter(source, start)
-        results.add(Diagnostic(
-            message = "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
-            category = DiagnosticCategory.Error,
-            code = 9023,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
+        when (lhs) {
+            is PropertyAccessExpression -> {
+                val receiver = lhs.expression
+                if (receiver !is Identifier) continue
+                val recvName = receiver.text
+                val isFunc = recvName in funcDecls || recvName in funcVarDecls
+                if (!isFunc) continue
+                val propName = lhs.name
+                if (propName !is Identifier) continue
+                expandoNames.add(recvName)
+                val key = recvName to propName.text
+                if (!seenExpandoPairs.add(key)) continue
+                val start = receiver.pos
+                val end = propName.pos + propName.text.length
+                val length = end - start
+                val (line, character) = positionToLineCharacter(source, start)
+                results.add(Diagnostic(
+                    message = "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
+                    category = DiagnosticCategory.Error,
+                    code = 9023,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            is ElementAccessExpression -> {
+                val receiver = lhs.expression
+                if (receiver !is Identifier) continue
+                val recvName = receiver.text
+                val isFunc = recvName in funcDecls || recvName in funcVarDecls
+                if (!isFunc) continue
+                val idx = lhs.argumentExpression
+                if (isIsolatedDeclElementAccessIndexLiteralName(idx)) continue
+                expandoNames.add(recvName)
+                val idxText = source.substring(idx.pos, isolatedDeclExprTrueEnd(idx))
+                val key = recvName to idxText
+                if (!seenExpandoPairs.add(key)) continue
+                val start = receiver.pos
+                val end = isolatedDeclExprTrueEnd(idx) + 1 // past `]`
+                val length = (end - start).coerceAtLeast(1)
+                val (line, character) = positionToLineCharacter(source, start)
+                results.add(Diagnostic(
+                    message = "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
+                    category = DiagnosticCategory.Error,
+                    code = 9023,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+            else -> {}
+        }
     }
     // Pass 3: walk top-level statements once for the main emissions (var-decl
     // TS9010/TS9022/TS9007, class-decl TS9021).
@@ -1621,6 +1657,9 @@ private fun emitIsolatedDeclarationsDiagnostics(
                         if (ModifierFlag.Export in stmt.modifiers) {
                             emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
                             emitIsolatedDeclVarInitTs9010(name, init, fileName, source, results)
+                            if (init is ObjectLiteralExpression) {
+                                emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
+                            }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
                         // expando-property assignments AND no return type. Applies
@@ -1635,6 +1674,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
             is ClassDeclaration -> {
                 if (ModifierFlag.Export !in stmt.modifiers) continue
                 emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
+                emitIsolatedDeclClassComputedNameDiags(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2554,6 +2594,150 @@ private fun isAllowedExtendsExpression(expr: Expression): Boolean {
     }
 }
 
+/**
+ * True when the argument to `func[idx]` is a statically-known string literal:
+ *   - direct `StringLiteralNode`             → `foo["bar"] = ...`
+ *   - `ElementAccessExpression(_, StringLiteralNode)` → `foo[obj["bar"]] = ...`
+ *     (the inner access resolves to a literal key)
+ * Both forms are accepted by TypeScript's --isolatedDeclarations because the
+ * property name on the function is statically determinable.
+ */
+private fun isIsolatedDeclElementAccessIndexLiteralName(idx: Expression): Boolean {
+    return when (idx) {
+        is StringLiteralNode -> true
+        is ElementAccessExpression -> idx.argumentExpression is StringLiteralNode
+        else -> false
+    }
+}
+
+/**
+ * Walks an exported `ClassDeclaration`'s members; for each member with
+ * `name is ComputedPropertyName`, emits TS9038 (always) and TS1166 (when the
+ * inner expression isn't a "simple literal" / `unique symbol` / property-access
+ * chain that TypeScript can statically resolve in declaration emit).
+ *
+ * Span = ComputedPropertyName's `[`..`]` (start = ComputedPropertyName.pos;
+ * end = inner expression's true-end + 1).
+ *
+ * TS1166 fires for AsExpression and ElementAccessExpression inner shapes — these
+ * are the "lazy symbol" patterns TypeScript flags as not resolvable to a simple
+ * literal type without the full type checker. Identifier / PropertyAccessExpression
+ * inner shapes get TS9038 only.
+ */
+private fun emitIsolatedDeclClassComputedNameDiags(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        val name: NameNode? = when (member) {
+            is PropertyDeclaration -> member.name
+            is MethodDeclaration -> member.name
+            is GetAccessor -> member.name
+            is SetAccessor -> member.name
+            else -> null
+        }
+        if (name !is ComputedPropertyName) continue
+        val inner = name.expression
+        if (isIsolatedDeclTrivialComputedName(inner)) continue
+        val start = name.pos
+        val end = isolatedDeclExprTrueEnd(inner) + 1
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = positionToLineCharacter(source, start)
+        if (inner is AsExpression || inner is ElementAccessExpression) {
+            results.add(Diagnostic(
+                message = "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.",
+                category = DiagnosticCategory.Error,
+                code = 1166,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+        results.add(Diagnostic(
+            message = "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9038,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+}
+
+/**
+ * Walks `ObjectLiteralExpression` initializer of an exported variable; for each
+ * PropertyAssignment with `name is ComputedPropertyName`, emits TS9038 with a
+ * TS9027 related at the enclosing variable name. Skips trivially-literal
+ * computed names (numeric literal, +/- numeric, string literal).
+ */
+private fun emitIsolatedDeclObjLitComputedNameDiags(
+    objLit: ObjectLiteralExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (prop in objLit.properties) {
+        if (prop !is PropertyAssignment) continue
+        val name = prop.name
+        if (name !is ComputedPropertyName) continue
+        val inner = name.expression
+        if (isIsolatedDeclTrivialComputedName(inner)) continue
+        val start = name.pos
+        val end = isolatedDeclExprTrueEnd(inner) + 1
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = positionToLineCharacter(source, start)
+        val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+        val related = Diagnostic(
+            message = "Add a type annotation to the variable ${varName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9027,
+            fileName = fileName,
+            line = varLine,
+            character = varChar,
+            start = varName.pos,
+            length = varName.text.length,
+        )
+        results.add(Diagnostic(
+            message = "Computed property names on class or object literals cannot be inferred with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9038,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(related),
+        ))
+    }
+}
+
+/**
+ * Trivially literal computed-name expressions accepted in --isolatedDeclarations:
+ *   - direct numeric literal: `[1]`
+ *   - signed numeric literal: `[-1]`, `[+5]`
+ *   - direct string literal:  `["foo"]` (rare in practice — parser usually folds
+ *     into a string-named property — but kept as a safety net)
+ */
+private fun isIsolatedDeclTrivialComputedName(expr: Expression): Boolean {
+    return when (expr) {
+        is NumericLiteralNode -> true
+        is StringLiteralNode -> true
+        is PrefixUnaryExpression -> {
+            val op = expr.operator
+            (op == SyntaxKind.Minus || op == SyntaxKind.Plus) &&
+                expr.operand is NumericLiteralNode
+        }
+        else -> false
+    }
+}
+
 private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
     is NumericLiteralNode -> expr.pos + expr.text.length
     is BigIntLiteralNode -> expr.pos + expr.text.length
@@ -2569,6 +2753,7 @@ private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
         val n = expr.name
         if (n is Identifier) n.pos + n.text.length else expr.end
     }
+    is ElementAccessExpression -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1
     is CallExpression -> {
         if (expr.arguments.isNotEmpty()) isolatedDeclExprTrueEnd(expr.arguments.last()) + 1
         else expr.end
