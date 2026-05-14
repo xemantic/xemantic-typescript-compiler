@@ -1,6 +1,48 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,659 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,660 / 10,078 tests passing (~85.9%).
+
+**B7.2 (2026-05-14, +1)** — TS9022 + TS9021 (+ TS9027 + TS9035 related) for
+`isolatedDeclarations` (closes `isolatedDeclarationErrorsClassesExpressions_ts`).
+Extends the `emitIsolatedDeclarationsDiagnostics` walker added in B7.1 to also
+handle exported variables initialized with class expressions and exported
+classes whose `extends` clause is a non-identifier expression. Three new
+emission patterns in `TypeScriptCompiler.kt`:
+
+- **TS9022** "Inference from class expressions is not supported with
+  --isolatedDeclarations." — fires at the `class` keyword position (length 5)
+  when a top-level `export const/let/var X = ...` has no type annotation AND
+  its initializer is either (a) a bare `ClassExpression` or (b) an
+  `AsExpression` of `[class {}, ...] as const` shape whose elements include
+  ClassExpression(s). Attaches **TS9027** ("Add a type annotation to the
+  variable X.") at the variable name; the array-as-const form additionally
+  attaches **TS9035** ("Add satisfies and a type assertion ...") at the same
+  position as the TS9022 squiggle.
+
+- **TS9021** "Extends clause can't contain an expression with
+  --isolatedDeclarations." — fires when an exported `ClassDeclaration`'s
+  `extends` clause type-expression is neither an `Identifier` nor a
+  `PropertyAccessExpression` (i.e. CallExpression, NewExpression, or other).
+  Squiggle span computed via a minimal `isolatedDeclExprTrueEnd` helper that
+  mirrors `Checker.expressionTrueEnd` for the CallExpression / NewExpression /
+  Identifier / PropertyAccessExpression cases (the AST `end` field overshoots
+  by one token per the CLAUDE.md scanner gotcha).
+
+Net delta: 1416 → 1415 failed (8659 → 8660 passing). Zero regressions across
+the 10078-test suite. Closes the target test cleanly. Wider isolatedDeclarations
+patterns deferred to follow-on substeps:
+- TS9007 (Function must have explicit return type) — emission rules are subtle:
+  in `isolatedDeclarationErrorsReturnTypes`, ALL 31 emissions are on INNER
+  default-value function expressions in `(cb = function(){})` patterns, NOT on
+  outer named function expressions assigned to `export let/var` (which TS can
+  preserve in .d.ts via the named-FE form). In `isolatedDeclarationErrors`, the
+  single TS9007 fires only when the arrow function variable is consumed in an
+  expando-property pattern (`X.a = ""` follows).
+- TS9011 (Parameter without type annotation), TS9013 (Expression type can't be
+  inferred), TS9023 (Expando function property assignment), TS9020 (Enum
+  member uncomputable), TS9038 (Computed property name uninferable), and
+  ~10 other TS90xx codes — each is bounded but tests typically need multiple
+  codes to flip; pick by `find_candidates.py` MISS bucket overlap.
 
 **B7.1 (2026-05-14, +1)** — TS5053 + TS9010 + TS9027 for `isolatedDeclarations`
 (closes `isolatedDeclarationsAllowJs_ts`). Three coordinated emissions, all in
