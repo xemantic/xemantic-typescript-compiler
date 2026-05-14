@@ -2796,6 +2796,38 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.8. TS9020 for enum members with non-computable initializers under `--isolatedDeclarations` (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsEnums_ts` errors-baseline).** Stacks on the existing pass-3 statement switch in `emitIsolatedDeclarationsDiagnostics`. Single-file change in `TypeScriptCompiler.kt`:
+
+  - New `is EnumDeclaration` arm calls `emitIsolatedDeclEnumChecks(enumDecl, ...)`. No `Export` gate — TS9020 applies to all enums in the file.
+
+  - `emitIsolatedDeclEnumChecks`: walks members left-to-right, building a `Map<memberName, isComputable>`. For each member whose initializer is NOT computable, emits TS9020 at the member NAME position (length = `name.text.length` for Identifier members, full quoted length for StringLiteralNode members).
+
+  - `isEnumInitializerComputable(expr, enumName, computable)` recursive predicate. Computable iff one of:
+    - Literal (numeric / bigint / string / template-no-substitution).
+    - Unary `+` / `-` / `~` on a computable operand.
+    - Binary `+ - * ** / % | & ^ << >> >>>` on two computable operands.
+    - `ParenthesizedExpression` on computable inner.
+    - `CallExpression` (always — preserved verbatim in `.d.ts`).
+    - Bare `Identifier` matching a prior same-enum member that is computable.
+    - `PropertyAccessExpression` (receiver = own enum name, name matches a same-enum computable member).
+    - `ElementAccessExpression` (receiver = own enum name, argumentExpression is StringLiteralNode matching a same-enum computable member).
+
+  - Operator set: `ISOLATED_DECL_ENUM_COMPUTABLE_OPS` — exhaustive list of allowed binary operators. Equality / logical / comparison operators are NOT allowed (their result type isn't a numeric/string constant).
+
+  **Verification.** Targeted errors-baseline test passes (7 expected TS9020 emissions all match position + message). Full-suite 10078/1408/3 (was 10078/1409/3, +1 net). Zero regressions. The JS-emit baseline for the same source still fails — pre-existing, unrelated to TS9020 (our emitter doesn't inline external constants like `EV` whereas TypeScript's does); that's a separate issue to be addressed independently.
+
+  Pattern coverage validated:
+  - `enum E { A = computed(0) }` — CallExpression → computable, no error.
+  - `enum F { A = E.A, B = A }` — both flagged: A's `E.A` is cross-enum non-computable; B's `A` references non-computable same-enum member (transitive).
+  - `enum Flag { A = 1 >> 1, AB = A | B, ABC = Flag.AB | C, AC = Flag["A"] | C }` — all OK (literal arithmetic + three forms of same-enum reference).
+  - `enum ExtFlags { D = 4 >> 1, E = EV, ABCD = Flag.ABC | D, AC = Flag["A"] | D }` — D OK, E/ABCD/AC flagged (external const + cross-enum refs).
+  - `enum Str { A = "A", B = "B", AB = A + B }` — string-concat OK.
+  - `enum StrExt { D = "D", ABD = Str.AB + D, AD = Str["A"] + D }` — ABD/AD flagged (cross-enum refs).
+
+  Wider patterns deferred:
+  - JS-emit constant inlining (TypeScript inlines `enum ExtFlags { E = EV }` to `E = 1` in JS emit when EV is a known-value const) — separate emitter concern.
+  - String enum member references in computed positions (e.g. `[E.A]` as object literal key) — not exercised by this test.
+
 - [x] **B7.7. `export default <expr>` walker for isolatedDeclarations — TS9017 / TS9013 / TS9037 + TS9036/TS9035 related (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsDefault_ts`).** Stacks on B7.1's pass-3 statement walker. Single-file change in `TypeScriptCompiler.kt`:
 
   - New `is ExportAssignment` arm in `emitIsolatedDeclarationsDiagnostics`'s pass-3 statement switch, gated on `!stmt.isExportEquals` (only `export default`, not `export = X`).
