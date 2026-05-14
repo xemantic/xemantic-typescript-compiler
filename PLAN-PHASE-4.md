@@ -2796,6 +2796,33 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.12. TS9012 walker for exported `ClassDeclaration` PropertyDeclaration with non-trivially-declarable initializer (DONE 2026-05-14, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassPropertyTs9012` walker called from the `is ClassDeclaration` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, after `emitIsolatedDeclClassComputedNameDiags`.
+
+  Mirrors B7.9's TS9010 trigger set (CallExpression / NewExpression / PropertyAccessExpression / ElementAccessExpression / BinaryExpression / Identifier excluding boolean keywords) onto class-member PropertyDeclarations. Walker gate (skip if any apply):
+  - `member.type != null` (annotated — declarable as written)
+  - `member.initializer == null` (no value — separate concern)
+  - `member.name !is Identifier` (ComputedPropertyName handled by the dedicated `emitIsolatedDeclClassComputedNameDiags`)
+  - Initializer is trivially declarable per `isIsolatedDeclTriviallyDeclarable`
+  - Initializer kind not in the trigger set (so ArrowFunction / FunctionExpression / ClassExpression / Object/Array literals all fall through `else -> false` — handled by other walkers / deferred substeps).
+
+  Emission: TS9012 at name.pos + name.text.length; TS9029 related at the same position with message "Add a type annotation to the property X."
+
+  **Adjacent partial progress (no flip but emissions firing).** `isolatedDeclarationErrorsClasses_ts` 14 → 15 emissions (line 3,5 `field = 1 + 1;`). `isolatedDeclarationErrorsExpressions_ts` 21 → 35 emissions (14 emissions across `class Exported`'s `public` / `readonly` fields with BinaryExpression / CallExpression / Identifier initializers — lines 59-69, 78-88). Template-with-substitution shapes in PropertyDeclaration (lines 91-93, 102-104) deferred to a follow-on substep.
+
+  **Verification.** Full-suite 10078/1405/3 (unchanged from B7.11; zero regressions). Net-zero on the suite — first net-zero infra commit in the B7.x series, departing from the prior +1-per-substep pattern because every remaining single-shape candidate is similarly net-zero (no remaining isolatedDeclarations error-baseline test can flip in fewer than ~5-10 walker shapes).
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` (call-site). Implicit-public, `public`, `protected`, `private`, `readonly`, and `static` modifiers all qualify (no visibility filter — TypeScript's baselines treat them identically). Trigger gate is the same intersection B7.9 proved safe across the suite.
+
+  **Foundation for follow-ons:**
+  - **B7.13 candidate**: TemplateExpression-with-substitutions extension for both `emitIsolatedDeclVarInitTs9010` (variable level) and `emitIsolatedDeclClassPropertyTs9012` (property level), plus AsExpression-as-const-wrapping-TemplateExpression-with-substitutions. Adds 4 TS9010 + 6 TS9012 emissions in `isolatedDeclarationErrorsExpressions_ts`.
+  - **B7.14 candidate**: TS9008 class MethodDeclaration without explicit return type. Adds 2 emissions in `isolatedDeclarationErrorsClasses_ts` + 4 emissions in `isolatedDeclarationErrorsObjects_ts` (object-literal method shorthand needs a separate walker variant).
+  - **B7.15 candidate**: TS9011 class MethodDeclaration unannotated parameters + non-trivial parameter defaults. Stacks on B7.5's FunctionDeclaration version. Adds ~3 emissions in `isolatedDeclarationErrorsClasses_ts`.
+  - **B7.16 candidate**: TS9009 single-accessor (get-only / set-only) and asymmetric-pair walker. Adds 2 emissions in `isolatedDeclarationErrorsClasses_ts` + 1 in `isolatedDeclarationErrorsObjects_ts`.
+
+  These four follow-ons combined would bring `isolatedDeclarationErrorsClasses_ts` from 15 → ~21-22 emissions out of 26 expected — close but not flipping (the remaining gap is checker-level TS7032/TS7006/TS7010 for computed-named accessors / interface methods + 1 span fix on line 50,5 + TS9013 for interface method).
+
+---
+
 - [x] **B7.11. ElementAccessExpression-LHS TS9023 + class/object-literal ComputedPropertyName TS9038/TS1166 walker (DONE 2026-05-14, +1 — flips `isolatedDeclarationLazySymbols_ts`).** Adds three coordinated walker pieces to `emitIsolatedDeclarationsDiagnostics` in `TypeScriptCompiler.kt`:
   - **Pass 2 extension**: ElementAccessExpression LHS expando (`func[idx] = X`) emits TS9023 when `idx` is NOT statically a string-literal pattern (not `StringLiteralNode` directly, and not `ElementAccessExpression(_, StringLiteralNode)`). Squiggle = full LHS span via `isolatedDeclExprTrueEnd(argumentExpression) + 1` (one past `]`). Deduped by `(receiver, source-text-of-index)`.
   - **`is ClassDeclaration` Pass 3 extension** (after `emitIsolatedDeclExtendsDiags`): walk class members (PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor) and for each with `name is ComputedPropertyName`, emit TS9038 + optionally TS1166. TS1166 fires when inner expression is `AsExpression` or `ElementAccessExpression`. Both diagnostics share span = inner expression's true span (computed via `isolatedDeclExprTrueEnd(inner) + (1 if start of `[` was eaten)`).
@@ -3195,6 +3222,25 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.12, 8670 → 8670, net-zero infra) — TS9012 walker for exported `ClassDeclaration` PropertyDeclaration with non-trivially-declarable initializer.** Continuation /loop after B7.11. `find_candidates.py --fresh` 0/0/0 (filtered from 3/63/15) — same baseline as post-B7.11. Per anti-loop rule the protocol requires picking the next item, and all queue items above 16.4 are checked. The B7.x series is the natural continuation. Survey of the four remaining isolatedDeclarations error-baseline tests showed every one is >=5 walker shapes away from flipping:
+  - `isolatedDeclarationErrorsReturnTypes_ts`: 0/31 emissions (entirely new TS9007 walker scope — too big).
+  - `isolatedDeclarationErrorsExpressions_ts`: 21/52 emissions (31 missing across template-with-substitution, array, binding-element, and PropertyDeclaration shapes).
+  - `isolatedDeclarationErrorsClasses_ts`: 14/26 emissions (12 missing across PropertyDeclaration, MethodDeclaration, method-params, accessor-pair, and several checker-level codes).
+  - `isolatedDeclarationErrorsObjects_ts`: 5/19 emissions (14 missing across object-literal sub-expr, method-shorthand, accessor-pair, spread, and shorthand-property shapes).
+
+  Picked TS9012 PropertyDeclaration as the highest-yield single-shape addition (15 expected emissions across two tests) and the safest expansion strategy (mirrors B7.9's proven TS9010 trigger set onto a new declaration kind — no novel classification logic, identical regression surface to the prior commit).
+
+  **Implementation.** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassPropertyTs9012(stmt, ...)` walker called from the `is ClassDeclaration` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, after `emitIsolatedDeclClassComputedNameDiags`:
+  - Iterates `stmt.members`; skips non-PropertyDeclaration members, annotated members (`member.type != null`), members without initializer, ComputedPropertyName names (deferred to dedicated walker), and trivially-declarable initializers (per `isIsolatedDeclTriviallyDeclarable`).
+  - Trigger `when (init)`: CallExpression / NewExpression / PropertyAccessExpression / ElementAccessExpression / BinaryExpression / Identifier (excluding `true`/`false`/`null`/`undefined`) → emit TS9012. All other shapes (ArrowFunction / FunctionExpression / ClassExpression / Object/Array literals / template literals) fall through `else -> false` and are handled by separate walkers or deferred substeps.
+  - Squiggle = name.pos + name.text.length. TS9029 related at the same position with "Add a type annotation to the property X." message.
+
+  **Test impact (no flip but emissions firing).** `isolatedDeclarationErrorsClasses_ts` 14 → 15 (+1 emission line 3,5 `field = 1 + 1;`). `isolatedDeclarationErrorsExpressions_ts` 21 → 35 (+14 emissions across `class Exported`'s public + readonly fields with BinaryExpression / CallExpression / Identifier initializers — lines 59-69, 78-88). 15 emissions land correctly with zero regressions on the 10078-test suite.
+
+  **Verification.** Full-suite 10078/1405/3 (unchanged from B7.11). Net-zero on the suite — first net-zero infra commit in the B7.x series, departing from the prior +1-per-substep pattern because every remaining single-shape candidate is similarly net-zero (no remaining isolatedDeclarations error-baseline test can flip in fewer than ~5-10 walker shapes).
+
+  **Lessons.** (a) Mirroring an existing well-tested trigger set onto a new declaration kind (here B7.9's TS9010 trigger set onto class PropertyDeclaration as TS9012) is the safest expansion strategy in the B7.x walker family — no novel classification logic, identical regression surface to the prior commit. (b) Net-zero infra commits are part of the protocol's acceptable outcomes; the previous B7.x sub-series happened to have +1-per-substep momentum because each individual test was 1 walker shape away from flipping. After B7.11 closed the last such test, the next flippable targets are all multi-shape — net-zero commits are now the expected cadence until ~5-10 shapes are stacked. (c) Implicit-public, `public`, `protected`, `private`, `readonly`, and `static` modifiers all qualify (no visibility filter — TypeScript's baselines treat them identically). The conservative skip is for ArrowFunction / FunctionExpression / ClassExpression initializers (which get TS9007 / TS9022 from separate walkers) and Object/Array literals (deferred).
 
   **Session 2026-05-14 (B7.11, 8669 → 8670, +1) — ElementAccessExpression-LHS TS9023 + class/object-literal `ComputedPropertyName` TS9038/TS1166 walker.** Continuation /loop after B7.10. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 3/63/15) — same baseline as post-B7.10. Per anti-loop rule + last-N commits being feature commits in the B7.x series (not recon-only), continued the natural B7.x progression. Survey of remaining 5 failing isolatedDeclarations error-baseline tests ranked by minimum-flippable diff size: `isolatedDeclarationLazySymbols_ts` had the smallest gap (5 missing emissions across 3 distinct walker shapes), and all three shapes were tractable in a single substep.
 
