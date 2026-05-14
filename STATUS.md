@@ -2,6 +2,60 @@
 
 **Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
 
+**B7.14 (2026-05-14, net-zero infra)** — TS9008 walker for object-literal
+method shorthand under exported `VariableStatement`. Single-file change in
+`TypeScriptCompiler.kt`. New `emitIsolatedDeclObjLitMethodTs9008` walker
+called from the `is VariableStatement` arm of pass 3's statement switch,
+alongside `emitIsolatedDeclObjLitComputedNameDiags` (gated on `Export` +
+`init is ObjectLiteralExpression`).
+
+Walker gate (skip if any apply):
+- `prop !is MethodDeclaration` (PropertyAssignment / SpreadAssignment /
+  Get/SetAccessor handled elsewhere — but PropertyAssignment whose
+  initializer is a nested `ObjectLiteralExpression` triggers recursion so
+  patterns like `oWithMethodsNested.foo: { method() {} }` are covered).
+- `member.type != null` (annotated return type)
+- `member.body == null` (overload-only / body-less; rare in object literals
+  — conservative skip)
+- `name` is neither `Identifier` nor `ComputedPropertyName`
+
+Span (matches B7.13):
+- Identifier → `name.pos + name.text.length`
+- ComputedPropertyName → `name.pos + (isolatedDeclExprTrueEnd(name.expression)
+  + 1 - name.pos)`
+
+Emission: TS9008 at the computed span; TWO related infos:
+- TS9027 "Add a type annotation to the variable X." anchored at the OUTER
+  variable name (matches TypeScript's baseline format for the object-literal
+  context).
+- TS9034 "Add a return type to the method" anchored at the same position as
+  TS9008.
+
+This differs from B7.13's class-method walker (which emits only TS9034 — class
+methods don't have an outer variable to annotate). The object-literal context
+anchors TS9027 at the variable so the user can fix it by annotating the
+variable.
+
+**Adjacent partial progress (no flip but emissions firing).**
+`isolatedDeclarationErrorsObjects_ts` 5 → 9 emissions (+4 — lines 21,5; 24,5;
+29,9; 32,9 — the 2 method shorthands in `oWithMethods` + the 2 in
+`oWithMethodsNested.foo`). Still 10 emissions short of the expected 19 — gap
+covers TS9013 sub-expr walker, TS7032/TS7006/TS9009 set-accessor walker, and
+TS9015/TS9016 spread/shorthand walkers (separate substeps).
+
+**Verification.** Full-suite 10078/1405/3 (unchanged from B7.13; zero
+regressions). Net-zero on the suite — continues the B7.x cadence of net-zero
+infra commits stacking walker shapes toward eventual test flips.
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+AND `init is ObjectLiteralExpression` (call-site gates). Recursion into
+nested ObjectLiteralExpression initializers via PropertyAssignment is depth-
+unbounded but bounded in practice by source structure; no stack-overflow
+risk for realistic test inputs. ComputedPropertyName span matches B7.13's
+class-method walker exactly so future dual-diagnostic cases (e.g. TS9038 +
+TS9008 on same computed-named method) would render correctly.
+
 **B7.13 (2026-05-14, net-zero infra)** — TS9008 walker for exported
 `ClassDeclaration` MethodDeclaration without explicit return type annotation.
 Single-file change in `TypeScriptCompiler.kt`. New
