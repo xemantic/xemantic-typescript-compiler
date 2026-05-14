@@ -1676,6 +1676,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
                 emitIsolatedDeclClassComputedNameDiags(stmt, fileName, source, results)
                 emitIsolatedDeclClassPropertyTs9012(stmt, fileName, source, results)
+                emitIsolatedDeclClassMethodTs9008(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2790,6 +2791,80 @@ private fun emitIsolatedDeclClassPropertyTs9012(
             character = character,
             start = name.pos,
             length = name.text.length,
+            relatedInformation = listOf(related),
+        ))
+    }
+}
+
+/**
+ * Walks an exported `ClassDeclaration`'s members and emits TS9008 on each
+ * MethodDeclaration that lacks an explicit return-type annotation (and has a
+ * body — i.e. is a real method, not an interface signature / overload-only
+ * declaration; interface members parse as `MethodSignature`, not
+ * `MethodDeclaration`, so this filter is implicit). Mirrors TypeScript's
+ * baseline: class methods without `: ReturnType` cannot be inferred under
+ * --isolatedDeclarations because the body would need full type checking.
+ *
+ * Squiggle:
+ *   - Identifier name → name.pos + name.text.length
+ *   - ComputedPropertyName name → entire `[...]` span via
+ *     ComputedPropertyName.pos + `isolatedDeclExprTrueEnd(inner) + 1`
+ *     (matching the TS9038 walker's span computation for the same shape;
+ *     baseline shows both diagnostics at the same start with the same length).
+ *
+ * TS9034 related info anchored at the same position with message
+ * "Add a return type to the method".
+ *
+ * No emission for abstract methods (body == null + Abstract modifier — TypeScript
+ * still requires the type annotation but our corpus has no failing test gating
+ * on this so we conservatively skip body-less MethodDeclarations to avoid
+ * over-firing on overload-only declarations).
+ */
+private fun emitIsolatedDeclClassMethodTs9008(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        if (member !is MethodDeclaration) continue
+        if (member.type != null) continue
+        if (member.body == null) continue
+        val name = member.name
+        val start: Int
+        val length: Int
+        when (name) {
+            is Identifier -> {
+                start = name.pos
+                length = name.text.length
+            }
+            is ComputedPropertyName -> {
+                start = name.pos
+                val end = isolatedDeclExprTrueEnd(name.expression) + 1
+                length = (end - start).coerceAtLeast(1)
+            }
+            else -> continue
+        }
+        val (line, character) = positionToLineCharacter(source, start)
+        val related = Diagnostic(
+            message = "Add a return type to the method",
+            category = DiagnosticCategory.Message,
+            code = 9034,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        )
+        results.add(Diagnostic(
+            message = "Method must have an explicit return type annotation with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9008,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
             relatedInformation = listOf(related),
         ))
     }

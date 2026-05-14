@@ -2,6 +2,53 @@
 
 **Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
 
+**B7.13 (2026-05-14, net-zero infra)** — TS9008 walker for exported
+`ClassDeclaration` MethodDeclaration without explicit return type annotation.
+Single-file change in `TypeScriptCompiler.kt`. New
+`emitIsolatedDeclClassMethodTs9008` walker called from the
+`is ClassDeclaration` arm of pass 3's statement switch, after
+`emitIsolatedDeclClassPropertyTs9012`.
+
+Walker gate (skip if any apply):
+- `member.type != null` (annotated return type)
+- `member.body == null` (overload-only / body-less declaration; interface
+  methods parse as `MethodSignature` not `MethodDeclaration` so are implicitly
+  excluded — body-null guard conservatively also covers any rare body-less
+  class method that future grammar changes might surface)
+- `name` is neither `Identifier` nor `ComputedPropertyName` (string-/numeric-
+  named methods rare in tests and require separate name-text extraction)
+
+Span:
+- Identifier name → name.pos + name.text.length
+- ComputedPropertyName name → entire `[...]` span via
+  `isolatedDeclExprTrueEnd(name.expression) + 1` — matches the TS9038 walker's
+  span computation for the same shape, so both diagnostics share start + length.
+
+Emission: TS9008 at the computed span; TS9034 related at the same position
+with "Add a return type to the method" message.
+
+**Adjacent partial progress (no flip but emissions firing).**
+- `isolatedDeclarationErrorsClasses_ts` 15 → 17 emissions (+2 — lines 4,5
+  `method() {}` and 42,5 `[noAnnotationStringName]() { }`). Line 42 already
+  emits TS9038 from B7.11; B7.13 adds TS9008 alongside, matching baseline's
+  dual-diagnostic shape.
+- No effect on `isolatedDeclarationErrorsObjects_ts` — its 4 TS9008 emissions
+  are on object-literal method shorthands (different syntactic shape with
+  TS9027 + TS9034 related infos instead of TS9034-only). Deferred to a
+  separate substep.
+
+**Verification.** Full-suite 10078/1405/3 (unchanged from B7.12; zero
+regressions). Net-zero on the suite — continues the new B7.x cadence of net-
+zero infra commits stacking walker shapes toward eventual test flips.
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`.
+Body-null guard is the conservative filter against accidentally firing on
+overload-only declarations or future grammar shapes. Span for
+ComputedPropertyName matches the existing TS9038 walker exactly so the dual
+diagnostics on the same node have matching start + length (baseline format
+requires this for both squiggles to render at the same position).
+
 **B7.12 (2026-05-14, net-zero infra)** — TS9012 walker for exported
 `ClassDeclaration` PropertyDeclaration with non-trivially-declarable
 initializer. Single-file change in `TypeScriptCompiler.kt`. Mirrors B7.9's
