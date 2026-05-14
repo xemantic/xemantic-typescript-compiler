@@ -1784,7 +1784,16 @@ private fun emitIsolatedDeclFnDeclParamChecks(
     source: String,
     results: MutableList<Diagnostic>,
 ) {
-    for (param in fn.parameters) {
+    emitIsolatedDeclParamsCheck(fn.parameters, fileName, source, results)
+}
+
+private fun emitIsolatedDeclParamsCheck(
+    params: List<Parameter>,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (param in params) {
         if (param.type != null) continue
         val paramName = param.name as? Identifier ?: continue
         val default = param.initializer
@@ -1812,8 +1821,17 @@ private fun emitIsolatedDeclParamDefaultClassify(
     results: MutableList<Diagnostic>,
 ) {
     if (isIsolatedDeclTriviallyDeclarable(expr)) return
-    // Function expressions handled by TS9007 separately; do not fire TS9011/TS9013
-    if (expr is ArrowFunction || expr is FunctionExpression) return
+    // Function expressions don't get TS9011/TS9013 on themselves (TS9007 separately
+    // covers missing return types). But their PARAMETER DEFAULTS still need
+    // declarability checking — recurse into the inner params.
+    if (expr is ArrowFunction) {
+        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results)
+        return
+    }
+    if (expr is FunctionExpression) {
+        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results)
+        return
+    }
     when {
         expr is ObjectLiteralExpression -> {
             for (prop in expr.properties) {

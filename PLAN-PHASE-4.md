@@ -2796,6 +2796,24 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.6. Recurse into nested ArrowFunction/FunctionExpression parameters from `emitIsolatedDeclParamDefaultClassify` (DONE 2026-05-14, +1 — flips `isolatedDeclarationsAddUndefined_ts`).** Stacks on B7.5; closes the residual nested-FE case B7.5 explicitly deferred. Single-file change in `TypeScriptCompiler.kt`:
+
+  - Extracted helper `emitIsolatedDeclParamsCheck(params, fileName, source, results)` from `emitIsolatedDeclFnDeclParamChecks`. The outer-FD walker now thin-wraps the helper with `fn.parameters`; the new nested-FE recursion calls the same helper with `expr.parameters`.
+
+  - `emitIsolatedDeclParamDefaultClassify`: when `expr is ArrowFunction` or `expr is FunctionExpression`, replaced the previous `return` bail-out with `emitIsolatedDeclParamsCheck(expr.parameters, ...)` then return. Function-expressions themselves still don't get TS9011/TS9013 squiggling on the FE as a whole (TS9007 covers missing return types separately) — but their inner parameter defaults inherit the same declarability classification logic that the outer FD's parameters already received in B7.5.
+
+  Target pattern: `export function foo2(p = (ip = 10 as T, v: number): void => {}): void{}`. Outer `p` has FE default; FE's inner param `ip` has non-trivial `10 as T` default. After recursion, the AsExpression non-`as const` branch fires TS9011 at the `T` type node (length 1) with TS9028 "Add a type annotation to the parameter ip." related info at `ip`'s position. Inner trivially-declarable defaults (`ip = 10` literal at `foo` line 18 — sibling case in same test) and type-annotated inner params (`v: number`) correctly emit nothing.
+
+  **Verification.** Targeted test passes; full-suite 10078/1410/3 (was 10078/1411/3, +1 net). Zero regressions across the 10078-test suite. Recursion is bounded by the existing `isIsolatedDeclTriviallyDeclarable` short-circuit + the AST shape (each level walks only named params). Same architectural risk profile as B7.5: the walker is gated on `options.isolatedDeclarations` so non-isolated tests are unaffected. Wider patterns still deferred:
+
+  - TS9007 for INNER nested function expressions (B7.3 noted this needs FE-scope analysis to distinguish "outer named FE preservable in .d.ts via the function-foo form" from "inner default-value FE not preservable"). Independent of B7.6's parameter-default recursion.
+
+  - TS9023 for ElementAccessExpression LHS (`foo[expr] = X`) — `isolatedDeclarationLazySymbols_ts` needs this PLUS TS1166 + TS9038 (computed property names on classes); each is a separate substep.
+
+  - TS9020 for enum member initializers referencing external symbols — `isolatedDeclarationErrorsEnums_ts` needs cross-enum constant-tracking infrastructure.
+
+  - TS9017 for `export default [...]` non-`as const` arrays; TS9037 + TS9036 for `export default <non-trivial-expr>` — `isolatedDeclarationErrorsDefault_ts` exercises this family.
+
 - [x] **B7.5. TS9011 + TS9013 for exported FunctionDeclaration parameter defaults under isolatedDeclarations (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsFunctionDeclarations_ts`).** Single-file change in TypeScriptCompiler.kt. New `emitIsolatedDeclFnDeclParamChecks` walker iterates exported FunctionDeclaration parameters; for each un-annotated param:
   - No default → TS9011 at param name.
   - Default trivially declarable (literal-like) → OK.
