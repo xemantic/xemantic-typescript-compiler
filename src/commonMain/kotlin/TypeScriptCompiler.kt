@@ -1659,6 +1659,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                             emitIsolatedDeclVarInitTs9010(name, init, fileName, source, results)
                             if (init is ObjectLiteralExpression) {
                                 emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
+                                emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
                             }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
@@ -2867,6 +2868,99 @@ private fun emitIsolatedDeclClassMethodTs9008(
             length = length,
             relatedInformation = listOf(related),
         ))
+    }
+}
+
+/**
+ * Walks an exported `VariableStatement`'s ObjectLiteralExpression initializer and
+ * emits TS9008 on each method shorthand (`{ method() {} }`) that lacks an explicit
+ * return-type annotation. Mirrors `emitIsolatedDeclClassMethodTs9008` for the
+ * object-literal context. Recurses into nested ObjectLiteralExpression
+ * initializers of PropertyAssignment members so patterns like
+ * `{ foo: { method() {} } }` are covered. The TS9027 "Add a type annotation to
+ * the variable X." related info is anchored at the OUTER variable name (not the
+ * inner property key) — matches TypeScript's baseline.
+ *
+ * Squiggle:
+ *   - Identifier method name → name.pos + name.text.length
+ *   - ComputedPropertyName method name → entire `[...]` span via
+ *     ComputedPropertyName.pos + `isolatedDeclExprTrueEnd(inner) + 1`
+ *
+ * Skipped:
+ *   - `member !is MethodDeclaration` (PropertyAssignment, GetAccessor, SetAccessor,
+ *     SpreadAssignment, ShorthandPropertyAssignment all handled elsewhere or
+ *     don't trigger TS9008)
+ *   - `member.type != null` (annotated return type)
+ *   - `member.body == null` (overload-only — rare in object literals but
+ *     conservatively skipped, mirrors B7.13)
+ *   - `name` is neither `Identifier` nor `ComputedPropertyName` (string-/numeric-
+ *     named methods rare and require separate name-text extraction)
+ */
+private fun emitIsolatedDeclObjLitMethodTs9008(
+    objLit: ObjectLiteralExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (prop in objLit.properties) {
+        if (prop is MethodDeclaration) {
+            if (prop.type != null) continue
+            if (prop.body == null) continue
+            val name = prop.name
+            val start: Int
+            val length: Int
+            when (name) {
+                is Identifier -> {
+                    start = name.pos
+                    length = name.text.length
+                }
+                is ComputedPropertyName -> {
+                    start = name.pos
+                    val end = isolatedDeclExprTrueEnd(name.expression) + 1
+                    length = (end - start).coerceAtLeast(1)
+                }
+                else -> continue
+            }
+            val (line, character) = positionToLineCharacter(source, start)
+            val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+            val varRelated = Diagnostic(
+                message = "Add a type annotation to the variable ${varName.text}.",
+                category = DiagnosticCategory.Message,
+                code = 9027,
+                fileName = fileName,
+                line = varLine,
+                character = varChar,
+                start = varName.pos,
+                length = varName.text.length,
+            )
+            val methodRelated = Diagnostic(
+                message = "Add a return type to the method",
+                category = DiagnosticCategory.Message,
+                code = 9034,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            )
+            results.add(Diagnostic(
+                message = "Method must have an explicit return type annotation with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9008,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = listOf(varRelated, methodRelated),
+            ))
+        } else if (prop is PropertyAssignment) {
+            val nestedInit = prop.initializer
+            if (nestedInit is ObjectLiteralExpression) {
+                emitIsolatedDeclObjLitMethodTs9008(nestedInit, varName, fileName, source, results)
+            }
+        }
     }
 }
 
