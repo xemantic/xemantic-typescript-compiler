@@ -2,6 +2,60 @@
 
 **Phase 4 — Checker buildout.** 8,670 / 10,078 tests passing (~86.0%).
 
+**B7.15 (2026-05-14, net-zero infra)** — TS9013 sub-expr walker for
+ObjectLiteralExpression initializers under exported `VariableStatement` +
+`isolatedDeclExprTrueEnd` empty-args CallExpression off-by-one fix. Two
+coordinated pieces in `TypeScriptCompiler.kt`:
+
+(a) New walker `emitIsolatedDeclObjLitSubExprTs9013` called from the
+`is VariableStatement` arm of pass 3's statement switch in
+`emitIsolatedDeclarationsDiagnostics`, alongside the
+`emitIsolatedDeclObjLitMethodTs9008` walker (gated on `Export` +
+`init is ObjectLiteralExpression`). Mirrors B7.7's `walkExportDefaultSubExpr`
+but for the variable-context: anchor TS9027 at the OUTER variable name, and
+DO emit on bare `Identifier` references (e.g. `e: V`) — the export-default
+walker skips Identifiers since exporting `default X` is declarable-as-typeof,
+but in variable context cannot be inferred without checking V's type.
+Recurses through nested ObjectLiteralExpression PropertyAssignments and
+ArrayLiteralExpression elements. MethodDeclaration / Get/SetAccessor /
+SpreadAssignment / ShorthandPropertyAssignment members are skipped (handled
+elsewhere or by deferred walkers).
+
+(b) `isolatedDeclExprTrueEnd` empty-args CallExpression fix. The previous
+branch `if (expr.arguments.isNotEmpty()) ... else expr.end` used `expr.end`
+which overshoots by one token (per CLAUDE.md gotcha — `node.end` includes the
+next scanned token's start). For `Math.random(),` this made the squiggle 14
+chars (covering the comma) instead of 13. Fixed to mirror the NewExpression
+branch: `if (expr.arguments.isEmpty()) isolatedDeclExprTrueEnd(expr.expression)
++ 2 // ()`. ALSO fixes a pre-existing 1-char overshoot in the B7.5 TS9011
+walker for `p = time()` and `p = Math.random()` patterns in
+`isolatedDeclarationErrorsExpressions_ts`.
+
+Squiggle: at the offending sub-expression's position, length =
+`isolatedDeclExprTrueEnd(expr) - expr.pos`.
+
+Related infos:
+- TS9027 "Add a type annotation to the variable X." anchored at the OUTER
+  variable name.
+- TS9035 "Add satisfies and a type assertion ..." anchored at the same
+  position as TS9013.
+
+**Adjacent partial progress (no flip but emissions firing).**
+- `isolatedDeclarationErrorsObjects_ts` 9 → 13 emissions (+4 — lines
+  7,8 / 12,12 / 16,12 / 25,8). Still 6 emissions short of expected 19.
+- `isolatedDeclarationErrorsExpressions_ts` squiggle widths now correct for
+  `time()` (6 chars vs 7) and `Math.random()` (13 vs 14) emissions on lines
+  110, 115. Doesn't flip — the test has many other gaps.
+
+**Verification.** Full-suite 10078/1405/3 (unchanged from B7.14; zero
+regressions).
+
+**Risk profile that materialized.** Bounded — both pieces are gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`.
+The helper fix surfaces in any walker that recursively bottoms out on a
+CallExpression — this affects only the isolatedDecl B7.x family (no other
+code path uses `isolatedDeclExprTrueEnd`).
+
 **B7.14 (2026-05-14, net-zero infra)** — TS9008 walker for object-literal
 method shorthand under exported `VariableStatement`. Single-file change in
 `TypeScriptCompiler.kt`. New `emitIsolatedDeclObjLitMethodTs9008` walker
