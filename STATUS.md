@@ -1,6 +1,67 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,660 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,662 / 10,078 tests passing (~85.9%).
+
+**B7.3 (2026-05-14, +2)** — TS9023 + TS9007 (+ TS9027 + TS9030 + TS9031 related)
+for the expando-function pattern under `isolatedDeclarations` (closes
+`isolatedDeclarationErrors_ts` and `isolatedDeclarationErrorsExpandoFunctions_ts`).
+Three-pass walker in `TypeScriptCompiler.kt`:
+
+- **Pass 1** — collects top-level function names: `FunctionDeclaration` with a
+  name (`funcDecls` map) AND `VariableDeclaration` whose initializer is an
+  `ArrowFunction` / `FunctionExpression` (`funcVarDecls` map).
+
+- **Pass 2** — walks top-level `ExpressionStatement` for
+  `BinaryExpression(=, PropertyAccessExpression(Identifier, Identifier))`
+  whose receiver is a function name. For each such expression:
+  - Adds the receiver name to `expandoNames`.
+  - Emits **TS9023** at the `name.prop` LHS span (`receiver.pos` to
+    `propName.pos + propName.text.length`).
+  - Dedupes by `(receiver, propertyName)` so `foo.length = 10; foo.length = 10`
+    fires TS9023 only once (matches TypeScript's behavior on
+    `isolatedDeclarationErrorsExpandoFunctions.ts`).
+
+- **Pass 3** — main walk; per statement:
+  - `VariableStatement` exported, decl uninit + untyped → existing TS9010
+    (from B7.1).
+  - `VariableStatement` exported, decl typed → existing TS9022 class-expression
+    walker (B7.2).
+  - `VariableStatement` (regardless of export modifier), decl initializer is
+    arrow/FE with no return type AND name is in `expandoNames` → **TS9007**
+    at the function expression's full span (pos to `body.closeBracePos + 1`
+    for Block bodies, or `expressionTrueEnd` for expression bodies). Related:
+    **TS9027** (variable name) + **TS9030** ("Add a return type to the
+    function expression.") at the squiggle position.
+  - `ClassDeclaration` exported → existing TS9021 walker (B7.2).
+  - `FunctionDeclaration` with no return type AND (exported OR name in
+    `expandoNames`) → **TS9007** at the function name (length =
+    `name.text.length`). Related: **TS9031** ("Add a return type to the
+    function declaration.") at the same position.
+
+Net delta: 1415 → 1413 failed (8660 → 8662 passing). Zero regressions across
+the 10078-test suite. Closes 2 tests in a single commit. Rule semantics:
+
+- TS9023 fires only for `PropertyAccessExpression` LHS (e.g. `foo.bar = X`),
+  not for `ElementAccessExpression` (e.g. `foo["bar"] = X` / `foo[0] = X`).
+  TypeScript treats some computed-key cases specially —
+  `isolatedDeclarationLazySymbols_ts` shows a TS9023 emission ONLY for the
+  non-literal computed form `foo[o.prop.inner] = "B"` while the literal-keyed
+  `foo[o["prop.inner"]] = "A"` is allowed. Deferred: this test also needs
+  TS1166 + TS9038 to flip, so we don't add the ElementAccess case yet (no
+  immediate consumer + dedicated test gating).
+
+- TS9007 on `FunctionDeclaration` fires for `export function` OR for any
+  function with expando assignments; the non-exported-without-expando case
+  is correctly excluded (verified in `computedPropertiesNarrowed_ts` which
+  has `function foo (): 1` (return type) and `function ns()` (non-exported,
+  no expando) — neither fires, test stays passing).
+
+- TS9007 on arrow/FE initializer fires only when the variable has expando
+  assignments. `isolatedDeclarationErrorsReturnTypes_ts`'s
+  `export let fnExpressionLetVariable = function foo() { return 0;}` (no
+  expando) correctly stays un-flagged — matches TypeScript baseline which
+  preserves named function expressions in .d.ts via their `function foo`
+  form.
 
 **B7.2 (2026-05-14, +1)** — TS9022 + TS9021 (+ TS9027 + TS9035 related) for
 `isolatedDeclarations` (closes `isolatedDeclarationErrorsClassesExpressions_ts`).

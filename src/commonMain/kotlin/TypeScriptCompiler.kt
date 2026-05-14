@@ -1520,15 +1520,73 @@ private fun emitIsolatedDeclarationsDiagnostics(
         fileName.endsWith(".d.cts")
     if (isDtsFile) return emptyList()
     val results = mutableListOf<Diagnostic>()
+    // Pass 1: collect top-level function names (FunctionDeclaration with name OR
+    // VariableDeclaration whose initializer is an arrow/FE).
+    val funcDecls = mutableMapOf<String, FunctionDeclaration>()
+    val funcVarDecls = mutableMapOf<String, Pair<VariableDeclaration, Expression>>()
+    for (stmt in sourceFile.statements) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.name?.let { funcDecls[it.text] = stmt }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    val name = decl.name
+                    if (name !is Identifier) continue
+                    val init = decl.initializer
+                    if (init is ArrowFunction || init is FunctionExpression) {
+                        funcVarDecls[name.text] = decl to init
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+    // Pass 2: walk top-level expando assignments; emit TS9023 (deduped by
+    // (name, property)) and collect which function names have expando assignments.
+    val expandoNames = mutableSetOf<String>()
+    val seenExpandoPairs = mutableSetOf<Pair<String, String>>()
+    for (stmt in sourceFile.statements) {
+        if (stmt !is ExpressionStatement) continue
+        val expr = stmt.expression
+        if (expr !is BinaryExpression || expr.operator != SyntaxKind.Equals) continue
+        val lhs = expr.left
+        if (lhs !is PropertyAccessExpression) continue
+        val receiver = lhs.expression
+        if (receiver !is Identifier) continue
+        val recvName = receiver.text
+        val isFunc = recvName in funcDecls || recvName in funcVarDecls
+        if (!isFunc) continue
+        val propName = lhs.name
+        if (propName !is Identifier) continue
+        expandoNames.add(recvName)
+        val key = recvName to propName.text
+        if (!seenExpandoPairs.add(key)) continue
+        val start = receiver.pos
+        val end = propName.pos + propName.text.length
+        val length = end - start
+        val (line, character) = positionToLineCharacter(source, start)
+        results.add(Diagnostic(
+            message = "Assigning properties to functions without declaring them is not supported with --isolatedDeclarations. Add an explicit declaration for the properties assigned to this function.",
+            category = DiagnosticCategory.Error,
+            code = 9023,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+    // Pass 3: walk top-level statements once for the main emissions (var-decl
+    // TS9010/TS9022/TS9007, class-decl TS9021).
     for (stmt in sourceFile.statements) {
         when (stmt) {
             is VariableStatement -> {
-                if (ModifierFlag.Export !in stmt.modifiers) continue
                 for (decl in stmt.declarationList.declarations) {
                     val name = decl.name
                     if (name !is Identifier) continue
                     if (decl.type != null) continue
-                    if (decl.initializer == null) {
+                    val init = decl.initializer
+                    if (init == null) {
+                        if (ModifierFlag.Export !in stmt.modifiers) continue
                         val (line, character) = positionToLineCharacter(source, name.pos)
                         val related = Diagnostic(
                             message = "Add a type annotation to the variable ${name.text}.",
@@ -1552,7 +1610,16 @@ private fun emitIsolatedDeclarationsDiagnostics(
                             relatedInformation = listOf(related),
                         ))
                     } else {
-                        emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
+                        }
+                        // TS9007 for arrow/FE initializer when the variable has
+                        // expando-property assignments AND no return type. Applies
+                        // regardless of `export` (the expando pattern requires
+                        // typing the variable in .d.ts).
+                        if (name.text in expandoNames) {
+                            emitIsolatedDeclFnExprMissingReturn(decl, name, init, fileName, source, results)
+                        }
                     }
                 }
             }
@@ -1560,10 +1627,126 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 if (ModifierFlag.Export !in stmt.modifiers) continue
                 emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
             }
+            is FunctionDeclaration -> {
+                val fnName = stmt.name ?: continue
+                if (stmt.type != null) continue
+                val isExported = ModifierFlag.Export in stmt.modifiers
+                if (!isExported && fnName.text !in expandoNames) continue
+                emitIsolatedDeclFnDeclMissingReturn(stmt, fnName, fileName, source, results)
+            }
             else -> {}
         }
     }
     return results
+}
+
+/**
+ * TS9007 + TS9031 for `function foo() { ... }` lacking a return type annotation.
+ * Squiggle is on the function name (length = name.text.length).
+ */
+private fun emitIsolatedDeclFnDeclMissingReturn(
+    fn: FunctionDeclaration,
+    name: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val start = name.pos
+    val length = name.text.length
+    val (line, character) = positionToLineCharacter(source, start)
+    val related = Diagnostic(
+        message = "Add a return type to the function declaration.",
+        category = DiagnosticCategory.Message,
+        code = 9031,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+    )
+    results.add(Diagnostic(
+        message = "Function must have an explicit return type annotation with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9007,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = listOf(related),
+    ))
+}
+
+/**
+ * TS9007 + TS9027 + TS9030 for `const X = () => ...` / `const X = function () { ... }`
+ * lacking a return type annotation, when X has expando-property assignments.
+ * Squiggle covers the entire function expression (pos .. closeBrace+1 / body-true-end).
+ */
+private fun emitIsolatedDeclFnExprMissingReturn(
+    decl: VariableDeclaration,
+    varName: Identifier,
+    fn: Expression,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val returnType = when (fn) {
+        is ArrowFunction -> fn.type
+        is FunctionExpression -> fn.type
+        else -> return
+    }
+    if (returnType != null) return
+    val start = fn.pos
+    val end = arrowOrFunctionExprTrueEnd(fn)
+    val length = (end - start).coerceAtLeast(1)
+    val (line, character) = positionToLineCharacter(source, start)
+    val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+    val related = listOf(
+        Diagnostic(
+            message = "Add a type annotation to the variable ${varName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9027,
+            fileName = fileName,
+            line = varLine,
+            character = varChar,
+            start = varName.pos,
+            length = varName.text.length,
+        ),
+        Diagnostic(
+            message = "Add a return type to the function expression.",
+            category = DiagnosticCategory.Message,
+            code = 9030,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ),
+    )
+    results.add(Diagnostic(
+        message = "Function must have an explicit return type annotation with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9007,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = related,
+    ))
+}
+
+private fun arrowOrFunctionExprTrueEnd(fn: Expression): Int = when (fn) {
+    is ArrowFunction -> {
+        val body = fn.body
+        when (body) {
+            is Block -> if (body.closeBracePos >= 0) body.closeBracePos + 1 else fn.end
+            is Expression -> isolatedDeclExprTrueEnd(body)
+            else -> fn.end
+        }
+    }
+    is FunctionExpression -> if (fn.body.closeBracePos >= 0) fn.body.closeBracePos + 1 else fn.end
+    else -> fn.end
 }
 
 /**
