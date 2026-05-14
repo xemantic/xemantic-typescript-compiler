@@ -101,6 +101,17 @@ class Transformer(
     // Populated during transformation so cross-enum references like `Foo.a` can be folded.
     private val allEnumMemberValues = mutableMapOf<String, MutableMap<String, Long>>()
 
+    // Maps enum name → (member name → string value) for string-valued enum members.
+    // Populated during `transformEnum` so cross-enum string-concat folding works
+    // (e.g. `Str.AB + D` → "ABD" when Str.AB resolves to "AB" and D to "D"
+    // inside StrExt). Cleared per file via `clear()` at the start of `transform`.
+    private val allEnumStringValues = mutableMapOf<String, MutableMap<String, String>>()
+
+    // Top-level `const X = <numeric-literal>` declarations — for inlining
+    // references like `enum E { A = X }` during enum emission. Populated by
+    // the existing top-level pre-pass in `transform`. Cleared per file.
+    private val topLevelNumericConstants = mutableMapOf<String, Long>()
+
     // True once we've seen a runtime (non-erased) statement at the top level.
     // Orphaned comments from erased declarations are only preserved before any runtime code.
     private var hasSeenRuntimeStatement = false
@@ -245,6 +256,8 @@ class Transformer(
         needsMetadataHelper = false
         needsMakeTemplateObjectHelper = false
         helperUsageOrder.clear()
+        topLevelNumericConstants.clear()
+        allEnumStringValues.clear()
         topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
@@ -259,6 +272,17 @@ class Transformer(
                 is FunctionDeclaration -> stmt.name?.text?.let { topLevelRuntimeNames.add(it) }
                 is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
                     collectBoundNames(decl.name).forEach { n -> topLevelRuntimeNames.add(n) }
+                    // Capture top-level `const X = numericLiteral` (and folded
+                    // numeric expressions) for later enum-init inlining (e.g.
+                    // `enum E { A = X }` → `E["A"] = 1`).
+                    if (stmt.declarationList.flags == ConstKeyword) {
+                        val name = decl.name
+                        val init = decl.initializer
+                        if (name is Identifier && init != null) {
+                            val num = tryEvaluateNumericLiteral(init)?.toLong()
+                            if (num != null) topLevelNumericConstants[name.text] = num
+                        }
+                    }
                 }
                 is EnumDeclaration -> topLevelRuntimeNames.add(stmt.name.text)
                 is ModuleDeclaration -> {
@@ -10212,6 +10236,9 @@ class Transformer(
         val processedMembers = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf())
         // Track which members are syntactically string-valued (for skipping reverse mapping)
         val stringValuedMembers = mutableSetOf<String>()
+        // Folded string values per member (for cross-member references e.g. `AB = A + B`).
+        // Initialized from prior merged-enum declarations (matches `memberValues` semantics).
+        val stringMemberValues = (allEnumStringValues[enumName]?.toMutableMap() ?: mutableMapOf<String, String>())
         for (member in decl.members) {
             val memberName = extractEnumMemberName(member.name)
             val memberNameExpr = memberNameToString(member.name)
@@ -10219,7 +10246,7 @@ class Transformer(
             val stmt: ExpressionStatement = when {
                 member.initializer != null -> {
                     val initExpr = transformExpression(member.initializer)
-                    val constStringVal = evaluateConstantStringExpression(initExpr)
+                    val constStringVal = evaluateConstantStringExpression(initExpr, stringMemberValues, enumName)
                     // Check if the initializer is syntactically a string expression
                     val isSyntacticallyStr = constStringVal != null
                         || isSyntacticallyStringEnum(initExpr, enumName, stringValuedMembers)
@@ -10227,6 +10254,10 @@ class Transformer(
                         // String enum member: E["B"] = value (no reverse mapping)
                         autoIncrementValid = false
                         stringValuedMembers.add(memberName)
+                        if (constStringVal != null) {
+                            stringMemberValues[memberName] = constStringVal
+                            allEnumStringValues.getOrPut(enumName) { mutableMapOf() }[memberName] = constStringVal
+                        }
                         val emitRight = if (constStringVal != null) {
                             StringLiteralNode(
                                 text = constStringVal, singleQuote = false, rawText = null,
@@ -10652,16 +10683,21 @@ class Transformer(
      * - Numeric literal + string: 2 + "" → "2"
      * - NoSubstitutionTemplateLiteral (plain template with no expressions): `foo` → "foo"
      */
-    private fun evaluateConstantStringExpression(expr: Expression): String? {
+    private fun evaluateConstantStringExpression(
+        expr: Expression,
+        stringMemberValues: Map<String, String> = emptyMap(),
+        currentEnumName: String? = null,
+    ): String? {
         return when (expr) {
             is StringLiteralNode -> expr.text
             is NoSubstitutionTemplateLiteralNode -> expr.text
-            is ParenthesizedExpression -> evaluateConstantStringExpression(expr.expression)
+            is ParenthesizedExpression ->
+                evaluateConstantStringExpression(expr.expression, stringMemberValues, currentEnumName)
             is BinaryExpression -> {
                 if (expr.operator != SyntaxKind.Plus) return null
                 // "" + numericLiteral → string
-                val leftStr = evaluateConstantStringExpression(expr.left)
-                val rightStr = evaluateConstantStringExpression(expr.right)
+                val leftStr = evaluateConstantStringExpression(expr.left, stringMemberValues, currentEnumName)
+                val rightStr = evaluateConstantStringExpression(expr.right, stringMemberValues, currentEnumName)
                 if (leftStr != null && rightStr != null) return leftStr + rightStr
                 val leftNum = tryEvaluateNumericLiteral(expr.left)
                 val rightNum = tryEvaluateNumericLiteral(expr.right)
@@ -10672,6 +10708,25 @@ class Transformer(
                     return leftNum.toString() + rightStr
                 }
                 null
+            }
+            // Bare reference to a same-enum string-valued member: `AB = A + B`.
+            is Identifier -> stringMemberValues[expr.text]
+            // Cross-enum (or qualified same-enum) reference: `Str.AB + D`.
+            is PropertyAccessExpression -> {
+                val obj = expr.expression
+                if (obj is Identifier) {
+                    if (obj.text == currentEnumName) stringMemberValues[expr.name.text]
+                    else allEnumStringValues[obj.text]?.get(expr.name.text)
+                } else null
+            }
+            // ElementAccess form: `Str["A"] + D`.
+            is ElementAccessExpression -> {
+                val obj = expr.expression
+                val arg = expr.argumentExpression
+                if (obj is Identifier && arg is StringLiteralNode) {
+                    if (obj.text == currentEnumName) stringMemberValues[arg.text]
+                    else allEnumStringValues[obj.text]?.get(arg.text)
+                } else null
             }
             else -> null
         }
@@ -11058,7 +11113,7 @@ class Transformer(
                     else -> null
                 }
             }
-            is Identifier -> memberValues[expr.text]
+            is Identifier -> memberValues[expr.text] ?: topLevelNumericConstants[expr.text]
             is PropertyAccessExpression -> {
                 // Handle cross-enum references like Foo.a or M.N.Foo.a where Foo is a previously-defined enum.
                 // For qualified paths (M.N.E1.a), extract the enum name (second-to-last segment) and member name.
