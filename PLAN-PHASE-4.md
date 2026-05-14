@@ -2796,6 +2796,22 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.3. Extend isolatedDeclarations walker with TS9023 (expando assignments) + TS9007 (FunctionDeclaration / arrow-FE missing return type) (DONE 2026-05-14, +2 — flips `isolatedDeclarationErrors_ts` AND `isolatedDeclarationErrorsExpandoFunctions_ts`).** Stacks on B7.1 + B7.2. Three-pass restructure of `emitIsolatedDeclarationsDiagnostics`:
+
+  - **Pass 1** — `funcDecls: Map<String, FunctionDeclaration>` and `funcVarDecls: Map<String, Pair<VariableDeclaration, Expression>>` collected by walking top-level FunctionDeclarations and VariableStatements with arrow/FE initializers.
+
+  - **Pass 2** — top-level `ExpressionStatement` with `BinaryExpression(=, PropertyAccessExpression(Identifier, Identifier))` whose receiver is a function name: emit **TS9023** at LHS span; dedupe by `(receiver, propName.text)` via `seenExpandoPairs` set; collect receiver into `expandoNames` set.
+
+  - **Pass 3** — main walk emits all of TS9010 (B7.1) + TS9022/TS9021 (B7.2) + new TS9007 cases:
+    - VariableStatement with arrow/FE initializer + no return type + name in `expandoNames` → **TS9007** at function's full span + **TS9027** (var name) + **TS9030** ("Add a return type to the function expression.").
+    - FunctionDeclaration + no return type + (exported OR name in `expandoNames`) → **TS9007** at the function name + **TS9031** ("Add a return type to the function declaration.").
+
+  Helpers: `arrowOrFunctionExprTrueEnd(fn)` (uses Block.closeBracePos for accurate end; falls back to `isolatedDeclExprTrueEnd` for expression-body arrows). `emitIsolatedDeclFnDeclMissingReturn` / `emitIsolatedDeclFnExprMissingReturn` build the diagnostic + related list.
+
+  **Verification.** Targeted tests pass; full-suite 10078/1413/3 (was 10078/1415/3, +2 net). Zero regressions. Wider patterns deferred:
+  - TS9023 for ElementAccessExpression LHS (`foo[expr] = X` form) — `isolatedDeclarationLazySymbols_ts` needs this but ALSO TS1166 + TS9038, so adding ElementAccess alone wouldn't flip it. Defer until a richer substep tackles the lazy-symbols family.
+  - TS9007 for INNER nested function expressions (default values of params in `(cb = function(){})` form) — `isolatedDeclarationErrorsReturnTypes_ts` needs this (31 emissions, all on inner FEs); needs FE-scope analysis to distinguish "outer named FE preservable in .d.ts via the function-foo form" from "inner default-value FE not preservable". Substantial scope — should be its own substep.
+
 - [x] **B7.2. Extend isolatedDeclarations walker with TS9022 + TS9021 (+ TS9027/TS9035 related) for class-expression initializers and non-identifier extends clauses (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsClassesExpressions_ts`).** Continuation of B7.1's `emitIsolatedDeclarationsDiagnostics` walker in `TypeScriptCompiler.kt`. Three new shape-detection emission patterns, all gated on top-level `export`:
 
   - **TS9022 "Inference from class expressions is not supported with --isolatedDeclarations."** — fires at the `class` keyword (length 5) when `export const/let/var X = init` has no type annotation AND `init` is either (a) a bare `ClassExpression` or (b) an `AsExpression` of `[class {}, ...] as const` shape (TypeReference with `typeName == "const"` and no type args; expression is an ArrayLiteralExpression). Attaches TS9027 "Add a type annotation to the variable X." related info at the variable name. The array-as-const form additionally attaches TS9035 "Add satisfies and a type assertion ..." at the same position as the squiggle.
@@ -3006,6 +3022,29 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.3, 8660 → 8662, +2) — Extend isolatedDeclarations walker with TS9023 (expando assignments) + TS9007 (FunctionDeclaration / arrow/FE missing return type).** Stacks on B7.1 + B7.2. Same session as B7.2 (continued /loop iteration). Targeted both `isolatedDeclarationErrors_ts` (4 emissions: 3 TS9023 + 1 TS9007) and `isolatedDeclarationErrorsExpandoFunctions_ts` (7 emissions: 6 TS9023 + 1 TS9007 with TS9023 dedup on duplicated `foo.length = 10`).
+
+  **Implementation.** Restructured `emitIsolatedDeclarationsDiagnostics` into three passes:
+  - **Pass 1** collects top-level function names — FunctionDeclaration with a name AND VariableDeclaration with arrow/FE initializer. Two maps: `funcDecls: Map<String, FunctionDeclaration>`, `funcVarDecls: Map<String, Pair<VariableDeclaration, Expression>>`.
+  - **Pass 2** walks top-level ExpressionStatements for `BinaryExpression(=, PropertyAccessExpression(Identifier, Identifier))` whose receiver is a function name. Emits TS9023 at LHS span (receiver.pos to propName end), deduped by `(receiver, propName.text)` via `seenExpandoPairs`. Collects all names that have at least one expando assignment into `expandoNames`.
+  - **Pass 3** main walk:
+    - VariableStatement: existing TS9010 (export+uninit+untyped, from B7.1) and existing TS9022 class-expression (export+typed-init, from B7.2). New: TS9007 on the arrow/FE initializer when the var name is in `expandoNames` AND the function has no return type. Squiggle = arrow/FE's full span (pos to `body.closeBracePos + 1` for Block bodies, or `expressionTrueEnd` for expression bodies). Related: TS9027 (variable name) + TS9030 ("Add a return type to the function expression.").
+    - ClassDeclaration: existing TS9021 (from B7.2).
+    - FunctionDeclaration: new TS9007 when `stmt.type == null` AND (`Export in stmt.modifiers` OR `name.text in expandoNames`). Squiggle = name (length = name.text.length). Related: TS9031 ("Add a return type to the function declaration.").
+
+  Helpers added:
+  - `arrowOrFunctionExprTrueEnd(fn)` — handles ArrowFunction with Block body (uses `closeBracePos + 1`), ArrowFunction with expression body (delegates to `isolatedDeclExprTrueEnd`), FunctionExpression (always Block body).
+  - `emitIsolatedDeclFnDeclMissingReturn` and `emitIsolatedDeclFnExprMissingReturn` — emit TS9007 + related, one per FunctionDeclaration/arrow-FE case.
+
+  **Verification.** Targeted tests pass; full-suite 10078/1413/3 (was 10078/1415/3, +2 net). Zero regressions.
+
+  **Risk profile.** Bounded — three behavioral gates protect non-expando, non-exported, return-typed functions:
+  - The TS9023 emission gates on `receiver.text in funcDecls || receiver.text in funcVarDecls` → only function-name receivers fire (not regular object property assignments).
+  - The TS9007 for FunctionDeclaration emits only when `(isExported || name in expandoNames) && type == null` → non-exported, non-expando functions stay quiet (preserves `computedPropertiesNarrowed_ts`'s `function foo (): 1` and `function ns()` which neither match).
+  - The TS9007 for arrow/FE initializer only fires when the variable has expando assignments — `isolatedDeclarationErrorsReturnTypes_ts`'s `export let fnExpressionLetVariable = function foo() { return 0;}` is correctly NOT flagged (no expando).
+
+  **Lessons.** (a) The expando-function pattern decomposes into three coupled emissions (TS9023 on the assignment, TS9007 on the function expression, TS9027/TS9030/TS9031 related) that all key off the same "function name has expando" analysis — a single three-pass walker handles them cleanly. (b) TypeScript's TS9023 dedupes by `(name, property)` not by syntactic appearance — `foo.length = 10; foo.length = 10` fires once. The `seenExpandoPairs` set is the canonical encoding. (c) `isolatedDeclarationLazySymbols_ts` still fails (its TS9023 fires on ElementAccessExpression form, plus it needs TS1166 + TS9038); ElementAccess TS9023 deferred because the test gates on multiple missing codes and no other test consumes ElementAccess-TS9023 in isolation.
 
   **Session 2026-05-14 (B7.2, 8659 → 8660, +1) — Extend isolatedDeclarations walker with TS9022 + TS9021 (+ TS9027 + TS9035 related).** Stacks on B7.1. Continuation /loop iteration. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 3/63/15) — same baseline as post-B7.1. Last commit was a +1 win (not a recon-only pattern), so anti-loop rule isn't triggered — continued natural progression of the B7 isolatedDeclarations family.
 
