@@ -2796,6 +2796,36 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.10. Enum-emission constant folding for top-level `const X = numericLiteral` references AND cross/same-enum string-valued member references (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsEnums_ts` JS-emit baseline).** Picks up the JS-emit residual B7.8 deferred ("separate emitter concern"). Single-file change in `Transformer.kt`. Three coordinated pieces:
+
+  - **New `topLevelNumericConstants: MutableMap<String, Long>` field** (Transformer.kt ~110). Populated by the existing top-level pre-pass in `transform` (the same loop that builds `topLevelRuntimeNames` and `topLevelTypeOnlyNames`) for any `const X = literalExpr` at the source-file top level. Uses the existing `tryEvaluateNumericLiteral` to fold the RHS — accepts hex/bin/oct literals, unary `-`/`+`/`~`, parenthesized, and binary `+ - * ** / % | & ^ << >> >>>` (the same set the helper already handles). `let`/`var` and non-numeric initializers are silently skipped. Cleared per file via `clear()` at the start of `transform`.
+
+  - **`evaluateConstantExpression` Identifier branch** (Transformer.kt ~11061) now falls back to `topLevelNumericConstants[expr.text]` after `memberValues[expr.text]`. Enables `enum E { A = X }` → `E["A"] = 1` when `const X = 1` is at top level. Test target diff line: `ExtFlags[ExtFlags["E"] = EV] = "E"` → `ExtFlags[ExtFlags["E"] = 1] = "E"`.
+
+  - **New `allEnumStringValues: MutableMap<String, MutableMap<String, String>>` field** (Transformer.kt ~107). Mirrors the existing `allEnumMemberValues` map but for STRING-valued enum members. Cleared per file.
+
+  - **`evaluateConstantStringExpression` now takes optional `stringMemberValues: Map<String, String>` + `currentEnumName: String?` params** (Transformer.kt ~10670). Three new expression branches:
+    - `Identifier` → same-enum lookup via `stringMemberValues`.
+    - `PropertyAccessExpression` where `expr.expression is Identifier` → same- or cross-enum lookup (same-enum routes through `stringMemberValues`; cross-enum through `allEnumStringValues[obj.text]`).
+    - `ElementAccessExpression` where `expr.argumentExpression is StringLiteralNode` → same/cross-enum lookup as above, string-literal arg only.
+
+  - **`transformEnum` tracks per-enum string values** (Transformer.kt ~10239). Initializes `stringMemberValues` from any prior declaration of the same enum (merged-enum init pattern, mirroring `memberValues`). When a member's initializer folds to a constant string (via the extended `evaluateConstantStringExpression`), writes to both `stringMemberValues[memberName]` and `allEnumStringValues[enumName][memberName]` BEFORE emitting the assignment statement. The string-emit branch then emits the folded `StringLiteralNode(constStringVal)` directly instead of falling through to `qualifyEnumMemberRefs(initExpr, …)`.
+
+  **Pattern coverage for the test corpus.** `enum Str { A = "A", B = "B", AB = A + B }` — three folded values; AB resolves through `stringMemberValues["A"] + stringMemberValues["B"]` → `"AB"`. `enum StrExt { D = "D", ABD = Str.AB + D, AD = Str["A"] + D }` — D folded locally; ABD's `Str.AB` resolves through `allEnumStringValues["Str"]["AB"]` (populated when Str was processed earlier in source order), `D` resolves through same-enum `stringMemberValues["D"]`; AD's `Str["A"]` goes through the new ElementAccessExpression branch. All four diff lines (one numeric `EV` + three string concat) close in one substep.
+
+  **Verification.** Targeted test passes; full-suite 10078/1406/3 (was 10078/1407/3, +1 net). Zero regressions across 10078-test suite.
+
+  **Risk profile that materialized.** Bounded — both infrastructure additions are gated:
+  - Numeric inlining requires `const` flag + `tryEvaluateNumericLiteral` succeeding on the RHS. Non-literal RHS (`const X = someFn()`, `const X = { a: 1 }`, etc.) silently produces no map entry, so the enum-init Identifier branch falls back to the existing un-inlined path.
+  - String inlining requires the new `evaluateConstantStringExpression` branches to return non-null. Same-enum bare-Identifier references that don't resolve (member not yet processed in source order) silently produce null and fall through to `qualifyEnumMemberRefs`.
+
+  Wider patterns deferred (no specific failing-test targets identified):
+  - Numeric `const X = E.A` (Identifier referring to enum member) — would require enum member-value lookup in the pre-pass; out of scope.
+  - Template-literal folding in enum string members (e.g. `enum E { A = \`prefix${"suffix"}\` }`); the existing `TemplateExpression` branch in `evaluateEnumInitializer` (Checker.kt) is unaffected, but the Transformer's `evaluateConstantStringExpression` doesn't yet handle `TemplateExpression`.
+  - `const enum` re-export via `import { X }` with `verbatimModuleSyntax` — separate concern.
+
+---
+
 - [x] **B7.9. TS9010 for `export const/let/var X = nonTriviallyDeclarableExpr` (DONE 2026-05-14, +1 — flips `declarationEmitIsolatedDeclarationErrorNotEmittedForNonEmittedFile_ts`).** Extension of B7.1's TS9010 walker — previously only fired for `export X;` without initializer; now also fires when initializer is one of a conservative set of runtime-only expression kinds that cannot be preserved as a literal type in the emitted .d.ts. Single-file change in `TypeScriptCompiler.kt`:
 
   - New `emitIsolatedDeclVarInitTs9010(varName, init, ...)` helper called from the `VariableStatement` arm of pass 3 in `emitIsolatedDeclarationsDiagnostics`, right after `emitIsolatedDeclClassExprDiags`, gated on `ModifierFlag.Export in stmt.modifiers`.

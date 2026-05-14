@@ -1,6 +1,56 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,668 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,669 / 10,078 tests passing (~86.0%).
+
+**B7.10 (2026-05-14, +1)** — Enum-emission constant folding for top-level
+`const X = numericLiteral` references AND cross/same-enum string-valued
+member references (closes `isolatedDeclarationErrorsEnums_ts` JS-emit
+baseline). Single-file change in `Transformer.kt`. Three coordinated
+pieces:
+
+- New `topLevelNumericConstants: Map<String, Long>` field. Populated by
+  the existing pre-pass in `transform` for any `const X = numericLiteral`
+  (or folded numeric expression via `tryEvaluateNumericLiteral`) at the
+  source-file top level. Cleared per file.
+
+- New `allEnumStringValues: Map<String, Map<String, String>>` field.
+  Populated inside `transformEnum` whenever a member is folded to a
+  constant string value. Cleared per file.
+
+- `evaluateConstantExpression` Identifier branch now falls back to
+  `topLevelNumericConstants` after `memberValues`. Enables
+  `enum E { A = EV }` → `E["A"] = 1` when `const EV = 1` is at file top
+  level.
+
+- `evaluateConstantStringExpression` takes new optional `stringMemberValues`
+  (per-enum, current) + `currentEnumName` params; gains three new
+  expression branches: `Identifier` (same-enum lookup), `PropertyAccessExpression`
+  (same- or cross-enum lookup against `allEnumStringValues`),
+  `ElementAccessExpression` (same- or cross-enum lookup, string-literal
+  arg only). Enables `Str.AB = A + B` → `Str["AB"] = "AB"`,
+  `StrExt.ABD = Str.AB + D` → `StrExt["ABD"] = "ABD"`, and
+  `StrExt.AD = Str["A"] + D` → `StrExt["AD"] = "AD"`.
+
+- `transformEnum` initializes `stringMemberValues` from prior
+  declaration's map (merged enums) and writes confirmed string values
+  into both the per-enum map and `allEnumStringValues[enumName]` after
+  emission, mirroring the numeric `memberValues` / `allEnumMemberValues`
+  pattern.
+
+**Verification.** Targeted test passes; full-suite 10078/1406/3 (was
+10078/1407/3, +1 net). Zero regressions across 10078-test suite. Both
+infrastructure additions are bounded:
+
+- Numeric inlining gated on `const` flag + `tryEvaluateNumericLiteral`
+  succeeding (folds only literal-like RHS expressions; `const X =
+  someFn()` is silently skipped).
+- String inlining gated on the existing `evaluateConstantStringExpression`
+  return path, so non-constant string expressions still fall through to
+  `qualifyEnumMemberRefs`.
+
+The corpus has no test that depends on the un-inlined source-form output
+for cross-enum string concat or external-const-in-enum-init patterns
+(verified via full-suite re-run with zero regressions).
 
 **B7.9 (2026-05-14, +1)** — TS9010 for `export const/let/var X = nonTriviallyDeclarableExpr`
 (closes `declarationEmitIsolatedDeclarationErrorNotEmittedForNonEmittedFile_ts`).
