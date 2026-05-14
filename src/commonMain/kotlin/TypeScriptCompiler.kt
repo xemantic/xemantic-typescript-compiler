@@ -1662,6 +1662,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                                 emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitSubExprTs9013(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitSpreadShorthand(init, name, fileName, source, results)
+                                emitIsolatedDeclObjLitAccessor(init, name, fileName, source, results)
                             }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
@@ -3137,6 +3138,113 @@ private fun emitIsolatedDeclObjLitSpreadShorthand(
             val nestedInit = prop.initializer
             if (nestedInit is ObjectLiteralExpression) {
                 emitIsolatedDeclObjLitSpreadShorthand(nestedInit, varName, fileName, source, results)
+            }
+        }
+    }
+}
+
+/**
+ * B7.17: TS7032 / TS7006 / TS9009 walker for `set X(value) {}` accessors in
+ * ObjectLiteralExpression initializers (under exported `VariableStatement`).
+ *
+ * Fires only on a SetAccessor whose single parameter has NO type annotation AND
+ * has NO peer GetAccessor (by name) in the same object literal. When a peer
+ * getter exists, TypeScript treats the setter param type as supplied by the
+ * getter's return type (even if that is itself implicit-any), and suppresses
+ * all three diagnostics.
+ *
+ * For each qualifying single-setter, emits:
+ *   - TS7032 at the accessor NAME position (length = name.length):
+ *       "Property 'X' implicitly has type 'any', because its set accessor lacks
+ *        a parameter type annotation."
+ *   - TS7006 at the param NAME position (length = param-name.length):
+ *       "Parameter 'value' implicitly has an 'any' type."
+ *   - TS9009 at the param NAME position (length = param-name.length):
+ *       "At least one accessor must have an explicit type annotation with
+ *        --isolatedDeclarations."
+ *     with related TS9033 at the accessor NAME position:
+ *       "Add a type to parameter of the set accessor declaration."
+ *
+ * Recurses into nested ObjectLiteralExpression initializers via
+ * PropertyAssignment so deep object literals are covered uniformly with the
+ * other B7.x walkers.
+ */
+private fun emitIsolatedDeclObjLitAccessor(
+    objLit: ObjectLiteralExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    // Build accessor-pair table by Identifier name. ComputedPropertyName /
+    // StringLiteralNode / NumericLiteralNode accessor names are conservatively
+    // skipped here (no failing-test target exercises them).
+    val hasGetter = mutableSetOf<String>()
+    for (prop in objLit.properties) {
+        if (prop is GetAccessor) {
+            val n = prop.name
+            if (n is Identifier) hasGetter.add(n.text)
+        }
+    }
+    for (prop in objLit.properties) {
+        if (prop is SetAccessor) {
+            val nameNode = prop.name as? Identifier ?: continue
+            if (nameNode.text in hasGetter) continue
+            val param = prop.parameters.firstOrNull() ?: continue
+            if (param.type != null) continue
+            val paramName = param.name as? Identifier ?: continue
+
+            val propName = nameNode.text
+            val (nameLine, nameChar) = positionToLineCharacter(source, nameNode.pos)
+            results.add(Diagnostic(
+                message = "Property '${propName}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 7032,
+                fileName = fileName,
+                line = nameLine,
+                character = nameChar,
+                start = nameNode.pos,
+                length = propName.length,
+            ))
+
+            val (paramLine, paramChar) = positionToLineCharacter(source, paramName.pos)
+            val paramLen = paramName.text.length
+            results.add(Diagnostic(
+                message = "Parameter '${paramName.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7006,
+                fileName = fileName,
+                line = paramLine,
+                character = paramChar,
+                start = paramName.pos,
+                length = paramLen,
+            ))
+
+            val ts9033Related = Diagnostic(
+                message = "Add a type to parameter of the set accessor declaration.",
+                category = DiagnosticCategory.Message,
+                code = 9033,
+                fileName = fileName,
+                line = nameLine,
+                character = nameChar,
+                start = nameNode.pos,
+                length = propName.length,
+            )
+            results.add(Diagnostic(
+                message = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9009,
+                fileName = fileName,
+                line = paramLine,
+                character = paramChar,
+                start = paramName.pos,
+                length = paramLen,
+                relatedInformation = listOf(ts9033Related),
+            ))
+        } else if (prop is PropertyAssignment) {
+            val nestedInit = prop.initializer
+            if (nestedInit is ObjectLiteralExpression) {
+                emitIsolatedDeclObjLitAccessor(nestedInit, varName, fileName, source, results)
             }
         }
     }
