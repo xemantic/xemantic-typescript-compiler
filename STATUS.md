@@ -2,6 +2,41 @@
 
 **Phase 4 — Checker buildout.** 8,671 / 10,078 tests passing (~86.0%).
 
+**B7.18 (2026-05-14, net-zero infra)** — TS9011 walker for exported
+`ClassDeclaration` MethodDeclaration parameters that lack an explicit type
+annotation (mirrors B7.5's FunctionDeclaration version for class methods).
+Single-file change in `TypeScriptCompiler.kt`. New
+`emitIsolatedDeclClassMethodParamChecks` walker called from the
+`is ClassDeclaration` arm of pass 3's statement switch, after
+`emitIsolatedDeclClassMethodTs9008`. Walker iterates `stmt.members`, picks
+MethodDeclaration with non-null body (skipping overload-only / abstract /
+interface MethodDeclaration with body=null), and delegates to the existing
+`emitIsolatedDeclParamsCheck` helper so the same trivially-declarable-default
+classification and TS9028 "Add a type annotation to the parameter X." related
+info shape applies uniformly across FunctionDeclaration and MethodDeclaration.
+
+**Adjacent partial progress (no flip).**
+`isolatedDeclarationErrorsClasses_ts` 17 → 20 emissions (+3: lines 8,18
+TS9011 for `methodParams(p)`; 9,23 TS9011 for `methodParams2(p = 1 + 1)`
+default `1 + 1`; 44,35 TS9011 for `[noParamAnnotationStringName](v)`).
+Still 6 emissions short of expected 26 — gap covers class-side single-
+accessor TS9009 / TS7032 / TS7006 walker (lines 11,12 — B7.19 candidate),
+class-side computed-name single-setter TS7032+TS7006 (line 48 — B7.20
+candidate), and interface MethodDeclaration TS7010+TS9013 (line 56 — B7.21
+candidate).
+
+**Verification.** Full-suite 10078/1404/3 (unchanged from B7.17; zero
+regressions). Net-zero on the suite — gain on `isolatedDeclarationErrorsClasses_ts`
+isn't enough to flip it; other isolated-decl tests already had all-or-none
+class-method param coverage from the checker's pre-existing TS7006 path.
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+(call-site). The body-null guard correctly skips MethodSignature-shaped
+overload declarations / abstract methods / interface members that parse as
+MethodDeclaration. Accessor parameters (GetAccessor / SetAccessor) are NOT
+touched — they emit TS9009/TS7032/TS7006 instead per B7.17 / B7.19+.
+
 **B7.17 (2026-05-14, +1 — flips `isolatedDeclarationErrorsObjects_ts`)** —
 TS7032 / TS7006 / TS9009 walker for single-setter accessors in
 ObjectLiteralExpression initializers under exported `VariableStatement`.

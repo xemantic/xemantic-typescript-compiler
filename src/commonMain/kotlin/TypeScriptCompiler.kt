@@ -1681,6 +1681,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclClassComputedNameDiags(stmt, fileName, source, results)
                 emitIsolatedDeclClassPropertyTs9012(stmt, fileName, source, results)
                 emitIsolatedDeclClassMethodTs9008(stmt, fileName, source, results)
+                emitIsolatedDeclClassMethodParamChecks(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2871,6 +2872,35 @@ private fun emitIsolatedDeclClassMethodTs9008(
             length = length,
             relatedInformation = listOf(related),
         ))
+    }
+}
+
+/**
+ * B7.18: TS9011 walker for exported `ClassDeclaration` MethodDeclaration
+ * parameters that lack an explicit type annotation (mirrors B7.5's
+ * FunctionDeclaration version for class methods). Reuses
+ * `emitIsolatedDeclParamsCheck` so the same trivially-declarable-default
+ * classification and TS9028 "Add a type annotation to the parameter X."
+ * related info shape applies uniformly across function and class methods.
+ *
+ * Body-less methods (overload-only / abstract / interface-member parsed as
+ * MethodDeclaration with body=null) are conservatively skipped — TypeScript's
+ * baseline doesn't emit TS9011 on overload declarations, only on
+ * implementation signatures. GetAccessor / SetAccessor / ConstructorDeclaration
+ * are skipped (accessors use TS9009/TS7032/TS7006 instead — see B7.17 for the
+ * object-literal version; constructor param-property handling is a separate
+ * concern not exercised by the current corpus).
+ */
+private fun emitIsolatedDeclClassMethodParamChecks(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        if (member !is MethodDeclaration) continue
+        if (member.body == null) continue
+        emitIsolatedDeclParamsCheck(member.parameters, fileName, source, results)
     }
 }
 
