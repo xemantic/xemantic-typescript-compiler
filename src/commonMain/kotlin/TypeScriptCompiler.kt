@@ -1661,6 +1661,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                                 emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitSubExprTs9013(init, name, fileName, source, results)
+                                emitIsolatedDeclObjLitSpreadShorthand(init, name, fileName, source, results)
                             }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
@@ -3060,6 +3061,83 @@ private fun walkObjLitSubExprTs9013(
                 length = length,
                 relatedInformation = listOf(varRelated, satisfiesRelated),
             ))
+        }
+    }
+}
+
+/**
+ * Walks an exported `VariableStatement`'s ObjectLiteralExpression initializer and
+ * emits TS9015 on each SpreadAssignment (`...part`) and TS9016 on each
+ * ShorthandPropertyAssignment (`part`). Recurses through nested
+ * ObjectLiteralExpression initializers of PropertyAssignment members so
+ * patterns like `oWithSpread2.nested: { ...part }` are covered.
+ *
+ * Squiggle:
+ *   - SpreadAssignment: `prop.pos` to end of expression — covers `...EXPR`.
+ *     Length = `isolatedDeclExprTrueEnd(prop.expression) - prop.pos`. Length
+ *     coerces to at least 1 in case of degenerate cases.
+ *   - ShorthandPropertyAssignment: `name.pos` + `name.text.length` — covers
+ *     just the identifier (e.g. `part` in `{ part, }`).
+ *
+ * Related info:
+ *   - TS9027 "Add a type annotation to the variable X." anchored at the OUTER
+ *     variable name.
+ */
+private fun emitIsolatedDeclObjLitSpreadShorthand(
+    objLit: ObjectLiteralExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+    val varRelated = Diagnostic(
+        message = "Add a type annotation to the variable ${varName.text}.",
+        category = DiagnosticCategory.Message,
+        code = 9027,
+        fileName = fileName,
+        line = varLine,
+        character = varChar,
+        start = varName.pos,
+        length = varName.text.length,
+    )
+    for (prop in objLit.properties) {
+        if (prop is SpreadAssignment) {
+            val start = prop.pos
+            val end = isolatedDeclExprTrueEnd(prop.expression)
+            val length = (end - start).coerceAtLeast(1)
+            val (line, character) = positionToLineCharacter(source, start)
+            results.add(Diagnostic(
+                message = "Objects that contain spread assignments can't be inferred with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9015,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = listOf(varRelated),
+            ))
+        } else if (prop is ShorthandPropertyAssignment) {
+            val start = prop.name.pos
+            val length = prop.name.text.length.coerceAtLeast(1)
+            val (line, character) = positionToLineCharacter(source, start)
+            results.add(Diagnostic(
+                message = "Objects that contain shorthand properties can't be inferred with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9016,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = listOf(varRelated),
+            ))
+        } else if (prop is PropertyAssignment) {
+            val nestedInit = prop.initializer
+            if (nestedInit is ObjectLiteralExpression) {
+                emitIsolatedDeclObjLitSpreadShorthand(nestedInit, varName, fileName, source, results)
+            }
         }
     }
 }

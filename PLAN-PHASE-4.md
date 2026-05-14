@@ -2796,6 +2796,29 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.16. TS9015 / TS9016 walker for SpreadAssignment / ShorthandPropertyAssignment in ObjectLiteralExpression initializers under exported `VariableStatement` (DONE 2026-05-14, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclObjLitSpreadShorthand` walker called from the `is VariableStatement` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, alongside the `emitIsolatedDeclObjLitSubExprTs9013` walker (gated on `Export` + `init is ObjectLiteralExpression`).
+
+  Walker iterates `objLit.properties`:
+  - **SpreadAssignment** (`...part`) → emit TS9015 with squiggle from `prop.pos` to `isolatedDeclExprTrueEnd(prop.expression)`. Length covers `...EXPR`.
+  - **ShorthandPropertyAssignment** (`part`) → emit TS9016 at `prop.name.pos` with `prop.name.text.length`. Covers just the identifier.
+  - **PropertyAssignment** with nested `ObjectLiteralExpression` initializer → recurse so patterns like `oWithSpread2.nested: { ...part }` are covered.
+
+  Related info: TS9027 "Add a type annotation to the variable X." anchored at the OUTER variable name (single shared `Diagnostic` reused for all emissions in the same call). Both TS9015 and TS9016 share this related info shape.
+
+  **Adjacent partial progress (no flip).** `isolatedDeclarationErrorsObjects_ts` 13 → 16 emissions (+3 — lines 75,5; 77,5; 84,9). Now only 3 emissions short of the expected 19 — gap covers the TS7032/TS7006/TS9009 triple for `set singleSetterBad(value) { }` at line 40. A B7.17 walker for single-accessor TS9009 + checker-level TS7032/TS7006 for set-accessor implicit-any params would complete the test.
+
+  **Verification.** Full-suite 10078/1405/3 (unchanged from B7.15; zero regressions).
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` AND `init is ObjectLiteralExpression` (call-site gates). Recursion into nested ObjectLiteralExpression initializers via PropertyAssignment is depth-unbounded but bounded in practice by source structure.
+
+  **Lesson learned.** First implementation used a `when (prop)` statement which Kotlin treats as exhaustive when `prop` is a sealed type — failed compilation with "must be exhaustive. Add the 'is BindingElement', 'is CaseClause', ... branches or an 'else' branch." Switched to `if-else-if` chain to match the convention used by other walkers in the same family (`emitIsolatedDeclObjLitMethodTs9008`, `walkObjLitSubExprTs9013`). Initial test run also revealed that gradle's incremental classpath was stale — even though `build/test-results/jvmTest/binary` was wiped, the `build/libs/*.jar` was from the previous build. Wiping `build/libs` (or doing a full `./gradlew clean`) forces a re-package — but in normal cycles, gradle handles this correctly; the staleness here was caused by the pre-fix compile error leaving the previous JAR in place.
+
+  **Foundation for follow-ons:**
+  - **B7.17 candidate**: TS9009 single-accessor (get-only / set-only) walker for both class members and object-literal members. Plus checker-level TS7032 / TS7006 for accessor parameter implicit-any. Adds 3 emissions in `isolatedDeclarationErrorsObjects_ts` (the `set singleSetterBad(value) { }` triple) + 2 in `isolatedDeclarationErrorsClasses_ts`. **B7.17 would FLIP `isolatedDeclarationErrorsObjects_ts`** — bringing it from 16 → 19/19 expected emissions.
+  - **B7.18 candidate**: TS9011 class MethodDeclaration unannotated parameters + non-trivial parameter defaults. Stacks on B7.5's FunctionDeclaration version. Adds ~3 emissions in `isolatedDeclarationErrorsClasses_ts`.
+
+---
+
 - [x] **B7.15. TS9013 sub-expr walker for ObjectLiteralExpression initializers under exported `VariableStatement` + `isolatedDeclExprTrueEnd` empty-args CallExpression off-by-one fix (DONE 2026-05-14, net-zero infra).** Two coordinated pieces in `TypeScriptCompiler.kt`:
 
   **(a) New walker `emitIsolatedDeclObjLitSubExprTs9013`** called from the `is VariableStatement` arm of pass 3's statement switch in `emitIsolatedDeclarationsDiagnostics`, alongside `emitIsolatedDeclObjLitMethodTs9008` (gated on `Export` + `init is ObjectLiteralExpression`).
