@@ -2796,6 +2796,20 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.5. TS9011 + TS9013 for exported FunctionDeclaration parameter defaults under isolatedDeclarations (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsFunctionDeclarations_ts`).** Single-file change in TypeScriptCompiler.kt. New `emitIsolatedDeclFnDeclParamChecks` walker iterates exported FunctionDeclaration parameters; for each un-annotated param:
+  - No default → TS9011 at param name.
+  - Default trivially declarable (literal-like) → OK.
+  - Default Arrow/FE → OK (TS9007 handles missing-return-type separately).
+  - Default object/array-as-const → recurse via `emitIsolatedDeclParamDefaultClassify` and emit TS9013 on each non-trivial sub-expression.
+  - Default `expr as T` (non-const) → TS9011 on the type node at top level; TS9013 if nested.
+  - Default other non-trivial (BinaryExpression, CallExpression, Identifier, ...) → TS9011 at top level; TS9013 if nested.
+
+  All emissions get TS9028 ("Add a type annotation to the parameter X.") related info; TS9013 also gets TS9035 satisfies hint.
+
+  Extended `isolatedDeclExprTrueEnd` with NumericLiteralNode / BigIntLiteralNode / StringLiteralNode / NoSubstitutionTemplateLiteralNode / Identifier / PrefixUnaryExpression / BinaryExpression cases (previously fell through to `expr.end` which overshoots per CLAUDE.md scanner gotcha).
+
+  **Verification.** Targeted test passes; full-suite 10078/1411/3 (was 10078/1412/3, +1 net). Zero regressions.
+
 - [x] **B7.4. TS2720 self-implements FP suppression + TS9026 cross-file augmentation walker (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsAugmentation_ts`).** Two-piece change required for the target's net-zero diff (`+1 TS9026 missing, -1 TS2720 extra`):
 
   - **Checker.kt** `checkImplementsClauses` — new self-implements short-circuit: `if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) continue@typeExprLoop`. Suppresses spurious TS2720 for `class X implements X {}` (tautology at declaration; augmentation members satisfied at runtime via prototype mutation, which TypeScript accepts).
@@ -3030,6 +3044,29 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-14 (B7.5, 8663 → 8664, +1) — TS9011 + TS9013 for exported FunctionDeclaration parameter defaults.** Continued /loop after B7.4. Pool empty per `find_candidates.py --fresh` (0/0/0). Survey of remaining isolatedDeclarations failures showed `isolatedDeclarationErrorsFunctionDeclarations_ts` had a small well-bounded diff: TS9007 already firing post-B7.3, need 5 more emissions (TS9011 ×2 + TS9013 ×3) for parameter-default classification.
+
+  **Implementation.** Single-file change in TypeScriptCompiler.kt:
+  - New `emitIsolatedDeclFnDeclParamChecks(fn, ...)`: iterates an exported FunctionDeclaration's parameters; skips annotated params. Per param:
+    - No default → TS9011 at param name (length = `name.text.length`).
+    - Has default → delegate to `emitIsolatedDeclParamDefaultClassify`.
+  - New `emitIsolatedDeclParamDefaultClassify(expr, paramName, isTopLevel, ...)`: recursive classifier.
+    - Trivially declarable (Numeric/BigInt/String/NoSubstTemplate/bool-null-undef Identifier/Prefix±Number|BigInt): no emission.
+    - ArrowFunction/FunctionExpression: no emission (TS9007 handles separately).
+    - ObjectLiteralExpression: recurse into each PropertyAssignment's initializer with `isTopLevel=false`.
+    - AsExpression with `as const`: recurse into inner ArrayLiteralExpression elements or ObjectLiteralExpression members with `isTopLevel=false`.
+    - AsExpression with non-const type: top-level → TS9011 at the type node's span (uses new `isolatedDeclTypeNodeLength` for simple TypeReference→Identifier shapes); non-top-level → TS9013.
+    - Else (BinaryExpression, CallExpression, Identifier, etc.): top-level → TS9011 on the expression; non-top-level → TS9013.
+  - New `emitIsolatedDeclTs9011` / `emitIsolatedDeclTs9013` helpers build the diagnostic + related (TS9028 always; TS9035 for TS9013).
+  - New `isIsolatedDeclTriviallyDeclarable` predicate.
+  - **`isolatedDeclExprTrueEnd` extended** with NumericLiteralNode / BigIntLiteralNode / StringLiteralNode / NoSubstitutionTemplateLiteralNode / Identifier / PrefixUnaryExpression / BinaryExpression cases. Previously fell through to `expr.end` which overshoots by one token per the CLAUDE.md scanner gotcha — produced wrong squiggle lengths for `1 + 1` (6 chars instead of 5). The new BinaryExpression case delegates to `isolatedDeclExprTrueEnd(expr.right)`, mirroring `Checker.expressionTrueEnd`.
+
+  **Verification.** Targeted test passes; full-suite 10078/1411/3 (was 10078/1412/3, +1 net). Zero regressions.
+
+  **Risk profile.** Bounded. The new TS9011/TS9013 walker fires only on TOP-LEVEL exported FunctionDeclarations (not inner arrows/FE in var initializers); gates each emission on `param.type == null` (annotated params unaffected); accepts trivially-declarable defaults so existing-passing tests like `isolatedDeclarationErrorsExpressions.ts`'s `numberParam(p = 1)` aren't impacted. Function-expression defaults are explicitly excluded (TS9007 already handles them separately).
+
+  **Lessons.** (a) The AST `end` field overshoots by one token in our parser — a recurring CLAUDE.md-documented gotcha. The TypeScriptCompiler.kt walker needs its own `expressionTrueEnd` helper (mirroring Checker.kt's) for accurate squiggle lengths; the existing helper was missing NumericLiteralNode / BinaryExpression cases that bit this substep on first run. (b) The `as const` vs non-`as const` AsExpression cases need different handling: `as const` makes the inner literal trivially declarable (recurse into ArrayLiteralExpression elements or ObjectLiteralExpression members); non-const cast like `10 as T` is itself non-trivial because `T` may be a local type alias unresolvable in declaration emit. (c) Param-default classification is recursive: top-level non-trivial → TS9011 (param-level); inside object/array literal → TS9013 (expression-level, with TS9035 satisfies hint). Two different codes for the same conceptual rule, distinguished only by nesting depth.
 
   **Session 2026-05-14 (B7.4, 8662 → 8663, +1) — TS2720 self-implements suppression in `checkImplementsClauses` + TS9026 cross-file augmentation walker.** Continued /loop iteration after B7.3. Pool empty per `find_candidates.py --fresh` (0/0/0 filtered from 3/61/15). Post-survey of remaining isolatedDeclarations tests showed `isolatedDeclarationErrorsAugmentation_ts` had the smallest diff: missing TS9026 ×1 + extra TS2720 ×1. The TS2720 was an obvious FP (`class X implements X` is tautological), and TS9026 cross-file augmentation detection turned out to be tractable via a simple basename-matching map.
 
