@@ -2796,6 +2796,16 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [ ] **B7.11. ElementAccessExpression-LHS TS9023 + class/object-literal ComputedPropertyName TS9038/TS1166 walker (target: flip `isolatedDeclarationLazySymbols_ts`, +1).** Adds three coordinated walker pieces to `emitIsolatedDeclarationsDiagnostics` in `TypeScriptCompiler.kt`:
+  - **Pass 2 extension**: ElementAccessExpression LHS expando (`func[idx] = X`) emits TS9023 when `idx` is NOT statically a string-literal pattern (not `StringLiteralNode` directly, and not `ElementAccessExpression(_, StringLiteralNode)`). Squiggle = full LHS span via `isolatedDeclExprTrueEnd(argumentExpression) + 1` (one past `]`). Deduped by `(receiver, source-text-of-index)`.
+  - **`is ClassDeclaration` Pass 3 extension** (after `emitIsolatedDeclExtendsDiags`): walk class members (PropertyDeclaration / MethodDeclaration / GetAccessor / SetAccessor) and for each with `name is ComputedPropertyName`, emit TS9038 + optionally TS1166. TS1166 fires when inner expression is `AsExpression` or `ElementAccessExpression`. Both diagnostics share span = inner expression's true span (computed via `isolatedDeclExprTrueEnd(inner) + (1 if start of `[` was eaten)`).
+  - **`is VariableStatement` Pass 3 extension** (after existing init handling, gated on `Export`): walk `ObjectLiteralExpression` initializer's PropertyAssignment list and for each with `name is ComputedPropertyName`, emit TS9038 (with TS9027 related at variable name) unless inner is `NumericLiteralNode` or `PrefixUnary(+|-, NumericLiteralNode)` or `StringLiteralNode`.
+  - **`isolatedDeclExprTrueEnd`** extended with `is ElementAccessExpression -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1`.
+
+  **Target**: `isolatedDeclarationLazySymbols_ts` has 5 missing emissions covering all three walker shapes. Side-effects help `computedPropertiesNarrowed_ts` (9 of 10 missing TS9038 covered) and `isolatedDeclarationErrorsObjects_ts` (5 of 19 missing) but won't flip them (each needs additional shapes). See "Known architectural blockers" §5 (no — this is just continuing the B7.x isolatedDeclarations family).
+
+---
+
 - [x] **B7.10. Enum-emission constant folding for top-level `const X = numericLiteral` references AND cross/same-enum string-valued member references (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsEnums_ts` JS-emit baseline).** Picks up the JS-emit residual B7.8 deferred ("separate emitter concern"). Single-file change in `Transformer.kt`. Three coordinated pieces:
 
   - **New `topLevelNumericConstants: MutableMap<String, Long>` field** (Transformer.kt ~110). Populated by the existing top-level pre-pass in `transform` (the same loop that builds `topLevelRuntimeNames` and `topLevelTypeOnlyNames`) for any `const X = literalExpr` at the source-file top level. Uses the existing `tryEvaluateNumericLiteral` to fold the RHS — accepts hex/bin/oct literals, unary `-`/`+`/`~`, parenthesized, and binary `+ - * ** / % | & ^ << >> >>>` (the same set the helper already handles). `let`/`var` and non-numeric initializers are silently skipped. Cleared per file via `clear()` at the start of `transform`.
