@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,664 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,665 / 10,078 tests passing (~86.0%).
+
+**B7.6 (2026-05-14, +1)** — Recurse into nested ArrowFunction/FunctionExpression
+parameters from `emitIsolatedDeclParamDefaultClassify` (closes
+`isolatedDeclarationsAddUndefined_ts`). Single-file change in
+`TypeScriptCompiler.kt`:
+
+- Extracted helper `emitIsolatedDeclParamsCheck(params, ...)` from
+  `emitIsolatedDeclFnDeclParamChecks` — now both the top-level
+  FunctionDeclaration walker and the new nested-FE recursion call this shared
+  helper.
+- `emitIsolatedDeclParamDefaultClassify`: when `expr is ArrowFunction` or
+  `expr is FunctionExpression`, instead of bailing, recurse into
+  `expr.parameters` via `emitIsolatedDeclParamsCheck`. Function expressions
+  themselves still don't get TS9011/TS9013 squiggling (TS9007 covers their
+  missing return types separately) — but their inner parameter defaults
+  inherit the same declarability classification logic that the outer FD's
+  parameters already get.
+
+Pattern handled: `export function foo(p = (ip = 10 as T, v: number): void => {}): void`
+— outer `p` has FE default; the FE's first inner param `ip` has non-trivial
+`10 as T` default. After recursion, the AsExpression non-`as const` branch
+fires TS9011 at the `T` type node (squiggle length 1) with TS9028
+"Add a type annotation to the parameter ip." related info at `ip`'s
+position. Inner trivially-declarable defaults (`ip = 10` literal) and
+type-annotated inner params (`v: number`) correctly emit nothing.
+
+Net delta: 1411 → 1410 failed (8664 → 8665 passing). Zero regressions
+across the 10078-test suite. Recursion is bounded by the existing
+`isIsolatedDeclTriviallyDeclarable` short-circuit and by the AST shape
+(each level only walks named params). Same architectural risk profile
+as B7.5: the walker is gated on `options.isolatedDeclarations` so
+non-isolated tests are unaffected.
 
 **B7.5 (2026-05-14, +1)** — TS9011 + TS9013 for exported FunctionDeclaration
 parameter defaults under `isolatedDeclarations` (closes
