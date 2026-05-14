@@ -1636,11 +1636,15 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclExtendsDiags(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
-                val fnName = stmt.name ?: continue
-                if (stmt.type != null) continue
+                val fnName = stmt.name
                 val isExported = ModifierFlag.Export in stmt.modifiers
-                if (!isExported && fnName.text !in expandoNames) continue
-                emitIsolatedDeclFnDeclMissingReturn(stmt, fnName, fileName, source, results)
+                if (fnName != null && stmt.type == null &&
+                    (isExported || fnName.text in expandoNames)) {
+                    emitIsolatedDeclFnDeclMissingReturn(stmt, fnName, fileName, source, results)
+                }
+                if (isExported) {
+                    emitIsolatedDeclFnDeclParamChecks(stmt, fileName, source, results)
+                }
             }
             else -> {}
         }
@@ -1755,6 +1759,220 @@ private fun arrowOrFunctionExprTrueEnd(fn: Expression): Int = when (fn) {
     }
     is FunctionExpression -> if (fn.body.closeBracePos >= 0) fn.body.closeBracePos + 1 else fn.end
     else -> fn.end
+}
+
+/**
+ * For an exported FunctionDeclaration, emits TS9011 / TS9013 for parameters
+ * lacking explicit type annotations. Rule:
+ *  - No default: TS9011 at the param name (length 1 char, since names that
+ *    fail are short identifiers; uses `name.text.length`).
+ *  - Default = trivially-declarable literal: OK (declaration emit can infer).
+ *  - Default = arrow/function expression: OK (TS9007 separately flags the
+ *    inner missing-return-type if needed).
+ *  - Default = object literal: walk values, TS9013 on each non-trivial value.
+ *  - Default = `[…] as const`: walk elements, TS9013 on each non-trivial el.
+ *  - Default = otherwise non-trivial top-level (BinaryExpr, CallExpr, etc.):
+ *    TS9011 on the default expression itself.
+ *
+ * TS9028 ("Add a type annotation to the parameter X.") attached to all
+ * TS9011/TS9013 emissions; TS9035 ("Add satisfies and a type assertion…")
+ * attached to TS9013.
+ */
+private fun emitIsolatedDeclFnDeclParamChecks(
+    fn: FunctionDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (param in fn.parameters) {
+        if (param.type != null) continue
+        val paramName = param.name as? Identifier ?: continue
+        val default = param.initializer
+        if (default == null) {
+            emitIsolatedDeclTs9011(
+                squiggleStart = paramName.pos,
+                squiggleLength = paramName.text.length,
+                paramName = paramName,
+                fileName = fileName,
+                source = source,
+                results = results,
+            )
+            continue
+        }
+        emitIsolatedDeclParamDefaultClassify(default, paramName, isTopLevel = true, fileName, source, results)
+    }
+}
+
+private fun emitIsolatedDeclParamDefaultClassify(
+    expr: Expression,
+    paramName: Identifier,
+    isTopLevel: Boolean,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    if (isIsolatedDeclTriviallyDeclarable(expr)) return
+    // Function expressions handled by TS9007 separately; do not fire TS9011/TS9013
+    if (expr is ArrowFunction || expr is FunctionExpression) return
+    when {
+        expr is ObjectLiteralExpression -> {
+            for (prop in expr.properties) {
+                if (prop !is PropertyAssignment) continue
+                val v = prop.initializer
+                emitIsolatedDeclParamDefaultClassify(v, paramName, isTopLevel = false, fileName, source, results)
+            }
+        }
+        expr is AsExpression -> {
+            val t = expr.type
+            val isAsConst = t is TypeReference &&
+                t.typeName.let { it is Identifier && it.text == "const" } &&
+                t.typeArguments == null
+            if (isAsConst) {
+                val inner = expr.expression
+                if (inner is ArrayLiteralExpression) {
+                    for (el in inner.elements) {
+                        emitIsolatedDeclParamDefaultClassify(el, paramName, isTopLevel = false, fileName, source, results)
+                    }
+                } else if (inner is ObjectLiteralExpression) {
+                    for (prop in inner.properties) {
+                        if (prop !is PropertyAssignment) continue
+                        val v = prop.initializer
+                        emitIsolatedDeclParamDefaultClassify(v, paramName, isTopLevel = false, fileName, source, results)
+                    }
+                }
+                // `1 as const` etc. — literal inner, no emission needed
+            } else {
+                // `expr as T` for non-const T → top-level: TS9011 on the T (type annotation)
+                if (isTopLevel) {
+                    emitIsolatedDeclTs9011(
+                        squiggleStart = t.pos,
+                        squiggleLength = isolatedDeclTypeNodeLength(t),
+                        paramName = paramName,
+                        fileName = fileName,
+                        source = source,
+                        results = results,
+                    )
+                } else {
+                    emitIsolatedDeclTs9013(expr, paramName, fileName, source, results)
+                }
+            }
+        }
+        isTopLevel -> {
+            val end = isolatedDeclExprTrueEnd(expr)
+            emitIsolatedDeclTs9011(
+                squiggleStart = expr.pos,
+                squiggleLength = (end - expr.pos).coerceAtLeast(1),
+                paramName = paramName,
+                fileName = fileName,
+                source = source,
+                results = results,
+            )
+        }
+        else -> {
+            emitIsolatedDeclTs9013(expr, paramName, fileName, source, results)
+        }
+    }
+}
+
+private fun isolatedDeclTypeNodeLength(t: TypeNode): Int {
+    // For simple TypeReference with an Identifier name, use the identifier length.
+    if (t is TypeReference) {
+        val tn = t.typeName
+        if (tn is Identifier) return tn.text.length
+    }
+    return (t.end - t.pos).coerceAtLeast(1)
+}
+
+private fun isIsolatedDeclTriviallyDeclarable(expr: Expression): Boolean = when (expr) {
+    is NumericLiteralNode -> true
+    is BigIntLiteralNode -> true
+    is StringLiteralNode -> true
+    is NoSubstitutionTemplateLiteralNode -> true
+    is Identifier -> expr.text == "true" || expr.text == "false" ||
+        expr.text == "null" || expr.text == "undefined"
+    is PrefixUnaryExpression ->
+        (expr.operator == SyntaxKind.Minus || expr.operator == SyntaxKind.Plus) &&
+            (expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode)
+    else -> false
+}
+
+private fun emitIsolatedDeclTs9011(
+    squiggleStart: Int,
+    squiggleLength: Int,
+    paramName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, squiggleStart)
+    val (pnLine, pnChar) = positionToLineCharacter(source, paramName.pos)
+    val related = Diagnostic(
+        message = "Add a type annotation to the parameter ${paramName.text}.",
+        category = DiagnosticCategory.Message,
+        code = 9028,
+        fileName = fileName,
+        line = pnLine,
+        character = pnChar,
+        start = paramName.pos,
+        length = paramName.text.length,
+    )
+    results.add(Diagnostic(
+        message = "Parameter must have an explicit type annotation with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9011,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = squiggleStart,
+        length = squiggleLength,
+        relatedInformation = listOf(related),
+    ))
+}
+
+private fun emitIsolatedDeclTs9013(
+    expr: Expression,
+    paramName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val end = isolatedDeclExprTrueEnd(expr)
+    val length = (end - expr.pos).coerceAtLeast(1)
+    val (line, character) = positionToLineCharacter(source, expr.pos)
+    val (pnLine, pnChar) = positionToLineCharacter(source, paramName.pos)
+    val related = listOf(
+        Diagnostic(
+            message = "Add a type annotation to the parameter ${paramName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9028,
+            fileName = fileName,
+            line = pnLine,
+            character = pnChar,
+            start = paramName.pos,
+            length = paramName.text.length,
+        ),
+        Diagnostic(
+            message = "Add satisfies and a type assertion to this expression (satisfies T as T) to make the type explicit.",
+            category = DiagnosticCategory.Message,
+            code = 9035,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = length,
+        ),
+    )
+    results.add(Diagnostic(
+        message = "Expression type can't be inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9013,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = expr.pos,
+        length = length,
+        relatedInformation = related,
+    ))
 }
 
 /**
@@ -1884,7 +2102,16 @@ private fun isAllowedExtendsExpression(expr: Expression): Boolean {
 }
 
 private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
+    is NumericLiteralNode -> expr.pos + expr.text.length
+    is BigIntLiteralNode -> expr.pos + expr.text.length
+    is StringLiteralNode -> {
+        val len = expr.rawText?.length ?: expr.text.length
+        expr.pos + len + (if (expr.isUnterminated) 1 else 2)
+    }
+    is NoSubstitutionTemplateLiteralNode -> expr.pos + expr.text.length + 2
     is Identifier -> expr.pos + expr.text.length
+    is PrefixUnaryExpression -> isolatedDeclExprTrueEnd(expr.operand)
+    is BinaryExpression -> isolatedDeclExprTrueEnd(expr.right)
     is PropertyAccessExpression -> {
         val n = expr.name
         if (n is Identifier) n.pos + n.text.length else expr.end

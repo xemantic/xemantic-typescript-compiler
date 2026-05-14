@@ -1,6 +1,62 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,663 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,664 / 10,078 tests passing (~85.9%).
+
+**B7.5 (2026-05-14, +1)** — TS9011 + TS9013 for exported FunctionDeclaration
+parameter defaults under `isolatedDeclarations` (closes
+`isolatedDeclarationErrorsFunctionDeclarations_ts`). Five new emissions in a
+single test plus generalized helpers reusable for follow-on substeps:
+
+- **TS9011** "Parameter must have an explicit type annotation with
+  --isolatedDeclarations." — fires when an exported FunctionDeclaration's
+  parameter has no type annotation. Three squiggle-position cases:
+  1. **No default value** → squiggle at the parameter NAME (length =
+     `name.text.length`).
+  2. **Default value is non-trivially-declarable at top level** (e.g.
+     `1 + 1` BinaryExpression, `Math.random()` CallExpression) → squiggle at
+     the DEFAULT EXPRESSION (length = `isolatedDeclExprTrueEnd(expr) -
+     expr.pos`).
+  3. **Default value is `expr as T` (not `as const`)** → squiggle at the
+     TYPE NODE T (length = `T.typeName.text.length` for simple Identifier
+     references).
+
+- **TS9013** "Expression type can't be inferred with --isolatedDeclarations."
+  — fires on non-trivial sub-expressions inside object/array literals nested
+  in parameter defaults. Walks recursively through `ObjectLiteralExpression`
+  (each `PropertyAssignment` initializer) and `AsExpression` of `as const`
+  shape (object literal members or array literal elements). Each non-trivial
+  sub-expression that's not a function expression gets TS9013 at its true
+  span.
+
+- Companion related infos: **TS9028** ("Add a type annotation to the
+  parameter X.") attached to all TS9011/TS9013 at the parameter name's
+  position; **TS9035** ("Add satisfies and a type assertion ...") attached
+  to TS9013 at the offending sub-expression position.
+
+- **Triviality predicate** `isIsolatedDeclTriviallyDeclarable`: accepts
+  NumericLiteralNode / BigIntLiteralNode / StringLiteralNode /
+  NoSubstitutionTemplateLiteralNode / Identifier with text `"true"`,
+  `"false"`, `"null"`, `"undefined"` / `PrefixUnaryExpression(Minus|Plus,
+  Numeric|BigInt)`. Mirrors TypeScript's "declarable literal" classification
+  for declaration-emit purposes.
+
+- **`isolatedDeclExprTrueEnd` extended** with NumericLiteralNode /
+  BigIntLiteralNode / StringLiteralNode / NoSubstitutionTemplateLiteralNode /
+  Identifier / PrefixUnaryExpression / BinaryExpression cases — previously
+  fell through to `expr.end` which overshoots by one token per the
+  CLAUDE.md scanner gotcha. Now produces accurate squiggle lengths
+  (e.g. `1 + 1` is 5 chars, not 6).
+
+Net delta: 1412 → 1411 failed (8663 → 8664 passing). Zero regressions
+across the 10078-test suite. Gate is `Export in fn.modifiers` only —
+non-exported FunctionDeclarations don't appear in declaration emit so
+parameter typing isn't required. ArrowFunction/FunctionExpression
+parameter defaults at the top level are explicitly allowed (TS9007
+separately flags missing return types on those). Nested arrow/FE
+parameter contexts (e.g. `isolatedDeclarationsAddUndefined.ts`'s
+`(p = (ip = 10 as T, v: number) => {})`) are NOT handled — requires
+recursing into the outer default's params, which is deferred to a
+later substep.
 
 **B7.4 (2026-05-14, +1)** — TS2720 self-implements FP suppression + TS9026
 for module-augmentation imports (closes `isolatedDeclarationErrorsAugmentation_ts`).
