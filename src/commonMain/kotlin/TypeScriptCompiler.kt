@@ -1651,6 +1651,9 @@ private fun emitIsolatedDeclarationsDiagnostics(
                     emitIsolatedDeclExportDefaultChecks(stmt, fileName, source, results)
                 }
             }
+            is EnumDeclaration -> {
+                emitIsolatedDeclEnumChecks(stmt, fileName, source, results)
+            }
             else -> {}
         }
     }
@@ -2249,6 +2252,118 @@ private fun buildTs9036Related(stmtPos: Int, fileName: String, source: String): 
         start = stmtPos,
         length = 1,
     )
+}
+
+/**
+ * Emit TS9020 for enum members whose initializer is not "computable without
+ * external references" per --isolatedDeclarations. A member is computable iff
+ * its initializer expression resolves to:
+ *  - A literal (numeric / bigint / string / template-no-substitution / unary
+ *    `+` / `-` / `~` on a literal),
+ *  - A binary arithmetic / bitwise / string-concat operation on two
+ *    computable operands,
+ *  - A `ParenthesizedExpression` on a computable inner expression,
+ *  - A `CallExpression` (preserved verbatim in .d.ts),
+ *  - A bare `Identifier` referring to a same-enum member that is computable,
+ *  - A `PropertyAccessExpression` / `ElementAccessExpression` whose receiver
+ *    is THIS enum's name and target is a same-enum member that is computable.
+ *
+ * References to OTHER enums (`E.A`, `Flag.ABC | C`) or external constants
+ * (`EV`) are NOT computable. Squiggle at the member name (length = name.text.length).
+ */
+private fun emitIsolatedDeclEnumChecks(
+    enumDecl: EnumDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val enumName = enumDecl.name.text
+    val computable = mutableMapOf<String, Boolean>()
+    for (member in enumDecl.members) {
+        val nameText = when (val n = member.name) {
+            is Identifier -> n.text
+            is StringLiteralNode -> n.text
+            else -> continue
+        }
+        val initializer = member.initializer
+        val isComputable = if (initializer == null) {
+            true
+        } else {
+            isEnumInitializerComputable(initializer, enumName, computable)
+        }
+        computable[nameText] = isComputable
+        if (!isComputable) {
+            val (start, length) = when (val n = member.name) {
+                is Identifier -> n.pos to n.text.length
+                is StringLiteralNode -> {
+                    val rawLen = n.rawText?.length ?: n.text.length
+                    n.pos to (rawLen + (if (n.isUnterminated) 1 else 2))
+                }
+                else -> continue
+            }
+            val (line, character) = positionToLineCharacter(source, start)
+            results.add(Diagnostic(
+                message = "Enum member initializers must be computable without references to external symbols with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9020,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+}
+
+private val ISOLATED_DECL_ENUM_COMPUTABLE_OPS = setOf(
+    SyntaxKind.Plus,
+    SyntaxKind.Minus,
+    SyntaxKind.Asterisk,
+    SyntaxKind.AsteriskAsterisk,
+    SyntaxKind.Slash,
+    SyntaxKind.Percent,
+    SyntaxKind.Bar,
+    SyntaxKind.Ampersand,
+    SyntaxKind.Caret,
+    SyntaxKind.LessThanLessThan,
+    SyntaxKind.GreaterThanGreaterThan,
+    SyntaxKind.GreaterThanGreaterThanGreaterThan,
+)
+
+private fun isEnumInitializerComputable(
+    expr: Expression,
+    enumName: String,
+    computable: Map<String, Boolean>,
+): Boolean = when (expr) {
+    is NumericLiteralNode, is BigIntLiteralNode, is StringLiteralNode,
+    is NoSubstitutionTemplateLiteralNode -> true
+    is PrefixUnaryExpression ->
+        (expr.operator == SyntaxKind.Plus || expr.operator == SyntaxKind.Minus ||
+            expr.operator == SyntaxKind.Tilde) &&
+            isEnumInitializerComputable(expr.operand, enumName, computable)
+    is BinaryExpression ->
+        expr.operator in ISOLATED_DECL_ENUM_COMPUTABLE_OPS &&
+            isEnumInitializerComputable(expr.left, enumName, computable) &&
+            isEnumInitializerComputable(expr.right, enumName, computable)
+    is ParenthesizedExpression -> isEnumInitializerComputable(expr.expression, enumName, computable)
+    is CallExpression -> true
+    is Identifier -> computable[expr.text] == true
+    is PropertyAccessExpression -> {
+        val recv = expr.expression
+        val nm = expr.name
+        if (recv is Identifier && recv.text == enumName && nm is Identifier) {
+            computable[nm.text] == true
+        } else false
+    }
+    is ElementAccessExpression -> {
+        val recv = expr.expression
+        val arg = expr.argumentExpression
+        if (recv is Identifier && recv.text == enumName && arg is StringLiteralNode) {
+            computable[arg.text] == true
+        } else false
+    }
+    else -> false
 }
 
 /**

@@ -1,6 +1,44 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,666 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,667 / 10,078 tests passing (~86.0%).
+
+**B7.8 (2026-05-14, +1)** — TS9020 for enum members under
+`--isolatedDeclarations` (closes
+`isolatedDeclarationErrorsEnums_ts` errors-baseline; JS-emit baseline was
+already failing pre-change, unaffected). New `is EnumDeclaration` arm in
+pass-3 of `emitIsolatedDeclarationsDiagnostics`:
+
+- `emitIsolatedDeclEnumChecks(enumDecl, ...)`: walks each member,
+  computes a `Map<memberName, isComputable>` left-to-right (prior members
+  already populated). Emits TS9020 at the member name when its initializer
+  is NOT "computable".
+
+- `isEnumInitializerComputable(expr, enumName, computable)`: recursive
+  predicate. Computable iff one of:
+  - Literal (numeric / bigint / string / template-no-substitution).
+  - Unary `+` / `-` / `~` on a computable operand.
+  - Binary arithmetic / bitwise / string-concat (`+ - * ** / % | & ^
+    << >> >>>`) on two computable operands.
+  - `ParenthesizedExpression` on computable inner.
+  - `CallExpression` (always — preserved verbatim in `.d.ts`).
+  - Bare `Identifier` referring to a same-enum member that is computable.
+  - `PropertyAccessExpression` / `ElementAccessExpression` whose receiver
+    matches THIS enum's name and the target is a same-enum computable
+    member.
+  References to OTHER enums (`E.A`, `Flag.ABC | C`) or external constants
+  (`EV`) are NOT computable. Transitive contamination: if A's initializer
+  is non-computable, then `B = A` is also non-computable (because
+  `computable["A"] != true`).
+
+- Test cases: `enum E { A = computed(0) }` — OK (CallExpression).
+  `enum F { A = E.A, B = A }` — both flagged (cross-enum + transitive
+  contamination). `enum Flag { A = 1 >> 1, AB = A | B, ABC = Flag.AB | C,
+  AC = Flag["A"] | C }` — all OK (literal arithmetic + same-enum refs in
+  three forms). `enum ExtFlags { D = 4 >> 1, E = EV, ABCD = Flag.ABC | D,
+  AC = Flag["A"] | D }` — D OK, E/ABCD/AC flagged.
+
+Net delta: 1409 → 1408 failed (8666 → 8667 passing). Zero regressions
+across the 10078-test suite.
 
 **B7.7 (2026-05-14, +1)** — `export default <expr>` isolatedDeclarations
 walker (closes `isolatedDeclarationErrorsDefault_ts`). New
