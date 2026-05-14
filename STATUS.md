@@ -1,6 +1,37 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,658 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,659 / 10,078 tests passing (~85.9%).
+
+**B7.1 (2026-05-14, +1)** — TS5053 + TS9010 + TS9027 for `isolatedDeclarations`
+(closes `isolatedDeclarationsAllowJs_ts`). Three coordinated emissions, all in
+`TypeScriptCompiler.kt`:
+
+- **TS5053 "Option 'allowJs' cannot be specified with option 'isolatedDeclarations'."**
+  added next to the existing `TS5069`/`TS5053` option-conflict block (line
+  ~467). Fires whenever both `options.allowJs` and `options.isolatedDeclarations`
+  are set. No file/line/character — header-only diagnostic, rendered without
+  position by the BaselineFormatter.
+
+- **TS9010 + TS9027 walker** — new private top-level helpers
+  `emitIsolatedDeclarationsDiagnostics(sourceFile, fileName, source)` and
+  `positionToLineCharacter(source, position)` at the end of TypeScriptCompiler.kt.
+  Narrow gate: when `isolatedDeclarations: true`, walks each parsed `.ts`/`.tsx`
+  file's top-level statements (JS / `.d.ts` excluded), finds `VariableStatement`
+  with `Export` modifier, then for each `VariableDeclaration` with
+  `name is Identifier && type == null && initializer == null` emits TS9010 at
+  the identifier's `pos` with `length = name.text.length`. TS9027 related info
+  ("Add a type annotation to the variable X.") attached, same position/length.
+
+- **Two call sites**: single-file path (around line 750) right after
+  `checker.getDiagnostics()`; multi-file path (around line 990) after the shared
+  checker runs, iterating `parsedSourceFiles` and looking up each file's
+  content via `parsed.files.firstOrNull { it.fileName == tsFileName }?.content`.
+
+Net delta: 1417 → 1416 failed (8658 → 8659 passing). Zero regressions across
+10078-test suite. The narrow gate (`type == null && initializer == null`) is
+why this doesn't over-fire on the other ~20 `isolatedDeclaration*` tests
+(which use `export const X = 1 + 1;` patterns — initializer present, would
+need richer "is type trivially declarable" checking to flag).
 
 **17.239 (2026-05-13, +0 foundation)** — Generalize 17.238's multi-line
 ArrowFunction Block-body squiggle clip from `body.pos + 1` (right after
