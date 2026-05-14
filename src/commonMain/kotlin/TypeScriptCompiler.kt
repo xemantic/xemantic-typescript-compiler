@@ -465,6 +465,14 @@ class TypeScriptCompiler {
                 code = 5069,
             ))
         }
+        // TS5053: allowJs cannot be specified with isolatedDeclarations
+        if (options.allowJs && options.isolatedDeclarations) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'allowJs' cannot be specified with option 'isolatedDeclarations'.",
+                category = DiagnosticCategory.Error,
+                code = 5053,
+            ))
+        }
         // TS5091: preserveConstEnums explicitly set to false with isolatedModules
         if (options.isolatedModules && options.preserveConstEnumsExplicitlyFalse) {
             diagnostics.add(Diagnostic(
@@ -741,6 +749,10 @@ class TypeScriptCompiler {
             val checker = Checker(options, listOf(binderResult))
             diagnostics.addAll(checker.getDiagnostics())
 
+            if (options.isolatedDeclarations) {
+                diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
+            }
+
             val transformer = Transformer(options, checker)
             val transformed = transformer.transform(sourceFile)
 
@@ -976,6 +988,14 @@ class TypeScriptCompiler {
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
             val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames)
             diagnostics.addAll(checker.getDiagnostics())
+
+            if (options.isolatedDeclarations) {
+                for ((tsFileName, sourceFile) in parsedSourceFiles) {
+                    val original = parsed.files.firstOrNull { it.fileName == tsFileName }?.content
+                        ?: continue
+                    diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, tsFileName, original))
+                }
+            }
 
             // Pre-compute cross-file namespace exports for multi-file namespace merging.
             // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
@@ -1477,4 +1497,73 @@ private fun collectNamespaceBodyExports(
             else -> {}
         }
     }
+}
+
+/**
+ * Emits TS9010 + TS9027 for top-level `export var x;` (untyped, uninitialized)
+ * declarations when `isolatedDeclarations: true`. JS files are skipped — only
+ * `.ts`/`.tsx` files emit. Narrow gate: name is Identifier, type==null,
+ * initializer==null. Other isolated-declarations patterns (initializers whose
+ * type isn't trivially inferable, function returns, class members, etc.) are
+ * not yet implemented.
+ */
+private fun emitIsolatedDeclarationsDiagnostics(
+    sourceFile: SourceFile,
+    fileName: String,
+    source: String,
+): List<Diagnostic> {
+    val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+    if (isJsFile) return emptyList()
+    val isDtsFile = fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") ||
+        fileName.endsWith(".d.cts")
+    if (isDtsFile) return emptyList()
+    val results = mutableListOf<Diagnostic>()
+    for (stmt in sourceFile.statements) {
+        if (stmt !is VariableStatement) continue
+        if (ModifierFlag.Export !in stmt.modifiers) continue
+        for (decl in stmt.declarationList.declarations) {
+            val name = decl.name
+            if (name !is Identifier) continue
+            if (decl.type != null) continue
+            if (decl.initializer != null) continue
+            val (line, character) = positionToLineCharacter(source, name.pos)
+            val related = Diagnostic(
+                message = "Add a type annotation to the variable ${name.text}.",
+                category = DiagnosticCategory.Message,
+                code = 9027,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = name.pos,
+                length = name.text.length,
+            )
+            results.add(Diagnostic(
+                message = "Variable must have an explicit type annotation with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9010,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = name.pos,
+                length = name.text.length,
+                relatedInformation = listOf(related),
+            ))
+        }
+    }
+    return results
+}
+
+/** 1-based line + character for a position in `source`. */
+private fun positionToLineCharacter(source: String, position: Int): Pair<Int, Int> {
+    var line = 1
+    var lineStart = 0
+    val cap = position.coerceAtMost(source.length)
+    for (i in 0 until cap) {
+        if (source[i] == '\n') {
+            line++
+            lineStart = i + 1
+        }
+    }
+    return line to (position - lineStart + 1)
 }
