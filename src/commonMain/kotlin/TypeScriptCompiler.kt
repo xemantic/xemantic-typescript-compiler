@@ -1660,6 +1660,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                             if (init is ObjectLiteralExpression) {
                                 emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
+                                emitIsolatedDeclObjLitSubExprTs9013(init, name, fileName, source, results)
                             }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
@@ -2965,6 +2966,105 @@ private fun emitIsolatedDeclObjLitMethodTs9008(
 }
 
 /**
+ * Walks an exported `VariableStatement`'s ObjectLiteralExpression initializer and
+ * emits TS9013 on every non-trivially-declarable sub-expression that appears as
+ * a PropertyAssignment value. Mirrors B7.7's `walkExportDefaultSubExpr` but
+ * adapted for the variable-context: anchor TS9027 at the OUTER variable name
+ * (instead of TS9036 at the export-keyword position), and DO emit on bare
+ * `Identifier` references (e.g. `e: V`) — the export-default walker skips
+ * Identifiers since exporting `default X` is declarable-as-typeof, but in
+ * variable context `let oBad = { e: V }` cannot be inferred without checking
+ * V's type, which is precisely what --isolatedDeclarations forbids.
+ *
+ * Recurses through nested ObjectLiteralExpression PropertyAssignments and
+ * ArrayLiteralExpression elements. MethodDeclaration / Get/SetAccessor /
+ * SpreadAssignment / ShorthandPropertyAssignment members are skipped (handled
+ * by separate walkers).
+ *
+ * Squiggle: at the offending sub-expression's position, length =
+ * `isolatedDeclExprTrueEnd(expr) - expr.pos`.
+ *
+ * Related infos (per emission):
+ *   - TS9027 "Add a type annotation to the variable X." anchored at the OUTER
+ *     variable name.
+ *   - TS9035 "Add satisfies and a type assertion to this expression
+ *     (satisfies T as T) to make the type explicit." anchored at the same
+ *     position as TS9013.
+ */
+private fun emitIsolatedDeclObjLitSubExprTs9013(
+    objLit: ObjectLiteralExpression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (prop in objLit.properties) {
+        if (prop !is PropertyAssignment) continue
+        walkObjLitSubExprTs9013(prop.initializer, varName, fileName, source, results)
+    }
+}
+
+private fun walkObjLitSubExprTs9013(
+    expr: Expression,
+    varName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    if (isIsolatedDeclTriviallyDeclarable(expr)) return
+    when (expr) {
+        is ObjectLiteralExpression -> {
+            for (prop in expr.properties) {
+                if (prop !is PropertyAssignment) continue
+                walkObjLitSubExprTs9013(prop.initializer, varName, fileName, source, results)
+            }
+        }
+        is ArrayLiteralExpression -> {
+            for (el in expr.elements) {
+                walkObjLitSubExprTs9013(el, varName, fileName, source, results)
+            }
+        }
+        else -> {
+            val end = isolatedDeclExprTrueEnd(expr)
+            val length = (end - expr.pos).coerceAtLeast(1)
+            val (line, character) = positionToLineCharacter(source, expr.pos)
+            val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+            val varRelated = Diagnostic(
+                message = "Add a type annotation to the variable ${varName.text}.",
+                category = DiagnosticCategory.Message,
+                code = 9027,
+                fileName = fileName,
+                line = varLine,
+                character = varChar,
+                start = varName.pos,
+                length = varName.text.length,
+            )
+            val satisfiesRelated = Diagnostic(
+                message = "Add satisfies and a type assertion to this expression (satisfies T as T) to make the type explicit.",
+                category = DiagnosticCategory.Message,
+                code = 9035,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = expr.pos,
+                length = length,
+            )
+            results.add(Diagnostic(
+                message = "Expression type can't be inferred with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9013,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = expr.pos,
+                length = length,
+                relatedInformation = listOf(varRelated, satisfiesRelated),
+            ))
+        }
+    }
+}
+
+/**
  * Trivially literal computed-name expressions accepted in --isolatedDeclarations:
  *   - direct numeric literal: `[1]`
  *   - signed numeric literal: `[-1]`, `[+5]`
@@ -3001,8 +3101,13 @@ private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
     }
     is ElementAccessExpression -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1
     is CallExpression -> {
-        if (expr.arguments.isNotEmpty()) isolatedDeclExprTrueEnd(expr.arguments.last()) + 1
-        else expr.end
+        // For empty `()`, do NOT use `expr.end` — it overshoots by one token
+        // (per CLAUDE.md gotcha: `node.end` includes the next scanned token's
+        // start). Mirror NewExpression's branch instead: walk the callee's
+        // true end + 2 chars for `()`. For non-empty args, walk last arg + 1
+        // (closing `)`).
+        if (expr.arguments.isEmpty()) isolatedDeclExprTrueEnd(expr.expression) + 2
+        else isolatedDeclExprTrueEnd(expr.arguments.last()) + 1
     }
     is NewExpression -> {
         val args = expr.arguments
