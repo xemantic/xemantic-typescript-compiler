@@ -2796,6 +2796,35 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.7. `export default <expr>` walker for isolatedDeclarations — TS9017 / TS9013 / TS9037 + TS9036/TS9035 related (DONE 2026-05-14, +1 — flips `isolatedDeclarationErrorsDefault_ts`).** Stacks on B7.1's pass-3 statement walker. Single-file change in `TypeScriptCompiler.kt`:
+
+  - New `is ExportAssignment` arm in `emitIsolatedDeclarationsDiagnostics`'s pass-3 statement switch, gated on `!stmt.isExportEquals` (only `export default`, not `export = X`).
+
+  - `emitIsolatedDeclExportDefaultChecks(stmt, ...)` classifier — 5 emission shapes:
+    - Identifier OR trivially-declarable literal → no emission (declarable by name / literal type in .d.ts).
+    - `ArrayLiteralExpression` (non-`as const`) → **TS9017** "Only const arrays can be inferred ..." spanning the full `[ ... ]`. Span computed via new `findMatchingDelimiter(source, openPos, open, close)` helper.
+    - `ObjectLiteralExpression` → recurse via `walkExportDefaultSubExpr` over PropertyAssignment initializers; each non-trivial leaf emits **TS9013**.
+    - `AsExpression` with `as const` type → recurse into underlying literal as above.
+    - Other non-trivial top-level expr → **TS9037** "Default exports can't be inferred ..." at the expression's true span (via existing `isolatedDeclExprTrueEnd`).
+
+  - **TS9036 related** "Move the expression in default export to a variable and add a type annotation to it." attached to every emission, anchored at `stmt.pos` (the `export` keyword position). Helper: `buildTs9036Related(stmtPos, fileName, source)`.
+
+  - **TS9035 related** "Add satisfies and a type assertion ..." attached to TS9013 only, anchored at the offending sub-expression position.
+
+  - `walkExportDefaultSubExpr`: nested-recursion helper. Recurses through `ObjectLiteralExpression` properties and `ArrayLiteralExpression` elements; non-trivial leaves emit TS9013 at the leaf position; Identifier / trivially-declarable leaves emit nothing.
+
+  - `findMatchingDelimiter`: naive bracket matcher with string-literal (', ", \`) and line/block-comment skipping; sufficient for the isolatedDeclarations corpus's `[...]` / `{...}` span detection. Returns position immediately after the matching close delimiter.
+
+  **Verification.** Targeted test passes; full-suite 10078/1409/3 (was 10078/1410/3, +1 net). Zero regressions across the 10078-test suite. Walker gated on `options.isolatedDeclarations`. Wider patterns deferred:
+
+  - VariableStatement initializers with non-trivial sub-expressions — `isolatedDeclarationErrorsObjects_ts` exercises `export let oBad = { a: Math.random() }` (TS9013 with TS9027 "Add a type annotation to the variable oBad." related — different from B7.7's TS9036 default-export related). Same recursive sub-expression classification but different anchor (variable name) and different related-info code (TS9027 vs TS9036).
+
+  - Method shorthand `{ method() {} }` → **TS9008** + TS9034 "Add a return type to the method" related — `isolatedDeclarationErrorsObjects_ts` exercises this. Needs MethodDeclaration-in-ObjectLiteralExpression walker.
+
+  - Spread (`...x`) / shorthand (`{ a }`) properties → **TS9015** / **TS9016**. Computed property names → **TS9038**. Each is a small new emission point.
+
+  - Accessor-pair asymmetry — **TS9009** for set-only or asymmetric get/set without type annotation. `isolatedDeclarationErrorsObjects_ts` exercises this.
+
 - [x] **B7.6. Recurse into nested ArrowFunction/FunctionExpression parameters from `emitIsolatedDeclParamDefaultClassify` (DONE 2026-05-14, +1 — flips `isolatedDeclarationsAddUndefined_ts`).** Stacks on B7.5; closes the residual nested-FE case B7.5 explicitly deferred. Single-file change in `TypeScriptCompiler.kt`:
 
   - Extracted helper `emitIsolatedDeclParamsCheck(params, fileName, source, results)` from `emitIsolatedDeclFnDeclParamChecks`. The outer-FD walker now thin-wraps the helper with `fn.parameters`; the new nested-FE recursion calls the same helper with `expr.parameters`.

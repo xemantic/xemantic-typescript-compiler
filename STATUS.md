@@ -1,6 +1,38 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,665 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,666 / 10,078 tests passing (~86.0%).
+
+**B7.7 (2026-05-14, +1)** — `export default <expr>` isolatedDeclarations
+walker (closes `isolatedDeclarationErrorsDefault_ts`). New
+`emitIsolatedDeclExportDefaultChecks` arm on `ExportAssignment` (only when
+`!isExportEquals`) in `emitIsolatedDeclarationsDiagnostics`. Five emission
+shapes covered:
+
+- `Identifier` / trivially-declarable literal → OK (preserved by name in .d.ts).
+- `ArrayLiteralExpression` (non-`as const`) → **TS9017** "Only const arrays
+  can be inferred ..." spanning the full `[ ... ]`. Span computed via new
+  `findMatchingDelimiter` helper (naive bracket matcher with string-literal
+  and line/block-comment skipping; sufficient for the corpus).
+- `ObjectLiteralExpression` → recurse into property initializers via
+  `walkExportDefaultSubExpr`; each non-trivial leaf emits **TS9013** at the
+  offending sub-expression.
+- `AsExpression` with `as const` type → recurse into the underlying object /
+  array literal as above.
+- Other non-trivial top-level (`BinaryExpression`, `CallExpression`,
+  `AsExpression` non-`as const`, ...) → **TS9037** "Default exports can't
+  be inferred ..." at the expression's true span.
+
+All emissions get a **TS9036** "Move the expression in default export to
+a variable ..." related info at the `export default` statement start.
+TS9013 additionally gets **TS9035** "Add satisfies and a type assertion ..."
+at the offending sub-expression. Helpers: `emitIsolatedDeclTs9017Default`,
+`emitIsolatedDeclTs9037Default`, `emitIsolatedDeclTs9013Default`,
+`buildTs9036Related`, `walkExportDefaultSubExpr`.
+
+Net delta: 1410 → 1409 failed (8665 → 8666 passing). Zero regressions
+across the 10078-test suite. Walker gated on `options.isolatedDeclarations`.
+Identifier-as-default-export (`export default a;`) correctly emits nothing
+because the value can be preserved by name in the emitted .d.ts.
 
 **B7.6 (2026-05-14, +1)** — Recurse into nested ArrowFunction/FunctionExpression
 parameters from `emitIsolatedDeclParamDefaultClassify` (closes

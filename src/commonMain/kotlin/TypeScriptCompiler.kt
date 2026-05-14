@@ -1646,6 +1646,11 @@ private fun emitIsolatedDeclarationsDiagnostics(
                     emitIsolatedDeclFnDeclParamChecks(stmt, fileName, source, results)
                 }
             }
+            is ExportAssignment -> {
+                if (!stmt.isExportEquals) {
+                    emitIsolatedDeclExportDefaultChecks(stmt, fileName, source, results)
+                }
+            }
             else -> {}
         }
     }
@@ -1996,6 +2001,254 @@ private fun emitIsolatedDeclTs9013(
         length = length,
         relatedInformation = related,
     ))
+}
+
+/**
+ * `export default <expr>;` walker. Classification:
+ *  - Trivially declarable (literal / true / false / null / undefined / -literal) → OK.
+ *  - `Identifier` → OK (preserved by name in .d.ts).
+ *  - `ArrayLiteralExpression` (not via `as const`) → TS9017 covering full array.
+ *  - `ObjectLiteralExpression` → recurse into properties.
+ *  - `AsExpression` with `as const` type → recurse into the underlying literal.
+ *  - Other non-trivial top-level expression → TS9037.
+ * Each non-trivial sub-expression nested inside object/array emits TS9013.
+ * All emissions get a TS9036 "Move the expression ... to a variable" related
+ * info at the `export default` statement start.
+ */
+private fun emitIsolatedDeclExportDefaultChecks(
+    stmt: ExportAssignment,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val expr = stmt.expression
+    val stmtPos = stmt.pos
+    when {
+        isIsolatedDeclTriviallyDeclarable(expr) -> {}
+        expr is Identifier -> {}
+        expr is ArrayLiteralExpression -> {
+            val end = findMatchingDelimiter(source, expr.pos, '[', ']')
+            val length = (end - expr.pos).coerceAtLeast(1)
+            emitIsolatedDeclTs9017Default(expr.pos, length, stmtPos, fileName, source, results)
+        }
+        expr is ObjectLiteralExpression -> {
+            for (prop in expr.properties) {
+                if (prop !is PropertyAssignment) continue
+                walkExportDefaultSubExpr(prop.initializer, stmtPos, fileName, source, results)
+            }
+        }
+        expr is AsExpression -> {
+            val t = expr.type
+            val isAsConst = t is TypeReference &&
+                t.typeName.let { it is Identifier && it.text == "const" } &&
+                t.typeArguments == null
+            if (isAsConst) {
+                val inner = expr.expression
+                if (inner is ArrayLiteralExpression) {
+                    for (el in inner.elements) {
+                        walkExportDefaultSubExpr(el, stmtPos, fileName, source, results)
+                    }
+                } else if (inner is ObjectLiteralExpression) {
+                    for (prop in inner.properties) {
+                        if (prop !is PropertyAssignment) continue
+                        walkExportDefaultSubExpr(prop.initializer, stmtPos, fileName, source, results)
+                    }
+                }
+            } else {
+                val end = isolatedDeclExprTrueEnd(expr)
+                val length = (end - expr.pos).coerceAtLeast(1)
+                emitIsolatedDeclTs9037Default(expr.pos, length, stmtPos, fileName, source, results)
+            }
+        }
+        else -> {
+            val end = isolatedDeclExprTrueEnd(expr)
+            val length = (end - expr.pos).coerceAtLeast(1)
+            emitIsolatedDeclTs9037Default(expr.pos, length, stmtPos, fileName, source, results)
+        }
+    }
+}
+
+private fun walkExportDefaultSubExpr(
+    expr: Expression,
+    stmtPos: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    if (isIsolatedDeclTriviallyDeclarable(expr)) return
+    if (expr is Identifier) return
+    when (expr) {
+        is ObjectLiteralExpression -> {
+            for (prop in expr.properties) {
+                if (prop !is PropertyAssignment) continue
+                walkExportDefaultSubExpr(prop.initializer, stmtPos, fileName, source, results)
+            }
+        }
+        is ArrayLiteralExpression -> {
+            for (el in expr.elements) {
+                walkExportDefaultSubExpr(el, stmtPos, fileName, source, results)
+            }
+        }
+        else -> {
+            val end = isolatedDeclExprTrueEnd(expr)
+            val length = (end - expr.pos).coerceAtLeast(1)
+            emitIsolatedDeclTs9013Default(expr.pos, length, stmtPos, fileName, source, results)
+        }
+    }
+}
+
+/**
+ * Naive bracket matcher. Returns position right after the matching close
+ * delimiter. Assumes `source[openPos] == open`. Handles string-literal
+ * skipping (', ", `) and line / block comments. Not a full tokenizer —
+ * sufficient for export-default array/object span detection in the
+ * isolatedDeclarations corpus.
+ */
+private fun findMatchingDelimiter(source: String, openPos: Int, open: Char, close: Char): Int {
+    var depth = 0
+    var i = openPos
+    while (i < source.length) {
+        val c = source[i]
+        when (c) {
+            '"', '\'' -> {
+                val quote = c
+                i++
+                while (i < source.length && source[i] != quote) {
+                    if (source[i] == '\\' && i + 1 < source.length) i++
+                    i++
+                }
+                if (i < source.length) i++
+                continue
+            }
+            '`' -> {
+                i++
+                while (i < source.length && source[i] != '`') {
+                    if (source[i] == '\\' && i + 1 < source.length) i++
+                    i++
+                }
+                if (i < source.length) i++
+                continue
+            }
+            '/' -> {
+                if (i + 1 < source.length && source[i + 1] == '/') {
+                    while (i < source.length && source[i] != '\n') i++
+                    continue
+                }
+                if (i + 1 < source.length && source[i + 1] == '*') {
+                    i += 2
+                    while (i + 1 < source.length && !(source[i] == '*' && source[i + 1] == '/')) i++
+                    if (i + 1 < source.length) i += 2
+                    continue
+                }
+            }
+        }
+        if (c == open) depth++
+        else if (c == close) {
+            depth--
+            if (depth == 0) return i + 1
+        }
+        i++
+    }
+    return openPos + 1
+}
+
+private fun emitIsolatedDeclTs9037Default(
+    start: Int,
+    length: Int,
+    stmtPos: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, start)
+    val related = listOf(
+        buildTs9036Related(stmtPos, fileName, source),
+    )
+    results.add(Diagnostic(
+        message = "Default exports can't be inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9037,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = related,
+    ))
+}
+
+private fun emitIsolatedDeclTs9017Default(
+    start: Int,
+    length: Int,
+    stmtPos: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, start)
+    val related = listOf(
+        buildTs9036Related(stmtPos, fileName, source),
+    )
+    results.add(Diagnostic(
+        message = "Only const arrays can be inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9017,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = related,
+    ))
+}
+
+private fun emitIsolatedDeclTs9013Default(
+    start: Int,
+    length: Int,
+    stmtPos: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, start)
+    val related = listOf(
+        buildTs9036Related(stmtPos, fileName, source),
+        Diagnostic(
+            message = "Add satisfies and a type assertion to this expression (satisfies T as T) to make the type explicit.",
+            category = DiagnosticCategory.Message,
+            code = 9035,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ),
+    )
+    results.add(Diagnostic(
+        message = "Expression type can't be inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9013,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = related,
+    ))
+}
+
+private fun buildTs9036Related(stmtPos: Int, fileName: String, source: String): Diagnostic {
+    val (line, character) = positionToLineCharacter(source, stmtPos)
+    return Diagnostic(
+        message = "Move the expression in default export to a variable and add a type annotation to it.",
+        category = DiagnosticCategory.Message,
+        code = 9036,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = stmtPos,
+        length = 1,
+    )
 }
 
 /**
