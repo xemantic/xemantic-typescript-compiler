@@ -1,6 +1,43 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,662 / 10,078 tests passing (~85.9%).
+**Phase 4 — Checker buildout.** 8,663 / 10,078 tests passing (~85.9%).
+
+**B7.4 (2026-05-14, +1)** — TS2720 self-implements FP suppression + TS9026
+for module-augmentation imports (closes `isolatedDeclarationErrorsAugmentation_ts`).
+Two coordinated pieces — landing either alone wouldn't flip the target:
+
+- **Checker.kt** `checkImplementsClauses` — new short-circuit at the top of
+  the `typeExprLoop@ for (typeExpr in clause.types)` body: when
+  `baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()`,
+  `continue@typeExprLoop`. Suppresses the spurious TS2720 that fires for
+  `class X implements X {}` whenever the class's interface representation has
+  been merged with an augmentation that adds members not present in the class
+  body. The check is tautological at the point of declaration (the class
+  always satisfies its own declared shape); augmentation members are
+  satisfied at runtime via prototype mutation (which TypeScript accepts and
+  which TS9026 separately flags under `--isolatedDeclarations`).
+
+- **TypeScriptCompiler.kt** new `buildAugmenterMap(files)` builds
+  `Map<targetBasename, List<augmenterFileName>>` by scanning each
+  `parsedSourceFiles` entry for `ModuleDeclaration` whose name is a relative
+  string literal (`./X` / `../X`); only relative specifiers count
+  (non-relative ones target ambient modules). Then
+  `emitIsolatedDeclarationsAugmentImports(sourceFile, fileName, source, map)`
+  walks each file's `ImportDeclaration` statements: for each relative
+  specifier, if the imported file's basename matches an augmenter listed
+  under the current file's basename, emit **TS9026** covering the full
+  import statement (start = `stmt.pos`, end = position of `;` + 1 found via
+  `source.indexOf(';', specEnd)`). Multi-file path only — the single-file
+  path can't have cross-file augmentations.
+
+Net delta: 1413 → 1412 failed (8662 → 8663 passing). Zero regressions
+across the 10078-test suite. The TS2720 suppression is intentionally
+narrow (`typeArguments.isNullOrEmpty()`) — `class X<T> implements X<number>`
+would not be tautological (different instantiation) and stays flagged. The
+TS9026 walker is gated on `options.isolatedDeclarations` so non-isolated
+multi-file tests are unaffected; only one test in the corpus has the
+`declare module './<sibling>'` + `import from './<sibling>'` pattern under
+`isolatedDeclarations: true`.
 
 **B7.3 (2026-05-14, +2)** — TS9023 + TS9007 (+ TS9027 + TS9030 + TS9031 related)
 for the expando-function pattern under `isolatedDeclarations` (closes

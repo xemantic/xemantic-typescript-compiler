@@ -45792,6 +45792,17 @@ interface DataView {
                     is PropertyAccessExpression -> (tn.name as? Identifier)?.text
                     else -> null
                 } ?: continue
+                // Self-implements: `class X implements X` is tautological at the point
+                // of declaration — the class always satisfies its own declared shape.
+                // Module augmentations may extend the interface side with additional
+                // members; those are satisfied at runtime via prototype mutation
+                // (a pattern TypeScript accepts and which TS9026 separately flags
+                // under --isolatedDeclarations). Skipping prevents an FP TS2720
+                // whenever the class's interface representation has been merged with
+                // an augmentation that adds members not present in the class body.
+                if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) {
+                    continue@typeExprLoop
+                }
                 val ifaceSymbol = globals[baseIfaceName] ?: continue
                 // 16.4l: Handle both interface (TS2420) and class (TS2720) targets.
                 val isClassTarget = ifaceSymbol.flags.hasAny(SymbolFlags.Class) &&
