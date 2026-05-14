@@ -1,6 +1,46 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,667 / 10,078 tests passing (~86.0%).
+**Phase 4 — Checker buildout.** 8,668 / 10,078 tests passing (~86.0%).
+
+**B7.9 (2026-05-14, +1)** — TS9010 for `export const/let/var X = nonTriviallyDeclarableExpr`
+(closes `declarationEmitIsolatedDeclarationErrorNotEmittedForNonEmittedFile_ts`).
+Extension of B7.1's TS9010 walker — previously only fired for `export X;`
+without initializer; now also fires for `export const X = expr` when the
+initializer is one of the conservative trigger kinds that cannot be preserved
+as a literal type in the emitted .d.ts. Single-file change in
+`TypeScriptCompiler.kt`:
+
+- New `emitIsolatedDeclVarInitTs9010(varName, init, ...)` helper called from
+  the VariableStatement arm of pass 3 in `emitIsolatedDeclarationsDiagnostics`
+  (right after `emitIsolatedDeclClassExprDiags`, gated on `ModifierFlag.Export`).
+
+- Trigger expression kinds (conservative — only those where the TypeScript
+  baseline definitively expects TS9010 and no currently-passing isolated-decl
+  test puts them under `export const X = ...`):
+  - `CallExpression` / `NewExpression`
+  - `PropertyAccessExpression` / `ElementAccessExpression`
+  - `BinaryExpression`
+  - `Identifier` (excluding `true`/`false`/`null`/`undefined`)
+
+- Squiggle at variable name with TS9027 "Add a type annotation to the variable X."
+  related info, mirroring the existing no-initializer TS9010 emission.
+
+- Intentionally NOT handled in this substep (each deferred to a follow-on):
+  - `ObjectLiteralExpression` — needs recursive sub-expr walker emitting TS9013
+    on non-trivial leaves (`isolatedDeclarationErrorsObjects_ts`'s `oBad`/`oBad2` pattern).
+  - `ArrayLiteralExpression` — needs TS9017 ("Only const arrays can be inferred ...").
+  - `TemplateExpression` — needs const-vs-let distinction (TypeScript emits TS9010
+    for `const` template-with-substitutions but accepts `let`).
+  - `AsExpression` (non-`as const`) — separate diagnostic family.
+  - `ArrowFunction` / `FunctionExpression` — separate TS9007 walker handles
+    missing return types; full param-annotation requirements deferred.
+
+**Verification.** Targeted test passes; full-suite 10078/1407/3 (was 10078/1408/3,
++1 net). Zero regressions across 10078-test suite. Closes the named target —
+all 3 expected TS9010 emissions (lines 5/6/7 of `index.ts`: `trpc.middleware`,
+`trpc.router`, `trpc.procedure` — all `PropertyAccessExpression`) fire at the
+correct positions. Foundation for follow-on substeps that handle the
+deferred expression kinds (TS9013 sub-expr walker, TS9017 array, etc.).
 
 **B7.8 (2026-05-14, +1)** — TS9020 for enum members under
 `--isolatedDeclarations` (closes

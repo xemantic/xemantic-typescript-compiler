@@ -1620,6 +1620,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                     } else {
                         if (ModifierFlag.Export in stmt.modifiers) {
                             emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
+                            emitIsolatedDeclVarInitTs9010(name, init, fileName, source, results)
                         }
                         // TS9007 for arrow/FE initializer when the variable has
                         // expando-property assignments AND no return type. Applies
@@ -2400,6 +2401,67 @@ private fun emitIsolatedDeclClassExprDiags(
         }
         else -> {}
     }
+}
+
+/**
+ * For `export const/let/var X = expr` where `expr` is a runtime-only expression
+ * that cannot be preserved as a literal type in the emitted .d.ts, emits TS9010
+ * at the variable name with TS9027 "Add a type annotation" related info.
+ *
+ * Trigger expression kinds (conservative — only the ones where TypeScript's
+ * baseline definitively expects TS9010 and our currently-passing isolated-decl
+ * tests don't put them under `export const X = ...`):
+ *  - CallExpression / NewExpression
+ *  - PropertyAccessExpression / ElementAccessExpression
+ *  - BinaryExpression
+ *  - Identifier (other than `true`/`false`/`null`/`undefined`)
+ *
+ * Other expression kinds (literals, ArrowFunction, FunctionExpression,
+ * ClassExpression, AsExpression, ObjectLiteralExpression, ArrayLiteralExpression,
+ * TemplateExpression, PrefixUnaryExpression, …) are intentionally left alone
+ * here — they need either separate handling (TS9013/TS9017/TS9022) or const-vs-let
+ * distinction that isn't in scope for this substep.
+ */
+private fun emitIsolatedDeclVarInitTs9010(
+    varName: Identifier,
+    init: Expression,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val triggers = when (init) {
+        is CallExpression -> true
+        is NewExpression -> true
+        is PropertyAccessExpression -> true
+        is ElementAccessExpression -> true
+        is BinaryExpression -> true
+        is Identifier -> init.text != "true" && init.text != "false" &&
+            init.text != "null" && init.text != "undefined"
+        else -> false
+    }
+    if (!triggers) return
+    val (line, character) = positionToLineCharacter(source, varName.pos)
+    val related = Diagnostic(
+        message = "Add a type annotation to the variable ${varName.text}.",
+        category = DiagnosticCategory.Message,
+        code = 9027,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = varName.pos,
+        length = varName.text.length,
+    )
+    results.add(Diagnostic(
+        message = "Variable must have an explicit type annotation with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9010,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = varName.pos,
+        length = varName.text.length,
+        relatedInformation = listOf(related),
+    ))
 }
 
 private fun emitTs9022(
