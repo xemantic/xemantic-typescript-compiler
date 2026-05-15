@@ -2510,16 +2510,15 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
-- [ ] **B9.2. Default param type for un-annotated binding-pattern parameters — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern (foundation, no test-flip alone; ~0-1 tests).** Stacks on B9.1 (DONE). Routing point: `getTypeOfVariableOrProperty`'s `Parameter` branch (Checker.kt:40580-40588). Currently when `decl.type == null` and `decl.initializer == null`, returns `anyType` unconditionally. Add a pre-`anyType` branch:
+- [x] **B9.2. Default param type for un-annotated binding-pattern parameters — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern (DONE 2026-05-15, net-zero infra as projected).** Stacks on B9.1 (DONE). Single-branch change in `getTypeOfVariableOrProperty`'s `Parameter` arm (Checker.kt:40580):
 
-  - When `decl.name is ObjectBindingPattern` → return a fresh `Type.Object()` with `properties = emptyList()` (empty anonymous object, renders as `{}` per the existing `typeToString` Type.Object branch at line 43542).
+  - When `decl.type == null` AND `decl.initializer == null` AND `decl.name is ObjectBindingPattern` → return `Type.Object().also { it.properties = emptyList() }` (anonymous empty object, renders as `{}` via the existing `typeToString` Type.Object branch at line 43542).
   - When `decl.name is ArrayBindingPattern` → return `getArrayType(anyType)` (renders as `any[]`).
+  - Identifier-named parameter path unchanged — still falls through to `anyType`.
 
-  **Risk profile.** LOW. The change ONLY fires when (a) the param has a binding-pattern name AND (b) no annotation AND (c) no default initializer. Pre-B9.1, such params were silently dropped from the Signature, so no consumer touched their `getTypeOfSymbol`. Post-B9.1, the synthesized FunctionScopedVariable symbol has `valueDeclaration = Parameter` with a binding-pattern name; `getTypeOfSymbol` is now reachable for it. Default-`anyType` was reasonable but `{}` / `any[]` matches TypeScript's structural-default convention for un-annotated destructured params. Should not affect non-binding-pattern Parameters (Identifier name path is unchanged).
+  **Verification.** Full-suite 10078/1400/3 unchanged. Zero regressions across 10078 tests. The named target `crashInEmitTokenWithComment_ts` source-display now shows `(_: {}) => undefined` (was `(_: any) => undefined` post-B9.1, was `() => undefined` pre-B9.1). Still needs B9.3 (`=> undefined` body → `any` return type) and B9.4 (TS2537 emission against `{}` index lookup) to fully flip.
 
-  **Verification plan.** Run full suite. Expect net-zero on the corpus — the only test that gates on this directly is `crashInEmitTokenWithComment_ts`, which still needs B9.3 + B9.4 to fully flip. Watch for any TS2322 / TS2345 / TS2741 mismatch where a binding-pattern-FE/Arrow argument was previously treated as `(any) => any` and is now `({}) => any`; structural comparison against `{}` is uncommonly stricter than against `any`, but the `(_: any) => any` paths were already failing arity guards pre-B9.1, so few baselines should depend on this.
-
-  **Foundation for follow-ons:** Pairs with B9.3 (arrow body `=> undefined` → `any`) and B9.4 (TS2537 for computed-property destructuring against `{}`). See B9.1 entry for the full stack rationale.
+  **Risk profile that materialized.** LOW → ZERO regressions. The change only fires when ALL THREE conditions hold (binding-pattern name + no annotation + no initializer), and post-B9.1 the only `getTypeOfSymbol` consumers reaching this path are downstream of the FE/Arrow `forSignatureDisplay = true` synthesis. Non-binding-pattern Parameters (Identifier name) take the existing fall-through to `anyType` unchanged.
 
 - [x] **B9.1. Synthesize signature-parameter symbols for `ObjectBindingPattern` / `ArrayBindingPattern` parameters in `getParameterSymbols` (DONE 2026-05-15, net-zero infra as projected).** Foundation landed. Four pieces in `Checker.kt`:
 

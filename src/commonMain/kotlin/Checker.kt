@@ -40584,6 +40584,17 @@ interface DataView {
                     val inferred = inferTypeFromInitializer(init)
                     if (inferred !== anyType && inferred !== errorType) return inferred
                 }
+                // B9.2: structural default for un-annotated binding-pattern parameters
+                // — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern.
+                // Only reachable when B9.1's `forSignatureDisplay = true` synthesis
+                // produced a FunctionScopedVariable symbol carrying a binding-pattern
+                // Parameter as its valueDeclaration. Matches TypeScript's display
+                // convention for `({a}) => ...` showing `({ a }: {}) => ...`.
+                when (decl.name) {
+                    is ObjectBindingPattern -> return Type.Object().also { it.properties = emptyList() }
+                    is ArrayBindingPattern -> return getArrayType(anyType)
+                    else -> {}
+                }
                 anyType
             }
             is PropertyDeclaration -> {
