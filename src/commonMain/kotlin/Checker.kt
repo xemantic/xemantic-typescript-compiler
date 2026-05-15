@@ -40752,13 +40752,27 @@ interface DataView {
      * Create Symbol objects for function/method parameters.
      * Each Parameter AST node gets a corresponding Symbol with FunctionScopedVariable flag.
      * This is needed for type checking of call arguments (TS2345).
+     *
+     * B9.1: When [forSignatureDisplay] is true, synthesize a placeholder symbol for
+     * `ObjectBindingPattern` / `ArrayBindingPattern` parameters so the resulting
+     * Signature carries the correct arity for display (`(_: T) => U` instead of
+     * `() => U`). Default-false preserves the pre-B9.1 silent-drop behavior at
+     * non-display call sites (function declarations, methods, constructors, type
+     * literals) where arity may already be authoritative downstream.
      */
-    private fun getParameterSymbols(params: List<Parameter>): List<Symbol> {
+    private fun getParameterSymbols(
+        params: List<Parameter>,
+        forSignatureDisplay: Boolean = false,
+    ): List<Symbol> {
         return params.mapNotNull { param ->
             // Skip `this` pseudo-parameter
             val name = when (val n = param.name) {
                 is Identifier -> if (n.text == "this") return@mapNotNull null else n.text
-                else -> return@mapNotNull null // binding patterns not yet supported
+                is ObjectBindingPattern, is ArrayBindingPattern -> {
+                    if (!forSignatureDisplay) return@mapNotNull null
+                    "" // placeholder; formatParameter renders binding-pattern decls via `_`
+                }
+                else -> return@mapNotNull null
             }
             val sym = Symbol(SymbolFlags.FunctionScopedVariable, name)
             sym.declarations.add(param)
@@ -42255,7 +42269,7 @@ interface DataView {
                 else -> anyType
             }
         }
-        val params = getParameterSymbols(expr.parameters)
+        val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
         // Apply contextual typing: infer parameter types from contextual call signature
         applyContextualParameterTypes(params, expr.parameters)
         val sig = Signature(
@@ -42292,7 +42306,7 @@ interface DataView {
             }
             currentTypeParamScope = scope
         }
-        val params = getParameterSymbols(expr.parameters)
+        val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
         val returnType: Type
         try {
             sigTypeParams?.forEachIndexed { i, tp ->
@@ -43321,6 +43335,12 @@ interface DataView {
      */
     private fun formatParameter(p: Symbol): String {
         val decl = p.valueDeclaration as? Parameter
+        // B9.1: binding-pattern parameters synthesized for signature display
+        // render as `_` (matching `formatParameterDecl`'s pre-existing fallback).
+        val displayName: String = when (decl?.name) {
+            is ObjectBindingPattern, is ArrayBindingPattern -> "_"
+            else -> p.name
+        }
         val resolvedType = getTypeOfSymbol(p)
         // 17.24: When the resolved type is errorType (e.g. unresolved name like
         // `items: ItemSet`), prefer rendering from the AST type-node so the displayed
@@ -43341,7 +43361,7 @@ interface DataView {
             resolvedType.let { if (it === anyType) "any" else typeToString(it) }
         }
         return when {
-            decl?.dotDotDotToken == true -> "...${p.name}: $pType"
+            decl?.dotDotDotToken == true -> "...$displayName: $pType"
             decl?.questionToken == true -> {
                 // 17.15a: Drop `| undefined` when the param type is a function/constructor
                 // type — the form `name?: T => U | undefined` would parse as a function
@@ -43353,9 +43373,9 @@ interface DataView {
                         resolvedType.symbol == null &&
                         !resolvedType.callSignatures.isNullOrEmpty() &&
                         resolvedType.properties.isNullOrEmpty())
-                if (isFnType) "${p.name}?: $pType" else "${p.name}?: $pType | undefined"
+                if (isFnType) "$displayName?: $pType" else "$displayName?: $pType | undefined"
             }
-            else -> "${p.name}: $pType"
+            else -> "$displayName: $pType"
         }
     }
 
@@ -52662,7 +52682,12 @@ interface DataView {
         val params = sig.parameters.joinToString(", ") { param ->
             val paramType = getTypeOfSymbol(param)
             val typeStr = if (paramType === anyType) "any" else typeToString(paramType)
-            "${param.name}: $typeStr"
+            // B9.1: render binding-pattern synthesized params as `_`.
+            val displayName = when ((param.valueDeclaration as? Parameter)?.name) {
+                is ObjectBindingPattern, is ArrayBindingPattern -> "_"
+                else -> param.name
+            }
+            "$displayName: $typeStr"
         }
         val returnType = sig.resolvedReturnType
         val returnStr = if (returnType != null && returnType !== anyType) typeToString(returnType) else "any"
@@ -56289,8 +56314,20 @@ interface DataView {
             val sp = getTypeOfSymbol(sourceSig.parameters[i])
             val tp = getTypeOfSymbol(targetSig.parameters[i])
             if (!checkTypeRelatedTo(tp, sp, assignableRelation)) {
+                // B9.1: binding-pattern synthesized params have empty `Symbol.name`;
+                // render as `_` here (consistent with formatParameter).
+                val sName = sourceSig.parameters[i].let { p ->
+                    if (p.name.isEmpty() && (p.valueDeclaration as? Parameter)?.name.let {
+                            it is ObjectBindingPattern || it is ArrayBindingPattern
+                        }) "_" else p.name
+                }
+                val tName = targetSig.parameters[i].let { p ->
+                    if (p.name.isEmpty() && (p.valueDeclaration as? Parameter)?.name.let {
+                            it is ObjectBindingPattern || it is ArrayBindingPattern
+                        }) "_" else p.name
+                }
                 chain.add(
-                    "      Types of parameters '${sourceSig.parameters[i].name}' and '${targetSig.parameters[i].name}' are incompatible."
+                    "      Types of parameters '$sName' and '$tName' are incompatible."
                 )
                 chain.add("        Type '${typeToString(tp)}' is not assignable to type '${typeToString(sp)}'.")
                 return chain
