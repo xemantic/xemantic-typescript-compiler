@@ -2796,6 +2796,20 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.26. TS9007 walker for class-`PropertyDeclaration` initializers that are FE/Arrow (DONE 2026-05-15, +1 — flips `isolatedDeclarationErrorsReturnTypes_ts`).** Parallel walker to B7.25 for the class-property axis. New `emitIsolatedDeclClassPropertyFnExprParamChecks(stmt, ...)` iterates `stmt.members`, picks PropertyDeclaration with init = FE/Arrow, recurses into `init.parameters` via `emitIsolatedDeclParamsCheck`. B7.25's classifier extension then emits TS9007 for inner `cb = function(){ }`-style defaults.
+
+  **Member-filter rules:**
+  - `ModifierFlag.Private in member.modifiers` → skip (no `.d.ts` emission).
+  - `name.text.startsWith("#")` → skip (private-field, no `.d.ts` emission).
+  - `protected` and `static` modifiers → walked (baseline flags them).
+  - Non-Identifier names → skipped (no failing-test target exercises ComputedPropertyName / StringLiteralNode / NumericLiteralNode for this pattern).
+
+  **Verification.** Targeted test passes (31/31 emissions). Full-suite 10078/1401/3 (was 10078/1402/3, +1 net). Zero regressions. Closes `isolatedDeclarationErrorsReturnTypes_ts` — the LAST failing `isolatedDeclaration*_ts` errors-baseline test. The isolatedDeclarations error-baseline family is now FULLY CLOSED.
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` (call-site, inherited from the `is ClassDeclaration` arm of pass 3). Within that scope, only PropertyDeclaration members with FE/Arrow initializers and non-private/non-`#` names participate. `emitIsolatedDeclParamsCheck` is the shared sub-walker used by FunctionDeclaration and class-method paths — extending its callers doesn't change its behavior. The B7.25 classifier extension's `expr.type == null` gate ensures we only fire on FE without return type, leaving annotated FEs alone.
+
+  **Foundation for follow-ons:** No identified failing-test target in the corpus for ArrowFunction defaults with non-trivially-literal body (B7.27 candidate from B7.25 session note). Could survey opportunistically, but the B7.x isolated-declarations family is now exhausted at the test-flip level — no remaining `isolatedDeclaration*_ts` errors-baseline tests fail today.
+
 - [x] **B7.25. TS9007 walker for `FunctionExpression` param-defaults in exported `VariableStatement` initializers when init is `FunctionExpression` or `ArrowFunction` (DONE 2026-05-15, net-zero infra).** Wires `emitIsolatedDeclParamsCheck(init.parameters, ...)` from the VariableStatement branch of pass 3 (gated on `ModifierFlag.Export` and `init is ArrowFunction || init is FunctionExpression`). Extends `emitIsolatedDeclParamDefaultClassify`'s FunctionExpression branch with a new TS9007 emission BEFORE the existing inner-params recursion: when the FE default has `type == null`, emits TS9007 at the `function` keyword position (length 8 = `"function".length`) with related TS9028 at the enclosing param's name and TS9030 at the FE.
 
   **Implementation.** Single-file change in `TypeScriptCompiler.kt`. New helper `emitIsolatedDeclTs9007ForFnExprParamDefault(fe, paramName, ...)` mirrors the existing `emitIsolatedDeclFnExprMissingReturn` shape but uses a fixed-8-char squiggle (instead of `arrowOrFunctionExprTrueEnd` for the full body span), matching TypeScript's baseline display where the squiggle covers only the `function` keyword.
