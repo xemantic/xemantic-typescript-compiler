@@ -2986,37 +2986,77 @@ private fun emitIsolatedDeclClassAccessor(
                 relatedInformation = listOf(ts9032Related),
             ))
         } else if (member is SetAccessor) {
-            val nameNode = member.name as? Identifier ?: continue
-            if (nameNode.text in hasGetter) continue
+            val name = member.name
             val param = member.parameters.firstOrNull() ?: continue
             if (param.type != null) continue
             val paramName = param.name as? Identifier ?: continue
-
-            val propName = nameNode.text
-            val (nameLine, nameChar) = positionToLineCharacter(source, nameNode.pos)
             val (paramLine, paramChar) = positionToLineCharacter(source, paramName.pos)
             val paramLen = paramName.text.length
-            val ts9033Related = Diagnostic(
-                message = "Add a type to parameter of the set accessor declaration.",
-                category = DiagnosticCategory.Message,
-                code = 9033,
-                fileName = fileName,
-                line = nameLine,
-                character = nameChar,
-                start = nameNode.pos,
-                length = propName.length,
-            )
-            results.add(Diagnostic(
-                message = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
-                category = DiagnosticCategory.Error,
-                code = 9009,
-                fileName = fileName,
-                line = paramLine,
-                character = paramChar,
-                start = paramName.pos,
-                length = paramLen,
-                relatedInformation = listOf(ts9033Related),
-            ))
+
+            when (name) {
+                is Identifier -> {
+                    if (name.text in hasGetter) continue
+                    val propName = name.text
+                    val (nameLine, nameChar) = positionToLineCharacter(source, name.pos)
+                    val ts9033Related = Diagnostic(
+                        message = "Add a type to parameter of the set accessor declaration.",
+                        category = DiagnosticCategory.Message,
+                        code = 9033,
+                        fileName = fileName,
+                        line = nameLine,
+                        character = nameChar,
+                        start = name.pos,
+                        length = propName.length,
+                    )
+                    results.add(Diagnostic(
+                        message = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+                        category = DiagnosticCategory.Error,
+                        code = 9009,
+                        fileName = fileName,
+                        line = paramLine,
+                        character = paramChar,
+                        start = paramName.pos,
+                        length = paramLen,
+                        relatedInformation = listOf(ts9033Related),
+                    ))
+                }
+                is ComputedPropertyName -> {
+                    // B7.20: ComputedPropertyName-named SetAccessor. The checker's
+                    // SetAccessor branch (Checker.kt:9087) gates on Identifier names
+                    // and so does NOT fire TS7032/TS7006 for `set [expr](v)` shapes.
+                    // Emit them here under --isolatedDeclarations + Export gates.
+                    // No TS9009/TS9033 — the baseline shows TS7032 + TS9038 + TS7006
+                    // for `set [noParamAnnotationStringName](value)` (line 48), with
+                    // TS9038 already emitted by emitIsolatedDeclClassComputedNameDiags.
+                    // Peer-suppression by computed-name expression text is NOT done —
+                    // no failing-test target exercises a get/set computed-name pair.
+                    val nameEnd = isolatedDeclExprTrueEnd(name.expression) + 1
+                    val nameLen = (nameEnd - name.pos).coerceAtLeast(1)
+                    val propName = source.substring(name.pos, nameEnd)
+                    val (nameLine, nameChar) = positionToLineCharacter(source, name.pos)
+                    results.add(Diagnostic(
+                        message = "Property '${propName}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",
+                        category = DiagnosticCategory.Error,
+                        code = 7032,
+                        fileName = fileName,
+                        line = nameLine,
+                        character = nameChar,
+                        start = name.pos,
+                        length = nameLen,
+                    ))
+                    results.add(Diagnostic(
+                        message = "Parameter '${paramName.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error,
+                        code = 7006,
+                        fileName = fileName,
+                        line = paramLine,
+                        character = paramChar,
+                        start = paramName.pos,
+                        length = paramLen,
+                    ))
+                }
+                else -> {}
+            }
         }
     }
 }
