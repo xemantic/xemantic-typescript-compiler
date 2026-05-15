@@ -2796,6 +2796,23 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.21. TS7010 + TS9013 + AsExpression-end fix to close `isolatedDeclarationErrorsClasses_ts` (DONE 2026-05-15, +1 — flips test).** Three coordinated pieces:
+
+  **(a) Checker.kt: TS7010 InterfaceDeclaration extension for ComputedPropertyName names.** The existing `checkTS7010InStatements`'s InterfaceDeclaration branch only extracted names from `Identifier` and `StringLiteralNode`. Extended `rawName` resolution with a third fallback: `((nameNode as? ComputedPropertyName)?.expression as? Identifier)?.let { "[${it.text}]" }`. So `[noAnnotationLiteralName]()` in interface I now resolves to `[noAnnotationLiteralName]` and emits TS7010 with that name in the message and the full member squiggle (`member.pos` to `member.end`). Verified safe — no other test in the corpus has unannotated computed-name methods in interfaces (`overloadsWithComputedNames`, `dynamicNamesErrors` all have explicit `: void` / `: number` return types).
+
+  **(b) TypeScriptCompiler.kt: TS9013 walker for interface MethodDeclaration with ComputedPropertyName name + no return type.** New `emitIsolatedDeclInterfaceMethodTs9013` walker, called from a new `is InterfaceDeclaration ->` arm in the pass 3 dispatcher. Gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`. Fires TS9013 at the same span as TS7010 (`member.pos` to `member.end`). No related info — interface-context TS9013 has no `Move expression to variable and add annotation` shape; that's TS9036 for default exports only. Identifier-named and StringLiteralNode-named interface methods do NOT fire TS9013 — TypeScript's baseline only emits this code for ComputedPropertyName shapes. Only the `[Identifier]` inner form is handled today; other inner-expression shapes (string literals, qualified names, parenthesized) deferred until a failing test exercises them.
+
+  **(c) TypeScriptCompiler.kt: AsExpression branch in `isolatedDeclExprTrueEnd`.** Fixes the line 50 `[("A" + "B") as "AB"] = 1;` length off-by-one (was 22, expected 21). Walker uses `isolatedDeclExprTrueEnd(inner) + 1` to compute the closing `]` position. The previous fall-through `else -> expr.end` branch overshoots by one token (per CLAUDE.md gotcha). Now uses `expr.tightEnd` (parser-tracked `scanner.getPrevTokenEnd()` at the type's last character — populated in Parser.kt at all three AsExpression construction sites) when set, falling back to `expr.end` otherwise. Both TS1166 ("computed property name must have simple literal type or unique symbol") and TS9038 ("computed property names cannot be inferred") squiggles shrink by 1 char to match the baseline.
+
+  **Verification.** Targeted test passes (26/26 emissions match). Full-suite 10078/1403/3 (was 10078/1404/3, +1 net). Zero regressions across 10078-test suite. Closes the isolated-declarations class-error test family (`isolatedDeclarationErrorsClasses` + `isolatedDeclarationErrorsObjects`, the latter previously flipped in B7.17).
+
+  **Risk profile that materialized.** Bounded for all three pieces:
+  - (a) Checker extension is safe — verified no other tests have unannotated computed-name interface methods (3 corpus matches all have explicit return types).
+  - (b) Walker is gated on `isolatedDeclarations` + `Export` + ComputedPropertyName + Identifier-inner — narrowest possible scope.
+  - (c) AsExpression `tightEnd` fix only changes behavior when the field is populated (default 0 → falls through to `expr.end`). All three Parser.kt AsExpression construction sites do populate `tightEnd`, so this affects every AsExpression in the corpus — but only consumers of `isolatedDeclExprTrueEnd` see the difference, and they're all `isolatedDeclarations`-gated. Verified zero regressions in the full suite confirms no other consumer relied on the overshooting behavior.
+
+---
+
 - [x] **B7.20. TS7032 + TS7006 walker for ComputedPropertyName-named SetAccessors in exported class declarations (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. Extends B7.19's `emitIsolatedDeclClassAccessor` walker — its SetAccessor branch now does `when (name)` over both `Identifier` (existing TS9009/TS9033 emission) and `ComputedPropertyName` (new TS7032 + TS7006 emission). The checker's `checkImplicitAnyInClassElement` SetAccessor branch (Checker.kt:9087) only handles Identifier-named accessors and so does NOT fire TS7032/TS7006 for `set [expr](v)` shapes — this walker fills the gap under `--isolatedDeclarations` + `Export` gates.
 
   Per qualifying ComputedPropertyName-named SetAccessor (no peer-suppression for computed names — no failing-test target exercises a get/set computed-name pair):
