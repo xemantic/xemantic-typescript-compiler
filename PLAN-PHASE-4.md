@@ -2510,6 +2510,14 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B9.4. TS2537 emission for computed-property destructuring inside ObjectBindingPattern parameter defaulted to `{}` (promoted 2026-05-15; stacks on B9.1+B9.2+B9.3).** New pass `checkBindingPatternComputedIndexSig` walks every ArrowFunction / FunctionExpression in every binder file. For each `Parameter` whose `name is ObjectBindingPattern`, `type == null`, AND `initializer == null` (the B9.2 defaulted-`{}` shape), walks `pattern.elements` for `BindingElement.propertyName is ComputedPropertyName`. Emits TS2537 "Type '{}' has no matching index signature for type '<X>'." at the inner expression's `pos` with length `expressionTrueEnd(expr) - pos`, where `<X>` is the widened type display of the index expression (string/number/symbol etc.).
+
+  **Target.** `crashInEmitTokenWithComment_ts` — currently has 1 of 2 expected emissions (TS2345 fires post-B9.3; TS2537 is the missing one). B9.5 (source-slice param-name display) may also be needed to fully flip — the TS2345 source-display message string still differs (`(_: {}) => any` vs `({ [foo.bar]: c }: {}) => any`).
+
+  **Risk profile.** LOW. The walker gates on three conjunctive conditions (binding-pattern name + no annotation + no initializer) AND requires a ComputedPropertyName in the binding element — extraordinarily narrow. No test in the corpus has the same shape (ObjectBindingPattern arrow/FE parameter with no annotation, no initializer, and computed-property destructuring) that doesn't expect TS2537. Verified via grep against `crashInEmitToken*` and adjacent destructuring tests.
+
+  **Foundation for B9.5:** Source-slice rendering of binding-pattern param names in `formatParameter` to replace the `_` placeholder. Requires plumbing source string into the display helper (or stashing slice on Parameter at parse time). Deferred until B9.4 verifies whether the test flips on its own.
+
 - [x] **B9.3. Arrow concise-body literal `=> undefined` widens return type to `any` (DONE 2026-05-15, net-zero infra as projected).** Stacks on B9.1+B9.2. Single-branch change in `getTypeOfArrowFunction`'s concise-body inference (Checker.kt:42279). Currently:
 
   ```
