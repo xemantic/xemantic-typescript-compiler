@@ -1706,6 +1706,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclClassMethodTs9008(stmt, fileName, source, results)
                 emitIsolatedDeclClassMethodParamChecks(stmt, fileName, source, results)
                 emitIsolatedDeclClassAccessor(stmt, fileName, source, results)
+                emitIsolatedDeclClassPropertyFnExprParamChecks(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2030,6 +2031,35 @@ private fun emitIsolatedDeclParamDefaultClassify(
         }
         else -> {
             emitIsolatedDeclTs9013(expr, paramName, fileName, source, results)
+        }
+    }
+}
+
+/**
+ * B7.26: parallel walker to B7.25 for class `PropertyDeclaration` initializers
+ * that are `FunctionExpression` or `ArrowFunction`. Recurses into the outer
+ * FE/Arrow's parameters via `emitIsolatedDeclParamsCheck`, which (via B7.25's
+ * classifier extension) fires TS9007 for inner `cb = function(){ }`-style
+ * defaults. Skips `private` modifier and `#`-prefixed private-field members —
+ * those don't appear in `.d.ts` output per TypeScript's isolatedDeclarations
+ * baseline, so they should not flag.
+ */
+private fun emitIsolatedDeclClassPropertyFnExprParamChecks(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        if (member !is PropertyDeclaration) continue
+        if (ModifierFlag.Private in member.modifiers) continue
+        val name = member.name as? Identifier ?: continue
+        if (name.text.startsWith("#")) continue
+        val init = member.initializer
+        when (init) {
+            is ArrowFunction -> emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+            is FunctionExpression -> emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+            else -> {}
         }
     }
 }
