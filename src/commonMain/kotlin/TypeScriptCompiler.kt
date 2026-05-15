@@ -1703,10 +1703,65 @@ private fun emitIsolatedDeclarationsDiagnostics(
             is EnumDeclaration -> {
                 emitIsolatedDeclEnumChecks(stmt, fileName, source, results)
             }
+            is InterfaceDeclaration -> {
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                emitIsolatedDeclInterfaceMethodTs9013(stmt, fileName, source, results)
+            }
             else -> {}
         }
     }
     return results
+}
+
+/**
+ * B7.21: TS9013 walker for ComputedPropertyName-named MethodDeclaration members
+ * of exported interfaces that lack a return-type annotation. Fires alongside
+ * the checker's TS7010 (extended in B7.21 to cover ComputedPropertyName names
+ * via display string `[id]`). The TS9013 squiggle covers the full member span
+ * (`member.pos` to `member.end`) — same shape as TS7010 — and carries no
+ * related info (interface-context TS9013 has no `Move expression to variable
+ * and add annotation` shape; that's TS9036 for default exports only).
+ *
+ * Identifier-named and StringLiteralNode-named interface methods do NOT fire
+ * TS9013 — TypeScript's baseline only emits this code for ComputedPropertyName
+ * shapes where the inferred return type can't be expressed in a `.d.ts` file
+ * without elaborating the computed key. Bare-name forms get TS7010 only.
+ *
+ * Other member kinds in interfaces (PropertySignature, IndexSignature,
+ * call/construct signatures via MethodDeclaration with empty/`new` names)
+ * are NOT touched here.
+ */
+private fun emitIsolatedDeclInterfaceMethodTs9013(
+    stmt: InterfaceDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    for (member in stmt.members) {
+        if (member !is MethodDeclaration) continue
+        if (member.type != null) continue
+        val name = member.name
+        if (name !is ComputedPropertyName) continue
+        // Only the `[Identifier]` form is handled — matches the TS7010
+        // checker extension's display string (`[id]`). Other inner-expression
+        // shapes (string literals, qualified names, parenthesized) would need
+        // distinct displayed names and span computations; defer until a
+        // failing test exercises them.
+        if (name.expression !is Identifier) continue
+        val start = member.pos
+        val length = (member.end - start).coerceAtLeast(1)
+        val (line, character) = positionToLineCharacter(source, start)
+        results.add(Diagnostic(
+            message = "Expression type can't be inferred with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9013,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
 }
 
 /**
@@ -3490,6 +3545,13 @@ private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
             else -> isolatedDeclExprTrueEnd(args.last()) + 1
         }
     }
+    // `expr.end` overshoots by one token (per CLAUDE.md gotcha) — `tightEnd`
+    // is the parser-tracked position right after the type's last character
+    // (`scanner.getPrevTokenEnd()`), so it gives the right end for the
+    // `expression as Type` source span. Used by computed-name walkers
+    // (`emitIsolatedDeclClassComputedNameDiags`) where `[expr as T]`'s
+    // closing `]` is computed as `isolatedDeclExprTrueEnd(inner) + 1`.
+    is AsExpression -> if (expr.tightEnd > 0) expr.tightEnd else expr.end
     else -> expr.end
 }
 

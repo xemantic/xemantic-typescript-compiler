@@ -22790,8 +22790,10 @@ interface DataView {
                     // The squiggle covers the full method signature (from name through `;`).
                     for (member in stmt.members) {
                         if (member is MethodDeclaration && member.type == null) {
-                            val rawName = (member.name as? Identifier)?.text
-                                ?: (member.name as? StringLiteralNode)?.text
+                            val nameNode = member.name
+                            val rawName = (nameNode as? Identifier)?.text
+                                ?: (nameNode as? StringLiteralNode)?.text
+                                ?: ((nameNode as? ComputedPropertyName)?.expression as? Identifier)?.let { "[${it.text}]" }
                             if (rawName != null) {
                                 when {
                                     rawName.isEmpty() -> {
@@ -22803,7 +22805,9 @@ interface DataView {
                                         emitTS7013WithSpan(member.pos, member.end - member.pos, source, fileName)
                                     }
                                     else -> {
-                                        // Named method signature — emit TS7010
+                                        // Named method signature (including ComputedPropertyName
+                                        // wrapping a single Identifier — displayed as `[id]`) —
+                                        // emit TS7010.
                                         emitTS7010WithSpan(member.pos, member.end - member.pos, rawName, source, fileName)
                                     }
                                 }
