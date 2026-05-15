@@ -2510,6 +2510,17 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B9.2. Default param type for un-annotated binding-pattern parameters — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern (foundation, no test-flip alone; ~0-1 tests).** Stacks on B9.1 (DONE). Routing point: `getTypeOfVariableOrProperty`'s `Parameter` branch (Checker.kt:40580-40588). Currently when `decl.type == null` and `decl.initializer == null`, returns `anyType` unconditionally. Add a pre-`anyType` branch:
+
+  - When `decl.name is ObjectBindingPattern` → return a fresh `Type.Object()` with `properties = emptyList()` (empty anonymous object, renders as `{}` per the existing `typeToString` Type.Object branch at line 43542).
+  - When `decl.name is ArrayBindingPattern` → return `getArrayType(anyType)` (renders as `any[]`).
+
+  **Risk profile.** LOW. The change ONLY fires when (a) the param has a binding-pattern name AND (b) no annotation AND (c) no default initializer. Pre-B9.1, such params were silently dropped from the Signature, so no consumer touched their `getTypeOfSymbol`. Post-B9.1, the synthesized FunctionScopedVariable symbol has `valueDeclaration = Parameter` with a binding-pattern name; `getTypeOfSymbol` is now reachable for it. Default-`anyType` was reasonable but `{}` / `any[]` matches TypeScript's structural-default convention for un-annotated destructured params. Should not affect non-binding-pattern Parameters (Identifier name path is unchanged).
+
+  **Verification plan.** Run full suite. Expect net-zero on the corpus — the only test that gates on this directly is `crashInEmitTokenWithComment_ts`, which still needs B9.3 + B9.4 to fully flip. Watch for any TS2322 / TS2345 / TS2741 mismatch where a binding-pattern-FE/Arrow argument was previously treated as `(any) => any` and is now `({}) => any`; structural comparison against `{}` is uncommonly stricter than against `any`, but the `(_: any) => any` paths were already failing arity guards pre-B9.1, so few baselines should depend on this.
+
+  **Foundation for follow-ons:** Pairs with B9.3 (arrow body `=> undefined` → `any`) and B9.4 (TS2537 for computed-property destructuring against `{}`). See B9.1 entry for the full stack rationale.
+
 - [x] **B9.1. Synthesize signature-parameter symbols for `ObjectBindingPattern` / `ArrayBindingPattern` parameters in `getParameterSymbols` (DONE 2026-05-15, net-zero infra as projected).** Foundation landed. Four pieces in `Checker.kt`:
 
   - **`getParameterSymbols` (Checker.kt:40756)** — new `forSignatureDisplay: Boolean = false` parameter. When true AND `param.name is ObjectBindingPattern || ArrayBindingPattern`, synthesize a `Symbol(SymbolFlags.FunctionScopedVariable, name = "")` carrying `valueDeclaration = param` and `declarations.add(param)`. Empty name is fine because display sites special-case binding-pattern decls to render `_`. Default-false at every other call site preserves the pre-B9.1 silent-drop behavior — FunctionDeclaration / MethodDeclaration / constructors / type literals / etc. are unaffected.
