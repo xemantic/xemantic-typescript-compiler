@@ -2510,6 +2510,36 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B9.1. Synthesize signature-parameter symbols for `ObjectBindingPattern` / `ArrayBindingPattern` parameters in `getParameterSymbols` (foundation, no test-flip alone; ~0-1 tests).** Root cause located at `Checker.kt:40756-40768`: the `else` branch of the `when (val n = param.name)` does `return@mapNotNull null // binding patterns not yet supported`. Consequence: any arrow / fn-expression with a destructured parameter loses ALL its parameters in the constructed `Signature`, so downstream `signatureToString` renders `() => X` (zero params) instead of `(_pattern_: T) => X`. The `// not yet supported` comment is from earlier scaffolding.
+
+  **Named target.** `crashInEmitTokenWithComment_ts` — currently:
+  - exp source display: `({ [foo.bar]: c }: {}) => any`
+  - act source display: `() => undefined`
+  - Plus a missing TS2537 `Type '{}' has no matching index signature for type 'string'.` at (5,7).
+  
+  This substep is the FOUNDATION piece (synthesize the binding-pattern param symbol so display has one parameter). The other two pieces (param-type defaulting `{}` for ObjectBindingPattern + return-type defaulting `any` for `() => undefined` literal-body + TS2537 emission) are separate follow-on substeps. Test does NOT flip with this alone — net-zero infra expected.
+
+  **Implementation.** Single-function change in `getParameterSymbols` (Checker.kt:40756). When `param.name` is `ObjectBindingPattern` or `ArrayBindingPattern`:
+  - Compute a display name via the source-text slice `source.substring(param.name.pos, param.name.end)` (Checker has `currentSource` accessible during type computation; verify).
+  - Normalize spacing for display? **TypeScript's baseline** for `crashInEmitTokenWithComment` shows `{ [foo.bar]: c }` (spaces inside braces) where source has `{[foo.bar]: c}` (tight). The normalization either lives at Symbol-name construction (cheaper) or in `formatParameter` (cleaner). Prefer the latter: keep `symbol.name` as source slice, add a `prettifyBindingPatternDisplay(name: String)` helper called from `formatParameter` that inserts a space after `{`/`[` and before `}`/`]` only at top level (don't break nested literals). Verify in a single targeted test before committing.
+  - Symbol flags: `SymbolFlags.FunctionScopedVariable` (same as existing branch).
+  - `valueDeclaration = param`, `declarations.add(param)`.
+
+  **Risk profile.** UNKNOWN but expected MEDIUM. The current silent-drop has been the de-facto behavior, so unknown consumers of `sig.parameters.size` may break (e.g. arity checks, overload resolution). Audit all `sig.parameters.size` / `signature.minArgumentCount` consumers BEFORE landing. Specifically the TS2554 ("Expected N arguments, but got M") and TS2769 paths.
+
+  **Mitigation.** Stage 1 (this substep): synthesize symbols ONLY for arrow function and function expression types (the contexts where signature display matters for TS2345 source-display chains). Skip for FunctionDeclaration / MethodDeclaration / function-type literal (where arity may already be authoritative). Conservatively gate on `expr is ArrowFunction || expr is FunctionExpression` at the CALL SITES of `getParameterSymbols`, or add a `forSignatureDisplay: Boolean` parameter — whichever has tighter blast radius.
+
+  **Verification plan.** Run full suite. If zero regressions, land as `feat(B9.1): synthesize binding-pattern param symbols (foundation, net-zero infra)`. If regressions appear, narrow further (e.g. only for ArrowFunction with destructured first param, skip if any `sig.parameters.size` check would be affected).
+
+  **Foundation for follow-ons.**
+  - **B9.2 candidate**: Default param type for un-annotated binding-pattern params — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern. Currently `getTypeOfSymbol(p)` likely returns `errorType` or `anyType` for such params; the baseline expects the param type slot to render as `: {}` for the `[foo.bar]: c` case.
+  - **B9.3 candidate**: Arrow-body literal-return inference for `=> identifier` where identifier is `undefined`. Currently we resolve this to the `undefined` type (typeToString → `"undefined"`); baseline expects `any`. May only matter under specific options (`@noTypesAndSymbols: true` is set in this test).
+  - **B9.4 candidate**: TS2537 emission for computed-property destructuring against an inferred `{}` type — `({[foo.bar]: c}: {})` — `foo.bar` is `string`, no index signature on `{}` matches `string`.
+
+  Stacks B9.1 → B9.2 → B9.3 → B9.4 in that order to flip `crashInEmitTokenWithComment_ts` (+1). See also "Known architectural blockers" §1 / display-infra residual.
+
+---
+
 - [x] **B8.1. Intersection-with-conflicting-privates → `never` reduction (DONE 2026-05-15, +1 — flips `intersectionWithConflictingPrivates_ts`).** Three pieces in `Checker.kt`: (1) new helper `findConflictingPrivateInIntersection(types)` walks each Type.Interface (and Type.Reference.target) constituent's `symbol.declarations`, inspects DIRECT class members with Identifier names (PropertyDeclaration/MethodDeclaration/Get/SetAccessor), skips `OBJECT_PROTOTYPE_PROPERTIES`, returns the first property name appearing in 2+ constituents AND `ModifierFlag.Private` in any declaration; (2) `getIntersectionType` calls it AFTER primitive-incompatibility reduction, returns `neverType` when non-null; (3) side-channel `CheckerState.intersectionReductionReasons: HashMap<IntersectionType, IntersectionReductionReason>` keyed by AST IntersectionType node, populated post-call from `getTypeFromTypeNodeWorker`'s IntersectionType branch when the result is `neverType` AND the conflict re-confirms (so primitive reductions don't pollute the cache); (4) two new emission sites consult `findIntersectionReductionForExpr(expr)` (walks receiver's symbol declarations for annotation containing IntersectionType in cache): TS2322 in `checkAssignmentExpression`'s Identifier branch (when `targetType === neverType` + cache hit, emits "Type '$source' is not assignable to type 'never'." + chain), and TS2339 in `checkMemberAccessMissing` early branch (when receiver type is `neverType` + cache hit, emits "Property '$propName' does not exist on type 'never'." + chain). Chain text: "  The intersection 'A & B' was reduced to 'never' because property 'x' exists in multiple constituents and is private in some."
 
   **Verification.** Targeted test passes (3/3 lines: TS2339 at (5,4) + chain, TS2322 at (6,1) + chain). Full-suite 10078/1400/3 (was 10078/1401/3, +1 net). Zero regressions across 10078-test suite — no test in the corpus relied on `A & B` (private-conflict) NOT reducing.
@@ -3530,6 +3560,28 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-15 (post-B8.1 recon, 8675 unchanged — chore(queue) restructure only) — Promote B9.1 to queue: synthesize signature-parameter symbols for `ObjectBindingPattern` / `ArrayBindingPattern` parameters.** Continuation /loop iteration after B8.1. With B8.1 closing the named target (`intersectionWithConflictingPrivates_ts`), every recent active substep is checked off. `find_candidates.py --fresh` returns 0/0/0 (filtered from 3 EXTRA / 63 MISSING / 14 SWAPS). Per anti-loop rule, recon-only is NOT acceptable when active queue is empty; promoted next tractable substep instead.
+
+  **B9.1 selection rationale.** Re-surveyed the SWAP/EXTRA buckets that weren't already promoted to substeps:
+  - SWAP `crashInEmitTokenWithComment_ts` (+3): exposes a clearly-localized root cause at `Checker.kt:40761` (`else -> return@mapNotNull null // binding patterns not yet supported` in `getParameterSymbols`). This is a documented scaffolding gap, not architectural.
+  - SWAP `namespaceDisambiguationInUnion_ts` (+3): multi-piece (namespace-qualified union display + TS2322 chain + tuple-vs-array TS2322 emission). Cross-cutting display infrastructure changes.
+  - SWAP `unionTypeWithRecursiveSubtypeReduction3_ts` (+2): recursive-type-display unfold logic; touches `typeToString` recursion + cycle detection. Higher risk.
+  - SWAP `getAndSetNotIdenticalType3_ts` (+2): needs get/set accessor differential typing (assignment uses setter, read uses getter) PLUS class generic comparison `A<string>` vs `A<number>`. Two architectural pieces.
+  - MISS `limitDeepInstantiations_ts` (+1): needs depth-counter on type-alias instantiation. Risk: regressing legitimate generic instantiations.
+  - EXTRA bucket: all 3 entries (`moduleAugmentationsImports3/4_ts`, `implementArrayInterface_ts`) are flagged as Blocker #3 or Blocker #4 territory in the skip log.
+
+  B9.1 is the only candidate whose ROOT CAUSE is a single comment-flagged scaffolding TODO (`// binding patterns not yet supported`). Scope: one function. The fix is foundation work (no test-flip alone) but unblocks a stack of follow-on substeps for `crashInEmitTokenWithComment_ts` (B9.2 default param type, B9.3 arrow-body literal-return inference, B9.4 TS2537 emission).
+
+  **Decomposition (in promoted queue item, see B9.1 entry near top of QUEUE):** (1) Add `is ObjectBindingPattern | is ArrayBindingPattern` arm to `getParameterSymbols`'s `when (val n = param.name)`. (2) Symbol `name` = `source.substring(param.name.pos, param.name.end)` (source slice). (3) Display normalization (space insertion) lives in `formatParameter`, not Symbol construction. (4) Gate via `forSignatureDisplay: Boolean` param OR limit to ArrowFunction/FunctionExpression call sites to bound blast radius on `sig.parameters.size` consumers (TS2554 arity, TS2769 overloads).
+
+  **Implementation NOT attempted in this session.** Investigation revealed audit work required: enumerate `sig.parameters.size` / `signature.minArgumentCount` consumers, design the gate (`forSignatureDisplay` flag vs caller restriction), pick spacing-normalization location. Scope exceeds remaining session budget per protocol's "one full-suite verification cycle" cap. Per protocol "(b) acceptable session-end commits", `chore(queue): promote ...` is the legitimate next-session-prep commit.
+
+  **STATUS.md NOT bumped** — no test-count change this session. Next session picks up B9.1 with clear decomposition, named target, and risk-mitigation plan.
+
+  **Tactical note for next session.** Audit BEFORE editing: `grep -n "parameters.size\|minArgumentCount" src/commonMain/kotlin/Checker.kt | wc -l` to size the consumer audit. Then read the gated paths (TS2554 arity check, TS2769 overload resolution) to verify they'd still see the right counts. Adding the binding-pattern symbol arm itself is ~5 lines of Kotlin; the audit + gate design is the real work.
+
+  ---
 
   **Session 2026-05-15 (post-B7.26 recon, 8674 unchanged — chore(queue) restructure only) — Promote B8.1 to queue: intersection-with-conflicting-privates → never reduction.** Continuation /loop iteration after B7.26. With B7.26 closing the LAST `isolatedDeclaration*_ts` errors-baseline test, all B1-B7 active-blocker substeps are now checked off. `find_candidates.py --fresh` returns 0/0/0 (filtered from 3 EXTRA / 63 MISSING / 15 SWAPS). Per anti-loop rule, recon-only is NOT acceptable when the active queue is empty; promoted next tractable substep instead.
 
