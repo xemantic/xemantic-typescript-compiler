@@ -2796,6 +2796,24 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.24. TS9019 walker for `ObjectBindingPattern` / `ArrayBindingPattern` destructuring targets in exported `VariableStatement` (DONE 2026-05-15, +1 — flips `isolatedDeclarationErrorsExpressions_ts`).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclVarBindingPatternChecks` walker called from the VariableStatement branch of pass 3 in a new branch BEFORE the `name !is Identifier continue` skip.
+
+  Walker iterates `pattern.elements`:
+  - `BindingElement` with `el.name is Identifier` and `!el.dotDotDotToken` → emit TS9019 at `name.pos` with `name.text.length`. NO related info (TypeScript's baseline for TS9019 doesn't attach TS9027).
+  - `OmittedExpression` array holes → skip.
+  - Rest elements (`...rest`) → skip (no failing-test target).
+  - Nested binding patterns → skip.
+
+  Crucially, walker runs INDEPENDENTLY of `decl.type` — TS9019 fires even when the destructuring target has an explicit type annotation. Line 134 (`export const [, , b = 1]: [number, number, number | undefined] = ...`) confirms this. Walker is gated only on `ModifierFlag.Export in stmt.modifiers`.
+
+  **Verification.** Targeted test passes (52/52 emissions). Full-suite 10078/1402/3 (was 10078/1403/3, +1 net). Zero regressions. Closes the isolatedDeclarations expressions-error test family.
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`. The dispatcher branch is the first in `emitIsolatedDeclarationsDiagnostics` to recognize binding-pattern decl names (all other walkers gated on `name is Identifier`); verified via grep that no other call site relies on this `name` shape, so the new branch is additive. Conservative skip rules prevent firing on parameter destructuring (`export function foo([, , b]: ... = ...)`) which TypeScript's baseline does NOT mark with TS9019.
+
+  **Lesson learned.** Gradle's `compileKotlinJvm` task occasionally reports `UP-TO-DATE` after a source edit when its file-content hashing doesn't pick up the change immediately. `touch <file>` forces a re-evaluation. The test result XML is authoritative — if gradle's stdout doesn't show test execution but the XML shows a fresh pass/fail (timestamp recent), trust the XML.
+
+---
+
 - [x] **B7.23. TS9017 (non-`as const` array) / TS9018 (SpreadElement in any array) walker for exported `VariableStatement` initializers (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclVarInitArrayChecks` walker called from the `VariableStatement` branch of pass 3 right after `emitIsolatedDeclVarInitTs9010`. Two coordinated emissions:
 
   - **TS9017** "Only const arrays can be inferred ..." — fires when the initializer is a bare `ArrayLiteralExpression` (NOT wrapped in `as const`). Squiggle covers the full `[...]` span via `findMatchingDelimiter`. TS9027 related anchored at the variable name.

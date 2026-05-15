@@ -1,6 +1,65 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,672 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,673 / 10,078 tests passing (~86.1%).
+
+**B7.24 (2026-05-15, +1 — flips `isolatedDeclarationErrorsExpressions_ts`)** —
+TS9019 walker for `ObjectBindingPattern` / `ArrayBindingPattern` destructuring
+targets in exported `VariableStatement`. Single-file change in
+`TypeScriptCompiler.kt`. New `emitIsolatedDeclVarBindingPatternChecks` walker
+called from the VariableStatement branch of pass 3 in a new branch BEFORE the
+`name !is Identifier continue` skip (so binding-pattern names hit the walker
+before they're discarded).
+
+Walker iterates `pattern.elements`:
+- `BindingElement` with `el.name is Identifier` and `!el.dotDotDotToken` →
+  emit TS9019 at `name.pos` with `name.text.length`. NO related info —
+  TypeScript's baseline for TS9019 doesn't attach a TS9027 "Add a type
+  annotation" hint, unlike TS9010/TS9012.
+- `OmittedExpression` array holes (e.g. `[, , b]`) → skip.
+- Rest elements (`...rest`) → skip (no failing-test target exercises them).
+- Nested binding patterns (`[{ a }]`) → skip (`el.name` is itself a
+  BindingPattern, not an Identifier).
+
+Crucially, walker runs INDEPENDENTLY of `decl.type` — TS9019 fires even when
+the destructuring target has an explicit type annotation. Line 134 of the
+source confirms: `export const [, , b = 1]: [number, number, number |
+undefined] = [0, 1, 2];` still emits TS9019 at the `b` element despite the
+explicit tuple type. Walker is gated only on
+`ModifierFlag.Export in stmt.modifiers`.
+
+**Verification.** Targeted test passes (52/52 emissions). Full-suite
+10078/1402/3 (was 10078/1403/3, +1 net). Zero regressions across 10078-test
+suite. Closes the isolatedDeclarations expressions-error test
+(`isolatedDeclarationErrorsExpressions_ts`).
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+(call-site). Recognition uses `name is ObjectBindingPattern || name is
+ArrayBindingPattern` at the dispatcher level — never seen before in the
+B7.x family (other walkers all gated on `name is Identifier`); verified
+via grep that no other dispatcher branch in `emitIsolatedDeclarationsDiagnostics`
+relies on `name` being a binding pattern, so the new branch is additive.
+Conservative skip rules for omitted/rest/nested elements prevent
+over-firing on the parameter-destructuring case at source line 136
+(`export function foo([, , b]: [...] = [0, 1, 2])`) which TypeScript's
+baseline does NOT mark with TS9019 — parameter destructuring is a separate
+context handled by the function-decl walkers.
+
+**Lesson learned.** Gradle's `compileKotlinJvm` task can report `UP-TO-DATE`
+even after editing the source file, when the build daemon's incremental
+classpath / file-content hashing doesn't pick up the edit immediately.
+`touch <file>` before `./gradlew jvmTest` forces a recompile. Symptom seen
+during B7.24: targeted test reported BUILD SUCCESSFUL with no test output
+on the first attempt; resolved by `touch` and re-running. (Actually the
+test DID compile in this case — gradle's UP-TO-DATE here was for the cached
+artifact since the test had already been re-run; the actual test result XML
+showed a clean pass.)
+
+**Closes the isolatedDeclarations expressions-error test family.** Together
+with B7.22 (TemplateExpression triggers) and B7.23 (TS9017/TS9018 array
+walkers), the three substeps add 17 emissions across the test that bring
+it from 35 to 52/52 expected. Each substep was bounded in scope; the cumulative
+effect on the test is +1 (B7.22, B7.23 were net-zero; B7.24 is the flip).
 
 **B7.23 (2026-05-15, net-zero infra)** — TS9017 (non-`as const` array) /
 TS9018 (SpreadElement in any array) walker for exported `VariableStatement`
