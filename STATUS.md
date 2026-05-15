@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,673 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,674 / 10,078 tests passing (~86.1%).
+
+**B7.26 (2026-05-15, +1 — flips `isolatedDeclarationErrorsReturnTypes_ts`)** —
+Parallel walker to B7.25 for the class-property axis. Single-file change
+in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassPropertyFnExprParamChecks(stmt, ...)`
+called from the `ClassDeclaration` branch of pass 3 after the existing
+isolatedDeclarations walkers. Iterates `stmt.members`, picks
+PropertyDeclaration with init = FE/Arrow, recurses into `init.parameters`
+via the shared `emitIsolatedDeclParamsCheck`. The B7.25 classifier extension
+then emits TS9007 for inner `cb = function(){ }`-style defaults.
+
+Member filter:
+- `ModifierFlag.Private in member.modifiers` → skip.
+- `name.text.startsWith("#")` → skip (private-field).
+- `protected` / `static` → walked (baseline flags them).
+- Non-Identifier names → skipped.
+
+**Verification.** Targeted test passes (31/31 emissions). Full-suite
+10078/1401/3 (was 10078/1402/3, +1 net). Zero regressions across the
+10078-test suite. Closes `isolatedDeclarationErrorsReturnTypes_ts` —
+the LAST failing `isolatedDeclaration*_ts` errors-baseline test. The
+**isolatedDeclarations error-baseline family is now FULLY CLOSED**.
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+(call-site, inherited from the `is ClassDeclaration` arm of pass 3).
+Within that scope, only PropertyDeclaration members with FE/Arrow
+initializers and non-private/non-`#` names participate. The shared
+sub-walker `emitIsolatedDeclParamsCheck` was already exercised by
+FunctionDeclaration and class-method paths; extending its callers does
+not change its semantics. B7.25's classifier extension's `expr.type == null`
+gate ensures we only fire on FE without return type — annotated FEs are
+unaffected.
+
+---
 
 **B7.25 (2026-05-15, net-zero infra)** — TS9007 walker for
 `FunctionExpression` param-defaults in exported `VariableStatement`
