@@ -1,6 +1,63 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,675 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,676 / 10,078 tests passing (~86.1%).
+
+**B9.5 (2026-05-15, +1 — flips `crashInEmitTokenWithComment_ts`; stacks on B9.4)** —
+AST-based source-slice rendering of binding-pattern parameter names in
+`formatParameter` (Checker.kt:43561) and `signatureToString(sig)`
+(Checker.kt:52907). New `formatBindingPatternFromAst(node)` helper
+reconstructs the parameter display string from AST shape, replacing
+the post-B9.1 `_` placeholder. Handles ObjectBindingPattern,
+ArrayBindingPattern, BindingElement (with `...rest`, renamed
+properties, computed property names, nested patterns), and a small
+expression printer for ComputedPropertyName inner expressions
+(Identifier, string/numeric/bigint/template literal, PropertyAccess,
+ElementAccess, parens, signed numeric literals). Unsupported shapes
+fall back to `_`.
+
+**Verification.** Full-suite 10078/1399/3 (was 10078/1400/3 post-B9.4,
++1 net). Zero regressions across 10078-test suite. Target
+`crashInEmitTokenWithComment_ts` flips clean — TS2345 source display
+now reads `({ [foo.bar]: c }: {}) => any` matching baseline. Closes
+the B9.x stack toward this target (B9.1 foundation → B9.2 default
+`{}` → B9.3 `=> undefined` any → B9.4 TS2537 emit → B9.5 display).
+
+**Risk profile that materialized.** LOW. The search-for-regressions
+concern from the queue note was unfounded — no corpus baseline
+depended on the post-B9.1 `_` placeholder for binding-pattern FE/Arrow
+parameters. AST-based reconstruction gracefully degrades to `_` on
+any shape it doesn't handle, so display strings never break — they
+may simply revert to the pre-B9.5 placeholder.
+
+---
+
+**B9.4 (2026-05-15, net-zero infra — stacks on B9.1+B9.2+B9.3 toward `crashInEmitTokenWithComment_ts`)** —
+TS2537 emission for computed-property destructuring inside an
+ObjectBindingPattern parameter that defaulted to `{}` via B9.2 (no
+annotation, no initializer). New checker pass
+`checkBindingPatternComputedIndexSig` (Checker.kt ~30894) walks every
+ArrowFunction / FunctionExpression in the AST. For each Parameter
+matching the B9.2 defaulted-`{}` shape, walks `pattern.elements` for
+BindingElement.propertyName == ComputedPropertyName with a
+non-literal inner expression; emits TS2537 at the inner expression's
+position with the widened-literal type display. Literal-key gate
+`isLiteralComputedKeyExpr` skips StringLiteralNode, NumericLiteralNode,
+BigIntLiteralNode, NoSubstitutionTemplateLiteralNode, signed numeric
+literals, and parens — TypeScript treats those as property-name
+lookups against `{}`, not index-signature lookups.
+
+**Verification.** Full-suite 10078/1400/3 unchanged. Zero regressions.
+Pre-gate run regressed 2 tests (extra TS2537 on `` [`key`] `` and `[2]`);
+literal-key gate closed both without compromising the target emission.
+Target test fired TS2537 at the expected position, but didn't flip yet
+— the TS2345 source-display message still showed `(_: {}) => any`
+(addressed by B9.5).
+
+**Risk profile that materialized.** Bounded post-gate. Walker triggers
+only on (binding-pattern name + no annotation + no initializer +
+ComputedPropertyName + non-literal inner expression).
+
+---
 
 **B9.3 (2026-05-15, net-zero infra — stacks on B9.1+B9.2 toward `crashInEmitTokenWithComment_ts`)** —
 Widen concise-body `=> undefined` literal to `any` in `getTypeOfArrowFunction`

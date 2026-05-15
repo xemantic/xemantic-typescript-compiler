@@ -43555,10 +43555,12 @@ interface DataView {
      */
     private fun formatParameter(p: Symbol): String {
         val decl = p.valueDeclaration as? Parameter
-        // B9.1: binding-pattern parameters synthesized for signature display
-        // render as `_` (matching `formatParameterDecl`'s pre-existing fallback).
-        val displayName: String = when (decl?.name) {
-            is ObjectBindingPattern, is ArrayBindingPattern -> "_"
+        // B9.5: binding-pattern parameters render as their source-slice
+        // reconstruction (e.g. `{ [foo.bar]: c }` for `{[foo.bar]: c}`). For
+        // AST shapes the helper can't reconstruct, falls back to `_` (the
+        // pre-B9.5 placeholder).
+        val displayName: String = when (val name = decl?.name) {
+            is ObjectBindingPattern, is ArrayBindingPattern -> formatBindingPatternFromAst(name as Node)
             else -> p.name
         }
         val resolvedType = getTypeOfSymbol(p)
@@ -43597,6 +43599,81 @@ interface DataView {
             }
             else -> "$displayName: $pType"
         }
+    }
+
+    /**
+     * B9.5: Reconstruct a binding-pattern parameter's display string from its AST.
+     * Used by `formatParameter` and `signatureToString(sig)` to render parameters
+     * declared with ObjectBindingPattern / ArrayBindingPattern names as their
+     * source-equivalent (e.g. `{ [foo.bar]: c }`, `[a, b]`, `{ a, b: renamed }`).
+     * For AST shapes outside the supported set, returns `_` (the pre-B9.5
+     * fallback) so display strings degrade gracefully.
+     */
+    private fun formatBindingPatternFromAst(node: Node): String = when (node) {
+        is ObjectBindingPattern -> {
+            val parts = node.elements.map { formatBindingElementFromAst(it) }
+            if (parts.isEmpty()) "{}" else "{ ${parts.joinToString(", ")} }"
+        }
+        is ArrayBindingPattern -> {
+            val parts = node.elements.map { e ->
+                when (e) {
+                    is BindingElement -> formatBindingElementFromAst(e)
+                    is OmittedExpression -> ""
+                    else -> "_"
+                }
+            }
+            "[${parts.joinToString(", ")}]"
+        }
+        else -> "_"
+    }
+
+    private fun formatBindingElementFromAst(el: BindingElement): String {
+        val nameStr = when (val n = el.name) {
+            is Identifier -> n.text
+            is ObjectBindingPattern, is ArrayBindingPattern -> formatBindingPatternFromAst(n as Node)
+            else -> "_"
+        }
+        val dotDot = if (el.dotDotDotToken) "..." else ""
+        val propName = el.propertyName
+        return when {
+            propName == null -> "$dotDot$nameStr"
+            propName is Identifier && el.name is Identifier && propName.text == (el.name as Identifier).text ->
+                "$dotDot$nameStr"
+            propName is Identifier -> "${propName.text}: $dotDot$nameStr"
+            propName is StringLiteralNode -> "\"${propName.text}\": $dotDot$nameStr"
+            propName is NumericLiteralNode -> "${propName.text}: $dotDot$nameStr"
+            propName is ComputedPropertyName -> {
+                val inner = formatExprForBindingDisplay(propName.expression) ?: return "_"
+                "[$inner]: $dotDot$nameStr"
+            }
+            else -> "_"
+        }
+    }
+
+    private fun formatExprForBindingDisplay(expr: Expression): String? = when (expr) {
+        is Identifier -> expr.text
+        is StringLiteralNode -> "\"${expr.text}\""
+        is NumericLiteralNode -> expr.text
+        is BigIntLiteralNode -> expr.text
+        is NoSubstitutionTemplateLiteralNode -> "`${expr.text}`"
+        is PropertyAccessExpression -> {
+            val left = formatExprForBindingDisplay(expr.expression) ?: return null
+            "$left.${expr.name.text}"
+        }
+        is ElementAccessExpression -> {
+            val left = formatExprForBindingDisplay(expr.expression) ?: return null
+            val arg = formatExprForBindingDisplay(expr.argumentExpression) ?: return null
+            "$left[$arg]"
+        }
+        is ParenthesizedExpression -> formatExprForBindingDisplay(expr.expression)
+        is PrefixUnaryExpression -> {
+            if ((expr.operator == SyntaxKind.Minus || expr.operator == SyntaxKind.Plus) &&
+                (expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode)) {
+                val op = if (expr.operator == SyntaxKind.Minus) "-" else "+"
+                "$op${formatExprForBindingDisplay(expr.operand)}"
+            } else null
+        }
+        else -> null
     }
 
     /** 17.10c: Format a Type.TypeParam as `name` or `name extends Constraint`. */
@@ -52902,9 +52979,9 @@ interface DataView {
         val params = sig.parameters.joinToString(", ") { param ->
             val paramType = getTypeOfSymbol(param)
             val typeStr = if (paramType === anyType) "any" else typeToString(paramType)
-            // B9.1: render binding-pattern synthesized params as `_`.
-            val displayName = when ((param.valueDeclaration as? Parameter)?.name) {
-                is ObjectBindingPattern, is ArrayBindingPattern -> "_"
+            // B9.5: source-slice rendering for binding-pattern synthesized params.
+            val displayName = when (val name = (param.valueDeclaration as? Parameter)?.name) {
+                is ObjectBindingPattern, is ArrayBindingPattern -> formatBindingPatternFromAst(name as Node)
                 else -> param.name
             }
             "$displayName: $typeStr"
