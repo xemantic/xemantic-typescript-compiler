@@ -2796,6 +2796,10 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [ ] **B7.25. TS9007 walker for `FunctionExpression` param-defaults in exported `VariableStatement` initializers when init is `FunctionExpression` or `ArrowFunction`.** First substep targeting `isolatedDeclarationErrorsReturnTypes_ts` (0/31 emissions currently). Smallest tractable shape: when an exported var-decl initializer is an outer FE/Arrow whose params include a `cb = function(){ }`-style default whose `FunctionExpression` lacks a return type, emit TS9007 at the `function` keyword position (length 8) with related TS9028 at the cb param name and TS9030 at the function position. Recurse via new wiring from the var-decl branch of pass 3 into `emitIsolatedDeclParamsCheck(init.parameters, ...)`. Extend `emitIsolatedDeclParamDefaultClassify`'s FunctionExpression branch to add the TS9007 emission BEFORE the existing inner-params recursion. Conservative scope: handles only FunctionExpression (not ArrowFunction) defaults; outer FE/Arrow at var-decl level is NOT itself flagged (TypeScript appears to accept simple-body return-type inference there). Expected emissions: 6 of 31 in the target test — won't flip but establishes the wiring. Follow-on substeps (B7.26+) extend to ArrowFunction defaults and to class-property-initializer FE/Arrow.
+
+---
+
 - [x] **B7.24. TS9019 walker for `ObjectBindingPattern` / `ArrayBindingPattern` destructuring targets in exported `VariableStatement` (DONE 2026-05-15, +1 — flips `isolatedDeclarationErrorsExpressions_ts`).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclVarBindingPatternChecks` walker called from the VariableStatement branch of pass 3 in a new branch BEFORE the `name !is Identifier continue` skip.
 
   Walker iterates `pattern.elements`:
