@@ -2796,6 +2796,24 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.20. TS7032 + TS7006 walker for ComputedPropertyName-named SetAccessors in exported class declarations (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. Extends B7.19's `emitIsolatedDeclClassAccessor` walker — its SetAccessor branch now does `when (name)` over both `Identifier` (existing TS9009/TS9033 emission) and `ComputedPropertyName` (new TS7032 + TS7006 emission). The checker's `checkImplicitAnyInClassElement` SetAccessor branch (Checker.kt:9087) only handles Identifier-named accessors and so does NOT fire TS7032/TS7006 for `set [expr](v)` shapes — this walker fills the gap under `--isolatedDeclarations` + `Export` gates.
+
+  Per qualifying ComputedPropertyName-named SetAccessor (no peer-suppression for computed names — no failing-test target exercises a get/set computed-name pair):
+  - **TS7032** at the ComputedPropertyName span (start = name.pos, length = `isolatedDeclExprTrueEnd(name.expression) + 1 - name.pos`). Property name in the message uses the source substring (e.g. `'[noParamAnnotationStringName]'` with brackets included).
+  - **TS7006** at the param NAME position (length = param-name.length).
+
+  No TS9009/TS9033 — the baseline shows TS7032 + TS9038 + TS7006 for `set [noParamAnnotationStringName](value)` (line 48), with TS9038 already emitted by `emitIsolatedDeclClassComputedNameDiags`. Diagnostic ordering is correct via `BaselineFormatter`'s sort (start → length → code): TS7032 (code 7032) precedes TS9038 (code 9038) at the same start/length pair.
+
+  **Adjacent partial progress (no flip).** `isolatedDeclarationErrorsClasses_ts` adds 2 emissions (TS7032 line 48,9 + TS7006 line 48,39). Now at 24 of expected 26 emissions. Still 2 emissions short — gap covers:
+  - **B7.21 candidate**: line 56 interface `MethodDeclaration` TS7010 + TS9013 for `[noAnnotationLiteralName]();`. Distinct emission shape from class contexts — TS7010 ("...lacks return-type annotation, implicitly has an 'any' return type") fires only on interface-member declarations.
+  - Line 50 parser/walker length off-by-one for `[("A" + "B") as "AB"] = 1;` — emits length 22 vs expected 21. Likely in `emitIsolatedDeclClassComputedNameDiags`'s ComputedPropertyName span computation when the inner expression is `as`-asserted.
+
+  **Verification.** Full-suite 10078/1404/3 (unchanged from B7.19; zero regressions). Net-zero on the suite — gain on `isolatedDeclarationErrorsClasses_ts` (24 of 26 expected) isn't enough to flip it.
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` (call-site). Only 4 test files in the corpus have class-level computed-name set-accessor patterns, and the other 3 (`classUsedBeforeInitializedVariables`, `computedPropertiesWithSetterAssignment`, `dynamicNamesErrors`) don't use `isolatedDeclarations`, so they're untouched. Source substring extraction for the property-name string is safe — `name.pos` and the inner expression end are always within bounds (parser-validated).
+
+---
+
 - [x] **B7.19. TS9009 / TS9033 walker for Identifier-named class accessors that lack an explicit type annotation (DONE 2026-05-15, net-zero infra).** Mirror of B7.17's object-literal version for the class-context. Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassAccessor` walker called from the `is ClassDeclaration` arm of pass 3's statement switch, after `emitIsolatedDeclClassMethodParamChecks`. Walker first builds peer-set tables (`hasGetter` / `hasSetter`) then makes a second pass:
 
   - **GET-only, no return type** (no peer setter, Identifier name) → emits TS9009 at the accessor name position with related TS9032 "Add a return type to the get accessor declaration."
