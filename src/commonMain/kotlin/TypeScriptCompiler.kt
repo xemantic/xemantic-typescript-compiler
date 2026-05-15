@@ -1682,6 +1682,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclClassPropertyTs9012(stmt, fileName, source, results)
                 emitIsolatedDeclClassMethodTs9008(stmt, fileName, source, results)
                 emitIsolatedDeclClassMethodParamChecks(stmt, fileName, source, results)
+                emitIsolatedDeclClassAccessor(stmt, fileName, source, results)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -2901,6 +2902,122 @@ private fun emitIsolatedDeclClassMethodParamChecks(
         if (member !is MethodDeclaration) continue
         if (member.body == null) continue
         emitIsolatedDeclParamsCheck(member.parameters, fileName, source, results)
+    }
+}
+
+/**
+ * B7.19: TS9009 / TS7032 walker for Identifier-named class accessors that
+ * lack an explicit type annotation, single-accessor-only (no peer pair).
+ * Mirrors B7.17's object-literal version for class context.
+ *
+ * Pair semantics: when a `get`/`set` peer with the same Identifier name is
+ * present, ALL emissions are suppressed regardless of whether the peer is
+ * annotated — TypeScript treats the pair as resolvable through the annotated
+ * side (or both unannotated → both implicit-any but pair-suppression still
+ * applies). Verified against the test's `getSetBad`, `getSetOk`, `getSetOk2`,
+ * `getSetOk3` quadruple — none fire.
+ *
+ * Computed-name accessors (`[expr]`) are conservatively skipped here — they
+ * fire TS9038 instead via `emitIsolatedDeclClassComputedNameDiags`. The
+ * companion TS7032/TS7006 walker for computed-name set-accessors is B7.20
+ * territory. StringLiteralNode / NumericLiteralNode names are skipped (no
+ * failing-test target exercises them).
+ *
+ * Per qualifying GET-only accessor (no peer setter, no return-type
+ * annotation) emits one diagnostic at the accessor NAME position:
+ *   - TS9009 with related TS9032
+ *     "Add a return type to the get accessor declaration."
+ *
+ * Per qualifying SET-only accessor (no peer getter, first parameter has no
+ * type annotation) emits one diagnostic:
+ *   - TS9009 at the param NAME position (length = param-name.length) with
+ *     related TS9033 "Add a type to parameter of the set accessor declaration."
+ *
+ * Note that BOTH TS7032 (at the accessor name) and TS7006 (at the param name)
+ * are already emitted by the checker (`checkImplicitAnyInClassElement`'s
+ * SetAccessor branch + `checkParamsForImplicitAny`) under `--strict` /
+ * `--noImplicitAny`, gated on the same no-peer-getter condition. This walker
+ * does NOT emit them (would duplicate). The walker's contribution is the
+ * TS9009/TS9033 pair which is specific to `--isolatedDeclarations`.
+ */
+private fun emitIsolatedDeclClassAccessor(
+    stmt: ClassDeclaration,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val hasGetter = mutableSetOf<String>()
+    val hasSetter = mutableSetOf<String>()
+    for (member in stmt.members) {
+        if (member is GetAccessor) {
+            val n = member.name
+            if (n is Identifier) hasGetter.add(n.text)
+        } else if (member is SetAccessor) {
+            val n = member.name
+            if (n is Identifier) hasSetter.add(n.text)
+        }
+    }
+    for (member in stmt.members) {
+        if (member is GetAccessor) {
+            val nameNode = member.name as? Identifier ?: continue
+            if (nameNode.text in hasSetter) continue
+            if (member.type != null) continue
+            val (nameLine, nameChar) = positionToLineCharacter(source, nameNode.pos)
+            val nameLen = nameNode.text.length
+            val ts9032Related = Diagnostic(
+                message = "Add a return type to the get accessor declaration.",
+                category = DiagnosticCategory.Message,
+                code = 9032,
+                fileName = fileName,
+                line = nameLine,
+                character = nameChar,
+                start = nameNode.pos,
+                length = nameLen,
+            )
+            results.add(Diagnostic(
+                message = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9009,
+                fileName = fileName,
+                line = nameLine,
+                character = nameChar,
+                start = nameNode.pos,
+                length = nameLen,
+                relatedInformation = listOf(ts9032Related),
+            ))
+        } else if (member is SetAccessor) {
+            val nameNode = member.name as? Identifier ?: continue
+            if (nameNode.text in hasGetter) continue
+            val param = member.parameters.firstOrNull() ?: continue
+            if (param.type != null) continue
+            val paramName = param.name as? Identifier ?: continue
+
+            val propName = nameNode.text
+            val (nameLine, nameChar) = positionToLineCharacter(source, nameNode.pos)
+            val (paramLine, paramChar) = positionToLineCharacter(source, paramName.pos)
+            val paramLen = paramName.text.length
+            val ts9033Related = Diagnostic(
+                message = "Add a type to parameter of the set accessor declaration.",
+                category = DiagnosticCategory.Message,
+                code = 9033,
+                fileName = fileName,
+                line = nameLine,
+                character = nameChar,
+                start = nameNode.pos,
+                length = propName.length,
+            )
+            results.add(Diagnostic(
+                message = "At least one accessor must have an explicit type annotation with --isolatedDeclarations.",
+                category = DiagnosticCategory.Error,
+                code = 9009,
+                fileName = fileName,
+                line = paramLine,
+                character = paramChar,
+                start = paramName.pos,
+                length = paramLen,
+                relatedInformation = listOf(ts9033Related),
+            ))
+        }
     }
 }
 
