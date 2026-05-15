@@ -1658,6 +1658,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                             emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
                             val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
                             emitIsolatedDeclVarInitTs9010(name, init, isConst, fileName, source, results)
+                            emitIsolatedDeclVarInitArrayChecks(name, init, fileName, source, results)
                             if (init is ObjectLiteralExpression) {
                                 emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
@@ -2573,6 +2574,135 @@ private fun emitIsolatedDeclVarInitTs9010(
         character = character,
         start = varName.pos,
         length = varName.text.length,
+        relatedInformation = listOf(related),
+    ))
+}
+
+/**
+ * B7.23: ArrayLiteralExpression walker for exported `VariableStatement`
+ * initializers under --isolatedDeclarations. Two emission shapes anchored at
+ * the variable name via TS9027 related info:
+ *
+ *  - **TS9017** "Only const arrays can be inferred ..." — fires when the
+ *    initializer is a bare `ArrayLiteralExpression` (NOT wrapped in
+ *    `as const`). Squiggle covers the full `[...]` span via
+ *    [findMatchingDelimiter]. The "const" in the message refers to the
+ *    `as const` assertion, not the binding's `const` keyword; TypeScript fires
+ *    TS9017 for `export let arr = [1, 2, 3]` because the array type is
+ *    inferred as `number[]` and the .d.ts emitter can't preserve element
+ *    types without checking.
+ *
+ *  - **TS9018** "Arrays with spread elements can't inferred ..." — fires for
+ *    each `SpreadElement` inside the initializer's ArrayLiteralExpression
+ *    (including when wrapped in `as const`, e.g.
+ *    `[1, 2, 3, ...arr] as const`). Squiggle covers just the `...expr`
+ *    span via the SpreadElement node's own pos/end.
+ *
+ * Only the topmost array level is walked — nested arrays
+ * (`[[1,2,3]]`) are NOT recursively walked for spread; no failing test
+ * exercises that shape, and the conservative scope avoids over-firing on
+ * patterns where the inner array is itself the value of a parent walker's
+ * concern.
+ */
+private fun emitIsolatedDeclVarInitArrayChecks(
+    varName: Identifier,
+    init: Expression,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (arrayLit, isAsConst) = when (init) {
+        is ArrayLiteralExpression -> init to false
+        is AsExpression -> {
+            val t = init.type
+            val isConst = t is TypeReference &&
+                t.typeName.let { it is Identifier && it.text == "const" } &&
+                t.typeArguments == null
+            if (isConst && init.expression is ArrayLiteralExpression) init.expression to true
+            else null to false
+        }
+        else -> null to false
+    }
+    if (arrayLit == null) return
+    if (!isAsConst) {
+        val end = findMatchingDelimiter(source, arrayLit.pos, '[', ']')
+        val length = (end - arrayLit.pos).coerceAtLeast(1)
+        emitIsolatedDeclTs9017ForVar(varName, arrayLit.pos, length, fileName, source, results)
+    }
+    for (el in arrayLit.elements) {
+        if (el is SpreadElement) {
+            // el.end overshoots by one token per CLAUDE.md gotcha — compute the
+            // true end via `isolatedDeclExprTrueEnd` on the inner expression so
+            // `...arr` lengths as 6 (`...`+identifier) not 7.
+            val spreadEnd = isolatedDeclExprTrueEnd(el.expression)
+            val spreadLength = (spreadEnd - el.pos).coerceAtLeast(1)
+            emitIsolatedDeclTs9018ForVar(varName, el.pos, spreadLength, fileName, source, results)
+        }
+    }
+}
+
+private fun emitIsolatedDeclTs9017ForVar(
+    varName: Identifier,
+    start: Int,
+    length: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, start)
+    val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+    val related = Diagnostic(
+        message = "Add a type annotation to the variable ${varName.text}.",
+        category = DiagnosticCategory.Message,
+        code = 9027,
+        fileName = fileName,
+        line = varLine,
+        character = varChar,
+        start = varName.pos,
+        length = varName.text.length,
+    )
+    results.add(Diagnostic(
+        message = "Only const arrays can be inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9017,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = listOf(related),
+    ))
+}
+
+private fun emitIsolatedDeclTs9018ForVar(
+    varName: Identifier,
+    start: Int,
+    length: Int,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val (line, character) = positionToLineCharacter(source, start)
+    val (varLine, varChar) = positionToLineCharacter(source, varName.pos)
+    val related = Diagnostic(
+        message = "Add a type annotation to the variable ${varName.text}.",
+        category = DiagnosticCategory.Message,
+        code = 9027,
+        fileName = fileName,
+        line = varLine,
+        character = varChar,
+        start = varName.pos,
+        length = varName.text.length,
+    )
+    results.add(Diagnostic(
+        message = "Arrays with spread elements can't inferred with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9018,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
         relatedInformation = listOf(related),
     ))
 }
