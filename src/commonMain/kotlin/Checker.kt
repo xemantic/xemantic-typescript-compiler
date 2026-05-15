@@ -697,6 +697,11 @@ class Checker(
         checkInterfacePropertyInitializers()
         // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
         checkComputedPropertyNameLiteral()
+        // 45b'. B9.4: TS2537 for computed-property destructuring inside an
+        // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
+        // (no annotation, no initializer). Walks every ArrowFunction /
+        // FunctionExpression in the AST.
+        checkBindingPatternComputedIndexSig()
         // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
         if (options.erasableSyntaxOnly) {
             checkErasableSyntaxOnly()
@@ -30884,6 +30889,208 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // B9.4: TS2537 — Type '{}' has no matching index signature for type 'X'.
+    //
+    // Fires for computed-property destructuring inside an ObjectBindingPattern
+    // parameter that defaulted to `{}` via B9.2 (no annotation, no initializer).
+    // -----------------------------------------------------------------------
+
+    private fun checkBindingPatternComputedIndexSig() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkB94InStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkB94InStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkB94InStmt(stmt, source, fileName)
+    }
+
+    private fun walkB94InStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                decl.initializer?.let { walkB94InExpr(it, source, fileName) }
+            }
+            is ExpressionStatement -> walkB94InExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkB94InExpr(it, source, fileName) }
+            is FunctionDeclaration -> {
+                stmt.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                for (param in stmt.parameters) {
+                    param.initializer?.let { walkB94InExpr(it, source, fileName) }
+                }
+            }
+            is ClassDeclaration -> for (member in stmt.members) when (member) {
+                is MethodDeclaration -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                is Constructor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                is PropertyDeclaration -> member.initializer?.let { walkB94InExpr(it, source, fileName) }
+                is GetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                is SetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+            is Block -> walkB94InStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkB94InExpr(stmt.expression, source, fileName)
+                walkB94InStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkB94InStmt(it, source, fileName) }
+            }
+            is ForStatement -> {
+                stmt.condition?.let { walkB94InExpr(it, source, fileName) }
+                walkB94InStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> walkB94InStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkB94InStmt(stmt.statement, source, fileName)
+            is WhileStatement -> {
+                walkB94InExpr(stmt.expression, source, fileName)
+                walkB94InStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkB94InStmt(stmt.statement, source, fileName)
+                walkB94InExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkB94InExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        walkB94InExpr(clause.expression, source, fileName)
+                        walkB94InStmts(clause.statements, source, fileName)
+                    }
+                    is DefaultClause -> walkB94InStmts(clause.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                walkB94InStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkB94InStmts(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkB94InStmts(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkB94InStmt(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                walkB94InStmts(it.statements, source, fileName)
+            }
+            is ExportAssignment -> walkB94InExpr(stmt.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun walkB94InExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> {
+                emitB94ForFnLikeParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> walkB94InStmts(body.statements, source, fileName)
+                    is Expression -> walkB94InExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                emitB94ForFnLikeParams(expr.parameters, source, fileName)
+                walkB94InStmts(expr.body.statements, source, fileName)
+            }
+            is ParenthesizedExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkB94InExpr(expr.condition, source, fileName)
+                walkB94InExpr(expr.whenTrue, source, fileName)
+                walkB94InExpr(expr.whenFalse, source, fileName)
+            }
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    walkB94InExpr(cur.right, source, fileName)
+                    cur = cur.left
+                }
+                walkB94InExpr(cur, source, fileName)
+            }
+            is CallExpression -> {
+                walkB94InExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { walkB94InExpr(it, source, fileName) }
+            }
+            is NewExpression -> {
+                walkB94InExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkB94InExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkB94InExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkB94InExpr(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkB94InExpr(prop.expression, source, fileName)
+                else -> {}
+            }
+            is AsExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { walkB94InExpr(it, source, fileName) }
+            is TemplateExpression -> for (span in expr.templateSpans) walkB94InExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> walkB94InExpr(expr.tag, source, fileName)
+            is SpreadElement -> walkB94InExpr(expr.expression, source, fileName)
+            is AwaitExpression -> expr.expression?.let { walkB94InExpr(it, source, fileName) }
+            is YieldExpression -> expr.expression?.let { walkB94InExpr(it, source, fileName) }
+            is PrefixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
+            is PropertyAccessExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkB94InExpr(expr.expression, source, fileName)
+                walkB94InExpr(expr.argumentExpression, source, fileName)
+            }
+            is TypeAssertionExpression -> walkB94InExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun emitB94ForFnLikeParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            // Trigger ONLY when the parameter shape matches B9.2's `{}` default
+            // (binding-pattern name + no annotation + no initializer). Annotated
+            // / defaulted patterns have a real declared type; checking those
+            // against an index signature requires the full structural-comparison
+            // path and is out of scope for B9.4.
+            if (param.type != null) continue
+            if (param.initializer != null) continue
+            val pattern = param.name as? ObjectBindingPattern ?: continue
+            for (element in pattern.elements) {
+                val computed = element.propertyName as? ComputedPropertyName ?: continue
+                val indexExpr = computed.expression
+                // Skip literal-type computed names (`[2]`, `["a"]`, `` [`key`] ``).
+                // TypeScript treats those as property-name lookups against the empty
+                // `{}` type, not index-signature lookups — TS2537 doesn't fire.
+                if (isLiteralComputedKeyExpr(indexExpr)) continue
+                val indexType = try { getTypeOfExpression(indexExpr) } catch (_: Throwable) { continue }
+                if (indexType === errorType || indexType === anyType) continue
+                // Only emit when the index type is a primitive that would require
+                // an index signature to match. TypeScript displays the widened
+                // form (`'a'` → `string`).
+                val widened = getWidenedLiteralType(indexType)
+                val typeDisplay = typeToString(widened)
+                if (typeDisplay.isEmpty()) continue
+                val start = indexExpr.pos
+                val length = expressionTrueEnd(indexExpr) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '{}' has no matching index signature for type '$typeDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2537,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    private fun isLiteralComputedKeyExpr(expr: Expression): Boolean = when (expr) {
+        is StringLiteralNode -> true
+        is NumericLiteralNode -> true
+        is BigIntLiteralNode -> true
+        is NoSubstitutionTemplateLiteralNode -> true
+        is PrefixUnaryExpression -> (expr.operator == SyntaxKind.Minus || expr.operator == SyntaxKind.Plus) &&
+            (expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode)
+        is ParenthesizedExpression -> isLiteralComputedKeyExpr(expr.expression)
+        else -> false
     }
 
     // -----------------------------------------------------------------------
