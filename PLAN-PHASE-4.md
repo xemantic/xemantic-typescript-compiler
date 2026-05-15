@@ -2510,6 +2510,22 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B9.5. AST-based source-slice rendering of binding-pattern parameter names in `formatParameter` / `signatureToString(sig)` (promoted 2026-05-15; stacks on B9.4).** Replace the `_` placeholder at Checker.kt:43561 and Checker.kt:52907 with a recursive `formatBindingPatternFromAst(node: Node): String` helper covering:
+
+  - **ObjectBindingPattern** → `{ <elements joined with ', '> }` with spaces inside braces (matches TypeScript's `{ [foo.bar]: c }` display convention).
+  - **ArrayBindingPattern** → `[<elements joined with ', '>]`.
+  - **BindingElement** — composes one of:
+    - `...<name>` when `dotDotDotToken`
+    - `<propertyName>: <name>` when `propertyName` differs from `name`
+    - `[<expr>]: <name>` when `propertyName is ComputedPropertyName`
+    - just `<name>` otherwise
+  - **ComputedPropertyName** inner expression: handles `Identifier`, `StringLiteralNode`, `NumericLiteralNode`, `BigIntLiteralNode`, `NoSubstitutionTemplateLiteralNode`, `PropertyAccessExpression`, `ElementAccessExpression`, parens. Fallback `_` for anything else.
+  - **Nested binding patterns** in `name`: recurse.
+
+  **Target.** `crashInEmitTokenWithComment_ts` — the LAST gap. With B9.5, the TS2345 source-display message string changes from `(_: {}) => any` to `({ [foo.bar]: c }: {}) => any`, matching the baseline. Test should flip from 1/2 emissions to 2/2 + matching message strings.
+
+  **Risk profile.** LOW-MEDIUM. The change is purely a display-string update — no type-checking semantics change. However, ANY test in the corpus that depends on the current `_` rendering for a binding-pattern FE/Arrow parameter in a TS2345/TS2769 message string would regress. The previous B9.1 session note verified zero corpus baselines depended on the zero-param display (pre-B9.1), but `_` was the post-B9.1 display — we're now changing again. Mitigation: gate on AST shapes that have a clean source-slice reconstruction; fall back to `_` for unsupported AST shapes. The most likely regression vector is any test whose baseline shows `_:` for a destructuring parameter; if any exist, update the helper or fall back.
+
 - [x] **B9.4. TS2537 emission for computed-property destructuring inside ObjectBindingPattern parameter defaulted to `{}` (DONE 2026-05-15, net-zero infra).** Stacks on B9.1+B9.2+B9.3. New pass `checkBindingPatternComputedIndexSig` walks every ArrowFunction / FunctionExpression in every binder file. For each `Parameter` whose `name is ObjectBindingPattern`, `type == null`, AND `initializer == null` (the B9.2 defaulted-`{}` shape), walks `pattern.elements` for `BindingElement.propertyName is ComputedPropertyName`. Emits TS2537 "Type '{}' has no matching index signature for type '<X>'." at the inner expression's `pos` with length `expressionTrueEnd(expr) - pos`, where `<X>` is the widened type display of the index expression.
 
   **Literal-key gate.** Initial run (no gate) regressed 2 tests: `computerPropertiesInES5ShouldBeTransformed_ts` (extra TS2537 on `` [`key`] ``) and `renamingDestructuredPropertyInFunctionType_ts` (extra TS2537 on `[2]`). Added `isLiteralComputedKeyExpr` gate skipping StringLiteralNode / NumericLiteralNode / BigIntLiteralNode / NoSubstitutionTemplateLiteralNode (and `+`/`-` prefix on numeric literals, plus parens). TypeScript treats literal-typed computed keys as property-name lookups against `{}`, not index-signature lookups — TS2537 doesn't fire for those cases.
