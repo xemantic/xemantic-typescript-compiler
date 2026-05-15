@@ -2796,6 +2796,28 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.23. TS9017 (non-`as const` array) / TS9018 (SpreadElement in any array) walker for exported `VariableStatement` initializers (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclVarInitArrayChecks` walker called from the `VariableStatement` branch of pass 3 right after `emitIsolatedDeclVarInitTs9010`. Two coordinated emissions:
+
+  - **TS9017** "Only const arrays can be inferred ..." — fires when the initializer is a bare `ArrayLiteralExpression` (NOT wrapped in `as const`). Squiggle covers the full `[...]` span via `findMatchingDelimiter`. TS9027 related anchored at the variable name.
+  - **TS9018** "Arrays with spread elements can't inferred ..." — fires per `SpreadElement` inside the initializer's array (including when the outer array is wrapped in `as const`). Squiggle starts at the SpreadElement's `pos` (the `.` of `...`) and ends at the inner expression's `isolatedDeclExprTrueEnd` (avoids the `node.end` overshoots-by-one-token issue per CLAUDE.md). TS9027 related at the variable name.
+
+  Walker detects two shapes:
+  - `init is ArrayLiteralExpression` → emit TS9017, then walk elements for spread.
+  - `init is AsExpression(ArrayLiteralExpression, const)` → skip TS9017 (the `as const` is the "fix" TS9017 suggests), but DO walk elements for TS9018.
+
+  Only the topmost array level is walked — nested arrays inside spreads or elements are NOT recursively walked; no failing test exercises that shape.
+
+  **Adjacent partial progress (no flip).** `isolatedDeclarationErrorsExpressions_ts` 48 → 50 emissions (+2: TS9017 at line 53 / TS9018 at line 55). Still 2 emissions short — gap is the B7.24 TS9019 binding-pattern walker (lines 127-128).
+
+  **Verification.** Full-suite 10078/1403/3 (unchanged from B7.22; zero regressions). Net-zero on the suite — gain on the target test isn't enough to flip.
+
+  **Risk profile that materialized.** Bounded — walker gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` (call-site). `isAsConst` detection mirrors the existing pattern in `emitIsolatedDeclExportDefaultChecks` (Type.Reference.typeName.text=="const", no type args). Only one test in the corpus has `export <kind> arr = [...]` array literal patterns under `--isolatedDeclarations` (verified via grep), so over-firing risk is minimal.
+
+  **Foundation for follow-ons:**
+  - **B7.24 candidate**: TS9019 BindingElement walker for `ObjectBindingPattern` / `ArrayBindingPattern` in `export const|let|var { a } = ...`. Each non-rest, non-nested element with an Identifier name fires TS9019 at the element-name position (no related info — TypeScript's baseline doesn't attach TS9027 for TS9019). Independent of `decl.type` (TS9019 fires even when the destructuring target has an explicit type annotation; line 134's `[, , b = 1]: [number, number, number | undefined]` example confirms this).
+
+---
+
 - [x] **B7.22. TemplateExpression / AsExpression(TemplateExpression) triggers for the var-level TS9010 and class-property-level TS9012 walkers (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. Extends both `emitIsolatedDeclVarInitTs9010` (variable level) and `emitIsolatedDeclClassPropertyTs9012` (class property level) to recognize template-literal-with-substitutions initializers as runtime-only under specific binding-kind / modifier conditions.
 
   **(a) Variable walker.** New `isConst: Boolean` parameter (derived from `stmt.declarationList.flags == SyntaxKind.ConstKeyword` at the call site). Triggers extended:
