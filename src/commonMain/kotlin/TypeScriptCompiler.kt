@@ -1626,6 +1626,18 @@ private fun emitIsolatedDeclarationsDiagnostics(
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     val name = decl.name
+                    // B7.24: TS9019 for destructuring binding patterns under
+                    // `export`. Fires regardless of whether the decl has a type
+                    // annotation (line 134 of `isolatedDeclarationErrorsExpressions.ts`
+                    // confirms `export const [...]: [N,N,N|U] = [...]` still
+                    // emits TS9019). Walker is responsible for skipping rest
+                    // elements and nested binding patterns conservatively.
+                    if (name is ObjectBindingPattern || name is ArrayBindingPattern) {
+                        if (ModifierFlag.Export in stmt.modifiers) {
+                            emitIsolatedDeclVarBindingPatternChecks(name, fileName, source, results)
+                        }
+                        continue
+                    }
                     if (name !is Identifier) continue
                     if (decl.type != null) continue
                     val init = decl.initializer
@@ -2672,6 +2684,59 @@ private fun emitIsolatedDeclTs9017ForVar(
         length = length,
         relatedInformation = listOf(related),
     ))
+}
+
+/**
+ * B7.24: TS9019 walker for `ObjectBindingPattern` / `ArrayBindingPattern`
+ * destructuring targets in exported `VariableStatement`. Each non-rest,
+ * non-nested `BindingElement` with an Identifier name fires TS9019 at the
+ * element-name position.
+ *
+ * No TS9027 related info — TypeScript's baseline for TS9019 doesn't attach
+ * a "Add a type annotation" hint, distinguishing it from TS9010/TS9012
+ * which always do. This matches the `isolatedDeclarationErrorsExpressions_ts`
+ * baseline (lines 127-128).
+ *
+ * Skipped:
+ *  - `OmittedExpression` array holes (e.g. the first two slots in
+ *    `[, , b]`).
+ *  - Rest elements (`...rest`) — TypeScript does not emit TS9019 for them
+ *    in any corpus baseline; conservative skip.
+ *  - Nested binding patterns (e.g. `[{ a }]`) — `el.name` is itself a
+ *    BindingPattern, not an Identifier. Conservative skip; no failing test
+ *    exercises this shape.
+ *
+ * Length of the squiggle = name Identifier's text length (single character
+ * for single-letter names like `a` / `b`).
+ */
+private fun emitIsolatedDeclVarBindingPatternChecks(
+    pattern: Expression,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val elements: List<Node> = when (pattern) {
+        is ObjectBindingPattern -> pattern.elements
+        is ArrayBindingPattern -> pattern.elements
+        else -> return
+    }
+    for (el in elements) {
+        if (el !is BindingElement) continue
+        if (el.dotDotDotToken) continue
+        val name = el.name
+        if (name !is Identifier) continue
+        val (line, character) = positionToLineCharacter(source, name.pos)
+        results.add(Diagnostic(
+            message = "Binding elements can't be exported directly with --isolatedDeclarations.",
+            category = DiagnosticCategory.Error,
+            code = 9019,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
+        ))
+    }
 }
 
 private fun emitIsolatedDeclTs9018ForVar(
