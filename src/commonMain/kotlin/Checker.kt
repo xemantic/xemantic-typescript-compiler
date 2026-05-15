@@ -42276,6 +42276,8 @@ interface DataView {
             when {
                 body is Block && !hasReturnWithExpression(body) -> voidType
                 body is Block -> anyType // has return with expression, can't infer without analysis
+                // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
+                body is Identifier && body.text == "undefined" -> anyType
                 body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
                 else -> anyType
             }

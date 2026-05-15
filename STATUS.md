@@ -2,6 +2,33 @@
 
 **Phase 4 — Checker buildout.** 8,675 / 10,078 tests passing (~86.1%).
 
+**B9.3 (2026-05-15, net-zero infra — stacks on B9.1+B9.2 toward `crashInEmitTokenWithComment_ts`)** —
+Widen concise-body `=> undefined` literal to `any` in `getTypeOfArrowFunction`
+(Checker.kt:42279). Single-branch addition before the existing concise-body
+`getTypeOfExpression(body)` arm: when `body is Identifier && body.text ==
+"undefined"`, return `anyType` instead of resolving the identifier to the
+`undefined` intrinsic. Mirrors `inferTypeFromInitializer`'s widening at
+Checker.kt:13410 (where `var x = undefined` is typed `any`, not `undefined`).
+
+**Verification.** Full-suite 10078/1400/3 unchanged (was 10078/1400/3
+post-B9.2). Zero regressions across 10078 tests. The named target
+`crashInEmitTokenWithComment_ts` source display now shows `(_: {}) => any`
+(was `(_: {}) => undefined` post-B9.2, was `(_: any) => undefined` post-B9.1,
+was `() => undefined` pre-B9.1). Still needs B9.4 (TS2537 emission against
+`{}` computed-property destructuring) to fully flip. The pattern-name display
+gap (`_` vs source slice `{ [foo.bar]: c }`) may or may not be a deciding
+factor in the baseline diff — B9.4 alone may close it, or B9.5 may be
+required afterward.
+
+**Risk profile that materialized.** LOW → ZERO regressions. The change ONLY
+fires when the arrow body is the LITERAL identifier `undefined`
+(`Identifier && text == "undefined"`). FunctionExpression bodies are always
+`Block`, never concise-body — so the new arm only affects ArrowFunction
+inference. Annotated arrows take the earlier `expr.type?.let { ... }` branch
+and skip this code entirely.
+
+---
+
 **B9.2 (2026-05-15, net-zero infra — stacks on B9.1 toward `crashInEmitTokenWithComment_ts`)** —
 Default param type for un-annotated binding-pattern parameters. Single-branch
 change in `getTypeOfVariableOrProperty`'s `Parameter` arm (Checker.kt:40580):

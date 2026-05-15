@@ -2510,7 +2510,7 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
-- [ ] **B9.3. Arrow concise-body literal `=> undefined` widens return type to `any` (foundation, no test-flip alone; ~0-1 tests).** Stacks on B9.1+B9.2. Single-branch change in `getTypeOfArrowFunction`'s concise-body inference (Checker.kt:42279). Currently:
+- [x] **B9.3. Arrow concise-body literal `=> undefined` widens return type to `any` (DONE 2026-05-15, net-zero infra as projected).** Stacks on B9.1+B9.2. Single-branch change in `getTypeOfArrowFunction`'s concise-body inference (Checker.kt:42279). Currently:
 
   ```
   body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
@@ -2520,9 +2520,11 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
   **Risk profile.** LOW. The change ONLY fires when the arrow body is the LITERAL identifier `undefined` (NOT a generic Identifier expression whose name happens to be `undefined` — those are also `Identifier` AST nodes, but the `text == "undefined"` check matches only when the source code uses the keyword). FunctionExpression bodies are always `Block`, never concise-body, so this change is scoped strictly to ArrowFunction. No expected interaction with annotated arrows (the `expr.type?.let { ... }` early branch takes priority).
 
-  **Verification plan.** Run full suite. Expect net-zero on the corpus — the only test that gates on this directly is `crashInEmitTokenWithComment_ts`, which still needs B9.4 to fully flip.
+  **Verification.** Full-suite 10078/1400/3 unchanged (was 10078/1400/3 post-B9.2, net-zero exactly as projected). Zero regressions across 10078 tests. The named target `crashInEmitTokenWithComment_ts` source display now shows `(_: {}) => any` (was `(_: {}) => undefined` post-B9.2). Still needs B9.4 (TS2537 emission against `{}` computed-property destructuring) to fully flip.
 
-  **Foundation for B9.4:** Together B9.1+B9.2+B9.3 should bring `crashInEmitTokenWithComment_ts` source display from `() => undefined` (pre-B9.1) to `(_: {}) => any` (post-B9.3). The remaining gap to the expected `({ [foo.bar]: c }: {}) => any` is the binding-pattern name display (still rendering `_` instead of source slice). The TS2537 emission is B9.4. The pattern-name display would be B9.5 (deferred — may not be required if B9.4 alone closes the test by adding the missing TS2537, since the param-name slot may not be the deciding factor in the baseline diff).
+  **Risk profile that materialized.** LOW → ZERO regressions. The change ONLY fires when the arrow body is the LITERAL identifier `undefined` (`Identifier && text == "undefined"`). FunctionExpression bodies are always `Block`, never concise-body — so the new arm only affects ArrowFunction inference. Annotated arrows take the earlier `expr.type?.let { ... }` branch and skip the body inference entirely.
+
+  **Foundation for B9.4:** Together B9.1+B9.2+B9.3 bring `crashInEmitTokenWithComment_ts` source display from `() => undefined` (pre-B9.1) to `(_: {}) => any` (post-B9.3). The remaining gap to the expected `({ [foo.bar]: c }: {}) => any` is the binding-pattern name display (still rendering `_` instead of source slice). The TS2537 emission is B9.4. The pattern-name display would be B9.5 (deferred — may not be required if B9.4 alone closes the test by adding the missing TS2537, since the param-name slot may not be the deciding factor in the baseline diff).
 
 - [x] **B9.2. Default param type for un-annotated binding-pattern parameters — `{}` for ObjectBindingPattern, `any[]` for ArrayBindingPattern (DONE 2026-05-15, net-zero infra as projected).** Stacks on B9.1 (DONE). Single-branch change in `getTypeOfVariableOrProperty`'s `Parameter` arm (Checker.kt:40580):
 
