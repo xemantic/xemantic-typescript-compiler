@@ -2,6 +2,51 @@
 
 **Phase 4 — Checker buildout.** 8,673 / 10,078 tests passing (~86.1%).
 
+**B7.25 (2026-05-15, net-zero infra)** — TS9007 walker for
+`FunctionExpression` param-defaults in exported `VariableStatement`
+initializers whose init is `FunctionExpression` or `ArrowFunction`.
+Single-file change in `TypeScriptCompiler.kt`. Two coordinated pieces:
+
+  - **Var-decl wiring.** New call to `emitIsolatedDeclParamsCheck(init.parameters, ...)`
+    from the VariableStatement branch of pass 3 (gated on `Export` modifier
+    AND `init is ArrowFunction || init is FunctionExpression`). Recurses
+    into the outer FE/Arrow's params so inner `cb = function(){ }`-style
+    defaults reach the classifier.
+  - **Classifier extension.** New helper
+    `emitIsolatedDeclTs9007ForFnExprParamDefault(fe, paramName, ...)`
+    called from `emitIsolatedDeclParamDefaultClassify`'s FunctionExpression
+    branch BEFORE the existing inner-params recursion. Emits TS9007 at the
+    `function` keyword position (length 8) when the FE has no return-type
+    annotation, with related TS9028 at the enclosing param's name and
+    TS9030 at the FE position.
+
+**Verification.** Full-suite 10078/1402/3 (unchanged from B7.24;
+zero regressions). Net-zero on the suite — gain on
+`isolatedDeclarationErrorsReturnTypes_ts` (0 → 15 of 31 emissions, all
+matching baseline lines/cols exactly) isn't enough to flip it. The
+remaining 16 emissions are class-property-initializer variants
+(`FnParamsExportedClass`) and need a parallel walker in the
+`ClassDeclaration` branch — promoted as B7.26 candidate.
+
+**Risk profile that materialized.** Bounded — wiring gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`.
+The classifier extension only adds TS9007 emission when
+`expr is FunctionExpression && expr.type == null` — the existing
+inner-params recursion is preserved unconditionally. ArrowFunction
+defaults still recurse-only (no TS9007 emission) because the only
+arrow-default test cases in the corpus are `cb = () => 1` (literal
+body) which TypeScript's baseline does NOT flag — adding emission
+there would FP regress.
+
+**Lesson learned.** The test harness strips `// @directive` lines
+before parsing — the baseline's `(13,45)` matched our compiler's
+emission for what the test runner treats as line 13 (source line 18
+post-stripping of 5 directive lines). Future B7.x walkers don't need
+to compensate for this — `positionToLineCharacter` on the
+already-stripped source produces baseline-compatible line numbers.
+
+---
+
 **B7.24 (2026-05-15, +1 — flips `isolatedDeclarationErrorsExpressions_ts`)** —
 TS9019 walker for `ObjectBindingPattern` / `ArrayBindingPattern` destructuring
 targets in exported `VariableStatement`. Single-file change in
