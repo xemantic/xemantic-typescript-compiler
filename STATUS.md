@@ -2,6 +2,96 @@
 
 **Phase 4 — Checker buildout.** 8,672 / 10,078 tests passing (~86.1%).
 
+**B7.22 (2026-05-15, net-zero infra)** — `TemplateExpression` /
+`AsExpression(TemplateExpression)` triggers for the `emitIsolatedDeclVarInitTs9010`
+(variable level) and `emitIsolatedDeclClassPropertyTs9012` (class property
+level) walkers in `TypeScriptCompiler.kt`. Single-file change. The two
+walkers previously hard-listed Call / New / PropertyAccess / ElementAccess /
+BinaryExpression / Identifier as the runtime-only initializer shapes that
+prevent .d.ts inference under `--isolatedDeclarations`; this substep adds
+template literal patterns to the list.
+
+Two const/readonly-gated rules:
+
+**(a) Variable level (`emitIsolatedDeclVarInitTs9010`).** New `isConst: Boolean`
+parameter (`stmt.declarationList.flags == SyntaxKind.ConstKeyword`). Triggers
+extended:
+  - `TemplateExpression` (`` `s${1}` ``) → trigger ONLY when `isConst`. Under
+    `let`/`var` the type widens to `string`, declarable as-written; under
+    `const` the inferred type is a template-literal type that requires
+    checking to compute → TS9010 at the variable name.
+  - `AsExpression` wrapping a `TemplateExpression` (`` `s${1}` as const ``) →
+    always trigger regardless of [isConst]; `as const` forces literal-type
+    inference for any binding kind.
+
+**(b) Class property level (`emitIsolatedDeclClassPropertyTs9012`).** Mirror
+rule via `ModifierFlag.Readonly in member.modifiers`:
+  - `TemplateExpression` initializer + `readonly` modifier → TS9012 at the
+    property name.
+  - `AsExpression(TemplateExpression)` initializer → TS9012 regardless of
+    `readonly`. Removed the pre-existing
+    `if (isIsolatedDeclTriviallyDeclarable(init)) continue` short-circuit
+    because that helper returns `true` for `TemplateExpression` (correct at
+    param-default level but wrong here) — the triggers list is authoritative.
+
+**Adjacent partial progress (no flip).**
+`isolatedDeclarationErrorsExpressions_ts` 35 → 48 emissions (+13:
+4 TS9010 for `templateConstNotOk2/3/4/5` const+template-with-subs (lines 17-20);
+3 TS9010 for `templateLetOk2/3/4AsConst` let+`as const`+template (lines 49-51);
+3 TS9012 for `readonly templateConstNotOk2/3/4` readonly+template (lines 91-93);
+3 TS9012 for `templateLetOk2/3/4AsConst = ... as const` class properties
+(lines 102-104)). Still 4 emissions short of expected 52 — gap covers:
+- **B7.23 candidate**: TS9017 for non-`as const` plain `export let arr = [1,2,3]`
+  (line 53 in baseline / line 59 in source) and TS9018 for spread elements in
+  any array initializer regardless of `as const` (line 55 / 61).
+  Squiggle ON the array (TS9017) / spread element (TS9018), not the variable
+  name. Mirrors the export-default `emitIsolatedDeclTs9017Default` /
+  `walkExportDefaultSubExpr` helpers' shape for variable context.
+- **B7.24 candidate**: TS9019 for `export const { a } = ...` /
+  `export const [, , b = 1]: ... = ...` binding-pattern destructuring exports
+  (lines 127-128 / 133-134). Squiggle on the binding element name. New walker
+  for `VariableStatement` whose `decl.name` is an `ObjectBindingPattern` or
+  `ArrayBindingPattern` under `Export`.
+
+**Verification.** Targeted test now emits 48/52 expected (was 35/52). Full-suite
+10078/1403/3 (unchanged from B7.21; zero regressions). Net-zero on the suite —
+the gain on `isolatedDeclarationErrorsExpressions_ts` isn't enough to flip it
+(needs B7.23 + B7.24).
+
+**Risk profile that materialized.** Bounded for both pieces:
+- (a) Variable walker is gated on `options.isolatedDeclarations` AND
+  `ModifierFlag.Export in stmt.modifiers` (call-site). `isConst` derivation
+  via `declarationList.flags == ConstKeyword` follows the existing convention
+  used in Checker.kt:8768. The `AsExpression(TemplateExpression)` check uses
+  `init.expression is TemplateExpression` — no recursive descent; nested
+  `as` chains (`(`x` as const) as const`) are not exercised by any failing
+  test.
+- (b) Property walker uses `member.modifiers` for the readonly check
+  (PropertyDeclaration carries its own modifier list). Removing the
+  `isIsolatedDeclTriviallyDeclarable` short-circuit is safe because the
+  triggers list now covers every kind that helper would have skipped — the
+  helper returns `true` for literal nodes (NumericLiteral, BigIntLiteral,
+  StringLiteral, NoSubstitutionTemplate, Identifier-keywords, +/- numeric
+  unary) and `TemplateExpression`; literals/keywords fall through the
+  triggers list to `else -> false`, and TemplateExpression is now handled
+  by its dedicated `isReadonly` rule. Zero regressions confirms this in the
+  full suite.
+
+**Foundation for follow-ons:**
+- **B7.23 candidate**: ArrayLiteralExpression walkers — TS9017 at full-array
+  span when the initializer is a non-`as const` array under `export let`
+  (TypeScript emits TS9017 for `let`/`var`-bound non-const arrays only; `const`
+  arrays without `as const` get TS9019 BindingElement-like or are accepted as
+  inferable). TS9018 walks any ArrayLiteralExpression (including inside
+  `as const`) for SpreadElement and emits at the spread span. Both anchor TS9027
+  at the variable name.
+- **B7.24 candidate**: BindingElement walkers for `ObjectBindingPattern` /
+  `ArrayBindingPattern` in `export const|let|var { a } = ...` /
+  `export const|let|var [, , b] = ...`. Each non-rest element with a name
+  Identifier fires TS9019 at the element-name position. The
+  `export function foo([, , b]: [...] = ...)` shape (parameter destructuring)
+  is NOT affected — TypeScript's baseline doesn't fire TS9019 there.
+
 **B7.21 (2026-05-15, +1 — flips `isolatedDeclarationErrorsClasses_ts`)** —
 Three coordinated pieces close the test:
 
