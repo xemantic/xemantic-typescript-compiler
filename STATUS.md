@@ -2,6 +2,34 @@
 
 **Phase 4 — Checker buildout.** 8,675 / 10,078 tests passing (~86.1%).
 
+**B9.2 (2026-05-15, net-zero infra — stacks on B9.1 toward `crashInEmitTokenWithComment_ts`)** —
+Default param type for un-annotated binding-pattern parameters. Single-branch
+change in `getTypeOfVariableOrProperty`'s `Parameter` arm (Checker.kt:40580):
+when `decl.type == null && decl.initializer == null`, route by
+`decl.name`:
+
+  - `ObjectBindingPattern` → `Type.Object().also { it.properties = emptyList() }`
+    (anonymous empty object, renders as `{}` per the existing `typeToString`
+    Type.Object branch at line 43542).
+  - `ArrayBindingPattern` → `getArrayType(anyType)` (renders as `any[]`).
+  - Identifier-named path unchanged — falls through to `anyType`.
+
+**Verification.** Full-suite 10078/1400/3 unchanged. Zero regressions across
+10078 tests. The named target `crashInEmitTokenWithComment_ts` source display
+now shows `(_: {}) => undefined` (was `(_: any) => undefined` post-B9.1, was
+`() => undefined` pre-B9.1). Still needs B9.3 (`=> undefined` body → `any`
+return type) and B9.4 (TS2537 emission against `{}` computed-property
+destructuring) to fully flip.
+
+**Risk profile that materialized.** LOW → ZERO regressions. The change only
+fires when ALL THREE conditions hold (binding-pattern name + no annotation +
+no initializer), and post-B9.1 the only `getTypeOfSymbol` consumers reaching
+this path are downstream of the FE/Arrow `forSignatureDisplay = true`
+synthesis. Non-binding-pattern Parameters (Identifier name) take the existing
+fall-through to `anyType` unchanged.
+
+---
+
 **B9.1 (2026-05-15, net-zero infra — foundation for `crashInEmitTokenWithComment_ts`)** —
 Synthesize signature-parameter symbols for `ObjectBindingPattern` /
 `ArrayBindingPattern` parameters at FE/Arrow call sites of
