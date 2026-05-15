@@ -1,6 +1,67 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,674 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,675 / 10,078 tests passing (~86.1%).
+
+**B8.1 (2026-05-15, +1 — flips `intersectionWithConflictingPrivates_ts`)** —
+Intersection-with-conflicting-privates → `never` reduction. Three pieces in
+`Checker.kt`:
+
+  - **Reduction in `getIntersectionType`.** New helper
+    `findConflictingPrivateInIntersection(types)` walks each `Type.Interface`
+    (and `Type.Reference.target`) constituent's `symbol.declarations`,
+    inspects DIRECT class members (`PropertyDeclaration` / `MethodDeclaration`
+    / `GetAccessor` / `SetAccessor` with Identifier names), skips
+    `OBJECT_PROTOTYPE_PROPERTIES`, and returns the first property name that
+    appears in 2+ constituents AND has `ModifierFlag.Private` in any
+    declaration. When non-null, `getIntersectionType` returns `neverType`
+    AFTER the existing primitive-incompatibility reduction.
+
+  - **Side-channel cache.** New `CheckerState.intersectionReductionReasons:
+    HashMap<IntersectionType, IntersectionReductionReason>` keyed by the AST
+    `IntersectionType` node, populated post-call from
+    `getTypeFromTypeNodeWorker`'s IntersectionType branch when
+    `getIntersectionType` returned `neverType` AND
+    `findConflictingPrivateInIntersection` re-confirms the reason (so the
+    cache only fires for private-conflict reductions, not primitive ones).
+    `IntersectionReductionReason(displayString, conflictingPropName)` carries
+    the original intersection display ("A & B") and the conflicting prop name
+    ("x") for diagnostic recovery.
+
+  - **Diagnostic emission.** Two new emission sites consult
+    `findIntersectionReductionForExpr(expr)` which walks the receiver's
+    symbol declarations (`VariableDeclaration` / `Parameter` /
+    `PropertyDeclaration`) for an annotation containing an `IntersectionType`
+    in the cache:
+    - **TS2322** in `checkAssignmentExpression`'s Identifier branch — when
+      `targetType === neverType` AND the cache lookup finds a reduction
+      reason, emit "Type '$source' is not assignable to type 'never'." with
+      `messageChain = ["  The intersection 'A & B' was reduced to 'never'
+      because property 'x' exists in multiple constituents and is private in
+      some."]`. Returns early so the standard emission path (which would
+      print "type 'A & B'") doesn't fire.
+    - **TS2339** in `checkMemberAccessMissing` — early branch (after the
+      empty-name guard) that fires when receiver type is `neverType` AND the
+      reduction-reason cache lookup hits. Emits "Property '$propName' does
+      not exist on type 'never'." with the same chain message.
+
+**Verification.** Full-suite 10078/1400/3 (was 10078/1401/3, +1 net). Zero
+regressions. Closes B8.1 fully — the named target
+`intersectionWithConflictingPrivates_ts` flips clean.
+
+**Risk profile that materialized.** Bounded — reduction only fires when
+`findConflictingPrivateInIntersection` returns non-null, which requires:
+(a) 2+ Type.Interface (class) constituents, (b) a property name appearing in
+2+ of them, (c) at least one declaration of that property carrying
+`ModifierFlag.Private`. The corpus has 135 tests using `private` members but
+the SWAP-bucket survey identified `intersectionWithConflictingPrivates_ts` as
+the only target matching this exact pattern, so the over-fire risk was
+already low. Verified zero regressions across the 10078-test suite confirms
+no other test relied on `A & B` (private-conflict) NOT reducing. The
+side-channel cache is keyed by AST node identity, which is stable across the
+checker run; no cross-file pollution because `IntersectionType` instances are
+per-file.
+
+---
 
 **B7.26 (2026-05-15, +1 — flips `isolatedDeclarationErrorsReturnTypes_ts`)** —
 Parallel walker to B7.25 for the class-property axis. Single-file change

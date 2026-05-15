@@ -125,7 +125,21 @@ class Checker(
          *  Symbol/Signature/Type.Object reallocation that OOMs Promise/IPromise-style
          *  deep generic-method comparisons. */
         val resolvedPropertyTypes = HashMap<Long, Type>()
+        /** B8.1: side-channel for `IntersectionType` AST nodes that resolved to `never`
+         *  due to a conflicting private property. Populated by
+         *  [getTypeFromTypeNodeWorker]'s IntersectionType branch when reduction
+         *  fires; consumed by TS2322 / TS2339 emission paths to recover the
+         *  original intersection display + conflicting prop name for the
+         *  "The intersection 'A & B' was reduced to 'never' ..." chain line. */
+        val intersectionReductionReasons = HashMap<IntersectionType, IntersectionReductionReason>()
     }
+
+    /** B8.1: original intersection display + conflicting private property name for
+     *  diagnostics emitted on a never-reduced intersection. */
+    private data class IntersectionReductionReason(
+        val displayString: String,
+        val conflictingPropName: String,
+    )
 
     private val state = CheckerState()
 
@@ -39148,6 +39162,31 @@ interface DataView {
                     }
                     if (targetType != null && targetType !== anyType && targetType !== errorType) {
                         val tt = targetType!!
+                        // B8.1: target is `never` because its annotation is an
+                        // intersection that reduced due to a conflicting private
+                        // property. Emit TS2322 with `never` display + chain so the
+                        // standard emission path doesn't print `Type 'X' is not
+                        // assignable to type 'A & B'.` (the un-reduced form).
+                        if (tt === neverType) {
+                            val reductionReason = findIntersectionReductionForExpr(target)
+                            if (reductionReason != null) {
+                                val sourceType = getTypeOfExpression(expr.right)
+                                val displaySource = typeToString(getWidenedLiteralType(sourceType))
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type 'never'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    messageChain = listOf(intersectionReductionChainMessage(reductionReason)),
+                                ))
+                                return
+                            }
+                        }
                         // Class-Identifier-as-value RHS with construct-sig target — `d = C`.
                         // Mirrors the var-decl branch in checkVarDeclAssignability (17.8a):
                         // canUseTypeEngine skips class-instance-vs-constructor comparisons,
@@ -40228,7 +40267,25 @@ interface DataView {
             is KeywordTypeNode -> getTypeFromKeyword(node.kind)
             is TypeReference -> getTypeFromTypeReference(node)
             is UnionType -> getUnionType(node.types.map { getTypeFromTypeNode(it) })
-            is IntersectionType -> getIntersectionType(node.types.map { getTypeFromTypeNode(it) })
+            is IntersectionType -> {
+                val resolved = node.types.map { getTypeFromTypeNode(it) }
+                val result = getIntersectionType(resolved)
+                // B8.1: capture reduction reason when getIntersectionType returned never
+                // due to a private-conflict between class constituents. Cache is keyed by
+                // the AST IntersectionType node; downstream TS2322 / TS2339 emission
+                // looks up the variable's annotation node to recover the chain text.
+                if (result === neverType) {
+                    val conflictProp = findConflictingPrivateInIntersection(resolved)
+                    if (conflictProp != null) {
+                        val displayString = formatTypeForDisplay(node) ?: resolved.joinToString(" & ") { typeToString(it) }
+                        state.intersectionReductionReasons[node] = IntersectionReductionReason(
+                            displayString = displayString,
+                            conflictingPropName = conflictProp,
+                        )
+                    }
+                }
+                result
+            }
             is ArrayType -> getArrayType(getTypeFromTypeNode(node.elementType))
             is TupleType -> getTupleType(node)
             is LiteralType -> getTypeFromLiteralTypeNode(node)
@@ -49636,6 +49693,25 @@ interface DataView {
         // same branches as their un-parenthesized forms. Parens only affect precedence.
         var objectExpr = objectExprIn
         while (objectExpr is ParenthesizedExpression) objectExpr = objectExpr.expression
+        // B8.1: receiver typed as `never` because its annotation is an intersection
+        // that reduced to never due to a conflicting private property. Emit TS2339
+        // with `never` display + chain. Gate on cache hit so we don't change the
+        // emission for receivers that are `never` for OTHER reasons (the existing
+        // narrowed-to-never path below handles those for Union receivers).
+        run {
+            val reductionReason = findIntersectionReductionForExpr(objectExpr) ?: return@run
+            val recvType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { return@run }
+            if (recvType !== neverType) return@run
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type 'never'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+                messageChain = listOf(intersectionReductionChainMessage(reductionReason)),
+            ))
+            return
+        }
         // For the TS2576 "did you mean static member 'A.Y'" message, the suffix depends on
         // the access form — `.y` for property access, `["y"]`/`['y']` for element access.
         // Default to `.propName` if not supplied.
@@ -56760,7 +56836,105 @@ interface DataView {
             val distinctPrimitiveKinds = primitives.map { it.flags.value and primitiveFlags.value }.toSet()
             if (distinctPrimitiveKinds.size >= 2) return neverType
         }
+        // B8.1: reduce `A & B` to `never` when a property name appears in 2+
+        // class constituents and is `private` in at least one. The reduction
+        // reason (display string + conflicting prop name) is captured by
+        // [getTypeFromTypeNodeWorker]'s IntersectionType branch (post-call)
+        // so TS2322 / TS2339 emitters can append the
+        // "The intersection 'A & B' was reduced to 'never' ..." chain line.
+        if (findConflictingPrivateInIntersection(filtered) != null) return neverType
         return Type.Intersection(filtered)
+    }
+
+    /**
+     * B8.1: find the FIRST property name that appears in 2+ constituents of
+     * an intersection AND has `private` modifier in at least one declaration.
+     *
+     * Walks each [Type.Interface] (class) constituent's `symbol.declarations`
+     * and inspects DIRECT declared members only — inherited members are
+     * intentionally skipped to avoid OBJECT_PROTOTYPE_PROPERTIES noise and
+     * to match TypeScript's behavior. Anonymous [Type.Object] / [Type.Reference]
+     * constituents don't contribute (their members are not `private`-declared
+     * in the type-system sense, only class members can be).
+     *
+     * Returns null when no conflict is found (caller leaves the intersection
+     * intact).
+     */
+    private fun findConflictingPrivateInIntersection(types: List<Type>): String? {
+        // (propName → list of "is this declaration private?" booleans, one per occurrence)
+        val nameOccurrences = HashMap<String, MutableList<Boolean>>()
+        for (t in types) {
+            val iface = (t as? Type.Interface) ?: ((t as? Type.Reference)?.target) ?: continue
+            val symbol = iface.symbol ?: continue
+            for (decl in symbol.declarations) {
+                if (decl !is ClassDeclaration) continue
+                for (member in decl.members) {
+                    val name = when (member) {
+                        is PropertyDeclaration -> (member.name as? Identifier)?.text
+                        is MethodDeclaration -> (member.name as? Identifier)?.text
+                        is GetAccessor -> (member.name as? Identifier)?.text
+                        is SetAccessor -> (member.name as? Identifier)?.text
+                        else -> null
+                    } ?: continue
+                    if (name in OBJECT_PROTOTYPE_PROPERTIES) continue
+                    nameOccurrences.getOrPut(name) { mutableListOf() }.add(isMemberPrivate(member))
+                }
+            }
+        }
+        for ((name, occurrences) in nameOccurrences) {
+            if (occurrences.size >= 2 && occurrences.any { it }) return name
+        }
+        return null
+    }
+
+    /** B8.1: chain message text for an intersection that reduced to `never` due to
+     *  conflicting private members. Same text appended to TS2322 and TS2339. */
+    private fun intersectionReductionChainMessage(reason: IntersectionReductionReason): String =
+        "  The intersection '${reason.displayString}' was reduced to 'never' " +
+            "because property '${reason.conflictingPropName}' exists in multiple " +
+            "constituents and is private in some."
+
+    /** B8.1: look up the intersection-reduction reason for an expression that resolves
+     *  to `never` due to a conflicting-private intersection reduction. Walks the
+     *  receiver's symbol declarations for a VariableDeclaration / Parameter /
+     *  PropertyDeclaration / PropertySignature whose type annotation contains an
+     *  IntersectionType registered in [CheckerState.intersectionReductionReasons].
+     *  Returns null when no reduction info is recorded (callers fall through to
+     *  the standard never-display path). */
+    private fun findIntersectionReductionForExpr(expr: Expression): IntersectionReductionReason? {
+        if (state.intersectionReductionReasons.isEmpty()) return null
+        val symbol = when (expr) {
+            is Identifier -> currentFileLocals?.get(expr.text) ?: globals[expr.text]
+            else -> null
+        } ?: return null
+        for (decl in symbol.declarations) {
+            val typeNode: TypeNode? = when (decl) {
+                is VariableDeclaration -> decl.type
+                is Parameter -> decl.type
+                is PropertyDeclaration -> decl.type
+                else -> null
+            }
+            if (typeNode != null) {
+                findIntersectionReductionInTypeNode(typeNode)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** B8.1: walk a TypeNode looking for any IntersectionType registered in the
+     *  reduction-reason cache. Returns the first match found. */
+    private fun findIntersectionReductionInTypeNode(node: TypeNode): IntersectionReductionReason? {
+        when (node) {
+            is IntersectionType -> {
+                state.intersectionReductionReasons[node]?.let { return it }
+                for (t in node.types) findIntersectionReductionInTypeNode(t)?.let { return it }
+            }
+            is UnionType -> for (t in node.types) findIntersectionReductionInTypeNode(t)?.let { return it }
+            is ParenthesizedType -> return findIntersectionReductionInTypeNode(node.type)
+            is ArrayType -> return findIntersectionReductionInTypeNode(node.elementType)
+            else -> {}
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
