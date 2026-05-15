@@ -2,6 +2,66 @@
 
 **Phase 4 — Checker buildout.** 8,675 / 10,078 tests passing (~86.1%).
 
+**B9.1 (2026-05-15, net-zero infra — foundation for `crashInEmitTokenWithComment_ts`)** —
+Synthesize signature-parameter symbols for `ObjectBindingPattern` /
+`ArrayBindingPattern` parameters at FE/Arrow call sites of
+`getParameterSymbols`. Four pieces in `Checker.kt`:
+
+  - **`getParameterSymbols` (Checker.kt:40756).** New `forSignatureDisplay:
+    Boolean = false` parameter. When `true` AND `param.name is
+    ObjectBindingPattern || ArrayBindingPattern`, synthesize a
+    `Symbol(SymbolFlags.FunctionScopedVariable, name = "")` carrying
+    `valueDeclaration = param` and `declarations.add(param)`. Default-false
+    at every other call site preserves the pre-B9.1 silent-drop behavior.
+
+  - **Call-site gating.** Only two sites pass `forSignatureDisplay = true`:
+    `getTypeOfArrowFunction` (Checker.kt:42272) and
+    `getTypeOfFunctionExpression` (Checker.kt:42309) — the contexts where
+    TS2345 source-display chains render `signatureToString(sig, ...)` for
+    the argument expression's inferred type. Other call sites
+    (`resolveInterfaceMembers`, ctor builders, alias/heritage paths) keep
+    null-drop behavior to avoid arity surprises in
+    `checkArgumentsAgainstOverloads` / TS2554 consumers.
+
+  - **`formatParameter` (Checker.kt:43322).** Added `displayName` lookup:
+    when `decl?.name is ObjectBindingPattern || ArrayBindingPattern`,
+    render as `_` (consistent with the pre-existing `formatParameterDecl`
+    fallback at line 57041, which also uses `_` for non-Identifier names).
+    Applied uniformly to dotdotdot / question / standard render arms.
+
+  - **`signatureToString(sig)` (Checker.kt:52661).** TS2769
+    message-formatter variant — same `_` fallback for binding-pattern
+    symbols.
+
+  - **`signatureRelatedTo` chain (Checker.kt:56318).** The "Types of
+    parameters 'A' and 'B' are incompatible." chain line — same `_`
+    fallback for both source and target parameters with binding-pattern
+    decls. Paranoia path; rarely fires.
+
+**Verification.** Full-suite 10078/1400/3 (was 10078/1400/3, net-zero exactly
+as projected). Zero regressions across 10078 tests. The named target
+`crashInEmitTokenWithComment_ts` does NOT flip with B9.1 alone — needs B9.2
+(param type `{}` for ObjectBindingPattern), B9.3 (return type `any` for
+`=> undefined` literal body), and B9.4 (TS2537 emission for computed-property
+destructuring against `{}`). Source display improvement
+(`() => undefined` → `(_: any) => undefined` for the inner arrow argument)
+lands silently — no test in the corpus had a baseline depending on the
+pre-B9.1 zero-param display.
+
+**Risk profile that materialized.** Expected MEDIUM → actual ZERO. The
+mitigation worked: forSignatureDisplay gating restricted synthesis to two
+FE/Arrow call sites, and the empty `Symbol.name` is intercepted at the
+THREE display sites known to consume it (formatParameter, the TS2769-variant
+signatureToString, and the signatureRelatedTo chain). The `_` fallback
+matches the existing `formatParameterDecl` precedent — no display
+convention shift. `sig.parameters.size` / `minArgumentCount` consumers
+behave identically because FE/Arrow `minArgumentCount` was already computed
+unconditionally via `expr.parameters.count { ... }` directly from the AST;
+binding-pattern params just now get a Symbol slot in the parallel
+`parameters: List<Symbol>` list.
+
+---
+
 **B8.1 (2026-05-15, +1 — flips `intersectionWithConflictingPrivates_ts`)** —
 Intersection-with-conflicting-privates → `never` reduction. Three pieces in
 `Checker.kt`:
