@@ -2510,6 +2510,29 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B8.1. Intersection-with-conflicting-privates → `never` reduction (NEW; ~1 named target, MEDIUM risk).** Promoted 2026-05-15 after post-B7.26 recon: `find_candidates.py --fresh` returned 0/0/0 yet again, all B1-B7 substeps checked off, `intersectionWithConflictingPrivates_ts` is the only SWAP candidate with a clearly bounded scope (+3 diff = 1 type-display swap + 2 missing chain lines, both at the same root cause).
+
+  **Test target (from `find_candidates.py` SWAP bucket).**
+  - Source: `class A { private x: unknown; y?: string; }` + `class B { private x: unknown; y?: string; }` + `declare let ab: A & B;` + `ab.y = 'hello';` + `ab = {};`
+  - Expected (2 errors): TS2339 at (5,4) `Property 'y' does not exist on type 'never'.` + chain `The intersection 'A & B' was reduced to 'never' because property 'x' exists in multiple constituents and is private in some.`; TS2322 at (6,1) `Type '{}' is not assignable to type 'never'.` + same chain.
+  - Currently emitting: TS2322 at (6,1) with `Type '{}' is not assignable to type 'A & B'.` (no chain). TS2339 at (5,4) is firing correctly per shape but with wrong receiver type (`A & B` instead of `never`) and no chain.
+
+  **Decomposition (smallest-substep order):**
+  1. **Detect conflict.** New helper `findConflictingPrivateInIntersection(types: List<Type>): String?` — returns the conflicting property name (e.g. "x") or null. Walks each constituent (`Type.Object` / `Type.Reference` / `Type.Interface`), collects per-property declaring symbol, returns the FIRST property name that appears in 2+ constituents AND has `ModifierFlag.Private` in any declaration. Bounded — only walks declared (not inherited) properties to avoid OBJECT_PROTOTYPE_PROPERTIES noise.
+  2. **Reduce in `getIntersectionType`.** When `findConflictingPrivateInIntersection(filtered)` returns non-null, return `neverType`. Insert AFTER the existing primitive-incompatibility reduction (Checker.kt:56755). Before the reduction, save `filtered` (or its display string) keyed on `neverType.id`-with-source-position OR via a new side-channel like `Map<Pair<TypeId, String>, ConflictReason>` so the elaboration path can recover the original intersection display. Simpler alternative: introduce a new `Type.Intersection.reducedToNever: ConflictReason?` field that gets set BEFORE returning never — but then we'd return `Type.Intersection` not `neverType`, breaking callers that check `=== neverType`. Side-channel cache is safer.
+  3. **Elaboration chain in TS2322 / TS2339 paths.** When the target type is `neverType` AND a side-channel lookup finds the original intersection + conflicting property, append `\n  The intersection 'A & B' was reduced to 'never' because property 'x' exists in multiple constituents and is private in some.` to the diagnostic message. Touches `checkVarDeclAssignability` / `checkAssignmentExpression` (TS2322 callsites) and `checkSinglePropertyAccess` (TS2339 callsite).
+
+  **Risk profile.** MEDIUM:
+  - 135 tests in the corpus use `private` members. Most don't intersect them, but any test that has `class A { private x; }` + `class B { private x; }` + `let ab: A & B` would now reduce to `never` instead of staying as `A & B` — could regress tests that legitimately use this shape (unlikely in real code but possible in test corpus).
+  - The side-channel cache must be cleared per file or risk cross-file pollution.
+  - Display of intersection types in OTHER messages where the never-reduced intersection appears (e.g. `typeof ab` should still display as `never` everywhere) — need to verify no display regressions.
+
+  **Yield estimate.** +1 named target, possibly +1-2 adjacent tests (any with the same shape). Confirmed via `find_candidates.py` showing this is the only SWAP candidate matching the pattern.
+
+  **Why now.** All B1-B7 substeps closed; `find_candidates.py --fresh` returns 0/0/0; `chore(queue): promote ...` is the appropriate next-session-prep commit per protocol. Substep is the smallest tractable scope from the SWAP bucket — most other SWAPs require display-system or generic-inference infrastructure we don't have.
+
+---
+
 - [x] **B1.1. Blocker #1 — `&&`-chain narrowing of identifiers (FOUNDATION
   DONE 2026-05-07 in 17.139, net-zero infra; queue yield estimate of
   ~2-5 tests was overstated, see session note).** `computeRawTypeOfPropertyAccess`
