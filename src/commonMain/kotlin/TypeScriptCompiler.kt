@@ -1678,6 +1678,15 @@ private fun emitIsolatedDeclarationsDiagnostics(
                                 emitIsolatedDeclObjLitSpreadShorthand(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitAccessor(init, name, fileName, source, results)
                             }
+                            // B7.25: recurse into params of FE/Arrow var-decl
+                            // initializers so inner `cb = function(){ }`-style
+                            // defaults fire TS9007 (and inner param-name TS9011
+                            // where applicable).
+                            if (init is ArrowFunction) {
+                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+                            } else if (init is FunctionExpression) {
+                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+                            }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
                         // expando-property assignments AND no return type. Applies
@@ -1955,6 +1964,13 @@ private fun emitIsolatedDeclParamDefaultClassify(
         return
     }
     if (expr is FunctionExpression) {
+        // B7.25: emit TS9007 when the FE param-default lacks a return type
+        // annotation. Squiggle covers the `function` keyword (8 chars) at
+        // the FE's start position. Related infos: TS9028 at the enclosing
+        // param's name, TS9030 at the FE's position.
+        if (expr.type == null) {
+            emitIsolatedDeclTs9007ForFnExprParamDefault(expr, paramName, fileName, source, results)
+        }
         emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results)
         return
     }
@@ -2016,6 +2032,58 @@ private fun emitIsolatedDeclParamDefaultClassify(
             emitIsolatedDeclTs9013(expr, paramName, fileName, source, results)
         }
     }
+}
+
+/**
+ * B7.25: TS9007 for a `FunctionExpression` used as a parameter default
+ * (e.g. `cb = function(){ }`) when it lacks an explicit return type.
+ * Squiggle covers the `function` keyword (8 chars) at the FE's start.
+ * Related: TS9028 at the enclosing param's name, TS9030 at the FE.
+ */
+private fun emitIsolatedDeclTs9007ForFnExprParamDefault(
+    fe: FunctionExpression,
+    paramName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val start = fe.pos
+    val length = 8
+    val (line, character) = positionToLineCharacter(source, start)
+    val (pnLine, pnChar) = positionToLineCharacter(source, paramName.pos)
+    val related = listOf(
+        Diagnostic(
+            message = "Add a type annotation to the parameter ${paramName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9028,
+            fileName = fileName,
+            line = pnLine,
+            character = pnChar,
+            start = paramName.pos,
+            length = paramName.text.length,
+        ),
+        Diagnostic(
+            message = "Add a return type to the function expression.",
+            category = DiagnosticCategory.Message,
+            code = 9030,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ),
+    )
+    results.add(Diagnostic(
+        message = "Function must have an explicit return type annotation with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9007,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = start,
+        length = length,
+        relatedInformation = related,
+    ))
 }
 
 private fun isolatedDeclTypeNodeLength(t: TypeNode): Int {
