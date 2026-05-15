@@ -2796,6 +2796,30 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 
 ---
 
+- [x] **B7.22. TemplateExpression / AsExpression(TemplateExpression) triggers for the var-level TS9010 and class-property-level TS9012 walkers (DONE 2026-05-15, net-zero infra).** Single-file change in `TypeScriptCompiler.kt`. Extends both `emitIsolatedDeclVarInitTs9010` (variable level) and `emitIsolatedDeclClassPropertyTs9012` (class property level) to recognize template-literal-with-substitutions initializers as runtime-only under specific binding-kind / modifier conditions.
+
+  **(a) Variable walker.** New `isConst: Boolean` parameter (derived from `stmt.declarationList.flags == SyntaxKind.ConstKeyword` at the call site). Triggers extended:
+  - `is TemplateExpression -> isConst` — `\`s${1}\`` under `const` yields a template-literal type that requires checking; under `let`/`var` widens to `string` (declarable as-written).
+  - `is AsExpression -> init.expression is TemplateExpression` — `\`s${1}\` as const` always forces literal-type inference regardless of binding kind.
+
+  **(b) Class property walker.** New `isReadonly = ModifierFlag.Readonly in member.modifiers` check. Triggers extended:
+  - `is TemplateExpression -> isReadonly` — same const/let semantics applied via readonly modifier.
+  - `is AsExpression -> init.expression is TemplateExpression` — always trigger.
+
+  Also removed the pre-existing `if (isIsolatedDeclTriviallyDeclarable(init)) continue` short-circuit in the property walker because that helper returns `true` for `TemplateExpression` (correct at param-default level but wrong for property level). The triggers list is now authoritative; verified zero regressions confirms the literal kinds (NumericLiteralNode, BigIntLiteralNode, etc.) still fall through to `else -> false`.
+
+  **Adjacent partial progress (no flip).** `isolatedDeclarationErrorsExpressions_ts` 35 → 48 emissions (+13: 4 TS9010 const+template, 3 TS9010 let+as const+template, 3 TS9012 readonly+template, 3 TS9012 prop+as const+template). Still 4 emissions short of expected 52 — gap covers TS9017 (line 53 non-`as const` array under `export let`), TS9018 (line 55 SpreadElement in `as const` array), and TS9019 ×2 (lines 127-128 binding-pattern destructuring exports). Each remaining piece is a separate walker shape — B7.23 / B7.24 follow-ons.
+
+  **Verification.** Full-suite 10078/1403/3 (unchanged from B7.21; zero regressions). Net-zero on the suite — gain on `isolatedDeclarationErrorsExpressions_ts` (48 of 52 expected) isn't enough to flip it.
+
+  **Risk profile that materialized.** Bounded — both walkers gated on `options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers` (call-site). The const/readonly gates limit template emissions to the specific shapes TypeScript's baseline expects. Removing the `isIsolatedDeclTriviallyDeclarable` short-circuit was safe because the triggers list now subsumes its responsibility for property-level emission.
+
+  **Foundation for follow-ons:**
+  - **B7.23 candidate**: ArrayLiteralExpression walkers — TS9017 at full-array span when the initializer is a non-`as const` array under `export let`. TS9018 walks any ArrayLiteralExpression (including inside `as const`) for SpreadElement and emits at the spread span. Both anchor TS9027 at the variable name.
+  - **B7.24 candidate**: BindingElement walkers for `ObjectBindingPattern` / `ArrayBindingPattern` in `export const|let|var { a } = ...` / `export const|let|var [, , b] = ...`. Each non-rest element with a name Identifier fires TS9019 at the element-name position. The `export function foo([, , b]: [...] = ...)` shape (parameter destructuring) is NOT affected — TypeScript's baseline doesn't fire TS9019 there.
+
+---
+
 - [x] **B7.21. TS7010 + TS9013 + AsExpression-end fix to close `isolatedDeclarationErrorsClasses_ts` (DONE 2026-05-15, +1 — flips test).** Three coordinated pieces:
 
   **(a) Checker.kt: TS7010 InterfaceDeclaration extension for ComputedPropertyName names.** The existing `checkTS7010InStatements`'s InterfaceDeclaration branch only extracted names from `Identifier` and `StringLiteralNode`. Extended `rawName` resolution with a third fallback: `((nameNode as? ComputedPropertyName)?.expression as? Identifier)?.let { "[${it.text}]" }`. So `[noAnnotationLiteralName]()` in interface I now resolves to `[noAnnotationLiteralName]` and emits TS7010 with that name in the message and the full member squiggle (`member.pos` to `member.end`). Verified safe — no other test in the corpus has unannotated computed-name methods in interfaces (`overloadsWithComputedNames`, `dynamicNamesErrors` all have explicit `: void` / `: number` return types).

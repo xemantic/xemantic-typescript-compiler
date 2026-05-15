@@ -1656,7 +1656,8 @@ private fun emitIsolatedDeclarationsDiagnostics(
                     } else {
                         if (ModifierFlag.Export in stmt.modifiers) {
                             emitIsolatedDeclClassExprDiags(decl, name, fileName, source, results)
-                            emitIsolatedDeclVarInitTs9010(name, init, fileName, source, results)
+                            val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                            emitIsolatedDeclVarInitTs9010(name, init, isConst, fileName, source, results)
                             if (init is ObjectLiteralExpression) {
                                 emitIsolatedDeclObjLitComputedNameDiags(init, name, fileName, source, results)
                                 emitIsolatedDeclObjLitMethodTs9008(init, name, fileName, source, results)
@@ -2518,16 +2519,23 @@ private fun emitIsolatedDeclClassExprDiags(
  *  - PropertyAccessExpression / ElementAccessExpression
  *  - BinaryExpression
  *  - Identifier (other than `true`/`false`/`null`/`undefined`)
+ *  - TemplateExpression (template literal with substitutions — `` `s${1}` ``)
+ *    when [isConst] is true. Under `const`, the inferred type is a
+ *    template-literal type that requires checking to compute; under `let`/`var`
+ *    the widened type is just `string`, which is declarable as-written.
+ *  - `AsExpression` wrapping a `TemplateExpression` (`` `s${1}` as const ``),
+ *    regardless of [isConst]: the `as const` forces literal-type inference.
  *
  * Other expression kinds (literals, ArrowFunction, FunctionExpression,
- * ClassExpression, AsExpression, ObjectLiteralExpression, ArrayLiteralExpression,
- * TemplateExpression, PrefixUnaryExpression, …) are intentionally left alone
- * here — they need either separate handling (TS9013/TS9017/TS9022) or const-vs-let
- * distinction that isn't in scope for this substep.
+ * ClassExpression, ObjectLiteralExpression, ArrayLiteralExpression,
+ * `as const` over literals / arrays, PrefixUnaryExpression, …) are
+ * intentionally left alone here — they need either separate handling
+ * (TS9013/TS9017/TS9022) that isn't in scope for this substep.
  */
 private fun emitIsolatedDeclVarInitTs9010(
     varName: Identifier,
     init: Expression,
+    isConst: Boolean,
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
@@ -2538,6 +2546,8 @@ private fun emitIsolatedDeclVarInitTs9010(
         is PropertyAccessExpression -> true
         is ElementAccessExpression -> true
         is BinaryExpression -> true
+        is TemplateExpression -> isConst
+        is AsExpression -> init.expression is TemplateExpression
         is Identifier -> init.text != "true" && init.text != "false" &&
             init.text != "null" && init.text != "undefined"
         else -> false
@@ -2820,13 +2830,21 @@ private fun emitIsolatedDeclClassPropertyTs9012(
         val init = member.initializer ?: continue
         val name = member.name
         if (name !is Identifier) continue
-        if (isIsolatedDeclTriviallyDeclarable(init)) continue
+        // The triggers list below is authoritative — we do NOT short-circuit
+        // on `isIsolatedDeclTriviallyDeclarable(init)` here because that helper
+        // returns `true` for `TemplateExpression` (correct at param-default
+        // level — template literals have type `string` there) but TemplateExpression
+        // IS a trigger at the property level when the property is `readonly`
+        // (literal template type can't be preserved without checking).
+        val isReadonly = ModifierFlag.Readonly in member.modifiers
         val triggers = when (init) {
             is CallExpression -> true
             is NewExpression -> true
             is PropertyAccessExpression -> true
             is ElementAccessExpression -> true
             is BinaryExpression -> true
+            is TemplateExpression -> isReadonly
+            is AsExpression -> init.expression is TemplateExpression
             is Identifier -> init.text != "true" && init.text != "false" &&
                 init.text != "null" && init.text != "undefined"
             else -> false
