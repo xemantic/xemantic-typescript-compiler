@@ -2510,7 +2510,7 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
-- [ ] **B9.5. AST-based source-slice rendering of binding-pattern parameter names in `formatParameter` / `signatureToString(sig)` (promoted 2026-05-15; stacks on B9.4).** Replace the `_` placeholder at Checker.kt:43561 and Checker.kt:52907 with a recursive `formatBindingPatternFromAst(node: Node): String` helper covering:
+- [x] **B9.5. AST-based source-slice rendering of binding-pattern parameter names in `formatParameter` / `signatureToString(sig)` (DONE 2026-05-15, +1 — flips `crashInEmitTokenWithComment_ts`).** Stacks on B9.4. Replace the `_` placeholder at Checker.kt:43561 and Checker.kt:52907 with a recursive `formatBindingPatternFromAst(node: Node): String` helper covering:
 
   - **ObjectBindingPattern** → `{ <elements joined with ', '> }` with spaces inside braces (matches TypeScript's `{ [foo.bar]: c }` display convention).
   - **ArrayBindingPattern** → `[<elements joined with ', '>]`.
@@ -2522,9 +2522,9 @@ yield ÷ risk; each item is sized as a single-commit substep landing +1 to
   - **ComputedPropertyName** inner expression: handles `Identifier`, `StringLiteralNode`, `NumericLiteralNode`, `BigIntLiteralNode`, `NoSubstitutionTemplateLiteralNode`, `PropertyAccessExpression`, `ElementAccessExpression`, parens. Fallback `_` for anything else.
   - **Nested binding patterns** in `name`: recurse.
 
-  **Target.** `crashInEmitTokenWithComment_ts` — the LAST gap. With B9.5, the TS2345 source-display message string changes from `(_: {}) => any` to `({ [foo.bar]: c }: {}) => any`, matching the baseline. Test should flip from 1/2 emissions to 2/2 + matching message strings.
+  **Verification.** Full-suite 10078/1399/3 (was 10078/1400/3, +1 net). Zero regressions across 10078-test suite. The named target `crashInEmitTokenWithComment_ts` flips clean — TS2345 source display now reads `({ [foo.bar]: c }: {}) => any` matching baseline. Closes the B9.x stack toward the target test (B9.1 foundation → B9.2 default {} → B9.3 => undefined any → B9.4 TS2537 emit → B9.5 display).
 
-  **Risk profile.** LOW-MEDIUM. The change is purely a display-string update — no type-checking semantics change. However, ANY test in the corpus that depends on the current `_` rendering for a binding-pattern FE/Arrow parameter in a TS2345/TS2769 message string would regress. The previous B9.1 session note verified zero corpus baselines depended on the zero-param display (pre-B9.1), but `_` was the post-B9.1 display — we're now changing again. Mitigation: gate on AST shapes that have a clean source-slice reconstruction; fall back to `_` for unsupported AST shapes. The most likely regression vector is any test whose baseline shows `_:` for a destructuring parameter; if any exist, update the helper or fall back.
+  **Risk profile that materialized.** LOW. No corpus baseline in the suite depended on the post-B9.1 `_` placeholder for a binding-pattern FE/Arrow parameter — the search-for-regressions concern was unfounded. The AST-based reconstruction gracefully falls back to `_` for any shape it can't handle (parens around computed-name exprs preserved, unsupported operators on numeric literals etc.), so display strings never break — they may simply revert to the placeholder.
 
 - [x] **B9.4. TS2537 emission for computed-property destructuring inside ObjectBindingPattern parameter defaulted to `{}` (DONE 2026-05-15, net-zero infra).** Stacks on B9.1+B9.2+B9.3. New pass `checkBindingPatternComputedIndexSig` walks every ArrowFunction / FunctionExpression in every binder file. For each `Parameter` whose `name is ObjectBindingPattern`, `type == null`, AND `initializer == null` (the B9.2 defaulted-`{}` shape), walks `pattern.elements` for `BindingElement.propertyName is ComputedPropertyName`. Emits TS2537 "Type '{}' has no matching index signature for type '<X>'." at the inner expression's `pos` with length `expressionTrueEnd(expr) - pos`, where `<X>` is the widened type display of the index expression.
 
