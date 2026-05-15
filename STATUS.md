@@ -2,6 +2,73 @@
 
 **Phase 4 — Checker buildout.** 8,671 / 10,078 tests passing (~86.0%).
 
+**B7.19 (2026-05-15, net-zero infra)** — TS9009 / TS9033 walker for
+Identifier-named class accessors that lack an explicit type annotation
+(mirror of B7.17's object-literal version for the class-context). Single-file
+change in `TypeScriptCompiler.kt`. New `emitIsolatedDeclClassAccessor` walker
+called from the `is ClassDeclaration` arm of pass 3's statement switch, after
+`emitIsolatedDeclClassMethodParamChecks`. Walker first builds peer-set tables
+(`hasGetter` / `hasSetter`) then makes a second pass:
+
+- **GET-only, no return type** (no peer setter, Identifier name) → emits
+  TS9009 at the accessor name position with related TS9032 "Add a return
+  type to the get accessor declaration."
+- **SET-only, unannotated param** (no peer getter, Identifier name + first
+  param Identifier-named with no type annotation) → emits TS9009 at the
+  param name position with related TS9033 "Add a type to parameter of the
+  set accessor declaration."
+
+The companion TS7032 (at accessor name) and TS7006 (at param name) for the
+SET-only case are already emitted by the checker
+(`checkImplicitAnyInClassElement`'s SetAccessor branch + 
+`checkParamsForImplicitAny` at Checker.kt:9087-9105). The walker
+deliberately does NOT duplicate them — its contribution is the
+TS9009/TS9033 pair specific to `--isolatedDeclarations`. Pair semantics
+match B7.17: ANY peer accessor of opposite kind suppresses ALL emissions
+(regardless of whether the peer is annotated). Verified against the test's
+`getSetBad`, `getSetOk`, `getSetOk2`, `getSetOk3` quadruple — none fire.
+
+Computed-name accessors (`[expr]`) are conservatively skipped here — they
+fire TS9038 instead via `emitIsolatedDeclClassComputedNameDiags` and the
+companion TS7032/TS7006 walker for computed-name set-accessors is B7.20
+territory.
+
+**Adjacent partial progress (no flip).**
+`isolatedDeclarationErrorsClasses_ts` 20 → 23 emissions (+3: line 11,9
+TS9009 for `get getOnly()`; line 12,17 TS9009 for `set setOnly`'s `value`
+param; checker's pre-existing TS7032 at line 12,9 + TS7006 at line 12,17
+remain unchanged). Still 4 emissions short of expected 26 — gap covers:
+- B7.20 candidate: line 48 computed-name set-accessor TS7032+TS7006 for
+  `set [noParamAnnotationStringName](value) { }`. Checker's SetAccessor
+  branch only handles Identifier-named accessors today; a parallel branch
+  for ComputedPropertyName-named accessors (with appropriate name-text
+  extraction for the diagnostic) would close this.
+- B7.21 candidate: line 56 interface MethodDeclaration TS7010+TS9013 for
+  `[noAnnotationLiteralName]();`. Distinct emission shape from class
+  contexts — TS7010 ("...lacks return-type annotation, implicitly has an
+  'any' return type") fires only on interface-member declarations.
+- Line 50 parser/walker length off-by-one for
+  `[("A" + "B") as "AB"] = 1;` — emits length 22 vs expected 21. Likely
+  in `emitIsolatedDeclClassComputedNameDiags`'s ComputedPropertyName span
+  computation when the inner expression is `as`-asserted.
+
+**Verification.** Full-suite 10078/1404/3 (unchanged from B7.18; zero
+regressions). Net-zero on the suite — gain on `isolatedDeclarationErrorsClasses_ts`
+(20 → 23 of 26) isn't enough to flip it. Only two tests in the corpus
+exercise `isolatedDeclarations` + class accessor patterns
+(`isolatedDeclarationErrorsClasses_ts` and `isolatedDeclarationErrorsObjects_ts`,
+the latter already flipped in B7.17).
+
+**Risk profile that materialized.** Bounded — walker gated on
+`options.isolatedDeclarations` AND `ModifierFlag.Export in stmt.modifiers`
+(call-site). Identifier-name guard skips ComputedPropertyName /
+StringLiteralNode / NumericLiteralNode accessor names. Peer-suppression via
+`hasGetter` / `hasSetter` matches B7.17's symmetric semantics. The
+deliberate non-emission of TS7032/TS7006 (already emitted by the checker)
+prevents duplicate-diagnostic regressions like the one observed in the
+first iteration of this walker (which initially emitted TS7032 alongside
+the checker — verified via targeted-test diff before correction).
+
 **B7.18 (2026-05-14, net-zero infra)** — TS9011 walker for exported
 `ClassDeclaration` MethodDeclaration parameters that lack an explicit type
 annotation (mirrors B7.5's FunctionDeclaration version for class methods).
