@@ -942,6 +942,18 @@ class Transformer(
         // TypeScript erases the export assignment entirely.
         val runtimeDeclaredNames = mutableSetOf<String>()
         val typeOnlyDeclaredNames = mutableSetOf<String>()
+        // First pre-pass: collect TypeAlias / Interface names regardless of source order,
+        // so an ImportEqualsDeclaration earlier in the file can see a TypeAlias declared
+        // later. Used to detect TypeAlias-shadowed import-equals merges (TypeScript treats
+        // those as type-only and elides the runtime import).
+        val cjsTypeNamesAnywhere = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> cjsTypeNamesAnywhere.add(stmt.name.text)
+                is InterfaceDeclaration -> cjsTypeNamesAnywhere.add(stmt.name.text)
+                else -> {}
+            }
+        }
         for (stmt in originalSourceFile.statements) {
             when (stmt) {
                 is TypeAliasDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
@@ -1011,8 +1023,13 @@ class Transformer(
                 is ImportEqualsDeclaration -> {
                     val isDeclare = ModifierFlag.Declare in stmt.modifiers
                     val isExported = ModifierFlag.Export in stmt.modifiers
-                    if (stmt.isTypeOnly) {
-                        // Explicitly type-only: always type-only
+                    // If a TypeAlias/Interface with the same name is also declared anywhere
+                    // in this file, the merge is type-only (TypeScript elides the runtime
+                    // import — TypeAlias is the primary binding). Catches the case
+                    // `import EnumA = Enum.A; export type EnumA = ...` (alias.ts).
+                    val shadowedByTypeAlias = stmt.name.text in cjsTypeNamesAnywhere
+                    if (stmt.isTypeOnly || shadowedByTypeAlias) {
+                        // Explicitly type-only OR shadowed by TypeAlias: type-only
                         typeOnlyDeclaredNames.add(stmt.name.text)
                     } else if (!isDeclare) {
                         // Check if the target resolves to a type-only name (interface, type alias,
@@ -2882,6 +2899,17 @@ class Transformer(
         // Pre-scan for type-only names
         val runtimeDeclaredNames = mutableSetOf<String>()
         val typeOnlyDeclaredNames = mutableSetOf<String>()
+        // First pre-pass: collect all TypeAlias and Interface names so the
+        // ImportEqualsDeclaration shadow-check (below) sees them even when
+        // declared AFTER the import in source order.
+        val priorTypeNames = mutableSetOf<String>()
+        for (stmt in originalSourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> priorTypeNames.add(stmt.name.text)
+                is InterfaceDeclaration -> priorTypeNames.add(stmt.name.text)
+                else -> {}
+            }
+        }
         for (stmt in originalSourceFile.statements) {
             when (stmt) {
                 is TypeAliasDeclaration -> typeOnlyDeclaredNames.add(stmt.name.text)
@@ -2905,8 +2933,15 @@ class Transformer(
                 is ImportEqualsDeclaration -> {
                     val isDeclare = ModifierFlag.Declare in stmt.modifiers
                     val isExported = ModifierFlag.Export in stmt.modifiers
-                    if (stmt.isTypeOnly) {
-                        // Explicitly type-only: always type-only
+                    // If a TypeAlias/Interface with the same name exists anywhere in this
+                    // file (regardless of source order), the import alias merges with it
+                    // as type-only. TypeScript elides the runtime import — the TypeAlias
+                    // is the "primary" binding. Use priorTypeNames (set in first pre-pass)
+                    // since typeOnlyDeclaredNames is built in source-order and may not yet
+                    // contain a TypeAlias declared after this import.
+                    val shadowedByTypeAlias = stmt.name.text in priorTypeNames
+                    if (stmt.isTypeOnly || shadowedByTypeAlias) {
+                        // Explicitly type-only OR shadowed by TypeAlias: type-only
                         typeOnlyDeclaredNames.add(stmt.name.text)
                     } else if (!isDeclare) {
                         // Check if the target resolves to a type-only name (interface, type alias,
@@ -8281,6 +8316,25 @@ class Transformer(
         // Strict-mode reserved words cannot be used as variable names — erase the declaration.
         // E.g. `import public = require("1")` in a strict-mode file produces no output.
         if (decl.name.text in strictModeReservedWords) return emptyList()
+
+        // If a TypeAlias or Interface with the SAME name exists in the current file, the
+        // alias merges with it as type-only. TypeScript elides the runtime import — the
+        // TypeAlias is the primary binding. Catches:
+        //   `import EnumA = Enum.A; export type EnumA = ...`
+        // The `priorTypeNamesInFile` walks the current source file's top-level statements
+        // looking for matching TypeAlias/InterfaceDeclaration names.
+        val aliasName = decl.name.text
+        val isDeclareForShadow = ModifierFlag.Declare in decl.modifiers
+        if (!isDeclareForShadow) {
+            val shadowedByTypeAlias = topLevelStatements.any { other ->
+                when (other) {
+                    is TypeAliasDeclaration -> other.name.text == aliasName
+                    is InterfaceDeclaration -> other.name.text == aliasName
+                    else -> false
+                }
+            }
+            if (shadowedByTypeAlias) return emptyList()
+        }
 
         val ref = decl.moduleReference
         val isRequire = ref is ExternalModuleReference
