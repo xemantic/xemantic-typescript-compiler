@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,692 / 10,078 tests passing (~86.2%).
+**Phase 4 — Checker buildout.** 8,691 / 10,078 tests passing (~86.2%).
+
+**B15.1 (2026-05-16, +2 — flips `genericRecursiveImplicitConstructorErrors3_ts`)** —
+TS2339 for `this.X` on generic class with base types where X is genuinely
+missing across the resolvable inheritance chain. Two coordinated pieces:
+1. `checkMemberAccessMissing`: new `this`-access path before the existing
+   "skip class with base types" bail. Walks the chain via
+   `lookupInstanceMemberInResolvableChain` (safe — returns `false` only
+   when every base is resolvable as ClassDeclaration). Emits TS2339 with
+   type-param-aware display: `ClassName<A, B, C>` for generic classes.
+2. `checkPropertyAccessInStatement` ModuleDeclaration branch: push the
+   namespace symbol onto a new dedicated stack
+   `propertyAccessEnclosingNamespaces` so the ClassDeclaration branch can
+   resolve namespace-internal class symbols via `namespaceSymbol.exports`.
+   Dedicated stack (not shared `inferenceNamespaceStack`) to avoid FPs
+   where value-position class references like `MemberName.create(...)`
+   would resolve to instance type and trigger spurious TS2576.
 
 **B14.9 (2026-05-16, +2 — flips `commonJsExportTypeDeclarationError_ts__target_es{5,2015}__`)** —
 Two coordinated pieces:
