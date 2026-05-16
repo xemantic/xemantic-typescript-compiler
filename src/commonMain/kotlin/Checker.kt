@@ -238,6 +238,16 @@ class Checker(
      *  than `anyType` when `x` is bound in `M.exports` (not in `currentFileLocals`/`globals`). */
     private val inferenceNamespaceStack: ArrayDeque<Symbol> = ArrayDeque()
 
+    /** B15.1: enclosing-namespace stack used ONLY by the property-access walker
+     *  (`checkPropertyAccessInStatement` ModuleDeclaration branch) to resolve
+     *  namespace-internal class symbols for `this`-access typing. Kept separate
+     *  from [inferenceNamespaceStack] so the broader namespace-aware identifier
+     *  resolution path (`getTypeOfIdentifier` → `lookupInInferenceNamespace`)
+     *  is not triggered for value-position class references inside the body —
+     *  e.g. `MemberName.create(...)` would otherwise resolve `MemberName` to
+     *  its instance type and FP-trigger TS2576 on every static-method access. */
+    private val propertyAccessEnclosingNamespaces: ArrayDeque<Symbol> = ArrayDeque()
+
     /** Symbols (TypeAlias/Interface/Class) whose type parameter defaults emitted TS2744
      *  (circular / forward reference). Display as `Name<any, any, ...>` (with N args) when
      *  referenced without type arguments — matches TypeScript's substitution-on-invalid-default. */
@@ -48795,9 +48805,18 @@ interface DataView {
                         checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType)
                     }
                 }
-                // Resolve the class type for "this" inside class body
+                // Resolve the class type for "this" inside class body.
+                // For namespace-nested classes, walk the enclosing-namespace stack
+                // (populated by the ModuleDeclaration branch) and consult each
+                // namespace's `exports` table — the binder puts namespace-internal
+                // classes there, not directly in `globals`.
                 val classType = if (stmt.name != null) {
-                    val symbol = globals[stmt.name.text]
+                    var symbol: Symbol? = null
+                    for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+                        symbol = ns.exports?.get(stmt.name.text)
+                        if (symbol != null) break
+                    }
+                    if (symbol == null) symbol = globals[stmt.name.text]
                     if (symbol != null) getDeclaredTypeOfSymbol(symbol) else null
                 } else null
                 val savedStatic = inStaticClassMethod
@@ -48874,8 +48893,31 @@ interface DataView {
             }
             is LabeledStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             is ModuleDeclaration -> {
-                (stmt.body as? ModuleBlock)?.let {
-                    checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType)
+                // B15.1: Track enclosing namespace symbols in a local stack so nested
+                // class lookups (e.g. for `this`-access in `checkMemberAccessMissing`)
+                // can resolve namespace-internal classes via `namespaceSymbol.exports`.
+                // Uses a dedicated stack — pushing onto the shared `inferenceNamespaceStack`
+                // would broaden namespace-aware identifier resolution to value expressions
+                // like `MemberName.create(...)` inside the class body, causing FPs where
+                // `MemberName` (the class constructor) would resolve to its INSTANCE type
+                // and trigger TS2576 on every static-method access.
+                val nameNode = stmt.name
+                val moduleSymbol = if (nameNode is Identifier && ModifierFlag.Declare !in stmt.modifiers) {
+                    if (propertyAccessEnclosingNamespaces.isNotEmpty())
+                        propertyAccessEnclosingNamespaces.last().exports?.get(nameNode.text)
+                    else
+                        currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+                } else null
+                val pushed = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) {
+                    propertyAccessEnclosingNamespaces.addLast(moduleSymbol)
+                    true
+                } else false
+                try {
+                    (stmt.body as? ModuleBlock)?.let {
+                        checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType)
+                    }
+                } finally {
+                    if (pushed) propertyAccessEnclosingNamespaces.removeLast()
                 }
             }
             is ExportAssignment -> {
@@ -50754,6 +50796,39 @@ interface DataView {
                 }
             }
             return
+        }
+        // B15.1: TS2339 for `this.X` where X is genuinely missing across the entire
+        // resolvable instance-side inheritance chain. The general "skip class with
+        // base types" guard below is conservative — for `this` access we know the
+        // receiver IS the enclosing class instance, and `lookupInstanceMemberInResolvableChain`
+        // safely returns `false` only when every base is resolvable as a ClassDeclaration
+        // (no `Foo.Bar` base, no ambient `declare class`, no IndexSignature, no sibling
+        // InterfaceDeclaration) and no member matches anywhere in the chain. Display
+        // mirrors TypeScript's format: `ClassName<A, B, C>` for generic classes.
+        if (isThisAccess && objectType is Type.Interface
+            && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()
+            && propName !in RUNTIME_PROPERTIES
+        ) {
+            val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
+            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, propName) == false
+                && !isStaticMemberOfClass(classDecl, propName)
+            ) {
+                val baseName = classDecl.name?.text ?: objectType.symbol?.name
+                if (baseName != null) {
+                    val tps = classDecl.typeParameters
+                    val className = if (!tps.isNullOrEmpty())
+                        "$baseName<${tps.joinToString(", ") { it.name.text }}>"
+                    else baseName
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$className'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
         }
         // Skip if class/interface has base types — incomplete inheritance resolution causes FPs.
         // Also applies to generic references whose target is an Interface with base types
