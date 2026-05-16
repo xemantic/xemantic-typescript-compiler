@@ -1993,6 +1993,26 @@ class Parser(
     private fun parseInterfaceMembers(): List<ClassElement> {
         val members = mutableListOf<ClassElement>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+            // Recovery: `var x: T;` / `let x = e;` / `const x = e;` inside an interface
+            // body is invalid syntax. Break out so the outer statement parser can recover
+            // the remaining content as top-level statements (e.g.
+            // `interface Foo<T> { var x: T<>; }` recovers to an empty interface followed
+            // by `var x;` at the file scope). Lookahead-gated to skip the case where
+            // the keyword is being used as a PROPERTY NAME (`{ const: ...; var: ...; }`):
+            // a true var-statement is followed by an identifier, NOT `:` or `(`.
+            if (token == SyntaxKind.VarKeyword || token == SyntaxKind.LetKeyword ||
+                token == SyntaxKind.ConstKeyword
+            ) {
+                val looksLikeVarStmt = lookAhead {
+                    nextToken()
+                    // After the keyword: must NOT be `:` (property name), `(` (method),
+                    // `,` / `;` / `}` (lone keyword as property). An identifier or
+                    // OpenBracket/OpenBrace (destructuring) means we're starting a var
+                    // declaration that doesn't belong here.
+                    isIdentifier() || token == SyntaxKind.OpenBracket || token == SyntaxKind.OpenBrace
+                }
+                if (looksLikeVarStmt) break
+            }
             val member = parseTypeMember()
             if (member != null) members.add(member)
             parseOptional(SyntaxKind.Semicolon) || parseOptional(SyntaxKind.Comma)
