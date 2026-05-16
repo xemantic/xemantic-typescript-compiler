@@ -50347,7 +50347,17 @@ interface DataView {
         if (objectExpr is NewExpression) {
             val ctor = objectExpr.expression
             if (ctor is Identifier) {
-                val ctorSym = globals[ctor.text]
+                // B15.2: for namespace-nested `new C(...).prop` patterns, look up the
+                // ctor symbol via the property-access namespace stack first — the
+                // binder puts namespace-internal classes in `namespaceSymbol.exports`,
+                // not directly in `globals`. Falls back to `globals` for top-level
+                // classes (the original behavior).
+                var ctorSym: Symbol? = null
+                for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+                    ctorSym = ns.exports?.get(ctor.text)
+                    if (ctorSym != null) break
+                }
+                if (ctorSym == null) ctorSym = globals[ctor.text]
                 if (ctorSym != null && ctorSym.flags.hasAny(SymbolFlags.Class)) {
                     // Skip when the class symbol has multiple declarations — interface or
                     // namespace merging (including module augmentation) may contribute
