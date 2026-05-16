@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,683 / 10,078 tests passing (~86.2%).
+**Phase 4 — Checker buildout.** 8,684 / 10,078 tests passing (~86.2%).
+
+**B14.1 (2026-05-16, +1 — flips `enumNoInitializerFollowsNonLiteralInitializer_ts` errors-baseline)** —
+Two coordinated pieces close the test:
+
+1. **Checker TS18056 emission** (`Checker.kt:checkEnumMemberInitializers`).
+   When `isolatedModules` is true AND the previous enum member's
+   initializer is a bare `Identifier` (and didn't evaluate to a constant
+   number), emit TS18056 "Enum member following a non-literal numeric
+   member must have an initializer when 'isolatedModules' is enabled."
+   instead of the generic TS1061. Heuristic without type inference:
+   Identifier-only excludes `as any` casts (AsExpression), template
+   literals, calls, etc. — keeping TS1061 for cases TypeScript also
+   leaves as TS1061 (e.g. `d = (c)! satisfies number as any` →
+   successor still gets TS1061).
+
+2. **BaselineFormatter `./` strip in summary lines** (`BaselineFormatter.kt`).
+   Diagnostic summary lines previously emitted the raw `diag.fileName`,
+   so `@filename: ./bad.ts` showed up as `./bad.ts(N,M):` while the
+   TypeScript baseline shows `bad.ts(N,M):`. Strip leading `./` in both
+   the summary line and `!!! related` line. Source-echo headers
+   (`==== ./bad.ts ====`) keep the prefix — matches TypeScript's
+   asymmetric convention.
+
+**Verification.** Full-suite 10078/1391/3 (was 10078/1392/3 post-B13.1,
++1 net). Zero regressions.
 
 **B13.1 (2026-05-16, +1 — flips `arrowFunctionErrorSpan_ts` errors-baseline)** —
 Three coordinated pieces close the errors-baseline sub-test of

@@ -490,7 +490,9 @@ fun formatErrorBaseline(
         for (diag in sorted) {
             val df = diag.fileName
             if (df != null && diag.line != null && diag.character != null) {
-                +df
+                // TypeScript strips leading "./" from filenames in the diagnostic summary.
+                // Source-echo headers ("==== ./foo.ts ====") keep the prefix.
+                +df.removePrefix("./")
                 +"("
                 +diag.line.toString()
                 +","
@@ -646,7 +648,8 @@ fun formatErrorBaseline(
                         +" "
                         val relFile = related.fileName
                         if (relFile != null) {
-                            +relFile
+                            // Mirror summary-line convention: strip leading "./".
+                            +relFile.removePrefix("./")
                             +":"
                             val base = relFile.substringAfterLast('/').substringAfterLast('\\')
                             val isLib = base.startsWith("lib.") && base.endsWith(".d.ts")
