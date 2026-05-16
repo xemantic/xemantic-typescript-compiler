@@ -2474,7 +2474,11 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
-**Session 2026-05-16 (B17.1–B17.6, +8 net, 8705 → 8713 passing).** Six surgical iterations:
+**Session 2026-05-16 (B17.1–B17.7, +9 net, 8705 → 8714 passing).** Seven surgical iterations:
+- B17.7 (+1): `parseParameterList` comma-recovery — when no comma but next token starts a
+  parameter (Identifier / `...` / `{` / `[`), emit TS1005 and continue. Flips
+  `restParamModifier_ts` JS-emit (`constructor(...public rest: string[])` parser-recovery).
+
 - B17.1 (+2): `Scanner.reScanLessThanToken()` splits `<<` to `<` inside `tryParseTypeArguments`,
   with diagnostics-rollback to prevent leaked errors on speculative bailout. Flips
   `parseGenericArrowRatherThanLeftShift_ts` + `importTypeWithUnparenthesizedGenericFunctionParsed_ts`
