@@ -8749,11 +8749,18 @@ class Transformer(
             val memberName: String?
             val isStatic: Boolean
             val isProperty: Boolean
+            // B15.6: distinct flag for get/set accessors. Like properties, accessors emit
+            // `design:type` (from accessor type) instead of `design:type=Function`. Unlike
+            // properties, accessors also emit `design:paramtypes` (from the paired setter
+            // if one exists, else `[]`). They never emit `design:returntype`. TypeScript
+            // treats `@dec get foo()` / `set foo(value: T)` as a property-style descriptor
+            // — the public shape is `foo: T`.
+            val isAccessor: Boolean
             val paramDecorators: List<Pair<Int, List<Decorator>>>
             // Type info for emitDecoratorMetadata
             val propertyTypeNode: TypeNode?       // for properties
             val methodReturnTypeNode: TypeNode?   // for methods
-            val methodParamTypeNodes: List<TypeNode?> // for methods
+            val methodParamTypeNodes: List<TypeNode?> // for methods (and accessor setter params)
             val methodIsAsync: Boolean            // for inferring Promise return type
 
             when (member) {
@@ -8762,6 +8769,7 @@ class Transformer(
                     memberName = getMemberNameText(member.name)
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = true
+                    isAccessor = false
                     paramDecorators = emptyList()
                     propertyTypeNode = member.type
                     methodReturnTypeNode = null
@@ -8773,6 +8781,7 @@ class Transformer(
                     memberName = getMemberNameText(member.name)
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
+                    isAccessor = false
                     paramDecorators = member.parameters.mapIndexedNotNull { idx, param ->
                         if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
                     }
@@ -8790,22 +8799,36 @@ class Transformer(
                 }
                 is GetAccessor -> {
                     decorators = member.decorators
-                    memberName = getMemberNameText(member.name)
+                    val name = getMemberNameText(member.name)
+                    memberName = name
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
+                    isAccessor = true
                     paramDecorators = emptyList()
-                    propertyTypeNode = null
-                    methodReturnTypeNode = member.type
-                    methodParamTypeNodes = emptyList()
+                    // accessor "paramtypes" = setter's params, if a paired setter exists
+                    val pairedSetter = members.firstOrNull {
+                        it is SetAccessor && getMemberNameText(it.name) == name
+                            && (ModifierFlag.Static in it.modifiers) == isStatic
+                    } as? SetAccessor
+                    // accessor "property type" = getter's return type if annotated,
+                    // else fall back to the paired setter's first param type (TypeScript
+                    // uses the setter's annotation to infer the property shape when the
+                    // getter is un-annotated).
+                    propertyTypeNode = member.type ?: pairedSetter?.parameters?.firstOrNull()?.type
+                    methodReturnTypeNode = null
+                    methodParamTypeNodes = pairedSetter?.parameters?.map { it.type } ?: emptyList()
                     methodIsAsync = false
                 }
                 is SetAccessor -> {
                     decorators = member.decorators
-                    memberName = getMemberNameText(member.name)
+                    val name = getMemberNameText(member.name)
+                    memberName = name
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
+                    isAccessor = true
                     paramDecorators = emptyList()
-                    propertyTypeNode = null
+                    // accessor "property type" = setter's first param type
+                    propertyTypeNode = member.parameters.firstOrNull()?.type
                     methodReturnTypeNode = null
                     methodParamTypeNodes = member.parameters.map { it.type }
                     methodIsAsync = false
@@ -8873,8 +8896,20 @@ class Transformer(
                     // design:type for properties
                     decoratorExprs.add(makeMetadataCall("design:type",
                         serializeTypeNode(propertyTypeNode, classTypeParams)))
+                } else if (isAccessor) {
+                    // B15.6: accessors emit design:type (from accessor's effective property
+                    // type) AND design:paramtypes (from the setter, or `[]` for getter-only).
+                    // NO design:returntype — accessors are property-shaped in metadata.
+                    decoratorExprs.add(makeMetadataCall("design:type",
+                        serializeTypeNode(propertyTypeNode, classTypeParams)))
+                    val paramTypes = ArrayLiteralExpression(
+                        elements = methodParamTypeNodes.map { serializeTypeNode(it, classTypeParams) },
+                        multiLine = false,
+                        pos = -1, end = -1,
+                    )
+                    decoratorExprs.add(makeMetadataCall("design:paramtypes", paramTypes))
                 } else {
-                    // design:type = Function for methods/accessors
+                    // design:type = Function for methods
                     decoratorExprs.add(makeMetadataCall("design:type", syntheticId("Function")))
                     // design:paramtypes
                     val paramTypes = ArrayLiteralExpression(
