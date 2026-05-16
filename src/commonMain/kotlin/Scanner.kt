@@ -743,7 +743,14 @@ class Scanner(private val text: String) {
             }
         }
         // If the identifier starts with an escape and the decoded first char is not a valid identifier start, flag it
-        if (prefixLen == 0 && firstDecodedChar != null && !isIdentifierStart(firstDecodedChar)) {
+        // Special case: when the escape decoded to a supplementary-plane codepoint (encoded as a UTF-16 surrogate
+        // pair), `firstDecodedChar` is the lone high surrogate and `isIdentifierStart(highSurrogate)` returns false
+        // because surrogates aren't categorized as letters in isolation. Trust the `\u{HHHH}` escape syntax as
+        // intentional for an astral identifier start (e.g. U+102A7 CARIAN LETTER A2). Without this carve-out the
+        // leading `\` is stripped below and `this.\u{102A7}` mis-emits as `this.u{102A7}`.
+        val firstIsAstralPair = prefixLen == 0 && sb.length >= 2 &&
+                sb[0].isHighSurrogate() && sb[1].isLowSurrogate()
+        if (prefixLen == 0 && firstDecodedChar != null && !firstIsAstralPair && !isIdentifierStart(firstDecodedChar)) {
             hasInvalidUnicodeEscape = true
             if (invalidUnicodeEscapePos < 0) invalidUnicodeEscapePos = tokenPos // start of escape at token start
             // TypeScript strips the leading `\` from the emitted text for this case.

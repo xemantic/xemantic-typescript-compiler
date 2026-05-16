@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,707 / 10,078 tests passing (~86.4%).
+**Phase 4 — Checker buildout.** 8,708 / 10,078 tests passing (~86.4%).
+
+**B17.2 (2026-05-16, +1 — flips `unicodeEscapesInNames02_ts__target_es2015__` JS-emit sub-test)** —
+In `Scanner.scanIdentifierWithEscapes`, the post-decode check `!isIdentifierStart(firstDecodedChar)`
+treats a lone high surrogate as a non-identifier-start, triggering the `correctedRawText` path that
+strips the leading `\` from the emitted text. For supplementary-plane codepoints like `\u{102A7}`
+(CARIAN LETTER A2 = U+102A7), `firstDecodedChar` is the high surrogate U+D800 of the resulting
+surrogate pair — `isIdentifierStart` returns false because surrogates aren't categorized as letters
+in isolation, so the escape was mis-stripped to `u{102A7}`. New `firstIsAstralPair` carve-out trusts
+`\u{HHHH}` escape syntax as intentional for an astral identifier start when the decoded value
+begins with a complete surrogate pair, so property-name display preserves the source escape
+exactly (`this.\u{102A7}` round-trips correctly).
 
 **B17.1 (2026-05-16, +2 — flips `parseGenericArrowRatherThanLeftShift_ts` + `importTypeWithUnparenthesizedGenericFunctionParsed_ts` JS-emit sub-tests)** —
 New `Scanner.reScanLessThanToken()` splits `<<` (LessThanLessThan) / `<<=` (LessThanLessThanEquals)
