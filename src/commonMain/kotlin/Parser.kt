@@ -3558,14 +3558,42 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             val openingElement = JsxOpeningElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
             val children = parseJsxChildren(afterGtPos, jsxTagNameToString(tagName))
             val closingPos = getPos()
-            // Parse </tagname>
-            parseExpected(SyntaxKind.LessThan)
-            parseExpected(SyntaxKind.Slash)
-            val closingTagName = parseJsxTagName()
-            parseExpected(SyntaxKind.GreaterThan)
-            val closingElement = JsxClosingElement(tagName = closingTagName, pos = closingPos, end = getEnd())
-            JsxElement(openingElement = openingElement, children = children, closingElement = closingElement, pos = pos, end = getEnd())
+            // Parse </tagname> — but detect the missing-closing-tag-at-EOF shape and
+            // emit TS17008 + a specialized TS1005 ('</' expected.) rather than the bare
+            // '<' expected. that parseExpected would otherwise produce.
+            if (token == SyntaxKind.EndOfFile) {
+                val tagNameStr = jsxTagNameToString(tagName)
+                reportError(
+                    "JSX element '$tagNameStr' has no corresponding closing tag.",
+                    code = 17008,
+                    overrideStart = tagName.pos,
+                    overrideLength = jsxTagNameLength(tagName),
+                )
+                reportError("'</' expected.", code = 1005)
+                // Synthetic close with empty-name Identifier so JSX emit renders `</>`
+                // (matches TypeScript's unclosed-element recovery emission).
+                val syntheticName = Identifier(text = "", pos = closingPos, end = closingPos)
+                val syntheticClose = JsxClosingElement(tagName = syntheticName, pos = closingPos, end = closingPos)
+                JsxElement(openingElement = openingElement, children = children, closingElement = syntheticClose, pos = pos, end = getEnd())
+            } else {
+                parseExpected(SyntaxKind.LessThan)
+                parseExpected(SyntaxKind.Slash)
+                val closingTagName = parseJsxTagName()
+                parseExpected(SyntaxKind.GreaterThan)
+                val closingElement = JsxClosingElement(tagName = closingTagName, pos = closingPos, end = getEnd())
+                JsxElement(openingElement = openingElement, children = children, closingElement = closingElement, pos = pos, end = getEnd())
+            }
         }
+    }
+
+    /**
+     * Length of the source span covered by a JSX tag name, for diagnostic squiggles.
+     * Mirrors `jsxTagNameToString`'s recursive shape.
+     */
+    private fun jsxTagNameLength(tagName: Expression): Int = when (tagName) {
+        is Identifier -> tagName.text.length
+        is PropertyAccessExpression -> jsxTagNameLength(tagName.expression) + 1 + tagName.name.text.length
+        else -> 0
     }
 
     /**

@@ -1,6 +1,35 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,676 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,677 / 10,078 tests passing (~86.1%).
+
+**B10.1 (2026-05-16, +1 — flips `jsFileCompilationTypeAssertions_ts`)** —
+TS17008 "JSX element 'X' has no corresponding closing tag." emission +
+TS1005 message-swap to `'</' expected.` at the unclosed-JSX-element site
+in `parseJsxElementOrFragment` (Parser.kt ~3553). After `parseJsxChildren`
+returns at EOF, instead of letting `parseExpected(LessThan)` emit the
+bare `'<' expected.`, emit TS17008 at the opening tag-name span
+(`tagName.pos`, length via new `jsxTagNameLength` helper) and a
+specialized TS1005 `'</' expected.` Synthetic close uses an empty-name
+`Identifier` so JSX emit renders `</>` (matches TypeScript's unclosed-
+element recovery emission for the JS-emit sub-test of the target).
+
+**Verification.** Full-suite 10078/1398/3 (was 10078/1399/3 post-B9.5,
++1 net). Zero regressions across 10078-test suite. Both
+`jsFileCompilationTypeAssertions_ts` sub-tests (errors baseline + JS
+emit) pass. Adjacent partial progress on
+`parseUnaryExpressionNoTypeAssertionInJsx1_ts` (now correctly emits
+TS17008 + TS1005 with `'</' expected.` but still missing TS17004 —
+separate substep candidate B10.2 for the `--jsx`-flag-required
+diagnostic).
+
+**Risk profile that materialized.** Bounded as projected. The EOF
+gate fires only in the opening-tag branch of `parseJsxElementOrFragment`
+when no `</` follows children. All other JSX paths (self-closing,
+properly-closed, fragments) unchanged. The empty-name synthetic close
+was the missing piece for the JS-emit sub-test — using `tagName`
+itself would emit `</string>` instead of expected `</>`.
+
+---
 
 **B9.5 (2026-05-15, +1 — flips `crashInEmitTokenWithComment_ts`; stacks on B9.4)** —
 AST-based source-slice rendering of binding-pattern parameter names in
