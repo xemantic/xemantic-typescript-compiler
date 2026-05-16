@@ -35,6 +35,14 @@ class Transformer(
      * Maps namespace name → set of exported member names across all files.
      */
     private val externalNamespaceExports: Map<String, Set<String>> = emptyMap(),
+    /**
+     * Shared module-name counter used to generate unique import-alias temp names
+     * (e.g. `a_1`, `a_2`) across multiple Transformer invocations in a single
+     * `outFile` AMD/System bundle. When non-null, AMD's per-file counter map
+     * defers to this shared map keyed on the module specifier base-name.
+     * Null for single-file compilation — each file restarts at `_1`.
+     */
+    private val sharedModuleNameCounter: MutableMap<String, Int>? = null,
 ) {
 
     // Modifiers that are TypeScript-only and should be stripped from class members
@@ -2868,8 +2876,10 @@ class Transformer(
         var needsExportStar = false
         var importStarUsedFirst = true
 
-        // Counter for generating unique temp names
-        val moduleNameCounter = mutableMapOf<String, Int>()
+        // Counter for generating unique temp names. When sharedModuleNameCounter is
+        // provided (outFile AMD bundle), use it so import-alias numbering increments
+        // globally across all files in the bundle. Otherwise per-file local map.
+        val moduleNameCounter = sharedModuleNameCounter ?: mutableMapOf<String, Int>()
 
         // For identifier renaming (named imports like import { a } from "mod" → mod_1.a)
         val renameMap = mutableMapOf<String, Expression>()
