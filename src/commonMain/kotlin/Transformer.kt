@@ -11600,6 +11600,12 @@ class Transformer(
                 // ExportDeclaration inside a namespace is not valid JS; TypeScript erases it
                 // (members are exported via `Ns.name = value` assignments, not ES export syntax)
                 is ExportDeclaration -> continue
+                // ImportDeclaration inside a namespace body — TypeScript drops these
+                // (external module imports don't belong inside the IIFE; the runtime
+                // semantics are invalid). Matches baseline for tests like
+                // es5ModuleInternalNamedImports where `import * as M2 from "M2"` and
+                // `import M4 from "M4"` inside `namespace M { ... }` are silently elided.
+                is ImportDeclaration -> continue
                 else -> {}
             }
 
