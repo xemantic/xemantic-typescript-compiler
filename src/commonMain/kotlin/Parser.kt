@@ -4144,6 +4144,44 @@ class Parser(
                             )
                         }
 
+                        // `a?.<T>(args)` — optional call with explicit type arguments.
+                        // Try to parse type arguments; if followed by `(`, it's a generic
+                        // optional call. Type arguments are erased in JS emit. If the
+                        // tryScan fails to find `(`, fall through to property-access
+                        // recovery (the `<` becomes garbage handled by parseIdentifierName).
+                        LessThan -> {
+                            val callExpr: Expression? = scanner.tryScan {
+                                val typeArgs = tryParseTypeArguments()
+                                if (typeArgs != null && token == SyntaxKind.OpenParen) {
+                                    val args = parseArgumentList()
+                                    CallExpression(
+                                        expression = result,
+                                        typeArguments = typeArgs,
+                                        arguments = args,
+                                        questionDotToken = true,
+                                        innerComments = lastCallInnerComments,
+                                        pos = result.pos,
+                                        end = getEnd(),
+                                    )
+                                } else null
+                            }
+                            if (callExpr != null) {
+                                callExpr
+                            } else {
+                                // tryScan restored scanner; re-sync parser token, fall
+                                // through to property-access recovery.
+                                token = scanner.getToken()
+                                val name = parseIdentifierName()
+                                PropertyAccessExpression(
+                                    expression = result,
+                                    name = name,
+                                    questionDotToken = true,
+                                    pos = result.pos,
+                                    end = getEnd()
+                                )
+                            }
+                        }
+
                         else -> {
                             val name = parseIdentifierName()
                             PropertyAccessExpression(
