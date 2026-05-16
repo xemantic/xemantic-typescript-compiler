@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,714 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,715 / 10,078 tests passing (~86.5%).
+
+**B17.8 (2026-05-16, +1 — flips `interfaceDeclaration4_ts` JS-emit sub-test)** —
+In `Parser.parseInterfaceDeclaration`, recovery for `interface Foo.I1 { }`
+(invalid qualified-name interface name). After `parseIdentifier()` for the
+interface name, if the next token is `.`, emit TS1005 `{` expected, consume
+the dot, and return an empty interface with no body / heritage / type params.
+The outer statement parser recovers `.I1 { }` tail — TypeScript emits the
+remaining identifier as an expression statement (`I1;`) and the `{ }` as an
+empty block. Without consuming the `.`, the outer parser would prefix the
+expression statement with `.` (`.I1;`).
 
 **B17.7 (2026-05-16, +1 — flips `restParamModifier_ts` JS-emit sub-test)** —
 In `Parser.parseParameterList`, when a parameter has no comma follow-up but
