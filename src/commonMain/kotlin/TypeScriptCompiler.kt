@@ -740,7 +740,8 @@ class TypeScriptCompiler {
                 m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                     m == ModuleKind.Preserve || m == ModuleKind.System
             }
-            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait)
+            val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
+            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
@@ -804,7 +805,8 @@ class TypeScriptCompiler {
                             m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                                 m == ModuleKind.Preserve || m == ModuleKind.System
                         }
-                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait)
+                        val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
+                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag)
                         val sourceFile = parser.parse()
                         diagnostics.addAll(parser.getDiagnostics())
                         parsedFiles[file.fileName] = sourceFile
@@ -952,7 +954,8 @@ class TypeScriptCompiler {
                     m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                         m == ModuleKind.Preserve || m == ModuleKind.System
                 }
-                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti)
+                val needsJsxFlagMulti = computeNeedsJsxFlag(file.fileName, options, forceJsxForJsMulti)
+                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti)
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
 
@@ -1147,6 +1150,14 @@ class TypeScriptCompiler {
  * Extracts relative import paths from a source file and resolves them to actual file names
  * from the list of known files in the compilation.
  */
+private fun computeNeedsJsxFlag(fileName: String, options: CompilerOptions, forceJsxForJs: Boolean): Boolean {
+    val jsxUnset = options.jsx.let { it.isNullOrBlank() || it.equals("none", ignoreCase = true) }
+    if (!jsxUnset) return false
+    val isTsxOrJsx = fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
+    val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+    return isTsxOrJsx || (isPlainJsFile && forceJsxForJs && options.checkJs)
+}
+
 private fun extractRelativeImports(
     sourceFile: SourceFile,
     currentFileName: String,
