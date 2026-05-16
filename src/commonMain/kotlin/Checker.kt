@@ -16277,6 +16277,12 @@ class Checker(
                 val resolvedFile = resolveModuleSpecifier(moduleName) ?: continue
                 val targetResult = fileResults[resolvedFile] ?: continue
                 val targetFile = targetResult.sourceFile
+                // Empty fixture files (admitted to fileResults so B11.2's resolver can find
+                // them) have no statements at all. TypeScript treats such files as untyped
+                // modules and skips default-export checking — the user-facing diagnostic in
+                // that case is TS6142 from `checkJsxImportResolutions`, and TS1192 would be
+                // redundant noise.
+                if (targetFile.statements.isEmpty()) continue
 
                 val hasDefaultExport = moduleHasDefaultExport(targetFile)
 

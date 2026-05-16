@@ -839,6 +839,10 @@ class TypeScriptCompiler {
             val tsFileNames = mutableListOf<String>()
             // Parsed source files for two-phase bind+transform
             val parsedSourceFiles = mutableMapOf<String, SourceFile>()
+            // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
+            // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
+            // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
+            val emptyJsxTsxFixtures = mutableSetOf<String>()
 
             // Resolve outDir to an absolute path when fullEmitPaths is set.
             // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
@@ -910,11 +914,15 @@ class TypeScriptCompiler {
                         continue
                     }
                 }
-                // .jsx (JavaScript+JSX): without outDir/outFile, skip if no allowJs OR source is empty
-                // (empty .jsx files have no TypeScript content to transform)
-                if (isJsxFile && options.outDir == null && options.outFile == null &&
-                    (!options.allowJs || file.content.isBlank())) {
-                    continue
+                // .jsx (JavaScript+JSX): without outDir/outFile, skip non-empty `.jsx` when allowJs
+                // is unset (TypeScript reports nothing for those). Empty `.jsx` fixtures are
+                // admitted so they appear in `fileResults`, letting B11.2's
+                // `resolveJsxTsxCandidate` match `.jsx`/`.tsx` import targets even when the
+                // source happens to be blank (multi-file fixture pattern). Tracked in
+                // `emptyJsxTsxFixtures` so Phase 3 can skip their emit.
+                if (isJsxFile && options.outDir == null && options.outFile == null) {
+                    if (!options.allowJs && file.content.isNotBlank()) continue
+                    if (file.content.isBlank()) emptyJsxTsxFixtures.add(file.fileName)
                 }
                 val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts") ||
                     // *.d.*.ts — declaration files with custom extensions (allowArbitraryExtensions)
@@ -922,10 +930,13 @@ class TypeScriptCompiler {
                     (file.fileName.endsWith(".ts") && !file.fileName.endsWith(".d.ts") &&
                      file.fileName.contains(".d.") &&
                      file.fileName.substringBeforeLast(".ts").substringAfterLast(".d.").isNotEmpty())
-                // .tsx files without --jsx: skip only if the file content is blank
-                // (TypeScript reports an error for JSX syntax without --jsx, but still emits non-JSX tsx content)
+                // .tsx files without --jsx: previously skipped when content was blank, but
+                // we now admit empty `.tsx` fixtures so B11.2's `resolveJsxTsxCandidate` can
+                // match `.tsx` import targets even when the source happens to be blank
+                // (multi-file fixture pattern). Tracked in `emptyJsxTsxFixtures` so Phase 3
+                // can skip their emit.
                 if (file.fileName.endsWith(".tsx") && options.jsx == null && file.content.isBlank()) {
-                    continue
+                    emptyJsxTsxFixtures.add(file.fileName)
                 }
                 // allowJs: skip a .ts/.tsx file if a .js/.jsx file with the same full path (minus extension) exists.
                 // TypeScript "blocks" TS emit when a JS file of the same name is present (avoids conflict).
@@ -1016,6 +1027,12 @@ class TypeScriptCompiler {
 
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
+                // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
+                // B11.2's `resolveJsxTsxCandidate` visibility. Without this, the Emitter
+                // would add a `"use strict";` prologue and produce a phantom
+                // `//// [foo.js]` entry in the baseline.
+                if (tsFileName in emptyJsxTsxFixtures) continue
+
                 // TS6131: When outFile is set but module is not AMD/System and a file has exports,
                 // exclude the file from outFile output (TypeScript skips such files silently).
                 // The Checker emits TS6131 for the first such file. Here we just skip the output.

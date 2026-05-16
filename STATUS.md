@@ -1,6 +1,53 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,680 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,682 / 10,078 tests passing (~86.1%).
+
+**B12.1 (2026-05-16, +2 — flips `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts`)** —
+Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so
+B11.2's `resolveJsxTsxCandidate` can find them in `fileResults`. Three
+pieces landed in `TypeScriptCompiler.kt` + `Checker.kt`:
+
+1. **Phase 1 admit gates relaxed.** `.jsx` skip at line ~915 now uses
+   `!options.allowJs && file.content.isNotBlank()` (was `(!allowJs ||
+   isBlank)`) — admits empty `.jsx` always, still skips non-empty
+   `.jsx` without allowJs. `.tsx` skip at line ~927 dropped the
+   `content.isBlank()` clause entirely. Both empty paths add the file
+   name to a new `emptyJsxTsxFixtures: MutableSet<String>` so Phase 3
+   can identify them.
+
+2. **Phase 3 emit gate.** New `if (tsFileName in emptyJsxTsxFixtures)
+   continue` at the start of the transform/emit loop. Without this,
+   the Emitter would add a `"use strict";` prologue and produce a
+   phantom `//// [foo.js]` baseline entry for each admitted empty
+   fixture. Narrow to the admitted set — does NOT use
+   `sourceFile.statements.isEmpty()` because parser-error recovery on
+   non-empty files (e.g. `jsFileCompilationTypeArgumentSyntaxOfCall_ts`'s
+   `Foo<number>();` etc.) can produce zero statements but legitimately
+   needs JS emission.
+
+3. **Checker TS1192 gate.** In the default-import-without-default-export
+   check (Checker.kt ~16278), skip when `targetFile.statements.isEmpty()`.
+   TypeScript treats empty modules as untyped — TS1192 would be redundant
+   noise alongside the user-facing TS6142 from `checkJsxImportResolutions`.
+   Without this, `resolveModuleSpecifier`'s `.tsx` candidate matching
+   (the resolver DOES try `.tsx`, just not `.jsx`) would find the
+   admitted empty `/tsx.tsx` and fire FP TS1192 on `import tsx from "./tsx"`.
+
+**Verification.** Full-suite 10078/1393/3 (was 10078/1395/3 post-B11.2,
++2 net). Zero regressions. Both `moduleResolutionWithExtensions_notSupported_ts`
+sub-tests (errors-baseline + JS-emit) flip clean; same for `_2_ts`. Variant 3
+(`_3_ts`) unaffected (no errors-baseline; JS-emit already passing — the
+`emptyJsxTsxFixtures` gate prevents the empty `/jsx.jsx` from emitting
+`"use strict";`).
+
+**Risk profile that materialized.** Bounded as projected. Initial v1 attempt
+used `sourceFile.statements.isEmpty()` for the Phase 3 gate — that broke
+8 tests with parser-error-recovery shapes where the parser produces 0
+statements from non-empty source (notably `jsFileCompilationTypeArgumentSyntaxOfCall_ts`
+which has 5 lines of malformed JSX). v2 narrows the gate to the admitted
+fixture set, sidestepping the recovery issue.
+
+---
 
 **B11.2 (2026-05-16, +1 — flips `checkJsxNotSetError_ts`)** —
 TS6142 "Module 'X' was resolved to 'Y', but '--jsx' is not set." emission for
