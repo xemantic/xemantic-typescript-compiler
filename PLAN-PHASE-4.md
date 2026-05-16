@@ -2510,6 +2510,18 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B12.1. Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so B11.2's `resolveJsxTsxCandidate` can find them. Targets: `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts` (+2 expected).** Stacks on B11.2. Single-file change in `TypeScriptCompiler.kt` — relax the empty-content skips at line ~915 (`.jsx`) and ~927 (`.tsx`) so empty fixture files reach `parsedSourceFiles` → `binderResults` → `fileResults`. Then B11.2's resolver matches them and emits TS6142 at the import specifier.
+
+  **Current skip logic (TypeScriptCompiler.kt:915-918).** `.jsx` skipped when `outDir == null && outFile == null && (!allowJs || content.isBlank())`. The `content.isBlank()` arm blocks empty `.jsx` fixtures regardless of allowJs setting. Variant 1 (no allowJs, empty `/jsx.jsx`): skipped at `!allowJs`. Variant 2 (allowJs, empty `/jsx.jsx`): skipped at `content.isBlank()`. Both blocked.
+
+  **Implementation.** Change `.jsx` skip to `!options.allowJs && file.content.isNotBlank()` — admits empty files always, still skips non-empty `.jsx` without allowJs. Change `.tsx` skip at line 927-929 to drop the `content.isBlank()` clause entirely (the downstream blank-output skip at phase 3 handles emit-side concerns).
+
+  **Risk profile.** Bounded. (a) Empty file parsing is a no-op (Parser sees no tokens → empty `SourceFile.statements`). (b) Binder produces empty BinderResult (no symbols added to globals via `mergeSymbolTable`). (c) Checker passes iterate binderResults — empty result is a no-op for every pass. (d) Phase 3 emit: blank output → existing `if (javascript.isBlank()) ...continue` (line 1053) skips emission. The change only affects empty `.jsx`/`.tsx` files which previously got silently dropped — no other test in the corpus has a baseline depending on the pre-fix silent-drop behavior (variants 1+2 are the only known consumers; variant 3 has `@jsx: preserve` which makes `options.jsx != null` so B11.2's jsxUnset gate doesn't fire — no regression there).
+
+  **Verification plan.** Targeted full-suite re-run. Expected: both `moduleResolutionWithExtensions_notSupported_ts` and `_2_ts` flip (+2). Zero regressions — the change only affects empty `.jsx`/`.tsx` files which previously got silently dropped.
+
+  ---
+
 - [x] **B11.2. TS6142 "Module 'X' was resolved to 'Y', but '--jsx' is not set." emission for imports resolving to `.jsx`/`.tsx` files when `options.jsx` is unset (DONE 2026-05-16, +1 — flips `checkJsxNotSetError_ts`).**
 
   **Verification.** Full-suite 10078/1395/3 (was 10078/1396/3 post-B11.1, +1 net). Zero regressions. Target test `checkJsxNotSetError_ts` flips clean. The two secondary targets (`moduleResolutionWithExtensions_notSupported_ts`, `moduleResolutionWithExtensions_notSupported2_ts`) did NOT flip because their `/jsx.jsx` / `/tsx.tsx` source-fixture files have empty content, which TypeScriptCompiler.kt:915 skips from `parsedSourceFiles` when `allowJs && content.isBlank()` for `.jsx` files. Without those files in `fileResults`, `resolveJsxTsxCandidate` can't match them. Out-of-scope substep candidate: pass all @Filename'd files through the pipeline (including skipped empty ones) so the scoped resolver can match them — but that's a wider TypeScriptCompiler change.
