@@ -9667,40 +9667,56 @@ class Transformer(
                     val weakMapVar = "_${className}_$fieldName"
                     val initExpr = prop.initializer?.let { transformExpression(it) }
                     privateFieldInfos.add(PrivateFieldInfo(fieldName, weakMapVar, initExpr))
-
-                    // var _ClassName_field; (hoisted to function/module scope top)
-                    val varStmt = VariableStatement(
-                        declarationList = VariableDeclarationList(
-                            declarations = listOf(VariableDeclaration(
-                                name = syntheticId(weakMapVar),
+                }
+            }
+            // B15.7: emit ONE combined `var X, Y, Z;` statement for all private fields,
+            // and ONE combined `X = new WeakMap(), Y = new WeakMap(), Z = new WeakMap();`
+            // expression statement. TypeScript groups these — emitting them per-field
+            // produces (correct but) extra lines that don't match baselines.
+            if (privateFieldInfos.isNotEmpty()) {
+                val varStmt = VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = privateFieldInfos.map { info ->
+                            VariableDeclaration(
+                                name = syntheticId(info.weakMapVar),
                                 pos = -1, end = -1,
-                            )),
-                            flags = VarKeyword,
+                            )
+                        },
+                        flags = VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+                if (hoistedPrivateFieldScopes.isNotEmpty()) {
+                    hoistedPrivateFieldScopes.last().add(varStmt)
+                } else {
+                    privateFieldLeadingStatements.add(varStmt)
+                }
+                // Build a comma-chained assignment expression: X = new WeakMap(), Y = new WeakMap()
+                val assignments = privateFieldInfos.map { info ->
+                    BinaryExpression(
+                        left = syntheticId(info.weakMapVar),
+                        operator = Equals,
+                        right = NewExpression(
+                            expression = syntheticId("WeakMap"),
+                            arguments = emptyList(),
                             pos = -1, end = -1,
                         ),
                         pos = -1, end = -1,
                     )
-                    if (hoistedPrivateFieldScopes.isNotEmpty()) {
-                        hoistedPrivateFieldScopes.last().add(varStmt)
-                    } else {
-                        privateFieldLeadingStatements.add(varStmt)
-                    }
-
-                    // _ClassName_field = new WeakMap(); (after the class)
-                    privateFieldTrailingStatements.add(ExpressionStatement(
-                        expression = BinaryExpression(
-                            left = syntheticId(weakMapVar),
-                            operator = Equals,
-                            right = NewExpression(
-                                expression = syntheticId("WeakMap"),
-                                arguments = emptyList(),
-                                pos = -1, end = -1,
-                            ),
-                            pos = -1, end = -1,
-                        ),
-                        pos = -1, end = -1,
-                    ))
                 }
+                val combined: Expression = assignments.reduce { acc, next ->
+                    BinaryExpression(
+                        left = acc,
+                        operator = SyntaxKind.Comma,
+                        right = next,
+                        pos = -1, end = -1,
+                    )
+                }
+                privateFieldTrailingStatements.add(ExpressionStatement(
+                    expression = combined,
+                    pos = -1, end = -1,
+                ))
             }
         }
 
