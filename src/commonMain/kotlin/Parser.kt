@@ -6139,6 +6139,21 @@ class Parser(
                         end = getEnd(),
                     )
                 }
+                // Recovery: if at least one parameter has a TYPE ANNOTATION, the `(...)`
+                // unambiguously names a function-type parameter list (not a parenthesized type,
+                // which can't contain `name: Type`). Accept as a function type with synthetic
+                // `any` return and emit TS1005 `=>` expected, so the inner `(n: number)` of a
+                // malformed annotation like `type F2 = (n: number): string;` is consumed as a
+                // single unit instead of leaking `number;` as a top-level expression statement.
+                if (params.any { it.type != null }) {
+                    emptyFnTypeMissingArrowPos = scanner.getTokenPos()
+                    return@tryScan FunctionType(
+                        parameters = params,
+                        type = KeywordTypeNode(kind = SyntaxKind.AnyKeyword, pos = pos, end = getEnd()),
+                        pos = pos,
+                        end = getEnd(),
+                    )
+                }
                 return@tryScan null
             }
             nextToken() // consume =>

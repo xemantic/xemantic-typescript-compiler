@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,717 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,718 / 10,078 tests passing (~86.5%).
+
+**B17.10 (2026-05-16, +1 — flips `parseErrorIncorrectReturnToken_ts` JS-emit sub-test)** —
+In `Parser.parseFunctionOrParenthesizedType`, when the tryScan-parsed parameter list
+has at least one parameter with a type annotation but the following token is NOT `=>`,
+accept the parse as a malformed FunctionType (emit TS1005 `=>` expected, synthesize
+`any` return) instead of bailing to the parenthesized-type fallback. Rationale:
+`(name: Type)` cannot be a parenthesized type (the inner expression isn't a valid
+type), so it must be an incomplete function type. Without this, a malformed annotation
+like `type F2 = (n: number): string;` would bail out of tryScan, the fallback would
+only consume `(n)` (leaving `: number) : string;` for the outer parser), and `number;`
+would leak as a spurious top-level expression statement in the JS output.
 
 **B17.9 (2026-05-16, +2 — flips `es6ClassTest9_ts` JS-emit sub-test + adjacent)** —
 In `Parser.parseClassDeclaration`, recovery for `declare class foo();`
