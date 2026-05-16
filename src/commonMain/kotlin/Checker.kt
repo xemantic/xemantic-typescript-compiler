@@ -6169,6 +6169,14 @@ class Checker(
                         }
                         is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
                         is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
+                        // ParenthesizedExpression with instantiationEnd: synthetic paren from an
+                        // instantiation expression like `getValue<number>`. TypeScript treats this
+                        // as an invalid assignment target (TS2364) but ALSO as a use-before-assigned
+                        // of the inner Identifier — the InstantiationExpression reads the variable
+                        // before "assigning" to it (which is a no-op type-error).
+                        is ParenthesizedExpression -> if (left.instantiationEnd != null) {
+                            findUninitializedRefs(left.expression, uninitialized, source, fileName)
+                        }
                         else -> {}
                     }
                 } else if (expr.operator == SyntaxKind.Comma) {
