@@ -2510,6 +2510,22 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [ ] **B10.1. TS17008 "JSX element 'X' has no corresponding closing tag." emission + TS1005 message-swap to `'</' expected.` at the unclosed-JSX-element site in `parseJsxElementOrFragment` (Parser.kt ~3553–3568).** Target: flip `jsFileCompilationTypeAssertions_ts` (+1; `.js` file with `<string>undefined;` JSX-parsed-as-element); foundation for `parseUnaryExpressionNoTypeAssertionInJsx1_ts` (still needs TS17004 "Cannot use JSX unless the '--jsx' flag is provided." emission to fully flip).
+
+  **Diff diagnosis.** Both target tests share the same missing pieces:
+  - Currently the path `parseJsxChildren` returns at EOF → `parseExpected(SyntaxKind.LessThan)` fires TS1005 `'<' expected.` (generic message from `parseExpected`).
+  - TypeScript's baseline expects TS17008 at the opening tag-name position (e.g. `(2,10)` length 6 for `<string>`), then TS1005 with the SPECIALIZED message `'</' expected.` (not bare `'<'`).
+  - We do not emit TS17008 anywhere today (no grep hit in src/commonMain/kotlin/).
+
+  **Decomposition.** Single-file change in `Parser.kt`:
+  1. Add helper `jsxTagNameLength(tagName: Expression): Int` mirroring the existing `jsxTagNameToString` shape: `Identifier` → `text.length`; `PropertyAccessExpression` → `jsxTagNameLength(expression) + 1 + name.text.length` (covers `Foo.Bar`-style qualified names).
+  2. In `parseJsxElementOrFragment`'s opening-tag branch, AFTER `val children = parseJsxChildren(...)` and BEFORE `parseExpected(SyntaxKind.LessThan)`: if `token == SyntaxKind.EndOfFile`, emit TS17008 at `(tagName.pos, jsxTagNameLength(tagName))` with message "JSX element '<tagNameStr>' has no corresponding closing tag.", then `reportError("'</' expected.", code = 1005)` (uses default position = EOF, matches baseline `(line, 1)`), then return a synthetic `JsxElement` with a zero-width `JsxClosingElement(tagName = tagName, pos = closingPos, end = closingPos)` to preserve AST shape.
+  3. Skip the `parseExpected(LessThan)` / `parseExpected(Slash)` / `parseJsxTagName` / `parseExpected(GreaterThan)` sequence in the EOF branch — they would emit redundant errors.
+
+  **Risk profile.** Bounded — change ONLY fires inside `parseJsxElementOrFragment` opening-tag branch when at EOF after children parsing. Self-closing elements and properly-closed elements are unaffected. The non-EOF "stuck on bad token" case (rare, e.g. `<foo>bar<baz` where parseJsxChildren breaks on the inner LessThan as a child element) is NOT covered by this substep — keep using the existing `parseExpected` path there for now; a follow-on B10.2 could broaden to "any non-`<` token" if a failing-test target arises. Other JSX-using `.ts`/`.js` tests in the corpus would only see the new TS17008 + improved TS1005 message IF they have an unclosed JSX element at EOF — verified via grep that only 3 `.ts`/`.js` baselines expect TS17008 (`jsFileCompilationTypeAssertions`, `parseUnaryExpressionNoTypeAssertionInJsx1`, `parseJsxElementInUnaryExpressionNoCrash3`); two would benefit directly, the third has additional malformed-token recovery needs out of scope.
+
+  **Verification plan.** Targeted full-suite re-run between fix and commit. Expected: `jsFileCompilationTypeAssertions_ts` flips +1. `parseUnaryExpressionNoTypeAssertionInJsx1_ts` improves (gains 2 emissions: TS17008 + corrected TS1005) but still needs TS17004 to flip. Zero regressions expected — the change is purely additive (new TS17008) + a strictly-more-informative message swap.
+
 - [x] **B9.5. AST-based source-slice rendering of binding-pattern parameter names in `formatParameter` / `signatureToString(sig)` (DONE 2026-05-15, +1 — flips `crashInEmitTokenWithComment_ts`).** Stacks on B9.4. Replace the `_` placeholder at Checker.kt:43561 and Checker.kt:52907 with a recursive `formatBindingPatternFromAst(node: Node): String` helper covering:
 
   - **ObjectBindingPattern** → `{ <elements joined with ', '> }` with spaces inside braces (matches TypeScript's `{ [foo.bar]: c }` display convention).
