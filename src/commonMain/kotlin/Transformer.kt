@@ -7809,6 +7809,11 @@ class Transformer(
     private fun transformObjectLiteralElement(node: Node): Node {
         return when (node) {
             is PropertyAssignment -> node.copy(
+                // Computed property names can contain `await` inside async function bodies —
+                // those need the await→yield rewrite alongside the initializer. Without this,
+                // `{ [await a]: y }` inside an async body emits `[await a]` in the __awaiter
+                // generator function, which is a syntax error / no-op at the await call site.
+                name = transformPropertyName(node.name),
                 initializer = transformExpression(node.initializer),
             )
 
@@ -7827,6 +7832,14 @@ class Transformer(
             is SetAccessor -> transformSetAccessorElement(node)
             else -> node
         }
+    }
+
+    /** Recursively transforms a property-name node. Currently only ComputedPropertyName
+     *  needs traversal — its inner expression may contain `await` / `yield` / etc. that
+     *  need the active async-context rewrite. */
+    private fun transformPropertyName(name: NameNode): NameNode = when (name) {
+        is ComputedPropertyName -> name.copy(expression = transformExpression(name.expression))
+        else -> name
     }
 
     private fun transformMethodDeclarationElement(method: MethodDeclaration): MethodDeclaration {
