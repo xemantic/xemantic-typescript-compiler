@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,708 / 10,078 tests passing (~86.4%).
+**Phase 4 — Checker buildout.** 8,709 / 10,078 tests passing (~86.4%).
+
+**B17.3 (2026-05-16, +1 — flips `mergeWithImportedType_ts` errors-baseline sub-test)** —
+Two-piece checker fix for the type-alias-vs-value-import name collision. (1) In
+`checkImportConflictsWithLocal`, a new `typeAliasNames` set is tracked separately
+from the existing `typeOnlyNames` (which conflates TypeAlias + Interface). Inside
+the `NamedImports` element loop, a new branch fires TS2440 `Import declaration
+conflicts with local declaration of 'X'` when `localAlias in typeAliasNames`
+and the import binding is not type-only — TypeAlias declarations cannot
+participate in declaration merging, so any name clash with a named-import
+binding is a hard conflict regardless of what the imported symbol is. (2) In
+`checkCircularTypeAliasInStatements`, TS2456 `Type alias 'X' circularly
+references itself` is now suppressed when `X` is also bound by a *named* import
+(`import { X }` / `import * as X`) — the apparent self-reference resolves to
+the imported binding, not a real cycle. Default imports (`import X from`) are
+intentionally NOT suppression triggers because TypeScript still fires TS2456 in
+that shape (regression caught against `commonJsExportTypeDeclarationError_ts`
+es5/es2015 variants).
 
 **B17.2 (2026-05-16, +1 — flips `unicodeEscapesInNames02_ts__target_es2015__` JS-emit sub-test)** —
 In `Scanner.scanIdentifierWithEscapes`, the post-decode check `!isIdentifierStart(firstDecodedChar)`

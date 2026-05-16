@@ -44748,10 +44748,33 @@ interface DataView {
     private fun checkCircularTypeAliasInStatements(
         statements: List<Statement>, source: String, fileName: String,
     ) {
+        // Names introduced by *named* imports (`import { X }` / `import * as X`) at the
+        // file scope. When a TypeAlias's name matches one of these, the TS2440 path
+        // in `checkImportConflictsWithLocal` covers the diagnostic and the alias's
+        // apparent self-reference is just resolving to the imported binding rather
+        // than a true cycle — suppress TS2456 to mirror TypeScript's output shape.
+        //
+        // Default imports (`import X from "..."`) are intentionally excluded: TypeScript
+        // does NOT fire TS2440 in that shape, and TS2456 IS expected (e.g. types3.ts in
+        // `commonJsExportTypeDeclarationError`: `import test from "./test"; type test = test;`).
+        val importedNames = mutableSetOf<String>()
+        for (s in statements) {
+            if (s !is ImportDeclaration) continue
+            val clause = s.importClause ?: continue
+            if (clause.isTypeOnly) continue
+            when (val nb = clause.namedBindings) {
+                is NamespaceImport -> importedNames.add(nb.name.text)
+                is NamedImports -> for (el in nb.elements) {
+                    if (!el.isTypeOnly) importedNames.add(el.name.text)
+                }
+                else -> {}
+            }
+        }
         for (stmt in statements) {
             when (stmt) {
                 is TypeAliasDeclaration -> {
                     val aliasName = stmt.name.text
+                    if (aliasName in importedNames) continue
                     if (typeNodeDirectlyReferencesName(stmt.type, aliasName)) {
                         val pos = stmt.name.pos
                         val length = aliasName.length
@@ -60469,6 +60492,12 @@ interface DataView {
             val varNames = mutableSetOf<String>()     // variable declarations
             val mergeableNames = mutableSetOf<String>() // class/function/enum — can merge with internal aliases
             val typeOnlyNames = mutableSetOf<String>() // type alias / interface — can conflict with type-only imports
+            // Type aliases specifically — these CANNOT merge with any other declaration kind
+            // (unlike interfaces which can merge with classes/namespaces/values via declaration merging).
+            // `import { X } from "..."` (binding a value) + local `type X = ...` is therefore a hard
+            // conflict regardless of the imported symbol's kind, distinct from the type-only-vs-type-only
+            // case handled by `isExportedNameTypeOnly`.
+            val typeAliasNames = mutableSetOf<String>()
             for (stmt in stmts) {
                 when (stmt) {
                     is VariableStatement -> {
@@ -60480,7 +60509,10 @@ interface DataView {
                     is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
                     is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
                     is EnumDeclaration -> mergeableNames.add(stmt.name.text)
-                    is TypeAliasDeclaration -> typeOnlyNames.add(stmt.name.text)
+                    is TypeAliasDeclaration -> {
+                        typeOnlyNames.add(stmt.name.text)
+                        typeAliasNames.add(stmt.name.text)
+                    }
                     is InterfaceDeclaration -> typeOnlyNames.add(stmt.name.text)
                     else -> {}
                 }
@@ -60602,6 +60634,31 @@ interface DataView {
                                 if (localAlias in typeOnlyNames &&
                                     moduleSpecifierText != null &&
                                     isExportedNameTypeOnly(sourceNameForElt, moduleSpecifierText)) {
+                                    val startNode = element.propertyName ?: element.name
+                                    val startPos = startNode.pos
+                                    val spanLen = if (element.propertyName != null) {
+                                        element.name.pos + element.name.text.length - startPos
+                                    } else {
+                                        localAlias.length
+                                    }
+                                    val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Import declaration conflicts with local declaration of '$localAlias'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2440,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = startPos,
+                                        length = spanLen,
+                                    ))
+                                    continue
+                                }
+                                // TypeAlias-vs-value-import conflict: `type X = ...` cannot share a name
+                                // with `import { X } from "..."` since TypeAlias doesn't participate in
+                                // declaration merging. Mirrors TS2440 fired in this exact shape (e.g.
+                                // `import {E} from "./f1"; type E = E;` where f1 re-exports a value).
+                                if (localAlias in typeAliasNames) {
                                     val startNode = element.propertyName ?: element.name
                                     val startPos = startNode.pos
                                     val spanLen = if (element.propertyName != null) {
