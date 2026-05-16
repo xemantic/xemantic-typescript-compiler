@@ -53874,8 +53874,21 @@ interface DataView {
                         body.pos < fullEnd &&
                         source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
                     if (isMultiLine) {
-                        val eolPos = source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
-                        (eolPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
+                        // Find `=>` between arg.pos and body.pos. If `=>` is on a separate line
+                        // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
+                        // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
+                        // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
+                        val arrowMarkerPos = source.lastIndexOf("=>", (body.pos - 1).coerceAtLeast(0))
+                        val anchorPos = if (arrowMarkerPos in start..<body.pos) {
+                            // Use the `=>` position to find its line's end-of-line.
+                            val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
+                            val braceEolPos = source.indexOf('\n', body.pos).let { if (it < 0) source.length else it }
+                            // If `=>` and `{` are on different lines, prefer `=>`'s EOL (narrower).
+                            if (arrowEolPos < body.pos) arrowEolPos else braceEolPos
+                        } else {
+                            source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
+                        }
+                        (anchorPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
                     } else {
                         fullEnd - start
                     }

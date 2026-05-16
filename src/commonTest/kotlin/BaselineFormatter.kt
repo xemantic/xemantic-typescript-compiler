@@ -571,6 +571,10 @@ fun formatErrorBaseline(
                 for (diag in lineDiags) {
                     val col = ((diag.character ?: 1) - 1).coerceAtLeast(0) // convert to 0-based
                     val len = diag.length ?: 1
+                    // Track continuation lines covered by this diag's multi-line squiggle so we
+                    // can emit any additional diagnostics that start on those lines without
+                    // re-emitting their source line (the multi-line continuation already did).
+                    val continuationLineIndices = mutableListOf<Int>()
 
                     if (len == 0) {
                         // Zero-length span — empty squiggle line (just indentation, no ~)
@@ -594,6 +598,7 @@ fun formatErrorBaseline(
                             if (remaining <= 0) break
                             val nextLine = sourceLines[nextLineIdx]
                             skipLines.add(nextLineIdx)
+                            continuationLineIndices.add(nextLineIdx)
                             // Emit source line
                             +"    "
                             +nextLine
@@ -656,6 +661,51 @@ fun formatErrorBaseline(
                         +": "
                         +related.message
                         +"\r\n"
+                    }
+
+                    // Emit additional diagnostics that START on this diag's continuation lines
+                    // (those source lines were already emitted by the multi-line continuation, so
+                    // emit only the squiggle + !!! annotation, not the source line again).
+                    // Only handle single-line additional diagnostics — multi-line additionals would
+                    // re-emit overlapping source and are rare in practice.
+                    for (contLineIdx in continuationLineIndices) {
+                        val contLineNum = contLineIdx + 1
+                        val contLineContent = sourceLines[contLineIdx]
+                        val moreDiags = fileDiags
+                            .filter { it.line == contLineNum && it !== diag }
+                            .sortedWith(compareBy({ it.character ?: 0 }, { it.length ?: 0 }, { it.code }))
+                        for (moreDiag in moreDiags) {
+                            val mCol = ((moreDiag.character ?: 1) - 1).coerceAtLeast(0)
+                            val mLen = moreDiag.length ?: 1
+                            if (mLen == 0) {
+                                +"    "
+                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"\r\n"
+                            } else {
+                                val mCharsOnLine = (contLineContent.length - mCol).coerceAtLeast(1)
+                                val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
+                                +"    "
+                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"~".repeat(mFirstLineLen)
+                                +"\r\n"
+                            }
+                            +"!!! "
+                            +moreDiag.category.name.lowercase()
+                            +" TS"
+                            +moreDiag.code.toString()
+                            +": "
+                            +moreDiag.message
+                            +"\r\n"
+                            for (chain in moreDiag.messageChain) {
+                                +"!!! "
+                                +moreDiag.category.name.lowercase()
+                                +" TS"
+                                +moreDiag.code.toString()
+                                +": "
+                                +chain
+                                +"\r\n"
+                            }
+                        }
                     }
                 }
             }

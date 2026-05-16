@@ -1,6 +1,65 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,682 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,683 / 10,078 tests passing (~86.2%).
+
+**B13.1 (2026-05-16, +1 — flips `arrowFunctionErrorSpan_ts` errors-baseline)** —
+Three coordinated pieces close the errors-baseline sub-test of
+`arrowFunctionErrorSpan_ts` (the JS-emit sub-test still fails on an
+unrelated comment-preservation issue). Pieces touch Parser, Checker, and
+BaselineFormatter:
+
+1. **Parser TS1200 emission** (`Parser.kt:parseArrowFunction`). When
+   `=>` has a preceding line break (after the param list or single
+   identifier), emit TS1200 "Line terminator not permitted before
+   arrow." at the `=>` token (length 2). Only two files in the corpus
+   have the `)\n\s*=>` pattern: the target test and
+   `declarationEmitDistributiveConditionalWithInfer.ts` (which uses a
+   `FunctionType` TypeNode, not `parseArrowFunction` — unaffected).
+
+2. **Checker arrow-squiggle clip narrowing** (`Checker.kt:53870`,
+   the 17.238/17.239 squiggle-clip for multi-line arrow-block bodies).
+   Previously the clip used `source.indexOf('\n', body.pos)` —
+   end-of-line of the `{` line. For the `() =>\n // comment \n {`
+   shape that breaks: `{`'s line is several lines past `=>`, so the
+   squiggle covers `() =>`, the comment line, AND the `{` line.
+   TypeScript clips at end-of-line of `=>` here. Fix: find `=>`
+   position via `source.lastIndexOf("=>", body.pos - 1)`, prefer its
+   EOL when `=>` and `{` are on different lines. Single-line bodies
+   (no clip applied) and same-line `=> {` cases (existing behavior)
+   are unchanged.
+
+3. **BaselineFormatter multi-line continuation diagnostic preservation**
+   (`BaselineFormatter.kt`). Previously, when diag D1's squiggle covered
+   lines N..M as a multi-line span, lines N+1..M were added to
+   `skipLines` and the per-line iteration silently skipped them —
+   dropping any diag D2 that started on a continuation line. Fix:
+   track `continuationLineIndices` per diag; after D1's `!!! error`
+   annotation, iterate continuation lines and emit additional
+   single-line diagnostics that start there (squiggle + `!!! error`
+   annotation, no source-line re-emission since the multi-line
+   continuation already emitted it). Limited to single-line additional
+   diagnostics — multi-line additionals are rare and would need
+   different handling.
+
+**Verification.** Full-suite 10078/1392/3 (was 10078/1393/3, +1 net).
+Zero regressions across 10078-test suite. The errors-baseline sub-test
+of `arrowFunctionErrorSpan_ts` flips clean (TS1200 emission + correct
+squiggle position + correct comment-3 narrow squiggle). The JS-emit
+sub-test (`arrowFunctionErrorSpan_js`) still fails on a pre-existing
+comment-preservation issue in the JS emitter (drops `// comment 1`
+and `// comment 5` from the comment-3 block) — separate concern,
+out of scope.
+
+**Risk profile that materialized.** Bounded as projected. The Parser
+TS1200 emission only fires for the unique `)\n =>` pattern (one file
+in corpus). The Checker squiggle-clip change preserves existing
+behavior when `=>` and `{` are on the same line (the common multi-line
+body case). The Formatter change adds previously-dropped diagnostics
+back to the output — net positive for correctness; if any test
+expected them to be dropped (unlikely), it would regress, but the
+suite shows none.
+
+---
 
 **B12.1 (2026-05-16, +2 — flips `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts`)** —
 Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so
