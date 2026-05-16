@@ -2316,7 +2316,7 @@ class Parser(
                 message = "Type expected.",
                 code = 1110,
                 overrideStart = scanner.getPrevTokenEnd(),
-                overrideLength = 1,
+                overrideLength = 0,
             )
         }
         val eqConsumed = parseExpected(SyntaxKind.Equals)
@@ -2329,7 +2329,7 @@ class Parser(
                 message = "Type expected.",
                 code = 1110,
                 overrideStart = scanner.getPrevTokenEnd(),
-                overrideLength = 1,
+                overrideLength = 0,
             )
         }
         val type = parseType()
