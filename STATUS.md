@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,715 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,717 / 10,078 tests passing (~86.5%).
+
+**B17.9 (2026-05-16, +2 — flips `es6ClassTest9_ts` JS-emit sub-test + adjacent)** —
+In `Parser.parseClassDeclaration`, recovery for `declare class foo();`
+(invalid: class with `()` instead of `{}`). After heritage clauses, if the
+next token is `(` where `{` is expected, emit TS1005 `{` expected and bail
+out with an empty class body. The outer statement parser recovers `();` as
+an expression statement and continues with whatever follows (e.g. a
+sibling `function foo() {}` declaration that would previously be eaten by
+the class body parser searching for the missing close brace).
 
 **B17.8 (2026-05-16, +1 — flips `interfaceDeclaration4_ts` JS-emit sub-test)** —
 In `Parser.parseInterfaceDeclaration`, recovery for `interface Foo.I1 { }`
