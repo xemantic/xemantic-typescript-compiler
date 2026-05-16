@@ -36704,6 +36704,15 @@ interface DataView {
                     it.code == 2304 && it.start == refStart && it.fileName == fileName
                 }
                 if (hasTs2304) return
+                // Mirror for TS2314: generic type used without required type args
+                // (e.g. `): MemberName {` where MemberName<A,B,C>). TypeScript also
+                // suppresses TS2355/TS2366/TS7030 in this case because the return type
+                // is treated as malformed at the type level — emitting TS2355 on top
+                // would be redundant noise pointing to the same span.
+                val hasTs2314 = diagnostics.any {
+                    it.code == 2314 && it.start == refStart && it.fileName == fileName
+                }
+                if (hasTs2314) return
             }
         }
 
