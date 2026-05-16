@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,684 / 10,078 tests passing (~86.2%).
+**Phase 4 — Checker buildout.** 8,687 / 10,078 tests passing (~86.2%).
+
+**B14.4 (2026-05-16, +1 — flips `importedEnumMemberMergedWithExportedAliasIsError_ts`)** —
+In `transformImportEqualsDeclaration`, before the existing target-type-only
+checks, scan `topLevelStatements` for a same-name `TypeAliasDeclaration` or
+`InterfaceDeclaration`. If found, erase the entire declaration. Skip when
+`declare` modifier is present (ambient bindings stay regardless of shadow).
+Companion pre-scan updates in transformToCommonJS and transformToAMD do the
+same shadowing classification for downstream `typeOnlyDeclaredNames`. Catches
+`import EnumA = Enum.A; export type EnumA = ...` (the named target).
+Full-suite 10078/1389/3 (was 10078/1390/3, +1 net). Zero regressions.
+
+**B14.3 (2026-05-16, +1 — flips `es5ModuleInternalNamedImports_ts__target_es2015__`)** —
+In `transformNamespaceBody`, drop `ImportDeclaration` in the same type-only-elision
+branch that already drops InterfaceDeclaration/TypeAliasDeclaration/ExportDeclaration.
+ImportDeclarations inside an IIFE-wrapped namespace are invalid at runtime; TypeScript
+silently drops them. Full-suite 10078/1390/3 (was 10078/1391/3, +1 net). Zero
+regressions.
+
+**B14.2 (2026-05-16, net-zero infra — foundation for `commonJsExportTypeDeclarationError_ts`)** —
+TS1110 "Type expected." emission in `parseTypeAliasDeclaration` for two shapes:
+(a) `type X` (no `=`) — TS1110 at position right after the name; (b) `type X = `
+(with `=` but no body) — TS1110 at position right after `=`. Leading `|` / `&` in
+`type X = | A | B` are accepted as type-starts (parseType handles them). Closes
+2 of 3 missing diagnostics for `commonJsExportTypeDeclarationError_ts`; the
+target still needs TS2456 (circular type alias) to flip. Test count unchanged.
+Zero regressions.
 
 **B14.1 (2026-05-16, +1 — flips `enumNoInitializerFollowsNonLiteralInitializer_ts` errors-baseline)** —
 Two coordinated pieces close the test:
