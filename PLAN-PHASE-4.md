@@ -2474,6 +2474,40 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-16 (B17.1–B17.6, +8 net, 8705 → 8713 passing).** Six surgical iterations:
+- B17.1 (+2): `Scanner.reScanLessThanToken()` splits `<<` to `<` inside `tryParseTypeArguments`,
+  with diagnostics-rollback to prevent leaked errors on speculative bailout. Flips
+  `parseGenericArrowRatherThanLeftShift_ts` + `importTypeWithUnparenthesizedGenericFunctionParsed_ts`
+  JS-emit sub-tests.
+- B17.2 (+1): `Scanner.scanIdentifierWithEscapes` carve-out for astral surrogate pairs as
+  identifier start. Flips `unicodeEscapesInNames02_ts__target_es2015__` JS-emit.
+- B17.3 (+1): Checker TS2440 for typeAlias-vs-named-import name conflict + TS2456 suppression
+  for the same case. Flips `mergeWithImportedType_ts` errors-baseline.
+- B17.4 (+1): TS6504 `File 'X' is a JavaScript file` emission alongside TS5052. Flips
+  `checkJsFiles6_ts` errors-baseline.
+- B17.5 (+1): Parser `var`/`let`/`const` bailout from interface member loop (lookahead-gated
+  to preserve property-name use). Flips `instantiateTypeParameter_ts` JS-emit.
+- B17.6 (+2): `transformObjectLiteralElement` recurses into `ComputedPropertyName` for the
+  await→yield rewrite. Flips `es5-asyncFunctionObjectLiterals_ts__target_es2015__` + adjacent.
+
+**Recon outcome.** Remaining +1/+2 emit candidates (`parseErrorIncorrectReturnToken_ts`,
+`restParamModifier_ts`, `assertInWrapSomeTypeParameter_ts`, `ClassDeclaration26_ts`,
+`es6ClassTest9_ts`, `dontShowCompilerGeneratedMembers_ts`, `interfaceDeclaration4_ts`,
+`parseJsxElementInUnaryExpressionNoCrash3_ts`, `parserUnparsedTokenCrash2_ts`,
+`ambiguousGenericAssertion1_ts`) all require multi-piece parser-recovery improvements
+(specific token-sequence handling for malformed input). The +4-line bucket is dominated by
+multi-file emit ordering (`externalModuleRefernceResolutionOrderInImportDeclaration_ts`,
+`pathMappingBasedModuleResolution8_*`), SystemJS export-statement merging
+(`reexportMissingDefault5_ts`), AMD module-ID derivation
+(`declarationEmitBundleWithAmbientReferences_ts`), CJS re-export-via-defineProperty
+(`declarationMapsOutFile_ts`), and per-file CJS bundle gates (`moduleResolutionWithRequire_ts`,
+`requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs_ts`). The +6-line error-baseline
+bucket is mostly contextual-union/discriminant narrowing
+(`discriminatedUnionErrorMessage_ts`, `signatureCombiningRestParameters1_ts`) or JSDoc
+type extraction (`jsdocPropertyTagInvalid_ts`, `jsFileClassPropertyType[123]_ts`,
+`jsdocResolveNameFailureInTypedef_ts`) or noLib semantic-utility-type emission
+(`decoratorMetadataNoLibIsolatedModulesTypes_ts` needs TS2583 for Map + TS2564 suppression).
+
 **Status (2026-04-11):** Phase 15 exhausted. The remaining 2,049 failures are blocked by missing core type system features. Phase 16 prioritizes these by unblocking potential.
 
 ### Failure impact analysis (upper bounds — assumes feature fully unblocks tests)
