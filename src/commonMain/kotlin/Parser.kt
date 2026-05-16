@@ -39,6 +39,11 @@ class Parser(
 
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
+    // B18.1: set true by parseInterfaceMembers when it bails out on a
+    // top-level var/let/const inside an interface body — the caller skips
+    // its parseExpected(CloseBrace) so TS1131 (already emitted) isn't
+    // followed by a redundant TS1005.
+    private var interfaceMembersBailedOnKeyword = false
 
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
@@ -2014,7 +2019,11 @@ class Parser(
         val heritage = parseHeritageClauses()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseInterfaceMembers()
-        parseExpected(SyntaxKind.CloseBrace)
+        if (interfaceMembersBailedOnKeyword) {
+            interfaceMembersBailedOnKeyword = false
+        } else {
+            parseExpected(SyntaxKind.CloseBrace)
+        }
         return InterfaceDeclaration(
             name = name, typeParameters = typeParams, heritageClauses = heritage,
             members = members, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments
@@ -2042,7 +2051,22 @@ class Parser(
                     // declaration that doesn't belong here.
                     isIdentifier() || token == SyntaxKind.OpenBracket || token == SyntaxKind.OpenBrace
                 }
-                if (looksLikeVarStmt) break
+                if (looksLikeVarStmt) {
+                    // B18.1: emit TS1131 at the keyword position (length = keyword text)
+                    // so the outer parser doesn't emit a redundant TS1005 from
+                    // parseExpected(CloseBrace). The caller sees the flag and skips it.
+                    val kw = when (token) {
+                        SyntaxKind.VarKeyword -> "var"
+                        SyntaxKind.LetKeyword -> "let"
+                        else -> "const"
+                    }
+                    reportError(
+                        "Property or signature expected.", code = 1131,
+                        overrideStart = getPos(), overrideLength = kw.length,
+                    )
+                    interfaceMembersBailedOnKeyword = true
+                    break
+                }
             }
             val member = parseTypeMember()
             if (member != null) members.add(member)
@@ -6214,7 +6238,11 @@ class Parser(
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseInterfaceMembers()
-        parseExpected(SyntaxKind.CloseBrace)
+        if (interfaceMembersBailedOnKeyword) {
+            interfaceMembersBailedOnKeyword = false
+        } else {
+            parseExpected(SyntaxKind.CloseBrace)
+        }
         return TypeLiteral(members = members, pos = pos, end = getEnd())
     }
 

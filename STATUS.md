@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,718 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,719 / 10,078 tests passing (~86.5%).
+
+**B18.1 (2026-05-16, +1 — flips `instantiateTypeParameter_ts` errors-baseline sub-test)** —
+Two-piece fix. (1) `Parser.parseInterfaceMembers`: when bailing out on a top-level
+`var`/`let`/`const` keyword inside an interface body, now emit TS1131 "Property or
+signature expected." at the keyword position (length matches keyword text) and set
+a flag so callers (`parseInterfaceDeclaration` / `parseTypeLiteralOrMappedType`)
+skip their `parseExpected(CloseBrace)` — otherwise a redundant TS1005 `'}' expected.`
+fires at the same position. (2) `Checker.checkUnresolvedInTypeCore`: suppress TS1099
+"Type argument list cannot be empty." when the `TypeReference`'s `typeName` is an
+unresolved Identifier (TS2304 already fires for that case and is the primary error;
+TypeScript doesn't double-emit). For `interface Foo<T> { var x: T<>; }`, the
+recovered top-level `var x: T<>;` has `T` unresolved (no longer in scope after
+escaping the interface's type-parameter scope), so TS1099 is now correctly skipped.
 
 **B17.10 (2026-05-16, +1 — flips `parseErrorIncorrectReturnToken_ts` JS-emit sub-test)** —
 In `Parser.parseFunctionOrParenthesizedType`, when the tryScan-parsed parameter list
