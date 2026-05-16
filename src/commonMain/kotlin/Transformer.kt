@@ -163,6 +163,10 @@ class Transformer(
     // Causes the __await and __asyncGenerator helpers to be prepended to the output statements.
     private var needsAsyncGeneratorHelper = false
 
+    // Set to true when `yield* expr` in an async generator body is transformed.
+    // Pulls in __asyncDelegator + __asyncValues helpers from tslib.
+    private var needsAsyncDelegatorHelper = false
+
     // Set to true when object destructuring with rest elements is transformed.
     // Causes the __rest helper to be prepended to the output statements.
     private var needsRestHelper = false
@@ -190,6 +194,7 @@ class Transformer(
             "__makeTemplateObject" -> if (!needsMakeTemplateObjectHelper) { needsMakeTemplateObjectHelper = true; helperUsageOrder.add(name) }
             "__awaiter" -> if (!needsAwaiterHelper) { needsAwaiterHelper = true; helperUsageOrder.add(name) }
             "__asyncGenerator" -> if (!needsAsyncGeneratorHelper) { needsAsyncGeneratorHelper = true; helperUsageOrder.add(name) }
+            "__asyncDelegator" -> if (!needsAsyncDelegatorHelper) { needsAsyncDelegatorHelper = true; helperUsageOrder.add(name) }
             "__rest" -> if (!needsRestHelper) { needsRestHelper = true; helperUsageOrder.add(name) }
             "__decorate" -> if (!needsDecorateHelper) { needsDecorateHelper = true; helperUsageOrder.add(name) }
             "__metadata" -> if (!needsMetadataHelper) { needsMetadataHelper = true; helperUsageOrder.add(name) }
@@ -250,6 +255,7 @@ class Transformer(
         inAsyncGeneratorBody = false
         needsAwaiterHelper = false
         needsAsyncGeneratorHelper = false
+        needsAsyncDelegatorHelper = false
         needsRestHelper = false
         needsDecorateHelper = false
         needsParamHelper = false
@@ -523,6 +529,7 @@ class Transformer(
                     "__makeTemplateObject" -> tslibNames.add("__makeTemplateObject")
                     "__awaiter" -> tslibNames.add("__awaiter")
                     "__asyncGenerator" -> { tslibNames.add("__asyncGenerator"); tslibNames.add("__await") }
+                    "__asyncDelegator" -> { tslibNames.add("__asyncDelegator"); tslibNames.add("__asyncValues") }
                     "__rest" -> tslibNames.add("__rest")
                     "__decorate" -> tslibNames.add("__decorate")
                     "__metadata" -> tslibNames.add("__metadata")
@@ -7320,7 +7327,8 @@ class Transformer(
             // Tagged template
             is TaggedTemplateExpression -> transformTaggedTemplate(expr)
 
-            // Yield: in async generator body, `yield expr` → `yield yield __await(expr)`
+            // Yield: in async generator body, `yield expr` → `yield yield __await(expr)`,
+            //                              `yield* expr` → `yield __await(yield* __asyncDelegator(__asyncValues(expr)))`
             is YieldExpression -> {
                 if (inAsyncGeneratorBody && !expr.asteriskToken) {
                     val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
@@ -7330,6 +7338,31 @@ class Transformer(
                             expression = makeAwaitCall(innerExpr),
                             pos = -1, end = -1,
                         ),
+                        leadingComments = expr.leadingComments,
+                        trailingComments = expr.trailingComments,
+                        pos = -1, end = -1,
+                    )
+                } else if (inAsyncGeneratorBody && expr.asteriskToken && expr.expression != null) {
+                    // `yield* expr` in async generator → yield __await(yield* __asyncDelegator(__asyncValues(expr)))
+                    requireHelper("__asyncDelegator")  // pulls in __asyncDelegator + __asyncValues
+                    val innerExpr = transformExpression(expr.expression)
+                    val asyncValuesCall = CallExpression(
+                        expression = helperExpr("__asyncValues"),
+                        arguments = listOf(innerExpr),
+                        pos = -1, end = -1,
+                    )
+                    val asyncDelegatorCall = CallExpression(
+                        expression = helperExpr("__asyncDelegator"),
+                        arguments = listOf(asyncValuesCall),
+                        pos = -1, end = -1,
+                    )
+                    val innerYieldStar = YieldExpression(
+                        expression = asyncDelegatorCall,
+                        asteriskToken = true,
+                        pos = -1, end = -1,
+                    )
+                    YieldExpression(
+                        expression = makeAwaitCall(innerYieldStar),
                         leadingComments = expr.leadingComments,
                         trailingComments = expr.trailingComments,
                         pos = -1, end = -1,
