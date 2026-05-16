@@ -1,6 +1,33 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,677 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,678 / 10,078 tests passing (~86.1%).
+
+**B10.2 (2026-05-16, +1 — flips `parseUnaryExpressionNoTypeAssertionInJsx1_ts`)** —
+TS17004 "Cannot use JSX unless the '--jsx' flag is provided." emission at the
+outermost JSX opening-tag / fragment / self-closing span when `jsx` option is
+unset. Stacks on B10.1. New Parser constructor param `needsJsxFlag: Boolean`
+threaded through all 3 construction sites in `TypeScriptCompiler.kt` via new
+helper `computeNeedsJsxFlag(fileName, options, forceJsxForJs)` gating on
+`jsxUnset && (isTsxOrJsx || (isPlainJsFile && forceJsxForJs && options.checkJs))`.
+Parser tracks `jsxElementDepth` so the diagnostic fires only at the outermost
+JSX element (not per nested child). Squiggle position: `(openPos,
+scanner.getPrevTokenEnd() - openPos)` after each `parseExpected(GreaterThan)`
+(3 sites: fragment / self-closing / opening tag).
+
+**Verification.** Full-suite 10078/1397/3 (was 10078/1398/3 post-B10.1, +1 net).
+Zero regressions. `parseUnaryExpressionNoTypeAssertionInJsx1_ts` flips clean
+with all 3 expected emissions in correct order (TS17004 (2,13), TS17008 (2,14),
+TS1005 (3,1)). `jsFileCompilationTypeAssertions_ts` (the B10.1 target) does
+NOT regress — its `@allowJs: true` is paired with `checkJs: false` so the
+gate's checkJs requirement keeps `needsJsxFlag = false`.
+
+**Risk profile that materialized.** Bounded as projected. Gate restricts to
+either `.tsx`/`.jsx` extensions (not in our test corpus per CLAUDE.md "Test
+generator only processes .ts") OR `.js`/`.cjs`/`.mjs` + `forceJsxForJs` +
+`options.checkJs`. The outermost-element gate (`isOutermostJsx`) ensures
+nested JSX children don't duplicate the diagnostic.
+
+---
 
 **B10.1 (2026-05-16, +1 — flips `jsFileCompilationTypeAssertions_ts`)** —
 TS17008 "JSX element 'X' has no corresponding closing tag." emission +

@@ -18,7 +18,13 @@
 
 package com.xemantic.typescript.compiler
 
-class Parser(private val source: String, private val fileName: String, forceJsx: Boolean = false, topLevelAwait: Boolean = false) {
+class Parser(
+    private val source: String,
+    private val fileName: String,
+    forceJsx: Boolean = false,
+    topLevelAwait: Boolean = false,
+    private val needsJsxFlag: Boolean = false,
+) {
 
     private val scanner = Scanner(source)
     private var token: SyntaxKind = SyntaxKind.Unknown
@@ -29,6 +35,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
+    private var jsxElementDepth = 0
 
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
@@ -3525,6 +3532,16 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
      */
     private fun parseJsxElementOrFragment(): Expression {
         val pos = getPos()
+        val isOutermostJsx = jsxElementDepth == 0
+        jsxElementDepth++
+        try {
+            return parseJsxElementOrFragmentBody(pos, isOutermostJsx)
+        } finally {
+            jsxElementDepth--
+        }
+    }
+
+    private fun parseJsxElementOrFragmentBody(pos: Int, isOutermostJsx: Boolean): Expression {
         nextToken() // consume <
 
         // JSX fragment: <> ... </>
@@ -3532,6 +3549,7 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // Save the position right after the > (before scanner advances)
             val afterGtPos = scanner.getPos()
             nextToken() // consume >
+            emitTs17004IfNeeded(pos, isOutermostJsx)
             val children = parseJsxChildren(afterGtPos, null)
             parseExpected(SyntaxKind.LessThan)
             parseExpected(SyntaxKind.Slash)
@@ -3549,12 +3567,14 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
             // Self-closing: <Tag attrs/>
             nextToken() // consume /
             parseExpected(SyntaxKind.GreaterThan)
+            emitTs17004IfNeeded(pos, isOutermostJsx)
             JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
         } else {
             // Opening tag: <Tag attrs>
             // Save position right after > before scanner advances past it
             val afterGtPos = scanner.getPos()
             parseExpected(SyntaxKind.GreaterThan)
+            emitTs17004IfNeeded(pos, isOutermostJsx)
             val openingElement = JsxOpeningElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
             val children = parseJsxChildren(afterGtPos, jsxTagNameToString(tagName))
             val closingPos = getPos()
@@ -3594,6 +3614,24 @@ class Parser(private val source: String, private val fileName: String, forceJsx:
         is Identifier -> tagName.text.length
         is PropertyAccessExpression -> jsxTagNameLength(tagName.expression) + 1 + tagName.name.text.length
         else -> 0
+    }
+
+    /**
+     * Emits TS17004 "Cannot use JSX unless the '--jsx' flag is provided." at the opening
+     * tag/fragment span. Called after the opening `>` (or `/>`) has been consumed so
+     * `scanner.getPrevTokenEnd()` gives the span end. Only fires at the outermost JSX
+     * element to avoid duplicate diagnostics per nested child.
+     */
+    private fun emitTs17004IfNeeded(openPos: Int, isOutermostJsx: Boolean) {
+        if (!needsJsxFlag || !isOutermostJsx) return
+        val end = scanner.getPrevTokenEnd()
+        val length = (end - openPos).coerceAtLeast(1)
+        reportError(
+            "Cannot use JSX unless the '--jsx' flag is provided.",
+            code = 17004,
+            overrideStart = openPos,
+            overrideLength = length,
+        )
     }
 
     /**
