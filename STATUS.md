@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,704 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,705 / 10,078 tests passing (~86.3%).
+
+**B16.4 (2026-05-16, +1 — flips `optionalChainWithInstantiationExpression2_ts__target_es2020__`)** —
+In `Parser.kt`'s `QuestionDot` arm of postfix-expression parsing, handle
+`a?.<T>(args)` syntax — optional call with explicit type arguments. New
+`LessThan` case wraps `tryScan` around `tryParseTypeArguments()` + `OpenParen`
+check; on success builds a `CallExpression` with `questionDotToken=true` and
+the parsed type args. Falls back to property-access recovery (treats `<` as
+garbage) if no `(` follows. Type args are erased in JS emit. Earlier behavior
+parsed `a?.<b>()` as `a?.<` (property-access with `<` as identifier) +
+`b > ()`, breaking JS output.
 
 **B16.3 (2026-05-16, +1 — flips `keepImportsInDts3_ts`)** —
 In `Transformer.kt`'s AMD `define(...)` emission, strip Windows drive-letter
