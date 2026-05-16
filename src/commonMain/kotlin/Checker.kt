@@ -785,6 +785,8 @@ class Checker(
         checkCircularBaseClasses()
         // 64f3a. Check circular interface extends cycles (TS2310)
         checkCircularInterfaceBases()
+        // 64f3a-1. Check direct self-referencing type aliases (TS2456)
+        checkCircularTypeAlias()
         // 64f3a-2. Check class base via default-type-arg indexed-access cycle (TS2310)
         checkCircularClassBaseViaDefaultTypeArg()
         // 64f3b. Check non-constructor extends (TS2507)
@@ -44715,6 +44717,77 @@ interface DataView {
             try {
                 checkCircularInterfaceBasesInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    // TS2456 — direct self-referencing type alias (e.g. `type X = X`).
+    // The simple syntactic check: top-level RHS contains a TypeReference whose
+    // typeName matches the alias name (possibly inside Union/Intersection/
+    // ParenthesizedType/Array). Generic instantiation cases like `Array<X>` are
+    // legal (TypeScript treats them as Array<X> where X is the alias's own
+    // parameter), so we limit the descent to non-generic argument positions.
+    private fun checkCircularTypeAlias() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkCircularTypeAliasInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkCircularTypeAliasInStatements(
+        statements: List<Statement>, source: String, fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> {
+                    val aliasName = stmt.name.text
+                    if (typeNodeDirectlyReferencesName(stmt.type, aliasName)) {
+                        val pos = stmt.name.pos
+                        val length = aliasName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type alias '${aliasName}' circularly references itself.",
+                            category = DiagnosticCategory.Error,
+                            code = 2456,
+                            fileName = fileName,
+                            line = line, character = character,
+                            start = pos, length = length,
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkCircularTypeAliasInStatements(body.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Returns true if [type] contains a top-level TypeReference whose name equals
+     * [target] WITHOUT being inside a generic argument list. Walks through Union /
+     * Intersection / ParenthesizedType / Array operators, all of which preserve the
+     * "direct self-reference" semantics that trigger TS2456.
+     */
+    private fun typeNodeDirectlyReferencesName(type: TypeNode?, target: String): Boolean {
+        if (type == null) return false
+        return when (type) {
+            is TypeReference -> {
+                val name = (type.typeName as? Identifier)?.text
+                // Direct identifier match with NO type arguments — `type X = X`.
+                // (Generic instantiations like `Array<X>` aren't direct cycles in TypeScript's
+                // sense — those resolve via the parameter list.)
+                name == target && type.typeArguments.isNullOrEmpty()
+            }
+            is UnionType -> type.types.any { typeNodeDirectlyReferencesName(it, target) }
+            is IntersectionType -> type.types.any { typeNodeDirectlyReferencesName(it, target) }
+            is ParenthesizedType -> typeNodeDirectlyReferencesName(type.type, target)
+            is ArrayType -> typeNodeDirectlyReferencesName(type.elementType, target)
+            else -> false
         }
     }
 
