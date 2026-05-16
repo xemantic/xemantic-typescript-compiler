@@ -4460,6 +4460,14 @@ class Parser(
             parseParameterList()
         }
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+        // TS1200: Line terminator not permitted before arrow. Emitted at the `=>` token
+        // (length 2) when a line break separates the parameter list from `=>`.
+        if (token == SyntaxKind.EqualsGreaterThan && scanner.hasPrecedingLineBreak()) {
+            reportError(
+                "Line terminator not permitted before arrow.",
+                code = 1200, overrideLength = 2,
+            )
+        }
         parseExpected(SyntaxKind.EqualsGreaterThan)
         val savedAsync = inAsyncContext
         inAsyncContext = async

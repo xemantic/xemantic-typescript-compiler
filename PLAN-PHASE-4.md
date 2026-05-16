@@ -2510,6 +2510,20 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
+- [x] **B13.1. Three-piece fix for `arrowFunctionErrorSpan_ts` errors-baseline: Parser TS1200 emission + Checker narrow squiggle clip + BaselineFormatter multi-line continuation diagnostic preservation (DONE 2026-05-16, +1 — flips `arrowFunctionErrorSpan_ts` errors-baseline sub-test).** Three coordinated pieces:
+
+  **Parser** (`Parser.kt:parseArrowFunction`). Emit TS1200 "Line terminator not permitted before arrow." when `token == EqualsGreaterThan && scanner.hasPrecedingLineBreak()`. Squiggle at `=>` length 2. Only fires for the rare `)\n =>` shape — verified one file in corpus matches (the target test); the other (`declarationEmitDistributiveConditionalWithInfer.ts`) uses a FunctionType TypeNode which doesn't route through `parseArrowFunction`.
+
+  **Checker** (`Checker.kt:53870`, the 17.238/239 squiggle-clip). Previously clipped at end-of-line of `body.pos` (the `{` line). For `() =>\n // comment \n {` shape, the `{` is several lines after `=>`, so the squiggle wrongly extended through the comment lines. Fix: find `=>` via `source.lastIndexOf("=>", body.pos - 1)`; prefer its EOL when `=>` and `{` are on different lines. Single-line same-line `=> {` cases unchanged.
+
+  **BaselineFormatter** (`BaselineFormatter.kt`). Previously, lines covered by an earlier diag's multi-line squiggle continuation were added to `skipLines` and silently dropped — any diag starting on those lines was lost. Fix: track `continuationLineIndices` per diag; after the diag's `!!! error` annotation, iterate continuation lines and emit additional single-line diagnostics that start there (squiggle + annotation only, no source re-emit). Limited to single-line additional diagnostics — multi-line additionals are rare.
+
+  **Verification.** Full-suite 10078/1392/3 (was 10078/1393/3 post-B12.1, +1 net). Zero regressions. The errors-baseline sub-test of `arrowFunctionErrorSpan_ts` flips. The JS-emit sub-test (`arrowFunctionErrorSpan_js`) still fails on a separate comment-preservation issue in the JS emitter (out of scope).
+
+  **Risk profile that materialized.** Bounded as projected. Parser fix: gate so narrow only one file matches. Checker fix: only affects multi-line-block-body arrows where `=>` and `{` are on different lines (a rare shape). Formatter fix: emits previously-dropped diagnostics — net positive for correctness; no test in corpus expected them to be dropped.
+
+  ---
+
 - [x] **B12.1. Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so B11.2's `resolveJsxTsxCandidate` can find them (DONE 2026-05-16, +2 — flips `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts`).** Stacks on B11.2. Two-file change: `TypeScriptCompiler.kt` (skip relaxation + Phase 3 emit gate) and `Checker.kt` (TS1192 skip for empty target modules).
 
   **Implementation.** (1) `TypeScriptCompiler.kt:915-918` — `.jsx` skip changed from `(!allowJs || isBlank)` to `!allowJs && isNotBlank`, with empty-content path adding to new `emptyJsxTsxFixtures: MutableSet<String>`. (2) `TypeScriptCompiler.kt:927-929` — `.tsx` skip dropped the `isBlank` clause; empty `.tsx` adds to `emptyJsxTsxFixtures`. (3) `TypeScriptCompiler.kt` Phase 3 — new `if (tsFileName in emptyJsxTsxFixtures) continue` at the start of the transform/emit loop. (4) `Checker.kt:16278` (TS1192 check) — `if (targetFile.statements.isEmpty()) continue`. Empty modules treated as untyped per TypeScript behavior; TS6142 from B11.2 is the user-facing diagnostic.
@@ -3690,6 +3704,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-16 (B13.1, 8682 → 8683, +1 — flips ~~`arrowFunctionErrorSpan_ts`~~ errors-baseline sub-test) — Three-piece fix: Parser TS1200 + Checker narrow squiggle clip + BaselineFormatter multi-line continuation preservation.** Continuation /loop iteration after B12.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/63/12). Per anti-loop rule, did NOT stop after recon — investigated the candidate finder's `+1 MISS TS1200` claim for `arrowFunctionErrorSpan_ts`. The script's diff-line parser only counts SUMMARY-section deltas, so it under-counted the actual diff (which has 4 hunks: summary missing TS1200 + error count + body missing TS1200 + comment-3 squiggle position). Investigated all four, all three turned out to be tractable surgical fixes.
+
+  **Three-piece change.** (1) `Parser.kt:parseArrowFunction` — emit TS1200 "Line terminator not permitted before arrow." (length 2) at the `=>` token when `scanner.hasPrecedingLineBreak()`. Bounded to ArrowFunction parsing (FunctionType is handled separately by `parseFunctionOrParenthesizedType` without this check). Grep verified only one file in corpus has the `)\n =>` pattern that triggers this (the target). (2) `Checker.kt:53870` (the 17.238/239 squiggle-clip) — when `body.pos` (the `{`) is on a different line from `=>`, prefer end-of-line of `=>` (via `source.lastIndexOf("=>", body.pos - 1)`) over end-of-line of `{`. Preserves the same-line `() => {` case (used by all common multi-line bodies). (3) `BaselineFormatter.kt` — track `continuationLineIndices` per diag and emit additional single-line diagnostics that START on continuation lines after the primary diag's annotation. Previously these were silently dropped because the line was added to `skipLines`.
+
+  **Investigation note.** Initial attempt to fix this test was the parser TS1200 piece alone. Confirmed via DEBUG prints that the diagnostic was correctly added to the parser's diagnostics list, but it wasn't appearing in the baseline body section. Tracing through `formatMultiFileBaseline`'s body-emission loop revealed the `skipLines` issue: when D1 has a multi-line span, lines N+1..M are added to skipLines AND the for-loop iteration skips processing their own diagnostics. The summary section was correct (it uses a simple `for (diag in sorted)` over all diagnostics), but the body section dropped TS1200. Then separately the comment-3 case `f((  /*comments*/ () => \n // comment 3 \n { ... }  ))` had its TS2345 squiggle extending through the `{` line — fixed by narrowing the multi-line clip to end-of-line of `=>` when `=>` and `{` are on different lines.
+
+  **Verification.** Full-suite 10078/1392/3 (was 10078/1393/3 post-B12.1, +1 net). Zero regressions across 10078-test suite. The errors-baseline sub-test of `arrowFunctionErrorSpan_ts` flips clean. The JS-emit sub-test (`arrowFunctionErrorSpan_js`) still fails on a separate comment-preservation issue (drops `// comment 1` and `// comment 5` from the multi-line case 3 input — that's an Emitter problem with `f(/* comments */)` call arguments that span multiple lines with both leading and trailing comments). Out of scope here.
+
+  **Next session.** Surgical pool is back to 0/0/0 fresh per a likely re-run. Candidate-finder's diff-line parser limitation (it doesn't catch body-section squiggle shifts or comment displacements) means future +1 MISS candidates may actually be multi-piece — read the full diff before estimating scope. The formatter `continuationLineIndices` infrastructure is also forward-compatible for other tests that have diagnostics on multi-line continuation lines; if a future surgical fix lands a new diagnostic that starts on a continuation line, the formatter will render it correctly.
+
+  ---
+
   **Session 2026-05-16 (B12.1, 8680 → 8682, +2 — flips ~~`moduleResolutionWithExtensions_notSupported_ts`~~ + ~~`moduleResolutionWithExtensions_notSupported2_ts`~~) — Admit empty .jsx/.tsx fixture files into the multi-file pipeline.** Continuation /loop iteration after B11.2. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/63/12). Per the B11.2 session note's flagged carry-over ("Out-of-scope substep candidate: pass all @Filename'd files through the pipeline (including skipped empty ones) so the scoped resolver can match them"), promoted B12.1 and implemented.
 
   **Two-file change.** (1) `TypeScriptCompiler.kt`: relax `.jsx`/`.tsx` skip gates to admit empty fixtures, tracked via new `emptyJsxTsxFixtures: MutableSet<String>`; Phase 3 skip gate consults the set to prevent phantom `"use strict";` outputs. (2) `Checker.kt`: TS1192 default-import check now skips when target module has no statements (empty fixture → treat as untyped, B11.2's TS6142 is the user-facing diagnostic).
@@ -4045,7 +4071,10 @@ the live plan focused. Quick reference:
   skip-log and architectural-classified. Spot-checked 7+ MISS / SWAP
   candidates without finding fresh surgical scope:
   `arrowFunctionErrorSpan_ts` (TS1200 line-terminator + 2 other issues —
-  net-0 alone), `aliasUsageInOrExpression_ts` (cross-file `typeof
+  net-0 alone — **errors-baseline flipped B13.1 (2026-05-16); JS-emit
+  sub-test still fails on separate comment-preservation issue in the
+  emitter**),
+  `aliasUsageInOrExpression_ts` (cross-file `typeof
   import("...")` display — architectural per 17.113 skip-log),
   `promiseDefinitionTest` (TS2300 lib-clash for `class Promise<T>` —
   needs lib-file-symbol partitioning), `varianceAnnotationValidation_ts`
