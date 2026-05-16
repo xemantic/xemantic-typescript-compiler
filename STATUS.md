@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,710 / 10,078 tests passing (~86.4%).
+**Phase 4 — Checker buildout.** 8,711 / 10,078 tests passing (~86.4%).
+
+**B17.5 (2026-05-16, +1 — flips `instantiateTypeParameter_ts` JS-emit sub-test)** —
+In `Parser.parseInterfaceMembers`, a `var`/`let`/`const` keyword inside an
+interface body is invalid syntax. New lookahead-gated bailout breaks out of
+the member loop when one of these keywords appears AND the following token
+looks like the start of a variable declaration (Identifier / OpenBracket /
+OpenBrace for destructuring). The interface body terminates and the outer
+statement parser recovers the remaining content as top-level statements:
+`interface Foo<T> { var x: T<>; }` → empty interface + `var x;`. The
+lookahead gate preserves the legitimate property-name use case (`interface I1
+{ const: new (...) => any; var: SomeType; }`) where `var`/`const` are
+followed by `:` or `(`.
 
 **B17.4 (2026-05-16, +1 — flips `checkJsFiles6_ts` errors-baseline sub-test)** —
 In `TypeScriptCompiler.kt`, the existing TS5052 emission (`checkJs` without
