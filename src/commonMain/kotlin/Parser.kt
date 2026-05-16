@@ -2302,7 +2302,36 @@ class Parser(
         parseExpected(SyntaxKind.TypeKeyword)
         val name = parseIdentifier()
         val typeParams = parseTypeParametersOpt()
-        parseExpected(SyntaxKind.Equals)
+        // TS1110 "Type expected." — fires when the type body is missing.
+        // Two shapes: (a) `type X` (no `=`) — TS1110 at the position right after the
+        // name, then TS1005 from parseExpected(Equals); (b) `type X = ` (with `=` but
+        // no body) — TS1110 at the position right after `= `. TypeScript orders
+        // TS1110 first (source position) then TS1005.
+        //
+        // Leading `|` or `&` in `type X = | A | B` is valid (parseType handles them),
+        // so don't flag those tokens as "missing type" — treat them as type-starts.
+        if (token != SyntaxKind.Equals && token != SyntaxKind.Bar && token != SyntaxKind.Ampersand && !isStartOfType(token)) {
+            // Case (a): missing `=`. Emit TS1110 at the position right after the name.
+            reportError(
+                message = "Type expected.",
+                code = 1110,
+                overrideStart = scanner.getPrevTokenEnd(),
+                overrideLength = 1,
+            )
+        }
+        val eqConsumed = parseExpected(SyntaxKind.Equals)
+        if (eqConsumed && token != SyntaxKind.Bar && token != SyntaxKind.Ampersand && !isStartOfType(token)) {
+            // Case (b): `=` consumed but no type body. Emit TS1110 at the position right
+            // after `=` (TypeScript's "expected type after =" position — past trailing
+            // whitespace on the same line in real source, but our scanner uses end-of-`=`
+            // which is what TypeScript reports in its baseline). Use `getPrevTokenEnd()`.
+            reportError(
+                message = "Type expected.",
+                code = 1110,
+                overrideStart = scanner.getPrevTokenEnd(),
+                overrideLength = 1,
+            )
+        }
         val type = parseType()
         parseSemicolon()
         return TypeAliasDeclaration(
