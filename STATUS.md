@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,691 / 10,078 tests passing (~86.2%).
+**Phase 4 — Checker buildout.** 8,695 / 10,078 tests passing (~86.3%).
+
+**B15.4 (2026-05-16, +2 — flips `parserPrivateIdentifierInArrayAssignment_ts` + `parseJsxElementInUnaryExpressionNoCrash2_ts`)** —
+In `Emitter.kt:emitBinaryExpression`'s standard recursive path, when the
+operator-then-newline branch fires AND the right operand is an empty
+Identifier (parser placeholder from parse-error recovery like `[#abc]=`
+with EOF after `=`), emit the newline but skip the continuation indent
++ the (empty) right emit. Without this, the empty right wrote nothing
+and the outer `;` from `emitExpressionStatement` landed at the indented
+column (`    ;` instead of `;`).
+
+**B15.3 (2026-05-16, +1 — flips `emitDecoratorMetadata_isolatedModules_ts__module_esnext__` JS sub-test)** —
+In `Transformer.kt:elideUnusedESModuleImports`, treat namespace imports
+(`import * as ns from "X"`) as "always used" for elision purposes when
+`options.isolatedModules` is true. TypeScript preserves these imports
+under isolatedModules because the compiler can't make safe cross-file
+decisions about whether the module's exports are runtime values. Named
+imports remain subject to elision when unreferenced.
+
+**B15.2 (2026-05-16, +1 — flips `statics_ts`)** —
+Stacks on B15.1's `propertyAccessEnclosingNamespaces` stack. In
+`checkMemberAccessMissing`'s `objectExpr is NewExpression` branch, look
+up the constructor symbol via the namespace stack before falling back to
+`globals`. Namespace-internal classes are bound in `namespaceSymbol.exports`,
+not `globals` directly — so `new C(...).g` inside `namespace M { class C
+{} }` previously failed the `globals[ctor.text]` lookup and never reached
+the chain-walk emission.
 
 **B15.1 (2026-05-16, +2 — flips `genericRecursiveImplicitConstructorErrors3_ts`)** —
 TS2339 for `this.X` on generic class with base types where X is genuinely
