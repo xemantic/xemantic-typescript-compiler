@@ -5168,7 +5168,26 @@ class Parser(
             // These will become the leading comments of the NEXT parameter (comma-first style).
             val preCommaComments = leadingComments()
             if (!parseOptional(SyntaxKind.Comma)) {
-                // No comma — we're done. Capture leading comments of `)` as trailing of this last param.
+                // No comma. Try recovery: if the next token looks like the start of another
+                // parameter (identifier / `...` / binding-pattern open), TypeScript emits
+                // TS1005 `,` expected and keeps parsing. Mirrors the recovery for
+                // `constructor(...public rest: string[])` where `...public` parses as a rest
+                // param named `public` and `rest` is the next param. Without this the second
+                // parameter would be dropped and the constructor body would never be reached.
+                val nextLooksLikeParam = token != SyntaxKind.CloseParen &&
+                    token != SyntaxKind.EndOfFile &&
+                    (isIdentifier() ||
+                        token == SyntaxKind.DotDotDot ||
+                        token == SyntaxKind.OpenBrace ||
+                        token == SyntaxKind.OpenBracket)
+                if (nextLooksLikeParam) {
+                    reportError("',' expected.", code = 1005, overrideLength = 0,
+                        overrideStart = scanner.getTokenPos())
+                    params.add(param)
+                    continue
+                }
+                // No comma and next token doesn't look like a param — we're done. Capture
+                // leading comments of `)` as trailing of this last param.
                 val preCloseParenComments = leadingComments()
                 if (!preCloseParenComments.isNullOrEmpty()) {
                     val merged = (param.trailingComments ?: emptyList()) + preCloseParenComments

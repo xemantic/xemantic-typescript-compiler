@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,713 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,714 / 10,078 tests passing (~86.5%).
+
+**B17.7 (2026-05-16, +1 — flips `restParamModifier_ts` JS-emit sub-test)** —
+In `Parser.parseParameterList`, when a parameter has no comma follow-up but
+the next token still looks like the start of another parameter (Identifier,
+`...`, `{`, `[`), emit TS1005 `,` expected (length-0 at the next-token
+position) and continue parsing instead of breaking out. Mirrors TypeScript's
+recovery for shapes like `constructor(...public rest: string[])` where
+`...public` parses as a rest parameter with name `public` and `rest`
+follows as a second parameter; without this fix, the loop would break after
+the first param, `parseExpected(CloseParen)` would emit a misleading `')'
+expected`, the constructor body would never be reached (token still on
+`rest` rather than `{`), and the constructor would later be flagged TS2390
+"Constructor implementation is missing" — dropping it from JS output.
 
 **B17.6 (2026-05-16, +2 — flips `es5-asyncFunctionObjectLiterals_ts__target_es2015__` JS-emit + adjacent)** —
 In `Transformer.transformObjectLiteralElement`, the `PropertyAssignment` branch
