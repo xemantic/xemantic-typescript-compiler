@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,706 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,707 / 10,078 tests passing (~86.4%).
+
+**B17.1 (2026-05-16, +2 — flips `parseGenericArrowRatherThanLeftShift_ts` + `importTypeWithUnparenthesizedGenericFunctionParsed_ts` JS-emit sub-tests)** —
+New `Scanner.reScanLessThanToken()` splits `<<` (LessThanLessThan) / `<<=` (LessThanLessThanEquals)
+into a single `<` token, mirroring the existing `reScanGreaterToken` for `>>`. Called at the top
+of `Parser.tryParseTypeArguments()` so nested generic type-arg shapes like
+`Modifier<<T>(x: T) => T>` and `ReturnType<<T>(x: T) => number>` parse correctly — the outer
+`<` opens type args, the inner `<T>` enters `parsePrimaryType`'s generic-function-type branch.
+Also accept `LessThanLessThan` in `parseCallAndAccess`'s postfix `LessThan ->` branch so
+expression-position uses like `foo<<T>(x: T) => number>(() => 1)` flow through the existing
+tryScan / `tryParseTypeArguments` machinery. Critically, `tryParseTypeArguments` now snapshots
+`diagnostics.size` and rolls back leaked errors on a null return — speculative `parseType()`
+attempts (e.g. probing `1 << 1` as type args) could emit `TS1005 '(' expected.` via the inner
+generic-function-type branch's `parseExpected`, and `tryScan` only restores scanner state, not
+diagnostics. Without the rollback `overshifts_ts` regressed with spurious TS1005 emissions.
 
 **B16.5 (2026-05-16, +1 — flips `moduleAugmentationsImports2_ts`)** —
 In `Transformer.kt`, the per-call `moduleNameCounter` map (used to generate

@@ -399,6 +399,23 @@ class Scanner(private val text: String) {
     }
 
     /**
+     * Re-scans `<<` or `<<=` as a single `<` token. Used by the parser when it
+     * expects an opening `<` for type arguments and the following type is itself
+     * generic (e.g. `Modifier<<T>(x: T) => T>`).
+     */
+    fun reScanLessThanToken(): SyntaxKind {
+        if (token == SyntaxKind.LessThanLessThan ||
+            token == SyntaxKind.LessThanLessThanEquals
+        ) {
+            pos = tokenPos + 1
+            tokenValue = "<"
+            token = SyntaxKind.LessThan
+            return token
+        }
+        return token
+    }
+
+    /**
      * Resets the scanner to a specific position in the source text without scanning any token.
      * After this call, [getToken] returns [SyntaxKind.Unknown] and [getPos]/[getTokenPos] return [newPos].
      * Typically followed by a call to [scanJsxText] or [scan].

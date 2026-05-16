@@ -4024,9 +4024,12 @@ class Parser(
                     CallExpression(expression = result, arguments = args, innerComments = innerComments, pos = result.pos, end = getEnd(), trailingComments = callTrailing)
                 }
 
-                LessThan -> {
+                LessThan, LessThanLessThan -> {
                     // Try type arguments for call/tagged-template/instantiation — wrap in tryScan so if no `(` or
-                    // template follows, scanner is restored to before `<` (fixing `i < 10` in for-loop)
+                    // template follows, scanner is restored to before `<` (fixing `i < 10` in for-loop).
+                    // `LessThanLessThan` is also accepted: `foo<<T>(x:T)=>R>(args)` rescans `<<` to `<` inside
+                    // `tryParseTypeArguments`. If the rescan path fails to produce a viable type-arg list, the
+                    // outer tryScan restores scanner state so `<<` remains available for binary-expression parsing.
                     val typeArgsStart = getPos()
                     var typeArgsEnd = -1
                     val callExpr: Expression? = scanner.tryScan {
@@ -5345,8 +5348,19 @@ class Parser(
 
     private fun tryParseTypeArguments(): List<TypeNode>? {
         inTypeArgsDepth++
+        // Save diagnostic count: speculative `parseType()` below can leak errors via
+        // `parseExpected` when probing non-type input as type args (e.g. `1 << 1`
+        // entered the rescan path, then `<` was tried as a generic function type and
+        // `parseParameterList` / `parseExpected(=>)` emitted false errors). `tryScan`
+        // restores scanner state but not diagnostics — trim them on a null return so
+        // the speculative attempt is fully invisible.
+        val savedDiagCount = diagnostics.size
         try {
-            return scanner.tryScan {
+            val result = scanner.tryScan {
+                // Rescan `<<` to `<` for nested generic type args like
+                // `Foo<<T>(x: T) => R>` where the inner type starts with `<`.
+                // tryScan restores scanner state if we ultimately bail.
+                token = scanner.reScanLessThanToken()
                 if (token != SyntaxKind.LessThan) return@tryScan null
                 nextToken()
                 // Empty type argument list: <>
@@ -5371,6 +5385,10 @@ class Parser(
                 nextToken()
                 args
             }
+            if (result == null) {
+                while (diagnostics.size > savedDiagCount) diagnostics.removeAt(diagnostics.lastIndex)
+            }
+            return result
         } finally {
             inTypeArgsDepth--
         }
