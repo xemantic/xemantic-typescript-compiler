@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,700 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,701 / 10,078 tests passing (~86.3%).
+
+**B16.1 (2026-05-16, +1 — flips `requireOfJsonFileWithoutResolveJsonModule_ts` JS-emit sub-test)** —
+In `TypeScriptCompiler.kt:reformatJson`, recover invalid JSON content consisting
+only of bare identifiers separated by whitespace (e.g. `contents Not read`) as a
+single-line shorthand-property object literal `{ contents, Not, read }`. Matches
+TypeScript's JSON parser error-recovery emission. Gate: trimmed content starts
+with non-structural char (not `{`/`[`/`"`/digit/sign) AND tokens are all
+identifier-shaped (letter/digit/underscore/dollar only). Earlier behavior was to
+concatenate tokens (e.g. `contentsNotread`), which broke the JS-emit baseline.
 
 **B15.7 (2026-05-16, +1 — flips `extendedUnicodePlaneIdentifiers_ts`)** —
 In `Transformer.kt`'s private-field WeakMap downlevel transform (used

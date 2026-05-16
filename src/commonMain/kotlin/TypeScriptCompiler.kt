@@ -1364,6 +1364,24 @@ private fun stripJsonTrailingCommas(content: String): String =
 private fun reformatJson(content: String): String {
     // Detect computed property keys: `]:` pattern means a closing bracket before a colon
     if (content.contains(Regex("\\]\\s*:"))) return content
+    // Bare-identifier recovery: when content has no `{`/`[` opening and consists only of
+    // identifier-like tokens separated by whitespace (e.g. invalid JSON `contents Not read`),
+    // TypeScript's JSON parser recovers this as `{ contents, Not, read }` (shorthand-property
+    // object literal). Emit that single-line form rather than concatenating the tokens.
+    val trimmed = content.trim()
+    if (trimmed.isNotEmpty() && trimmed[0] != '{' && trimmed[0] != '[' &&
+        trimmed[0] != '"' && trimmed[0] != '\'' && !trimmed[0].isDigit() &&
+        trimmed[0] != '-' && trimmed[0] != '+'
+    ) {
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        // Only handle the bare-identifier shape (no punctuation like `:`/`,`/`{`/`[`/`"`).
+        val isBareIdentifierList = tokens.isNotEmpty() && tokens.all { tok ->
+            tok.all { c -> c.isLetterOrDigit() || c == '_' || c == '$' }
+        }
+        if (isBareIdentifierList) {
+            return "{ " + tokens.joinToString(", ") + " }"
+        }
+    }
     val sb = StringBuilder()
     var indent = 0
     var i = 0
