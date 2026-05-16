@@ -5895,7 +5895,7 @@ class Parser(
         ObjectKeyword, UnknownKeyword, UndefinedKeyword, NullKeyword,
         ThisKeyword, NewKeyword, ImportKeyword,
         OpenParen, OpenBracket, OpenBrace, LessThan,
-        StringLiteral, NumericLiteral, TrueKeyword, FalseKeyword,
+        StringLiteral, NumericLiteral, BigIntLiteral, TrueKeyword, FalseKeyword,
         Minus, DotDotDot,
         Backtick, NoSubstitutionTemplateLiteral, TemplateHead,
         TypeOfKeyword, KeyOfKeyword, UniqueKeyword, ReadonlyKeyword, InferKeyword -> true
