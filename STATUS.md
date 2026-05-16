@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,701 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,703 / 10,078 tests passing (~86.3%).
+
+**B16.2 (2026-05-16, +2 — flips `importHelpersNoHelpersForAsyncGenerators_ts__target_{es5,es2015}__`)** —
+In `Transformer.kt`'s YieldExpression branch, transform `yield* expr` inside an
+async-generator body to `yield __await(yield* __asyncDelegator(__asyncValues(expr)))`.
+New `needsAsyncDelegatorHelper` flag pulls in `__asyncDelegator` + `__asyncValues`
+from tslib alongside `__asyncGenerator`/`__await`. Previously `yield* expr` in
+async generators was passed through unchanged, emitting `yield* [3]` instead of
+the proper async-iteration delegation. Inline-helper path (non-importHelpers)
+not implemented — out of scope.
 
 **B16.1 (2026-05-16, +1 — flips `requireOfJsonFileWithoutResolveJsonModule_ts` JS-emit sub-test)** —
 In `TypeScriptCompiler.kt:reformatJson`, recover invalid JSON content consisting
