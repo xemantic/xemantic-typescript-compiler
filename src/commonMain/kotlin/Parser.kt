@@ -1501,6 +1501,22 @@ class Parser(
         // TS-level `<T>` declaration is present.
         val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val heritage = parseHeritageClauses(isClass = true)
+        // Recovery: `declare class foo();` is invalid (no body, has `()`). When the next
+        // token is `(` where `{` is expected, emit TS1005 `{` expected and bail out so the
+        // outer parser can recover the `();` tail as an expression statement and continue
+        // with whatever follows (e.g. a sibling `function foo() {}` declaration).
+        if (token == SyntaxKind.OpenParen) {
+            val parenPos = getPos()
+            reportError("'{' expected.", code = 1005,
+                overrideStart = parenPos, overrideLength = 1)
+            val trailing = trailingComments()
+            return ClassDeclaration(
+                name = name, typeParameters = typeParams, heritageClauses = heritage,
+                members = emptyList(), modifiers = modifiers, decorators = decorators,
+                beforeOpenBraceComments = null, pos = pos, end = getEnd(),
+                leadingComments = comments, trailingComments = trailing,
+            )
+        }
         val beforeOpenBrace = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.OpenBrace)
         val members = parseClassMembers()
