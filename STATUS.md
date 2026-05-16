@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,709 / 10,078 tests passing (~86.4%).
+**Phase 4 — Checker buildout.** 8,710 / 10,078 tests passing (~86.4%).
+
+**B17.4 (2026-05-16, +1 — flips `checkJsFiles6_ts` errors-baseline sub-test)** —
+In `TypeScriptCompiler.kt`, the existing TS5052 emission (`checkJs` without
+`allowJs`) now also fires TS6504 `File 'X' is a JavaScript file. Did you mean
+to enable the 'allowJs' option?` once per `.js`/`.jsx`/`.cjs`/`.mjs` input
+file. The diagnostic carries a 2-entry `messageChain`:
+`"  The file is in the program because:"` and
+`"    Root file specified for compilation"`, which the BaselineFormatter emits
+both in the summary section and after the `!!! error TS6504:` markers. Gated
+on `allowJsExplicitlyFalse` (paired with the existing TS5052 gate) so the new
+emission only fires in the explicit `"allowJs": false` shape, not in unrelated
+single-file `.ts` test runs where `allowJs` defaults to off.
 
 **B17.3 (2026-05-16, +1 — flips `mergeWithImportedType_ts` errors-baseline sub-test)** —
 Two-piece checker fix for the type-alias-vs-value-import name collision. (1) In

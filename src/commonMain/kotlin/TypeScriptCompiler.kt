@@ -456,6 +456,27 @@ class TypeScriptCompiler {
                 category = DiagnosticCategory.Error,
                 code = 5052,
             ))
+            // TS6504: also fires once per `.js`/`.jsx`/`.cjs`/`.mjs` input file when
+            // `checkJs` is set without `allowJs`. The diagnostic prompts the user to
+            // turn on `allowJs` so the JS file participates in checking. Gated on
+            // `allowJsExplicitlyFalse` (i.e. user wrote `"allowJs": false`) to avoid
+            // firing in unrelated single-file `.ts` test runs that happen to default
+            // `allowJs` to off. Pretty-print chain emitted alongside the main message.
+            for (file in parsed.files) {
+                val fn = file.fileName
+                val isJsExt = fn.endsWith(".js") || fn.endsWith(".jsx") ||
+                        fn.endsWith(".cjs") || fn.endsWith(".mjs")
+                if (!isJsExt) continue
+                diagnostics.add(Diagnostic(
+                    message = "File '${fn.removePrefix("/")}' is a JavaScript file. Did you mean to enable the 'allowJs' option?",
+                    category = DiagnosticCategory.Error,
+                    code = 6504,
+                    messageChain = listOf(
+                        "  The file is in the program because:",
+                        "    Root file specified for compilation",
+                    ),
+                ))
+            }
         }
         // TS5069: isolatedDeclarations without declaration/composite
         if (options.isolatedDeclarations && !options.declaration && !options.composite) {
