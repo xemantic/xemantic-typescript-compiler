@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,695 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,700 / 10,078 tests passing (~86.3%).
+
+**B15.7 (2026-05-16, +1 — flips `extendedUnicodePlaneIdentifiers_ts`)** —
+In `Transformer.kt`'s private-field WeakMap downlevel transform (used
+when `effectiveTarget < ES2022`), refactor the per-property loop to
+collect all `PrivateFieldInfo`s first, then emit ONE combined
+`var X, Y, Z;` statement and ONE combined `X = new WeakMap(), Y = new
+WeakMap();` expression statement. Matches TypeScript's grouped emission
+for classes with multiple `#field`s.
+
+**B15.6 (2026-05-16, +3 — flips `metadataReferencedWithinFilteredUnion_ts__strictnullchecks_{true,false}_target_es2015__` + `targetEs6DecoratorMetadataImportNotElided_ts__target_es2015__`)** —
+Accessor-aware decorator metadata emission. New `isAccessor` flag in
+`generateMemberDecorateStatements` for GetAccessor/SetAccessor. Accessors
+emit `design:type` (from accessor's effective property type — getter's
+return type, else paired setter's first param type) AND `design:paramtypes`
+(setter's params if a paired setter exists, else `[]`). No
+`design:returntype` — accessors are property-shaped in metadata.
+
+**B15.5 (2026-05-16, +1 — flips `metadataOfClassFromAlias_ts__strict_true_target_es2015__`)** —
+In `Transformer.kt:serializeTypeNode`, derive `strictNull` from
+`options.strict || options.strictNullChecks` (subject to explicit-false
+override). The TypeScript `strict` umbrella flag enables all strict
+sub-flags including strictNullChecks — without honoring it here, a
+property type `SomeClass | null` under `@strict: true` (without explicit
+`@strictNullChecks`) had null filtered out, leaving a single type and
+emitting `SomeClass`. TypeScript correctly treats it as a true Union and
+emits `Object`.
 
 **B15.4 (2026-05-16, +2 — flips `parserPrivateIdentifierInArrayAssignment_ts` + `parseJsxElementInUnaryExpressionNoCrash2_ts`)** —
 In `Emitter.kt:emitBinaryExpression`'s standard recursive path, when the
