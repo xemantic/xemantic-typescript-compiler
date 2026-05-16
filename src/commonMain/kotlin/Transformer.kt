@@ -7739,7 +7739,10 @@ class Transformer(
                 pendingProps.add(prop)
             }
         }
-        flushPending(trailingComma = node.hasTrailingComma)
+        // B15.8: synthesized literal args to Object.assign(...) don't carry a trailing comma
+        // even when the original source object literal had one — TypeScript's spread transform
+        // emits `{ a: '123' }` not `{ a: '123', }` regardless of source trailing-comma.
+        flushPending(trailingComma = false)
         return accumulator
     }
 
