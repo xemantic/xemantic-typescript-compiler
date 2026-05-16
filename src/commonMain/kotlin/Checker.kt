@@ -30051,7 +30051,12 @@ interface DataView {
         is Identifier -> expr.pos + expr.text.length
         is PrefixUnaryExpression -> expressionTrueEnd(expr.operand)
         is BinaryExpression -> expressionTrueEnd(expr.right)
-        is ParenthesizedExpression -> expressionTrueEnd(expr.expression) + 1 // +1 for closing )
+        is ParenthesizedExpression -> {
+            // Synthetic paren from instantiation expression (`obj.fn<T>`): use the
+            // recorded type-args end so the squiggle covers `obj.fn<T>` (not just `obj.fn`).
+            if (expr.instantiationEnd != null) expr.instantiationEnd!!
+            else expressionTrueEnd(expr.expression) + 1 // +1 for closing )
+        }
         is PropertyAccessExpression -> expr.name.pos + expr.name.text.length
         is ElementAccessExpression -> expressionTrueEnd(expr.argumentExpression) + 1 // +1 for ]
         is NonNullExpression -> expressionTrueEnd(expr.expression) + 1 // +1 for !
@@ -58556,7 +58561,14 @@ interface DataView {
             is Identifier -> true
             is PropertyAccessExpression -> true
             is ElementAccessExpression -> true
-            is ParenthesizedExpression -> isValidAssignmentTarget(expr.expression)
+            // A ParenthesizedExpression carrying `instantiationEnd` is a synthetic
+            // wrapper inserted by the parser for an instantiation expression like
+            // `obj.fn<T>`. TypeScript treats InstantiationExpression as an invalid
+            // assignment target — emit TS2364 "The left-hand side of an assignment
+            // expression must be a variable or a property access."
+            is ParenthesizedExpression ->
+                if (expr.instantiationEnd != null) false
+                else isValidAssignmentTarget(expr.expression)
             is NonNullExpression -> isValidAssignmentTarget(expr.expression)
             // Destructuring patterns are valid (array/object literal on LHS)
             is ArrayLiteralExpression -> true

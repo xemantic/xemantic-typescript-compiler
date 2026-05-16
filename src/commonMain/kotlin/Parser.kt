@@ -4087,6 +4087,11 @@ class Parser(
                                     }
                                     else -> ParenthesizedExpression(
                                         expression = result,
+                                        // Tag this synthetic paren as originating from an
+                                        // instantiation expression — checker uses this to
+                                        // emit TS2364 when the paren appears as the LHS of
+                                        // an assignment (`obj.fn<T> = ...`).
+                                        instantiationEnd = typeArgsEnd,
                                         pos = result.pos,
                                         end = getEnd()
                                     )
