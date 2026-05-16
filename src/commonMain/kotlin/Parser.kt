@@ -3542,6 +3542,10 @@ class Parser(
     }
 
     private fun parseJsxElementOrFragmentBody(pos: Int, isOutermostJsx: Boolean): Expression {
+        // Capture the "full start" — position right after the previous token,
+        // including the `<`'s leading trivia. Matches TypeScript's getNodePos()
+        // semantics, used for the TS17014 squiggle on unclosed fragments at EOF.
+        val fullStart = scanner.getPrevTokenEnd()
         nextToken() // consume <
 
         // JSX fragment: <> ... </>
@@ -3551,9 +3555,23 @@ class Parser(
             nextToken() // consume >
             emitTs17004IfNeeded(pos, isOutermostJsx)
             val children = parseJsxChildren(afterGtPos, null)
-            parseExpected(SyntaxKind.LessThan)
-            parseExpected(SyntaxKind.Slash)
-            parseExpected(SyntaxKind.GreaterThan)
+            // Detect EOF-after-children (unclosed fragment) under needsJsxFlag.
+            // Emit TS17014 at the full-start span + a specialized TS1005
+            // ('</' expected.) rather than the bare '<' expected. that
+            // parseExpected would otherwise produce.
+            if (token == SyntaxKind.EndOfFile && needsJsxFlag) {
+                reportError(
+                    "JSX fragment has no corresponding closing tag.",
+                    code = 17014,
+                    overrideStart = fullStart,
+                    overrideLength = afterGtPos - fullStart,
+                )
+                reportError("'</' expected.", code = 1005)
+            } else {
+                parseExpected(SyntaxKind.LessThan)
+                parseExpected(SyntaxKind.Slash)
+                parseExpected(SyntaxKind.GreaterThan)
+            }
             return JsxFragment(children = children, pos = pos, end = getEnd())
         }
 

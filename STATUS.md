@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,678 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,679 / 10,078 tests passing (~86.1%).
+
+**B11.1 (2026-05-16, +1 — flips `parseUnaryExpressionNoTypeAssertionInJsx2_ts`)** —
+TS17014 "JSX fragment has no corresponding closing tag." emission + TS1005
+message-swap to `'</' expected.` at the unclosed-JSX-fragment-at-EOF site in
+`parseJsxElementOrFragment`'s fragment branch. Mirror of B10.1's element-EOF
+fix scoped to fragments and gated on `needsJsxFlag`. Capture `fullStart =
+scanner.getPrevTokenEnd()` at body entry (before consuming `<`) to match
+TypeScript's `getNodePos()` semantics — squiggle at (fullStart, afterGtPos
+- fullStart) covers ` <>` (space + `<` + `>`) for `+ <>` shape.
+
+**Verification.** Full-suite 10078/1396/3 (was 10078/1397/3 post-B10.2/MAINT-1,
++1 net). Zero regressions. `parseUnaryExpressionNoTypeAssertionInJsx2_ts`
+flips clean (all 3 emissions present in correct sort order: TS17014 (2,12)
+length 3, TS17004 (2,13) length 2, TS1005 (3,1)). InJsx1 (B10.2 target),
+InJsx3, InJsx4 unchanged. `jsFileCompilationTypeAssertions_ts` (B10.1
+target) unaffected since its `@checkJs: false` keeps `needsJsxFlag = false`
+so the new gate doesn't fire.
+
+**Risk profile that materialized.** Bounded as projected. The EOF +
+`needsJsxFlag` gate fires only inside the fragment branch of
+`parseJsxElementOrFragment` opening-tag-position handler. Self-closing
+elements, properly-closed fragments, and `.tsx`/non-checkJs paths
+unaffected.
+
+---
 
 **B10.2 (2026-05-16, +1 — flips `parseUnaryExpressionNoTypeAssertionInJsx1_ts`)** —
 TS17004 "Cannot use JSX unless the '--jsx' flag is provided." emission at the
