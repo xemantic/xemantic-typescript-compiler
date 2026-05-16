@@ -10864,10 +10864,21 @@ class Checker(
                 checkTypeNameResolved(type.typeName, scope, source, fileName)
                 // Check type argument count (TS2314)
                 checkTypeArgCount(type, scope, source, fileName)
-                // Check TS1099: empty type argument list
+                // Check TS1099: empty type argument list. Suppress when the typeName is
+                // an unresolved Identifier — TS2304 already fires for that case, and
+                // TypeScript treats the unresolved-name diagnostic as primary.
                 if (type.typeArguments != null && type.typeArguments.isEmpty()) {
-                    val ltIdx = source.indexOf("<>", type.typeName.pos)
-                    if (ltIdx >= 0 && ltIdx < type.end) emitTS1099(ltIdx, source, fileName)
+                    val nameUnresolved = (type.typeName as? Identifier)?.let { id ->
+                        val n = id.text
+                        n.isNotEmpty() &&
+                            (n[0] in 'A'..'Z' || n[0] in 'a'..'z' || n[0] == '_' || n[0] == '$') &&
+                            n !in KEYWORD_IDENTIFIERS && !scope.has(n) &&
+                            n !in KNOWN_GLOBALS
+                    } ?: false
+                    if (!nameUnresolved) {
+                        val ltIdx = source.indexOf("<>", type.typeName.pos)
+                        if (ltIdx >= 0 && ltIdx < type.end) emitTS1099(ltIdx, source, fileName)
+                    }
                 }
                 type.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
             }

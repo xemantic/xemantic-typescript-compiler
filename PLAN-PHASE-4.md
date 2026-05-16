@@ -2474,6 +2474,20 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-16 (B18.1, +1, 8718 → 8719 passing).** Single surgical iteration on
+top of B17.10. `find_candidates.py --fresh` returned 2 candidates (filtered from
+4/62/13). Picked the SWAP candidate: `instantiateTypeParameter_ts` errors-baseline
+sub-test — expected TS1131 "Property or signature expected." at `var` but we emit
+TS1005 `'}' expected.`. Two-piece fix: (1) `Parser.parseInterfaceMembers` emits
+TS1131 at the keyword position when bailing on top-level `var`/`let`/`const`, AND
+sets a parser flag so the caller (`parseInterfaceDeclaration` and
+`parseTypeLiteralOrMappedType`) skips its `parseExpected(CloseBrace)` — otherwise
+TS1005 would still fire redundantly. (2) `Checker.checkUnresolvedInTypeCore`
+TypeReference branch: suppress TS1099 "Type argument list cannot be empty." when
+the typeName is an unresolved Identifier (not in scope and not a known global) —
+TS2304 already fires as the primary error and TypeScript doesn't double-emit.
+Zero regressions in full-suite re-run.
+
 **Session 2026-05-16 (B17.1–B17.9, +12 net, 8705 → 8717 passing).** Nine surgical iterations:
 - B17.7 (+1): `parseParameterList` comma-recovery — when no comma but next token starts a
   parameter (Identifier / `...` / `{` / `[`), emit TS1005 and continue. Flips
