@@ -1979,6 +1979,21 @@ class Parser(
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.InterfaceKeyword)
         val name = parseIdentifier()
+        // Recovery: `interface Foo.I1 { }` is invalid (interface names must be simple
+        // identifiers, not qualified names). Consume the `.` and bail out so the outer
+        // statement parser can recover the `I1 { }` tail — TypeScript emits the `I1;` +
+        // `{ }` block as leftover from the malformed interface header.
+        if (token == SyntaxKind.Dot) {
+            val dotPos = getPos()
+            reportError("'{' expected.", code = 1005,
+                overrideStart = dotPos, overrideLength = 1)
+            nextToken() // consume `.` so outer parser starts at the qualifier identifier
+            return InterfaceDeclaration(
+                name = name, typeParameters = null, heritageClauses = emptyList(),
+                members = emptyList(), modifiers = modifiers, pos = pos, end = getEnd(),
+                leadingComments = comments,
+            )
+        }
         val typeParams = parseTypeParametersOpt()
         val heritage = parseHeritageClauses()
         parseExpected(SyntaxKind.OpenBrace)
