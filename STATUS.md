@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,711 / 10,078 tests passing (~86.4%).
+**Phase 4 — Checker buildout.** 8,713 / 10,078 tests passing (~86.5%).
+
+**B17.6 (2026-05-16, +2 — flips `es5-asyncFunctionObjectLiterals_ts__target_es2015__` JS-emit + adjacent)** —
+In `Transformer.transformObjectLiteralElement`, the `PropertyAssignment` branch
+now transforms `node.name` via a new `transformPropertyName` helper alongside
+`node.initializer`. Property names can be `ComputedPropertyName` whose inner
+expression may contain `await` / `yield` / etc. — those require the active
+async-context rewrite (e.g. `await a` → `yield a` inside an `__awaiter`-wrapped
+async function body). Previously the computed name was passed through verbatim,
+so `{ [await a]: y }` inside `async function objectLiteral2()` emitted
+`[await a]` in the generator function (a syntax error / wrong semantics at the
+await call site). Now correctly emits `[yield a]`. Helper covers ComputedPropertyName
+only; other PropertyName kinds (Identifier, StringLiteralNode, NumericLiteralNode)
+pass through unchanged.
 
 **B17.5 (2026-05-16, +1 — flips `instantiateTypeParameter_ts` JS-emit sub-test)** —
 In `Parser.parseInterfaceMembers`, a `var`/`let`/`const` keyword inside an
