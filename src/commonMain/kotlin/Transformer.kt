@@ -622,7 +622,13 @@ class Transformer(
             val defaultUsed = defaultName != null && defaultName in referenced
             // Check namespace import
             val nsName = (clause.namedBindings as? NamespaceImport)?.name?.text
-            val nsUsed = nsName != null && nsName in referenced
+            // B15.3: under isolatedModules, treat namespace imports as "always used" for
+            // elision purposes — TypeScript preserves `import * as ns from "X"` even when
+            // `ns` is locally unreferenced because the compiler can't make safe cross-file
+            // decisions about whether the module's exports are runtime values. Named
+            // imports (`{ X }`) are still elided when unreferenced — they're presumed
+            // type-only locally if no reference exists.
+            val nsUsed = nsName != null && (nsName in referenced || options.isolatedModules)
             // Check named imports
             val namedImports = clause.namedBindings as? NamedImports
             val usedNamedElements = namedImports?.elements?.filter { spec ->
