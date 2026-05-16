@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,705 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,706 / 10,078 tests passing (~86.3%).
+
+**B16.5 (2026-05-16, +1 — flips `moduleAugmentationsImports2_ts`)** —
+In `Transformer.kt`, the per-call `moduleNameCounter` map (used to generate
+unique import-alias temp names like `a_1`, `a_2`) is now optionally shared
+across files via a new constructor parameter `sharedModuleNameCounter`.
+`TypeScriptCompiler.kt` creates a single shared `MutableMap<String, Int>` when
+`options.outFile != null` and passes it to each per-file Transformer in the
+multi-file path. AMD bundles now produce globally unique import-alias names
+matching TypeScript's behavior (e.g. file 1 gets `a_1`, file 2 gets `a_2`).
+Single-file compilation and non-bundled multi-file mode unchanged.
 
 **B16.4 (2026-05-16, +1 — flips `optionalChainWithInstantiationExpression2_ts__target_es2020__`)** —
 In `Parser.kt`'s `QuestionDot` arm of postfix-expression parsing, handle

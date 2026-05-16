@@ -1025,6 +1025,12 @@ class TypeScriptCompiler {
             // qualify references like `sys.version` → `ts.sys.version`.
             val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
 
+            // Shared counter for AMD import-alias temp names across all files in an outFile
+            // bundle (e.g. `a_1`, `a_2` for repeated `import {A} from "./a"`). Null when
+            // not bundling so each file restarts at `_1`.
+            val sharedModuleNameCounter: MutableMap<String, Int>? =
+                if (options.outFile != null) mutableMapOf() else null
+
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
                 // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
@@ -1058,7 +1064,7 @@ class TypeScriptCompiler {
                     }
                 }
 
-                val transformer = Transformer(options, checker, crossFileNamespaceExports)
+                val transformer = Transformer(options, checker, crossFileNamespaceExports, sharedModuleNameCounter)
                 val transformed = transformer.transform(sourceFile)
 
                 val emitter = Emitter(options)
