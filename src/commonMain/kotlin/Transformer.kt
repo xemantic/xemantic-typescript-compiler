@@ -8971,7 +8971,12 @@ class Transformer(
      */
     private fun serializeTypeNode(typeNode: TypeNode?, typeParams: Set<String>): Expression {
         if (typeNode == null) return syntheticId("Object")
-        val strictNull = options.strictNullChecks
+        // B15.5: `@strict: true` enables strictNullChecks (the umbrella strict flag turns on
+        // all strict sub-flags including strictNullChecks). Without this, `T | null` under
+        // `@strict: true` (but no explicit `@strictNullChecks`) would filter null and serialize
+        // as `T`, but TypeScript treats it as a true Union and emits `Object`.
+        val strictNull = (options.strict || options.strictNullChecks)
+            && !options.strictNullChecksExplicitlyFalse
         // Single null/undefined/never types → void 0
         if (isVoidMetadataTypeNode(typeNode)) return VoidExpression(
             expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
