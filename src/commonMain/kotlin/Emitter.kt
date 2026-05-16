@@ -3164,6 +3164,12 @@ class Emitter(
             // Guard: node.left.end > 0 avoids false positives for synthesized nodes where
             // left.end = 0 (default) but right has a real source position.
             val rightNewLine = node.left.end > 0 && hasNewLineInSource(node.left.end, node.right.pos)
+            // B15.4: when the right operand is a parser placeholder (empty Identifier from
+            // parse-error recovery — e.g. `[#abc]=` with EOF after `=`), emit `\n` without
+            // the continuation indent. The empty right would emit nothing and the outer
+            // `;` of `emitExpressionStatement` would land at the indented column. Matches
+            // TypeScript's baseline for these recovery shapes.
+            val rightIsEmptyPlaceholder = node.right is Identifier && (node.right as Identifier).text.isEmpty()
             if (rightNewLine) {
                 write(" $op")
                 // Emit trailing comments after operator on same line (e.g. `a && // no error\nb`)
@@ -3177,11 +3183,13 @@ class Emitter(
                     }
                 }
                 writeNewLine()
-                indentLevel++
-                repeat(indentLevel) { sb.append("    ") }
-                isStartOfLine = false
-                emitRight()
-                indentLevel--
+                if (!rightIsEmptyPlaceholder) {
+                    indentLevel++
+                    repeat(indentLevel) { sb.append("    ") }
+                    isStartOfLine = false
+                    emitRight()
+                    indentLevel--
+                }
             } else {
                 write(" $op ")
                 // Emit inline trailing comments after operator (e.g. `a + /*e3*/ b`)
