@@ -2510,7 +2510,17 @@ and the only path to gains is architectural-blocker substeps). Ranked by
 yield ÷ risk; each item is sized as a single-commit substep landing +1 to
 +5 tests when it works:
 
-- [ ] **B12.1. Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so B11.2's `resolveJsxTsxCandidate` can find them. Targets: `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts` (+2 expected).** Stacks on B11.2. Single-file change in `TypeScriptCompiler.kt` — relax the empty-content skips at line ~915 (`.jsx`) and ~927 (`.tsx`) so empty fixture files reach `parsedSourceFiles` → `binderResults` → `fileResults`. Then B11.2's resolver matches them and emits TS6142 at the import specifier.
+- [x] **B12.1. Admit empty `.jsx`/`.tsx` fixture files into the multi-file pipeline so B11.2's `resolveJsxTsxCandidate` can find them (DONE 2026-05-16, +2 — flips `moduleResolutionWithExtensions_notSupported_ts` + `moduleResolutionWithExtensions_notSupported2_ts`).** Stacks on B11.2. Two-file change: `TypeScriptCompiler.kt` (skip relaxation + Phase 3 emit gate) and `Checker.kt` (TS1192 skip for empty target modules).
+
+  **Implementation.** (1) `TypeScriptCompiler.kt:915-918` — `.jsx` skip changed from `(!allowJs || isBlank)` to `!allowJs && isNotBlank`, with empty-content path adding to new `emptyJsxTsxFixtures: MutableSet<String>`. (2) `TypeScriptCompiler.kt:927-929` — `.tsx` skip dropped the `isBlank` clause; empty `.tsx` adds to `emptyJsxTsxFixtures`. (3) `TypeScriptCompiler.kt` Phase 3 — new `if (tsFileName in emptyJsxTsxFixtures) continue` at the start of the transform/emit loop. (4) `Checker.kt:16278` (TS1192 check) — `if (targetFile.statements.isEmpty()) continue`. Empty modules treated as untyped per TypeScript behavior; TS6142 from B11.2 is the user-facing diagnostic.
+
+  **Verification.** Full-suite 10078/1393/3 (was 10078/1395/3 post-B11.2, +2 net). Zero regressions. Both target tests' sub-tests (errors-baseline + JS-emit) flip clean. `moduleResolutionWithExtensions_notSupported3_ts` JS-emit unaffected — the fixture gate prevents the admitted `/jsx.jsx` from emitting `"use strict";`.
+
+  **Risk profile that materialized.** Bounded. v1 attempt used `sourceFile.statements.isEmpty()` as the Phase 3 gate — that broke 8 tests with parser-error-recovery shapes (e.g. `jsFileCompilationTypeArgumentSyntaxOfCall_ts` has 5 lines of malformed JSX that parses to 0 statements but legitimately needs JS emit). v2 narrows the gate to the explicitly-admitted fixture set, sidestepping the recovery issue. Confirmed by repro test: pre-change state had `jsFileCompilationTypeArgumentSyntaxOfCall_ts` failing for an unrelated reason (TS17004 over-emission from B10.2), so it would have looked like a regression but wasn't caused by B12.1's admit changes.
+
+  **Lessons / non-obvious gates.** (a) `resolveModuleSpecifier` is asymmetric for `.jsx` vs `.tsx`: it tries `.tsx` extensions but explicitly skips `.jsx` (per existing CLAUDE.md gotcha). So admitting empty `.tsx` triggered FP TS1192 on default-imports (target found, no exports), while admitting empty `.jsx` did NOT trigger TS1192 (target not found via global resolver). The TS1192 gate in checker is required only because of this asymmetry. (b) `sourceFile.statements.isEmpty()` as a "is this an empty file" heuristic is unsafe — parser-error recovery can produce empty-statements from non-empty source. Track admission explicitly via a side set rather than inferring it from AST state.
+
+  ---
 
   **Current skip logic (TypeScriptCompiler.kt:915-918).** `.jsx` skipped when `outDir == null && outFile == null && (!allowJs || content.isBlank())`. The `content.isBlank()` arm blocks empty `.jsx` fixtures regardless of allowJs setting. Variant 1 (no allowJs, empty `/jsx.jsx`): skipped at `!allowJs`. Variant 2 (allowJs, empty `/jsx.jsx`): skipped at `content.isBlank()`. Both blocked.
 
@@ -3679,6 +3689,20 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-16 (B12.1, 8680 → 8682, +2 — flips ~~`moduleResolutionWithExtensions_notSupported_ts`~~ + ~~`moduleResolutionWithExtensions_notSupported2_ts`~~) — Admit empty .jsx/.tsx fixture files into the multi-file pipeline.** Continuation /loop iteration after B11.2. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/63/12). Per the B11.2 session note's flagged carry-over ("Out-of-scope substep candidate: pass all @Filename'd files through the pipeline (including skipped empty ones) so the scoped resolver can match them"), promoted B12.1 and implemented.
+
+  **Two-file change.** (1) `TypeScriptCompiler.kt`: relax `.jsx`/`.tsx` skip gates to admit empty fixtures, tracked via new `emptyJsxTsxFixtures: MutableSet<String>`; Phase 3 skip gate consults the set to prevent phantom `"use strict";` outputs. (2) `Checker.kt`: TS1192 default-import check now skips when target module has no statements (empty fixture → treat as untyped, B11.2's TS6142 is the user-facing diagnostic).
+
+  **Implementation pattern.** Phase 1 admits empty files explicitly to a side set, Phase 3 consults the set to short-circuit emission. Avoids `sourceFile.statements.isEmpty()` heuristic — that would broke 8 tests where parser-error recovery produces zero statements from non-empty source (e.g. `jsFileCompilationTypeArgumentSyntaxOfCall_ts`'s malformed JSX).
+
+  **Verification.** Full-suite 10078/1393/3 (was 10078/1395/3, +2 net). Zero regressions across 10078-test suite. Both target tests' sub-tests (errors-baseline + JS-emit) pass; variant 3 (`_3_ts`) JS-emit still passing — the `emptyJsxTsxFixtures` gate prevents the admitted empty `/jsx.jsx` from emitting `"use strict";`.
+
+  **Risk profile that materialized.** Bounded post-v2. v1 attempt with broad `statements.isEmpty()` Phase 3 gate caused 8 regressions on parser-error-recovery tests. v2 narrows to the admitted fixture set — surgical and correct. The Checker TS1192 gate addresses an asymmetry: `resolveModuleSpecifier` tries `.tsx` extensions (per CLAUDE.md "DOES NOT try `.js`/`.jsx`") so admitted empty `.tsx` triggered FP TS1192 on default-imports; the `targetFile.statements.isEmpty()` skip is the minimal correct gate.
+
+  **Next session.** `find_candidates.py --fresh` likely still 0/0/0. Notable carry-overs: (i) No further B11/B12 follow-ons identified from this session's recon. (ii) Remaining MISS-bucket candidates are all architectural (Blocker #1/#2/#3/#4 per existing skip-log). (iii) Most-recent SWAP candidates either need display-infrastructure overhauls or are explicit Guardrails decisions.
+
+  ---
 
   **Session 2026-05-16 (B11.2, 8679 → 8680, +1 — flips ~~`checkJsxNotSetError_ts`~~) — TS6142 for imports resolving to .jsx/.tsx with jsx unset.** Stacking on B11.1 in the same /loop session. With B11.1 closing one target, `find_candidates.py --fresh` was still 0/0/0 but the un-filtered MISS bucket flagged `checkJsxNotSetError_ts` (+1 missing TS6142) AND two `moduleResolutionWithExtensions_notSupported*_ts` tests with the same root-cause pattern. Per anti-loop rule, did not stop after B11.1 — promoted B11.2 and implemented.
 
