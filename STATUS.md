@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,687 / 10,078 tests passing (~86.2%).
+**Phase 4 — Checker buildout.** 8,692 / 10,078 tests passing (~86.2%).
+
+**B14.9 (2026-05-16, +2 — flips `commonJsExportTypeDeclarationError_ts__target_es{5,2015}__`)** —
+Two coordinated pieces:
+1. TS2456 emission for direct circular type aliases (`type X = X` or
+   `type X = X | T`). New `checkCircularTypeAlias` walks each
+   TypeAliasDeclaration's RHS through Union/Intersection/Parenthesized/Array
+   operators looking for a top-level TypeReference whose name matches the
+   alias. Generic instantiation cases (e.g. `Array<X>`) intentionally NOT
+   flagged — those are valid TypeScript.
+2. TS1110 `overrideLength = 0` (was 1) in `parseTypeAliasDeclaration`
+   (B14.2 follow-on). TypeScript's baseline uses a blank squiggle for
+   end-of-line TS1110 positions.
+
+**B14.8 (2026-05-16, +1 — flips `assignmentToInstantiationExpression_ts`)** —
+Extends B14.7 with TS2454 emission for the inner Identifier of an
+instantiation-expression LHS. `findUninitializedRefs` BinaryExpression
+assignment branch recurses into `left.expression` when `left` is a
+ParenthesizedExpression with `instantiationEnd != null` — previously the
+`else -> {}` arm dropped it silently.
+
+**B14.7 (2026-05-16, net-zero infra)** —
+TS2364 "invalid assignment target" for instantiation-expression LHS
+(`obj.fn<T> = ...`). Parser tags synthetic paren with `instantiationEnd`;
+Checker's `isValidAssignmentTarget` rejects parens with that tag;
+`expressionTrueEnd` uses `instantiationEnd` for the squiggle so it covers
+`obj.fn<T>` instead of just `obj.fn`.
+
+**B14.6 (2026-05-16, net-zero infra)** — Include `BigIntLiteral` in
+`isStartOfType` so `type X = 6n | 7n` doesn't trip B14.2's missing-body
+check.
+
+**B14.5 (2026-05-16, net-zero infra)** — Suppress TS2355 when TS2314
+fired on the same TypeReference return position (mirror of existing
+TS2304 suppression at Checker.kt:36699).
 
 **B14.4 (2026-05-16, +1 — flips `importedEnumMemberMergedWithExportedAliasIsError_ts`)** —
 In `transformImportEqualsDeclaration`, before the existing target-type-only
