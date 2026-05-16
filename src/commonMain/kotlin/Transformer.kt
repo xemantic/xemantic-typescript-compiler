@@ -3619,6 +3619,13 @@ class Transformer(
                 .removePrefix("./")
                 .substringBeforeLast('.')
                 .trimStart('/')
+                .let { name ->
+                    // Strip Windows drive-letter prefix (e.g. `c:/test` → `test`) — TypeScript's
+                    // AMD module ID treats the drive as the filesystem root, not a path segment.
+                    if (name.length >= 3 && name[1] == ':' && name[2] == '/' &&
+                        (name[0] in 'a'..'z' || name[0] in 'A'..'Z')
+                    ) name.substring(3) else name
+                }
         } else null
         val defineArgs = mutableListOf<Expression>()
         if (amdModuleName != null) {
