@@ -14549,6 +14549,7 @@ class Checker(
         val syntheticSymbol = Symbol(SymbolFlags.RegularEnum, decl.name.text)
         val localValues = mutableMapOf<String, ConstantValue>()
         var canAutoIncrement = true
+        var prevInitializer: Expression? = null
         for (member in decl.members) {
             val memberName = when (val n = member.name) {
                 is Identifier -> n.text
@@ -14560,6 +14561,7 @@ class Checker(
                 val v = evaluateEnumInitializer(member.initializer, localValues, syntheticSymbol)
                 canAutoIncrement = v is ConstantValue.NumberValue
                 if (v != null && memberName != null) localValues[memberName] = v
+                prevInitializer = member.initializer
             } else {
                 if (!canAutoIncrement) {
                     val nameNode = member.name
@@ -14570,18 +14572,35 @@ class Checker(
                         else -> nameNode.pos to 1
                     }
                     val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Enum member must have initializer.",
-                        category = DiagnosticCategory.Error, code = 1061,
-                        fileName = fileName, line = line, character = character,
-                        start = pos, length = length,
-                    ))
+                    // TS18056 fires when isolatedModules is enabled AND the previous member's
+                    // initializer is a non-literal expression that COULD evaluate to a number.
+                    // Heuristic without full type inference: previous initializer is a bare
+                    // Identifier (e.g. `a = foo` where foo is imported). Excludes string-literal
+                    // initializers (caught by `prevInitializer is StringLiteralNode` not matching)
+                    // and explicit `as any` casts (which are AsExpression, not Identifier).
+                    val isTs18056 = options.isolatedModules && prevInitializer is Identifier
+                    if (isTs18056) {
+                        diagnostics.add(Diagnostic(
+                            message = "Enum member following a non-literal numeric member must have an initializer when 'isolatedModules' is enabled.",
+                            category = DiagnosticCategory.Error, code = 18056,
+                            fileName = fileName, line = line, character = character,
+                            start = pos, length = length,
+                        ))
+                    } else {
+                        diagnostics.add(Diagnostic(
+                            message = "Enum member must have initializer.",
+                            category = DiagnosticCategory.Error, code = 1061,
+                            fileName = fileName, line = line, character = character,
+                            start = pos, length = length,
+                        ))
+                    }
                 } else if (memberName != null) {
                     // Record the implicit auto-increment value for downstream references.
                     val last = localValues.values.lastOrNull()
                     val base = if (last is ConstantValue.NumberValue) last.value + 1 else 0.0
                     localValues[memberName] = ConstantValue.NumberValue(base)
                 }
+                prevInitializer = null
             }
         }
     }
