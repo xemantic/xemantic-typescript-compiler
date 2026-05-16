@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,703 / 10,078 tests passing (~86.3%).
+**Phase 4 — Checker buildout.** 8,704 / 10,078 tests passing (~86.3%).
+
+**B16.3 (2026-05-16, +1 — flips `keepImportsInDts3_ts`)** —
+In `Transformer.kt`'s AMD `define(...)` emission, strip Windows drive-letter
+prefix (`c:/`) from the derived module ID when source filename has the shape
+`<letter>:/path/file.ts`. TypeScript treats the drive as filesystem root, not
+a path segment, so `c:/app/main.ts` produces module ID `app/main`, not
+`c:/app/main`. Previous behavior: passed through `c:/` literally in the
+define() call.
 
 **B16.2 (2026-05-16, +2 — flips `importHelpersNoHelpersForAsyncGenerators_ts__target_{es5,es2015}__`)** —
 In `Transformer.kt`'s YieldExpression branch, transform `yield* expr` inside an
