@@ -2474,10 +2474,24 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
-**Session 2026-05-16 (B17.1–B17.7, +9 net, 8705 → 8714 passing).** Seven surgical iterations:
+**Session 2026-05-16 (B17.1–B17.9, +12 net, 8705 → 8717 passing).** Nine surgical iterations:
 - B17.7 (+1): `parseParameterList` comma-recovery — when no comma but next token starts a
   parameter (Identifier / `...` / `{` / `[`), emit TS1005 and continue. Flips
   `restParamModifier_ts` JS-emit (`constructor(...public rest: string[])` parser-recovery).
+- B17.8 (+1): `parseInterfaceDeclaration` recovery for `interface Foo.I1 {}` — when the
+  token after the interface name is `.`, emit TS1005 `{` expected, consume the `.`, and
+  return an empty interface so the outer parser recovers the `I1 { }` tail as separate
+  statements. Flips `interfaceDeclaration4_ts` JS-emit.
+- B17.9 (+2): `parseClassDeclaration` recovery for `declare class foo();` — when the token
+  after the heritage clauses is `(`, emit TS1005 `{` expected and return an empty class
+  body so the outer parser recovers `();` as an expression statement and parses subsequent
+  statements (e.g. sibling `function foo() {}`). Flips `es6ClassTest9_ts` JS-emit + adjacent.
+
+B17.10 attempt (`var`/`let`/`const` bailout in class body, mirror of B17.5's interface fix)
+regressed -4 tests in the full suite and was reverted. Class bodies have looser member-name
+conventions than interfaces — keyword identifiers like `var`/`const` as property names are
+more common in class-shape AST recovery — so the same lookahead gate that worked for
+interfaces over-fired against legitimate class-body shapes.
 
 - B17.1 (+2): `Scanner.reScanLessThanToken()` splits `<<` to `<` inside `tryParseTypeArguments`,
   with diagnostics-rollback to prevent leaked errors on speculative bailout. Flips
