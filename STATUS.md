@@ -1,6 +1,42 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,679 / 10,078 tests passing (~86.1%).
+**Phase 4 — Checker buildout.** 8,680 / 10,078 tests passing (~86.1%).
+
+**B11.2 (2026-05-16, +1 — flips `checkJsxNotSetError_ts`)** —
+TS6142 "Module 'X' was resolved to 'Y', but '--jsx' is not set." emission for
+cross-file imports that resolve to a `.jsx`/`.tsx` target while `options.jsx`
+is unset. New `checkJsxImportResolutions` pass in Checker.kt walks every
+import statement in every binder file (gated on `binderResults.size > 1 ||
+isMultiFileSource` AND `jsxUnset`). Uses a scoped `resolveJsxTsxCandidate`
+resolver (distinct from `resolveModuleSpecifier` which intentionally skips
+`.jsx`/`.tsx` to avoid TS2459 FPs) that tries `.jsx`/`.tsx` extensions
+against `fileResults` keys, with directory-aware lookup for relative
+specifiers and absolute/suffix-match fallback. Skips specifiers that
+already carry the extension (TS6142 only fires when the extension was
+resolved-via, not stated). New `emitTS6142` helper mirrors `emitTS2307`
+shape (squiggle at specifier.pos length = moduleName.length + 2).
+
+**Verification.** Full-suite 10078/1395/3 (was 10078/1396/3 post-B11.1,
++1 net). Zero regressions. `checkJsxNotSetError_ts` flips clean — TS6142
+emitted at /bar.jsx(1,17) for `import Foo from '/foo'` resolving to
+`/foo.jsx` (alongside the existing TS17004 emissions at /bar.jsx(2,11)
+and /foo.jsx(2,5)). The adjacent `moduleResolutionWithExtensions_notSupported_ts`
+and `moduleResolutionWithExtensions_notSupported2_ts` were spec'd as
+secondary targets but did NOT flip — root cause: their `/jsx.jsx` and
+`/tsx.tsx` source-fixture files have empty content, which the
+TypeScriptCompiler multi-file pipeline skips for `.jsx` files when
+`allowJs && content.isBlank()` (TypeScriptCompiler.kt:915). The files
+never reach `parsedSourceFiles` / `fileResults`, so `resolveJsxTsxCandidate`
+can't find them. A wider fix would need to track all @Filename'd files
+including skipped ones — out of scope for this substep.
+
+**Risk profile that materialized.** Bounded as projected. The scoped
+resolver only fires for `.jsx`/`.tsx` extension targets, and the gate
+on `jsxUnset` skips every test that sets `@jsx`. Other multi-file tests
+in the corpus either import `.ts`/`.tsx` files where the target has
+@jsx set, or import `.ts`/`.d.ts` where the resolver doesn't match.
+
+---
 
 **B11.1 (2026-05-16, +1 — flips `parseUnaryExpressionNoTypeAssertionInJsx2_ts`)** —
 TS17014 "JSX fragment has no corresponding closing tag." emission + TS1005

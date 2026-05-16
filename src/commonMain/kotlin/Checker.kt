@@ -540,6 +540,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
+        checkJsxImportResolutions()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
@@ -15953,6 +15955,102 @@ class Checker(
             message = "Cannot find module '$moduleName'. Consider using '--resolveJsonModule' to import module with '.json' extension.",
             category = DiagnosticCategory.Error,
             code = 2732,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // JSX-not-set import check (TS6142)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS6142: "Module 'X' was resolved to 'Y', but '--jsx' is not set." — fires for
+     * cross-file imports that resolve to a `.jsx` or `.tsx` target while `options.jsx`
+     * is unset. Multi-file mode only.
+     */
+    private fun checkJsxImportResolutions() {
+        if (binderResults.size <= 1 && !isMultiFileSource) return
+        val jsxUnset = options.jsx.let { it.isNullOrBlank() || it.equals("none", ignoreCase = true) }
+        if (!jsxUnset) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
+                val specifier = when (stmt) {
+                    is ImportDeclaration -> stmt.moduleSpecifier
+                    is ExportDeclaration -> stmt.moduleSpecifier
+                    is ImportEqualsDeclaration -> {
+                        val ref = stmt.moduleReference
+                        if (ref is ExternalModuleReference) ref.expression else null
+                    }
+                    else -> null
+                } ?: continue
+                val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
+                // Skip specifiers that already carry the extension — TS6142 is only
+                // emitted when the extension was inferred by resolution, not stated.
+                if (moduleName.endsWith(".jsx") || moduleName.endsWith(".tsx")) continue
+                val resolved = resolveJsxTsxCandidate(moduleName, fileName) ?: continue
+                emitTS6142(specifier, moduleName, resolved, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Scoped resolver for [checkJsxImportResolutions] that tries `.jsx` / `.tsx`
+     * suffixes. Distinct from [resolveModuleSpecifier] which intentionally skips
+     * these to avoid TS2459 FPs across the rest of the checker — here the result
+     * is only ever consumed by TS6142 emission, so the narrower scope is safe.
+     */
+    private fun resolveJsxTsxCandidate(moduleName: String, contextFileName: String): String? {
+        val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+        // Relative: resolve against the importing file's directory first.
+        if (isRelative) {
+            val dir = contextFileName.substringBeforeLast('/', "")
+            val base = moduleName.removePrefix("./")
+            val resolvedBase = if (dir.isEmpty()) base else "$dir/$base"
+            val normalized = normalizePath(resolvedBase)
+            for (ext in listOf(".jsx", ".tsx")) {
+                val candidate = "$normalized$ext"
+                if (candidate in fileResults) return candidate
+                if (candidate.removePrefix("./") in fileResults) return candidate.removePrefix("./")
+            }
+        }
+        // Fallback: try absolute / non-relative match against fileResults keys.
+        // Test fixtures often use absolute-style paths like `/foo` → `/foo.jsx`.
+        val base = moduleName.removePrefix("./").removePrefix("../")
+        for (ext in listOf(".jsx", ".tsx")) {
+            val candidates = listOf("$moduleName$ext", "./$base$ext", "$base$ext", "/$base$ext")
+            for (candidate in candidates) {
+                if (candidate in fileResults) return candidate
+            }
+            // Suffix-match: any file ending with /base + ext
+            val suffix = "/$base$ext"
+            for (fn in fileResults.keys) {
+                if (fn.endsWith(suffix) || fn == "$base$ext") return fn
+            }
+        }
+        return null
+    }
+
+    private fun emitTS6142(
+        specifier: Expression,
+        moduleName: String,
+        resolvedFile: String,
+        source: String,
+        fileName: String,
+    ) {
+        val start = specifier.pos
+        val length = moduleName.length + 2 // +2 for quotes
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Module '$moduleName' was resolved to '$resolvedFile', but '--jsx' is not set.",
+            category = DiagnosticCategory.Error,
+            code = 6142,
             fileName = fileName,
             line = line,
             character = character,
