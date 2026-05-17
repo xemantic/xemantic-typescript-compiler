@@ -5460,6 +5460,18 @@ class Parser(
                 params.add(p)
                 if (!parseOptional(SyntaxKind.Comma)) break
             }
+            // B20.1: parser-recovery for missing `>` before parameter list — e.g.
+            // `foo<U extends C<C<T>>(x: U)` (one `>` short). When we successfully
+            // parsed at least one TypeParameter and now see `(` (the start of a
+            // parameter list), emit TS1005 `'>' expected.` at the `(` position and
+            // accept the parsed params. Without this, tryScan would roll back to
+            // the original `<` and `parseParameterList` would emit a confusing
+            // cascade (TS1005 `(` expected. at `<`, then TS1005 `)` expected. on the
+            // recovered `<U extends C<C<T>>` partial-parse, etc.).
+            if (token != SyntaxKind.GreaterThan && token == SyntaxKind.OpenParen && params.isNotEmpty()) {
+                reportError("'>' expected.", code = 1005, overrideLength = 1)
+                return@tryScan params
+            }
             if (token != SyntaxKind.GreaterThan) return@tryScan null
             nextToken()
             params

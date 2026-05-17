@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,725 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,727 / 10,078 tests passing (~86.6%).
+
+**B20.1 (2026-05-17, +2 — flips `assertInWrapSomeTypeParameter_ts` errors-baseline + JS-emit)** —
+Parser recovery for missing `>` before parameter list in generic method declarations
+(e.g. `foo<U extends C<C<T>>(x: U)` — one `>` short). In `tryParseTypeParameters`,
+when at least one TypeParameter was successfully parsed and the next token is `(`
+(not `>`), instead of rolling back via tryScan and emitting a confusing TS1005
+cascade at the original `<`, emit TS1005 `'>' expected.` at the `(` position
+(length 1) and accept the params. The caller's `parseParameterList()` then proceeds
+at `(` normally. Without this, scanner rollback led to `parseParameterList` seeing
+`<` instead of `(`, then `parseExpected(OpenParen)` emitting TS1005 `(` expected.
+followed by mis-parsing `<U extends C<C<T>>` as if it were the parameter list —
+producing 8 cascading errors and a JS-emit of `>>(x)` as the method name.
 
 **B19.2 (2026-05-17, +1 — flips `dontShowCompilerGeneratedMembers_ts` errors-baseline)** —
 Parser recovery for malformed `<NonIdent` call-signature shape inside a type literal /
