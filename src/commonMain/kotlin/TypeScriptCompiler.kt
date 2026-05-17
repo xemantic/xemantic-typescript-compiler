@@ -1702,6 +1702,43 @@ private fun reformatJson(content: String): String {
             return "{ " + tokens.joinToString(", ") + " }"
         }
     }
+    // Preserve single-line shape: when the entire (trimmed) content has no
+    // newline between its outermost brackets, JSON source like `["a", null]`
+    // or `[-10, 30]` should stay on one line. TypeScript's re-emit preserves
+    // the source layout per-bracket-pair; a full per-pair check is more
+    // complex than is justified here, so we fast-path the common case where
+    // the whole content fits on one line.
+    if (!trimmed.contains('\n')) {
+        // Normalize whitespace inside but keep on a single line.
+        val sbSingle = StringBuilder()
+        var k = 0
+        val tl = trimmed.length
+        var lastWasOperator = false
+        while (k < tl) {
+            val ch = trimmed[k]
+            when (ch) {
+                '"', '\'' -> {
+                    val q = ch
+                    val s = k++
+                    while (k < tl) {
+                        when (trimmed[k]) {
+                            '\\' -> k += 2
+                            q -> { k++; break }
+                            else -> k++
+                        }
+                    }
+                    sbSingle.append(trimmed, s, k); lastWasOperator = false
+                }
+                ',' -> { sbSingle.append(", "); k++; while (k < tl && trimmed[k].isWhitespace()) k++; lastWasOperator = true }
+                ':' -> { sbSingle.append(": "); k++; while (k < tl && trimmed[k].isWhitespace()) k++; lastWasOperator = true }
+                else -> {
+                    if (ch.isWhitespace()) { k++ }
+                    else { sbSingle.append(ch); k++; lastWasOperator = false }
+                }
+            }
+        }
+        return sbSingle.toString()
+    }
     val sb = StringBuilder()
     var indent = 0
     var i = 0
