@@ -1022,6 +1022,10 @@ class TypeScriptCompiler {
                 importDeps[file.fileName] = extractRelativeImports(
                     sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
                     includeReferencePathDeps = options.outFile != null,
+                    paths = options.paths,
+                    baseUrl = options.baseUrl,
+                    tsconfigDir = parsed.files.firstOrNull { it.fileName.substringAfterLast('/') == "tsconfig.json" }
+                        ?.fileName?.substringBeforeLast('/', ""),
                 )
 
                 tsFileNames.add(file.fileName)
@@ -1274,6 +1278,9 @@ private fun extractRelativeImports(
     allFiles: List<SourceFileEntry>,
     moduleSuffixes: List<String>? = null,
     includeReferencePathDeps: Boolean = false,
+    paths: Map<String, List<String>> = emptyMap(),
+    baseUrl: String? = null,
+    tsconfigDir: String? = null,
 ): List<String> {
     val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
@@ -1324,6 +1331,21 @@ private fun extractRelativeImports(
             resolveRelativePath(dir, specifier)
         } else {
             specifier
+        }
+
+        // For non-relative specifiers, try `paths` mapping first. When a pattern matches
+        // (e.g. "@speedy/*/testing" matches "@speedy/folder1/testing" with wildcard
+        // capturing "folder1"), substitute the wildcard into each substitution and
+        // resolve against tsconfig dir + baseUrl. If the resolved file is in
+        // allTsFileNames, record the dep and continue. This is essential for
+        // dependency ordering when paths-mapped imports refer to files that need to
+        // be emitted before the importer.
+        if (!specifier.startsWith("./") && !specifier.startsWith("../") && paths.isNotEmpty()) {
+            val mapped = resolvePathsMapping(specifier, paths, baseUrl, tsconfigDir, allTsFileNames)
+            if (mapped != null) {
+                deps.add(mapped)
+                continue
+            }
         }
 
         // Build candidate list respecting moduleSuffixes.
@@ -1379,6 +1401,76 @@ private fun extractRelativeImports(
         }
     }
     return deps
+}
+
+/**
+ * Resolves a non-relative import specifier against the `paths` compiler-options
+ * mapping (with optional baseUrl + tsconfig dir anchoring). Returns the first
+ * substituted candidate that exists in `allTsFileNames`, or null if no pattern
+ * matches or no substitution resolves to a known file. Handles literal patterns
+ * (no `*`) as well as single-wildcard patterns (e.g. `@speedy/*/testing`).
+ *
+ * Substitutions may have an explicit extension (e.g. `*/dist/index.ts`) — in
+ * which case the candidate is used as-is — or no extension, in which case `.ts`,
+ * `.tsx`, `.mts`, `.cts` and `/index.ts` variants are tried.
+ */
+private fun resolvePathsMapping(
+    specifier: String,
+    paths: Map<String, List<String>>,
+    baseUrl: String?,
+    tsconfigDir: String?,
+    allTsFileNames: Set<String>,
+): String? {
+    // Compute the anchor directory: tsconfigDir + baseUrl (if any).
+    // When baseUrl is "." or unset, anchor is tsconfigDir.
+    val anchor: String = run {
+        val b = baseUrl?.trim()?.removePrefix("./")?.trimEnd('/')
+        when {
+            tsconfigDir.isNullOrEmpty() && b.isNullOrEmpty() -> ""
+            tsconfigDir.isNullOrEmpty() -> b!!
+            b.isNullOrEmpty() || b == "." -> tsconfigDir
+            b.startsWith("/") -> b
+            else -> "$tsconfigDir/$b"
+        }
+    }
+
+    for ((pattern, substitutions) in paths) {
+        val starIdx = pattern.indexOf('*')
+        val wildcard: String? = if (starIdx < 0) {
+            // Literal pattern: must match specifier exactly
+            if (pattern != specifier) null else ""
+        } else {
+            val prefix = pattern.substring(0, starIdx)
+            val suffix = pattern.substring(starIdx + 1)
+            if (specifier.startsWith(prefix) && specifier.endsWith(suffix)
+                && specifier.length >= prefix.length + suffix.length) {
+                specifier.substring(prefix.length, specifier.length - suffix.length)
+            } else null
+        }
+        wildcard ?: continue
+        for (sub in substitutions) {
+            val substituted = sub.replace("*", wildcard)
+            val full = if (anchor.isEmpty() || substituted.startsWith("/")) substituted
+                else "$anchor/$substituted"
+            // If substituted already has a known TS extension, try as-is + ./ prefix.
+            val knownExts = listOf(".ts", ".tsx", ".mts", ".cts", ".d.ts")
+            val hasExt = knownExts.any { full.endsWith(it) }
+            val cands: List<String> = if (hasExt) {
+                listOf(full, "./$full")
+            } else {
+                listOf(
+                    "$full.ts", "$full.tsx", "$full.mts", "$full.cts",
+                    full,
+                    "$full/index.ts", "$full/index.tsx",
+                    "./$full.ts", "./$full.tsx",
+                )
+            }
+            for (c in cands) {
+                if (c in allTsFileNames) return c
+            }
+        }
+    }
+    return null
 }
 
 /**

@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,747 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,749 / 10,078 tests passing (~86.8%).
+
+**B30.1 (2026-05-17, +2 — flips `pathMappingBasedModuleResolution8_node_ts` + `pathMappingBasedModuleResolution8_classic_ts` JS-emit)** —
+`paths` compiler-options mapping is now consulted during dependency-ordering extraction
+(`extractRelativeImports`). Previously a non-relative specifier like
+`@speedy/folder1/testing` (matching `paths: {"@speedy/*/testing": ["*/dist/index.ts"]}`)
+was treated as a literal candidate, so no entry in `allTsFileNames` matched and the
+dependency edge was lost. `topologicalSort` then emitted the importer file before its
+real dependency, swapping the two `//// [index.js]` blocks in the JS baseline. New helper
+`resolvePathsMapping` in `TypeScriptCompiler.kt` (~1410) matches the specifier against
+each `paths` pattern (literal or single-wildcard `*`), substitutes the captured wildcard
+into each substitution string, anchors against `tsconfigDir + baseUrl` (defaulting to
+tsconfigDir alone when `baseUrl == "."`), and tries the substituted candidate with
+known TS extensions (.ts/.tsx/.mts/.cts), no extension, and `/index.ts` shapes. When the
+candidate is in `allTsFileNames`, it's recorded as a dependency and the standard
+candidate-list path is skipped (`continue`). `extractRelativeImports` callers pass
+`options.paths`, `options.baseUrl`, and the derived tsconfig dir. Both `_node` and
+`_classic` variants of `pathMappingBasedModuleResolution8` flipped (same fixture).
 
 **B29.1 (2026-05-17, +1 — flips `moduleResolutionWithSymlinks_withOutDir_ts` JS-emit)** —
 Output-path computation now preserves subdirectory structure under `outDir` + `fullEmitPaths`
