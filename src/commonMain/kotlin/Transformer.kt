@@ -11119,10 +11119,16 @@ class Transformer(
             val stmt: ExpressionStatement = when {
                 member.initializer != null -> {
                     val initExpr = transformExpression(member.initializer)
-                    val constStringVal = evaluateConstantStringExpression(initExpr, stringMemberValues, enumName)
+                    // Type-only operators on the ORIGINAL initializer (`!`, `as`, `<T>`,
+                    // `satisfies`) prevent folding — emit the runtime expression (and use
+                    // the numeric/reverse-mapping form even when the value is string-typed).
+                    // Matches `computedEnumMemberSyntacticallyString2_ts`'s `E1`/`E2` cases.
+                    val initIsTypeWrapped = isTypeOnlyOperatorWrapping(member.initializer)
+                    val constStringVal = if (initIsTypeWrapped) null
+                        else evaluateConstantStringExpression(initExpr, stringMemberValues, enumName)
                     // Check if the initializer is syntactically a string expression
-                    val isSyntacticallyStr = constStringVal != null
-                        || isSyntacticallyStringEnum(initExpr, enumName, stringValuedMembers)
+                    val isSyntacticallyStr = !initIsTypeWrapped && (constStringVal != null
+                        || isSyntacticallyStringEnum(initExpr, enumName, stringValuedMembers))
                     if (isSyntacticallyStr) {
                         // String enum member: E["B"] = value (no reverse mapping)
                         autoIncrementValid = false
@@ -11647,6 +11653,18 @@ class Transformer(
         }
         is Identifier -> expr.text in stringValuedMembers
             || (resolveImportedLiteralAndTrack(expr.text) is ConstantValue.StringValue)
+        else -> false
+    }
+
+    /**
+     * Returns true if the ORIGINAL initializer is wrapped (at the outermost level, possibly
+     * through a single ParenthesizedExpression) in a type-only operator: `as` cast, `<T>`
+     * type assertion, `!` non-null assertion, or `satisfies`. TypeScript treats such
+     * initializers as non-foldable in enum value compute — the runtime form is preserved.
+     */
+    private fun isTypeOnlyOperatorWrapping(expr: Expression): Boolean = when (expr) {
+        is AsExpression, is TypeAssertionExpression, is NonNullExpression, is SatisfiesExpression -> true
+        is ParenthesizedExpression -> isTypeOnlyOperatorWrapping(expr.expression)
         else -> false
     }
 
