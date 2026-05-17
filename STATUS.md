@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,727 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,728 / 10,078 tests passing (~86.6%).
+
+**B21.1 (2026-05-17, +1 — flips `decoratorMetadataNoLibIsolatedModulesTypes_ts` JS-emit)** —
+Decorator metadata safety wrapper for runtime-questionable lib globals under `@noLib && @isolatedModules`.
+When `__metadata("design:type", X)` (or `design:paramtypes` element) is a bare Identifier whose name is
+in the set `Map, Set, WeakMap, WeakSet, Promise, Symbol, BigInt, Proxy, Reflect, ArrayBuffer,
+SharedArrayBuffer, DataView, *Int*Array, *Float*Array, BigInt64Array, BigUint64Array`, wrap with
+`typeof (_a = typeof X !== "undefined" && X) === "function" ? _a : Object` and hoist `var _a;`.
+Mirrors the existing default-import safety wrap mechanism. Implementation added as a post-process
+to `transformPhase3`'s final return path (NOT inside `transformToCommonJS` — applies to ESM/AMD/UMD/
+System/CJS outputs uniformly). Insertion of `var _a;` is positioned after `RawStatement` helpers
+but before other statements.
 
 **B20.1 (2026-05-17, +2 — flips `assertInWrapSomeTypeParameter_ts` errors-baseline + JS-emit)** —
 Parser recovery for missing `>` before parameter list in generic method declarations
