@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,775 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,776 / 10,078 tests passing (~87.1%).
+
+**B44.4 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution3_classic_ts` JS-emit)** —
+Classic-resolution fallback for non-relative specifiers in `extractRelativeImports`:
+walk up from the importing file's directory looking for `<dir>/<specifier>.{ts,tsx,d.ts}`
+(no `/node_modules/` segment). Matches TypeScript's classic resolution algorithm
+which probes ancestor directories directly. Required for `@moduleResolution: classic`
+test fixtures that import e.g. `"file4"` (bare) from `c:/root/folder2/file2.ts`
+when the target is at `c:/file4.ts` — walks c:/root/folder2/ → c:/root/ → c:/,
+finds at c:/file4.ts. The new branch runs after the node_modules walk-up; both
+the new branch and the existing one only fire for non-relative specifiers when
+standard candidates failed. Full-suite 10078/1299/3 (was 10078/1300/3, +1 net).
+Zero regressions.
+
+
 
 **B44.3 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution3_node_ts` JS-emit)** —
 `extractRelativeImports` in TypeScriptCompiler.kt now adds a `baseUrl`-anchored

@@ -1539,6 +1539,30 @@ private fun extractRelativeImports(
                 val match = probes.firstOrNull { it in allTsFileNames }
                 if (match != null) {
                     deps.add(match)
+                    found = true
+                    break
+                }
+                val nextSlash = probeDir.lastIndexOf('/')
+                probeDir = if (nextSlash < 0) "" else probeDir.substring(0, nextSlash)
+            }
+        }
+        // Classic-resolution fallback: walk up from the importing file's directory looking
+        // for `<dir>/<specifier>.{ts,tsx,d.ts}` (NO `/node_modules/` segment). This matches
+        // TypeScript's classic resolution algorithm which probes ancestor directories
+        // directly. Required for `@moduleResolution: classic` fixtures that place files
+        // like `c:/file4.ts` and import `"file4"` from c:/root/folder2/file2.ts (walks
+        // c:/root/folder2/, c:/root/, c:/, finds at c:/file4.ts).
+        if (!found && !specifier.startsWith("./") && !specifier.startsWith("../")) {
+            var probeDir = dir
+            while (probeDir.isNotEmpty()) {
+                val probes = listOf(
+                    "$probeDir/$specifier.ts",
+                    "$probeDir/$specifier.tsx",
+                    "$probeDir/$specifier.d.ts",
+                )
+                val match = probes.firstOrNull { it in allTsFileNames }
+                if (match != null) {
+                    deps.add(match)
                     break
                 }
                 val nextSlash = probeDir.lastIndexOf('/')

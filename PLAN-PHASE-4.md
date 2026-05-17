@@ -118,6 +118,10 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.4, +1, 8775 → 8776 — flips `pathMappingBasedModuleResolution3_classic_ts` JS-emit).** After B44.3 added baseUrl-anchored probes, the classic-resolution variant still failed because `@moduleResolution: classic` resolves bare specifiers by walking up directories WITHOUT a `/node_modules/` segment. Fix: new branch in `extractRelativeImports` after the node_modules walk-up — probes `$probeDir/$specifier.{ts,tsx,d.ts}` from the importer's dir upward. file4 at `c:/file4.ts` imported as `"file4"` from `c:/root/folder2/file2.ts` now resolves. Other classic-resolution variants (4, 5, 6, 7) still fail on different gaps (source-echo reordering when fixture files sit outside the tsconfig directory).
+
+---
+
 **Session 2026-05-17 (B44.3, +1, 8774 → 8775 — flips `pathMappingBasedModuleResolution3_node_ts` JS-emit).** Continuation /loop after B44.2. From small-diff bucket of failing tests. `pathMappingBasedModuleResolution3_node_ts` has source `@baseUrl: c:/root` + `import {x} from "folder2/file2"` — TypeScript resolves to `c:/root/folder2/file2.ts`. Our `extractRelativeImports` only consulted `paths` (empty here) and node_modules walk-up (irrelevant); both bypass baseUrl-only setups. Without the dep edge, `file1` (the importer) had no deps so topo sort emitted it first; expected order is `file3 → file2 → file1` (file1 last). Fix: new probe block in `extractRelativeImports` before the node_modules walk-up — `$baseDir/$specifier.{ts,tsx,d.ts}` and `/index.{ts,tsx,d.ts}` — only runs when `paths` lookup failed AND `baseUrl` is set. Other 12-line and 18-line diff `pathMappingBasedModuleResolution*` siblings still fail on different gaps (resolved-vs-relative require strings, AMD `define` factory arg lists). Zero regressions.
 
 ---
