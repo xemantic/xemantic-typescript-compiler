@@ -118,6 +118,14 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.5, +4, 8776 → 8780 — flips `pathMappingBasedModuleResolution{4,5}_{classic,node}_ts` JS-emit).** Continuation /loop. Looked at the remaining pathMapping JS-emit diffs and observed the source-echo section was reordered: out-of-tree `@filename` fixtures (those outside the tsconfig directory) appear FIRST in the expected baseline, then in-tree sources in input order.
+
+  **Fix.** Post-loop partition of `sourceEchoes` in `TypeScriptCompiler.kt`: when `computedTsconfigDir` is non-empty, split into `outside` and `inside` lists keyed on `fileName.startsWith("$tsconfigDir/")`, and concatenate as `outside + inside`. Tests without `tsconfig.json` keep input order (no behavior change).
+
+  **Lessons / gotcha.** This rule is specific to the SOURCE-echo section of JS-emit baselines, NOT errors-baselines (which have a separate gotcha about moving the last file when it contains `require(` or `reference path`). The discovery prompt was the consistent same-diff shape across 4 pathMapping tests where actual and expected source-section blocks had identical content but different order.
+
+---
+
 **Session 2026-05-17 (B44.4, +1, 8775 → 8776 — flips `pathMappingBasedModuleResolution3_classic_ts` JS-emit).** After B44.3 added baseUrl-anchored probes, the classic-resolution variant still failed because `@moduleResolution: classic` resolves bare specifiers by walking up directories WITHOUT a `/node_modules/` segment. Fix: new branch in `extractRelativeImports` after the node_modules walk-up — probes `$probeDir/$specifier.{ts,tsx,d.ts}` from the importer's dir upward. file4 at `c:/file4.ts` imported as `"file4"` from `c:/root/folder2/file2.ts` now resolves. Other classic-resolution variants (4, 5, 6, 7) still fail on different gaps (source-echo reordering when fixture files sit outside the tsconfig directory).
 
 ---

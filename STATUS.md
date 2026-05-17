@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,776 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,780 / 10,078 tests passing (~87.1%).
+
+**B44.5 (2026-05-17, +4 — flips `pathMappingBasedModuleResolution{4,5}_{classic,node}_ts` JS-emit)** —
+Source echoes are reordered when a tsconfig.json is present: files OUTSIDE the
+tsconfig directory appear FIRST, then files inside (each subset in input order).
+TypeScript treats out-of-tree `@filename` fixtures as "external" and lists them
+before the project sources. Example: `c:/root/tsconfig.json` is the project root;
+`c:/file4.ts` is an out-of-tree fixture; expected echo starts with file4.ts then
+file1/2/3 (all inside `c:/root/`). Implementation in `TypeScriptCompiler.kt`:
+post-loop partition of `sourceEchoes` into `outside` and `inside` lists keyed on
+`fileName.startsWith(tsconfigDir + "/")`, concat as `outside + inside`. Tests
+without tsconfig.json keep input order (no behavior change). Full-suite
+10078/1295/3 (was 10078/1299/3, +4 net). Zero regressions.
+
+
 
 **B44.4 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution3_classic_ts` JS-emit)** —
 Classic-resolution fallback for non-relative specifiers in `extractRelativeImports`:

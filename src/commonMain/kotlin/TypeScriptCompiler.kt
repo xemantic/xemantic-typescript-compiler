@@ -1307,9 +1307,24 @@ class TypeScriptCompiler {
                 diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
             else finalJsOutputs
 
+            // TypeScript reorders the source echoes when a tsconfig.json is present:
+            // files OUTSIDE the tsconfig directory (parsed from `@filename` paths) appear
+            // FIRST, then files inside the tsconfig directory (each set in input order).
+            // Required for tests like pathMappingBasedModuleResolution4_classic_ts where
+            // `c:/root/tsconfig.json` is the project root and `c:/file4.ts` is an
+            // out-of-tree fixture; expected echo starts with file4.ts then file1/2/3.
+            val orderedSourceEchoes = if (!computedTsconfigDir.isNullOrEmpty()) {
+                val prefix = computedTsconfigDir.trimEnd('/') + "/"
+                val outside = mutableListOf<Pair<String, String>>()
+                val inside = mutableListOf<Pair<String, String>>()
+                for (echo in sourceEchoes) {
+                    if (echo.first.startsWith(prefix)) inside.add(echo) else outside.add(echo)
+                }
+                outside + inside
+            } else sourceEchoes
             return CompilationResult(
                 fileName = fileName,
-                sourceEchoes = sourceEchoes,
+                sourceEchoes = orderedSourceEchoes,
                 jsOutputs = suppressedJsOutputs,
                 isMultiFile = true,
                 options = options,
