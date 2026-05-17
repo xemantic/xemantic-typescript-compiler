@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,771 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,772 / 10,078 tests passing (~87.0%).
+
+**B43.3 (2026-05-17, +1 — flips `referenceSatisfiesExpression_ts` errors-baseline)** —
+Three-part definite-assignment fix for `(b satisfies T) = ...`, `[(c satisfies T)] = [...]`
+and friends: (a) `isValidAssignmentTarget` now accepts `AsExpression`, `TypeAssertionExpression`,
+and `SatisfiesExpression` (removes FP TS2364). (b) New `unwrapTypeOnlyWrapper` helper +
+ParenthesizedExpression branch in the Equals assignment path of `findUninitializedRefs`:
+when LHS is `(x satisfies T)` / `(x as T)` / `(<T>x)`, treat the wrapped identifier as a
+read (emits TS2454 if uninitialized) and THEN mark it as assigned. (c) New
+`emitReadsForTypeWrappedDestructuring` walker handles `[(c satisfies T)] = [10]` and
+`({d: (e satisfies T)} = ...)` shapes — walks the LHS destructuring pattern, finds
+type-wrapped identifiers, emits TS2454 reads at those positions. Companion: extended
+`collectDestructuringTargets` to unwrap ParenthesizedExpression/AsExpression/SatisfiesExpression/
+TypeAssertionExpression so the underlying identifier still gets marked assigned.
+`findUninitializedRefs` also gets a new `AsExpression` branch to mirror the existing
+`SatisfiesExpression` one. Full-suite 10078/1303/3 (was 10078/1304/3, +1 net).
+Zero regressions.
 
 **B43.2 (2026-05-17, +1 — flips `anyMappedTypesError_ts` errors-baseline)** —
 Parser now emits TS7039 "Mapped object type implicitly has an 'any' template type." when

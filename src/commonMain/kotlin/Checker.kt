@@ -6079,6 +6079,27 @@ class Checker(
      * Check expression trees for references to uninitialized variables.
      * When found, emit TS2454 and remove from uninitialized set (report only first use).
      */
+    /**
+     * Unwrap type-only expression wrappers (`as`, `<T>`, `satisfies`,
+     * non-null `!`, and `(...)` parentheses) to find the underlying value
+     * expression. Used by the definite-assignment walker so that
+     * `(b satisfies T) = 10` correctly marks `b` as assigned after the
+     * read-then-write check has fired.
+     */
+    private fun unwrapTypeOnlyWrapper(expr: Expression): Expression {
+        var cur: Expression = expr
+        while (true) {
+            cur = when (cur) {
+                is SatisfiesExpression -> cur.expression
+                is AsExpression -> cur.expression
+                is TypeAssertionExpression -> cur.expression
+                is NonNullExpression -> cur.expression
+                is ParenthesizedExpression -> if (cur.instantiationEnd == null) cur.expression else return cur
+                else -> return cur
+            }
+        }
+    }
+
     private fun checkUsesOfUninitialized(
         stmt: Statement,
         uninitialized: MutableSet<String>,
@@ -6239,15 +6260,35 @@ class Checker(
                             findUninitializedRefs(left.expression, uninitialized, source, fileName)
                             findUninitializedRefs(left.argumentExpression, uninitialized, source, fileName)
                         }
-                        is ObjectLiteralExpression -> collectDestructuringTargets(left, uninitialized)
-                        is ArrayLiteralExpression -> collectDestructuringTargets(left, uninitialized)
-                        // ParenthesizedExpression with instantiationEnd: synthetic paren from an
-                        // instantiation expression like `getValue<number>`. TypeScript treats this
-                        // as an invalid assignment target (TS2364) but ALSO as a use-before-assigned
-                        // of the inner Identifier — the InstantiationExpression reads the variable
-                        // before "assigning" to it (which is a no-op type-error).
-                        is ParenthesizedExpression -> if (left.instantiationEnd != null) {
-                            findUninitializedRefs(left.expression, uninitialized, source, fileName)
+                        is ObjectLiteralExpression -> {
+                            emitReadsForTypeWrappedDestructuring(left, uninitialized, source, fileName)
+                            collectDestructuringTargets(left, uninitialized)
+                        }
+                        is ArrayLiteralExpression -> {
+                            emitReadsForTypeWrappedDestructuring(left, uninitialized, source, fileName)
+                            collectDestructuringTargets(left, uninitialized)
+                        }
+                        // ParenthesizedExpression: handle two cases.
+                        //  (a) instantiationEnd != null — synthetic paren from an instantiation
+                        //      expression like `getValue<number>`. TypeScript treats this as
+                        //      an invalid assignment target (TS2364) AND as a use-before-assigned
+                        //      of the inner Identifier.
+                        //  (b) wrapping a type-only cast `(x as T)`, `<T>x`, or `x satisfies T`
+                        //      — TypeScript flags the underlying identifier as a READ
+                        //      (`(b satisfies T) = 10` emits TS2454 for `b`).
+                        is ParenthesizedExpression -> {
+                            if (left.instantiationEnd != null) {
+                                findUninitializedRefs(left.expression, uninitialized, source, fileName)
+                            } else when (val inner = left.expression) {
+                                is SatisfiesExpression, is AsExpression, is TypeAssertionExpression -> {
+                                    findUninitializedRefs(inner, uninitialized, source, fileName)
+                                    // After the read, also mark the underlying identifier as assigned.
+                                    val underlying = unwrapTypeOnlyWrapper(inner)
+                                    if (underlying is Identifier) uninitialized.remove(underlying.text)
+                                }
+                                is Identifier -> uninitialized.remove(inner.text)
+                                else -> {}
+                            }
                         }
                         else -> {}
                     }
@@ -6328,6 +6369,7 @@ class Checker(
             is VoidExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is TypeAssertionExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is SatisfiesExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is AsExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is CommaListExpression -> {
                 expr.elements.forEach { findUninitializedRefs(it, uninitialized, source, fileName) }
             }
@@ -6454,6 +6496,49 @@ class Checker(
                 if (expr.operator == SyntaxKind.Equals) {
                     collectDestructuringTargets(expr.left, uninitialized)
                 }
+            }
+            // `(x as T)`, `(x satisfies T)`, `(<T>x)` inside a destructuring target —
+            // unwrap and recurse so the inner identifier is still marked assigned.
+            is ParenthesizedExpression -> if (expr.instantiationEnd == null) {
+                collectDestructuringTargets(expr.expression, uninitialized)
+            }
+            is SatisfiesExpression -> collectDestructuringTargets(expr.expression, uninitialized)
+            is AsExpression -> collectDestructuringTargets(expr.expression, uninitialized)
+            is TypeAssertionExpression -> collectDestructuringTargets(expr.expression, uninitialized)
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk a destructuring LHS looking for `(x as T)`, `(x satisfies T)` and
+     * `(<T>x)` shapes whose inner identifier should ALSO count as a read for
+     * definite-assignment checking. TypeScript treats the type-wrapped form as
+     * a read even when on the LHS of an assignment.
+     */
+    private fun emitReadsForTypeWrappedDestructuring(
+        expr: Expression, uninitialized: MutableSet<String>, source: String, fileName: String,
+    ) {
+        when (expr) {
+            is ParenthesizedExpression -> if (expr.instantiationEnd == null) {
+                when (expr.expression) {
+                    is SatisfiesExpression, is AsExpression, is TypeAssertionExpression ->
+                        findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+                    else -> emitReadsForTypeWrappedDestructuring(expr.expression, uninitialized, source, fileName)
+                }
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) when (el) {
+                is SpreadElement -> emitReadsForTypeWrappedDestructuring(el.expression, uninitialized, source, fileName)
+                is OmittedExpression -> {}
+                else -> emitReadsForTypeWrappedDestructuring(el, uninitialized, source, fileName)
+            }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> emitReadsForTypeWrappedDestructuring(p.initializer, uninitialized, source, fileName)
+                is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { findUninitializedRefs(it, uninitialized, source, fileName) }
+                is SpreadAssignment -> emitReadsForTypeWrappedDestructuring(p.expression, uninitialized, source, fileName)
+                else -> {}
+            }
+            is BinaryExpression -> if (expr.operator == SyntaxKind.Equals) {
+                emitReadsForTypeWrappedDestructuring(expr.left, uninitialized, source, fileName)
             }
             else -> {}
         }
@@ -59107,6 +59192,12 @@ interface DataView {
                 if (expr.instantiationEnd != null) false
                 else isValidAssignmentTarget(expr.expression)
             is NonNullExpression -> isValidAssignmentTarget(expr.expression)
+            // Type-only wrappers: `x as T`, `<T>x`, `x satisfies T` preserve the
+            // underlying reference and remain valid assignment targets so long as
+            // their inner expression is.
+            is AsExpression -> isValidAssignmentTarget(expr.expression)
+            is TypeAssertionExpression -> isValidAssignmentTarget(expr.expression)
+            is SatisfiesExpression -> isValidAssignmentTarget(expr.expression)
             // Destructuring patterns are valid (array/object literal on LHS)
             is ArrayLiteralExpression -> true
             is ObjectLiteralExpression -> true
