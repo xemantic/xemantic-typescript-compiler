@@ -1061,6 +1061,18 @@ class TypeScriptCompiler {
             val sharedModuleNameCounter: MutableMap<String, Int>? =
                 if (options.outFile != null) mutableMapOf() else null
 
+            // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
+            // never emitted). Used to preserve subdirectory structure under outDir+fullEmitPaths.
+            // When all input files are in the same directory, commonSourceDir == that directory,
+            // and the existing basename-only behavior is preserved (no subdir component).
+            // When files span subdirectories (e.g. `/src/a/x.ts`, `/src/b/y.ts`), commonSourceDir
+            // is `/src` and each output keeps its `a/x.js` / `b/y.js` suffix under outDir.
+            // Skipped when outFile is set (concatenation) or when no outDir.
+            val commonSourceDir: String? = if (resolvedOutDir != null && options.outFile == null && tsFileNames.isNotEmpty()) {
+                val parentDirs = tsFileNames.map { it.substringBeforeLast('/', "") }
+                longestCommonPathPrefix(parentDirs)
+            } else null
+
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
                 // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
@@ -1121,12 +1133,22 @@ class TypeScriptCompiler {
                     .replace(".mts", ".mjs")
                     .replace(".cts", ".cjs")
                     .replace(".ts", ".js")
-                // When fullEmitPaths: keep full path; when outDir is also set, prepend it
+                // When fullEmitPaths: keep full path; when outDir is also set, prepend it.
+                // Use commonSourceDirectory (longest common ancestor of all tsFileNames) to
+                // preserve subdirectory structure under outDir. When all inputs share their
+                // parent directory, this reduces to basename + outDir (the original behavior);
+                // when they span subdirectories, each output keeps its relative-from-common-dir
+                // path (e.g. `library-a/index.js` under `/src/bin/`).
                 if (options.fullEmitPaths) {
                     if (resolvedOutDir != null) {
                         val outDir = resolvedOutDir.trimEnd('/')
-                        val base = jsName.substringAfterLast('/')
-                        jsName = "$outDir/$base"
+                        val relative = if (commonSourceDir != null && commonSourceDir.isNotEmpty()
+                            && jsName.startsWith("$commonSourceDir/")) {
+                            jsName.substring(commonSourceDir.length + 1)
+                        } else {
+                            jsName.substringAfterLast('/')
+                        }
+                        jsName = "$outDir/$relative"
                     }
                     // else: keep jsName as full path (just extension replaced)
                 } else {

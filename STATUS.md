@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,746 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,747 / 10,078 tests passing (~86.8%).
+
+**B29.1 (2026-05-17, +1 — flips `moduleResolutionWithSymlinks_withOutDir_ts` JS-emit)** —
+Output-path computation now preserves subdirectory structure under `outDir` + `fullEmitPaths`
+via a per-compilation `commonSourceDirectory` calculation. Previously, when `outDir` was set and
+`fullEmitPaths` was true, every emitted file's path was stripped to its basename and prepended
+with `outDir` (e.g. `/src/library-a/index.ts` → `/src/bin/index.js`), collapsing multiple
+inputs from different subdirectories into the same output path. Now `commonSourceDir` is
+computed as the longest common ancestor of all `tsFileNames`' parent dirs (using the existing
+`longestCommonPathPrefix` helper). For each output, if `jsName` starts with `$commonSourceDir/`,
+the relative-from-common-dir suffix is preserved under `outDir`; otherwise basename-only
+fallback applies. When all inputs share a single parent directory, the suffix reduces to the
+basename and behavior is unchanged. Skipped when `outFile` is set (concatenation) or when no
+`outDir`. Single-piece change (`TypeScriptCompiler.kt` ~1064 + ~1136).
 
 **B28.1 (2026-05-17, +2 — flips `nodeNextPackageSelfNameWithOutDirDeclDirNestedDirs_ts` + `nodeNextPackageSelfNameWithOutDirDeclDirCompositeNestedDirs_ts` JS-emit)** —
 Dependency-ordering fix for relative imports that use a `.js`/`.mjs`/`.cjs`/`.jsx`
