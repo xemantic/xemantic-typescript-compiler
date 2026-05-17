@@ -1428,13 +1428,49 @@ class Transformer(
                                             if (decl.initializer != null) {
                                                 val tempName = nextTempVarName()
                                                 sideEffectTempVars.add(tempName)
-                                                result.add(ExpressionStatement(
-                                                    expression = BinaryExpression(
+                                                // Walk nested ArrayBindingPatterns: for every nested
+                                                // pattern, emit a side-effect `_tn = parent[i]` access
+                                                // to preserve TypeScript's runtime-side-effects shape.
+                                                // Source `[,,[,[],,[]]] = u` →
+                                                //   `_a = u, _b = _a[2], _c = _b[1], _d = _b[3]`.
+                                                val assigns = mutableListOf<Expression>(
+                                                    BinaryExpression(
                                                         left = syntheticId(tempName),
                                                         operator = Equals,
                                                         right = decl.initializer,
                                                         pos = -1, end = -1,
-                                                    ),
+                                                    )
+                                                )
+                                                fun walkArrayPattern(pat: ArrayBindingPattern, parentTemp: String) {
+                                                    for ((i, elem) in pat.elements.withIndex()) {
+                                                        if (elem !is BindingElement) continue
+                                                        val nested = elem.name as? ArrayBindingPattern ?: continue
+                                                        val nestedTempName = nextTempVarName()
+                                                        sideEffectTempVars.add(nestedTempName)
+                                                        assigns.add(BinaryExpression(
+                                                            left = syntheticId(nestedTempName),
+                                                            operator = Equals,
+                                                            right = ElementAccessExpression(
+                                                                expression = syntheticId(parentTemp),
+                                                                argumentExpression = NumericLiteralNode(
+                                                                    text = i.toString(), pos = -1, end = -1,
+                                                                ),
+                                                                pos = -1, end = -1,
+                                                            ),
+                                                            pos = -1, end = -1,
+                                                        ))
+                                                        walkArrayPattern(nested, nestedTempName)
+                                                    }
+                                                }
+                                                (decl.name as? ArrayBindingPattern)?.let {
+                                                    walkArrayPattern(it, tempName)
+                                                }
+                                                val joined: Expression = if (assigns.size == 1) assigns[0]
+                                                else assigns.drop(1).fold(assigns[0]) { acc, e ->
+                                                    BinaryExpression(left = acc, operator = Comma, right = e, pos = -1, end = -1)
+                                                }
+                                                result.add(ExpressionStatement(
+                                                    expression = joined,
                                                     leadingComments = if (isFirst) stmt.leadingComments else null,
                                                     pos = -1, end = -1,
                                                 ))
@@ -2240,20 +2276,22 @@ class Transformer(
 
         // Insert side-effect temp var declarations (from empty destructuring: `export const {} = expr`)
         // BEFORE Object.defineProperty: `var _a;` at position 0.
+        // Combine all temp var names into a single VariableStatement with multiple declarators
+        // (`var _a, _b, _c, _d;`) to match TypeScript's emit for nested empty array patterns.
         if (sideEffectTempVars.isNotEmpty()) {
-            val tempVarDecls = sideEffectTempVars.map { tempName ->
-                VariableStatement(
-                    declarationList = VariableDeclarationList(
-                        declarations = listOf(VariableDeclaration(
+            val combinedDecl = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = sideEffectTempVars.map { tempName ->
+                        VariableDeclaration(
                             name = Identifier(text = tempName, pos = -1, end = -1),
                             type = null, initializer = null, pos = -1, end = -1,
-                        )),
-                        flags = VarKeyword, pos = -1, end = -1,
-                    ),
-                    modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
-                )
-            }
-            result.addAll(0, tempVarDecls)
+                        )
+                    },
+                    flags = VarKeyword, pos = -1, end = -1,
+                ),
+                modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+            )
+            result.add(0, combinedDecl)
         }
 
         // Move computed property temp vars (var _a;) from their position in the body to before
