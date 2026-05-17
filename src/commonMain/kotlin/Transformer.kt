@@ -198,6 +198,12 @@ class Transformer(
     // Causes the __makeTemplateObject helper to be prepended to the output statements.
     private var needsMakeTemplateObjectHelper = false
 
+    // Set to true when an `import X = require("mod")` is rewritten under
+    // module:node*/nodenext + ESM file (per package.json `type: module`). Causes the
+    // `import { createRequire as _createRequire } from "module"; const __require = _createRequire(import.meta.url);`
+    // header to be prepended to the output statements.
+    private var needsCreateRequireHelper = false
+
     // Tracks the order in which helpers are first needed during transformation.
     // Helpers are emitted in this order so the output matches TypeScript's first-usage ordering.
     // E.g., when a class has @decorator AND async methods, __decorate comes before __awaiter
@@ -283,6 +289,7 @@ class Transformer(
         needsParamHelper = false
         needsMetadataHelper = false
         needsMakeTemplateObjectHelper = false
+        needsCreateRequireHelper = false
         helperUsageOrder.clear()
         topLevelNumericConstants.clear()
         allEnumStringValues.clear()
@@ -670,7 +677,66 @@ class Transformer(
             } else finalStatements
         } else finalStatements
 
-        return sourceFile.copy(statements = noLibWrapped)
+        // Inject createRequire header for node*/nodenext ESM files that had an
+        // `import X = require("mod")` rewritten to `const X = __require("mod")`:
+        //   import { createRequire as _createRequire } from "module";
+        //   const __require = _createRequire(import.meta.url);
+        // Prepended before all other statements (matches TypeScript's emit order).
+        val withCreateRequire = if (needsCreateRequireHelper) {
+            val createRequireImport = ImportDeclaration(
+                importClause = ImportClause(
+                    name = null,
+                    namedBindings = NamedImports(
+                        elements = listOf(
+                            ImportSpecifier(
+                                name = Identifier(text = "_createRequire", pos = -1, end = -1),
+                                propertyName = Identifier(text = "createRequire", pos = -1, end = -1),
+                                isTypeOnly = false,
+                                pos = -1, end = -1,
+                            ),
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    isTypeOnly = false,
+                    pos = -1, end = -1,
+                ),
+                moduleSpecifier = StringLiteralNode(text = "module", singleQuote = false, rawText = null, pos = -1, end = -1),
+                assertClause = null,
+                pos = -1, end = -1,
+            )
+            val requireConst = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = listOf(
+                        VariableDeclaration(
+                            name = Identifier(text = "__require", pos = -1, end = -1),
+                            initializer = CallExpression(
+                                expression = syntheticId("_createRequire"),
+                                arguments = listOf(
+                                    PropertyAccessExpression(
+                                        expression = MetaProperty(
+                                            keywordToken = SyntaxKind.ImportKeyword,
+                                            name = Identifier(text = "meta", pos = -1, end = -1),
+                                            pos = -1, end = -1,
+                                        ),
+                                        name = Identifier(text = "url", pos = -1, end = -1),
+                                        pos = -1, end = -1,
+                                    )
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    ),
+                    flags = ConstKeyword,
+                    pos = -1, end = -1,
+                ),
+                modifiers = emptySet<ModifierFlag>(),
+                pos = -1, end = -1,
+            )
+            listOf(createRequireImport, requireConst) + noLibWrapped
+        } else noLibWrapped
+
+        return sourceFile.copy(statements = withCreateRequire)
     }
 
     /**
@@ -9017,6 +9083,43 @@ class Transformer(
             }
         }
 
+        // Under node*/nodenext + ESM file, `import x = require("mod")` desugars to
+        // `const x = __require("mod")` with a createRequire helper at the file top.
+        // This case must be checked BEFORE the type-only-module-erasure path because
+        // even if "mod" only exports types, the runtime `require()` is still valid Node
+        // semantics (an ambient module declared via `declare module "mod"` allows the
+        // require to succeed at runtime, with TypeScript shifting type-checking
+        // responsibility to the user).
+        if (isRequire && isESModuleFormat(options, currentFileName)
+            && options.effectiveModule.isNodeNext
+        ) {
+            val specExpr = (ref as ExternalModuleReference).expression
+            needsCreateRequireHelper = true
+            return listOf(
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(
+                            VariableDeclaration(
+                                name = decl.name,
+                                initializer = CallExpression(
+                                    expression = syntheticId("__require"),
+                                    arguments = listOf(normalizeModuleSpecifier(transformExpression(specExpr))),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
+                        ),
+                        flags = ConstKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    modifiers = stripTypeScriptModifiers(decl.modifiers),
+                    pos = decl.pos, end = decl.end,
+                    leadingComments = decl.leadingComments,
+                    trailingComments = decl.trailingComments,
+                )
+            )
+        }
+
         // Elide import=require() when the target module only exports types.
         // Applies to both exported and non-exported imports — if the target module is type-only,
         // neither `import x = require("mod")` nor `export import x = require("mod")` produce JS.
@@ -9029,12 +9132,10 @@ class Transformer(
             }
         }
 
-        // In ESM mode, `import x = require("mod")` handling depends on module kind:
-        // - preserve: keep if referenced, drop if unused
-        // - other ESM: drop entirely (not valid ESM syntax)
+        // In ESM mode (non-nodenext, non-preserve), `import x = require("mod")` is dropped
+        // entirely (not valid ESM syntax). Preserve mode keeps it if referenced.
         if (isRequire && isESModuleFormat(options, currentFileName)) {
             if (options.effectiveModule == ModuleKind.Preserve) {
-                // In preserve mode, only keep import=require() if it's referenced in value positions
                 if (checker?.isReferencedAliasDeclaration(decl) != true) {
                     return emptyList()
                 }
