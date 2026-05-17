@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,784 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,787 / 10,078 tests passing (~87.2%).
+
+**B44.8 (2026-05-17, +3 — flips `tslib{Missing,MultipleMissing,NotFoundDifferent}Helper_ts` JS-emit)** —
+Extend B44.5 source-echo reordering rule: when tsconfig.json is present, the
+order is (1) out-of-tree files, (2) in-tree node_modules files, (3) in-tree
+non-node_modules files (project sources). Each subset preserved in input
+order. Previously the rule was just out-of-tree-first. New piece: node_modules
+files come BEFORE project source files. Required for tests where third-party
+modules are echoed at the top of the JS-emit baseline. Other failing
+node_modules-related tests like `compositeWithNodeModulesSourceFile_ts` had
+input order matching the rule already, so they continue passing. Full-suite
+10078/1288/3 (was 10078/1291/3, +3 net). Zero regressions.
+
+
 
 **B44.7 (2026-05-17, +3 — flips `pathMappingBasedModuleResolution{6_node, 7_classic, 7_node}_ts` JS-emit)** —
 Implement `rootDirs` virtual file merging in `extractRelativeImports`. For

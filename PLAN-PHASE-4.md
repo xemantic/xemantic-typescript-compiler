@@ -118,6 +118,10 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.8, +3, 8784 → 8787 — flips `tslib{Missing,MultipleMissing,NotFoundDifferent}Helper_ts` JS-emit).** Extend the B44.5 source-echo reordering: when tsconfig.json is present, the canonical order is (1) out-of-tree files, (2) in-tree `node_modules/...` files, (3) in-tree non-node_modules files (project sources). Required for tests like `tslibMissingHelper_ts` where the test's @filename order is `package1/index.ts, package2/index.ts, node_modules/tslib/...` but TypeScript reorders to `node_modules/tslib/..., package1/index.ts, package2/index.ts`. Tests like `compositeWithNodeModulesSourceFile_ts` already had matching input order (node_modules @filename declared first), so they continue passing. The first attempt (node_modules LAST) regressed 14 tests; the corrected direction (node_modules BEFORE project source) flips 3 tests cleanly.
+
+---
+
 **Session 2026-05-17 (B44.7, +3, 8781 → 8784 — flips `pathMappingBasedModuleResolution{6_node, 7_classic, 7_node}_ts` JS-emit).** Implement rootDirs virtual file merging in `extractRelativeImports`. New `rootDirs: List<String>?` parameter threaded from `options.rootDirs`. Algorithm: identify the importing file's actual rootDir (longest-prefix match), then for relative specifiers that didn't resolve against the file's directory, try each ALTERNATE rootDir by swapping the file's prefix. Resolves `c:/root/src/file1.ts`'s `./project/file2` to `c:/root/generated/src/project/file2.ts` when `rootDirs: [".", "../generated/src"]`. Probes `.ts/.tsx/.mts/.cts` + `/index.*` variants. The 6_classic variant still fails on a different gap (AMD `define()` factory args + cross-rootDir re-export resolution).
 
 ---
