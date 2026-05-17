@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,780 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,781 / 10,078 tests passing (~87.1%).
+
+**B44.6 (2026-05-17, +1 — flips `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile_ts` JS-emit)** —
+Two-piece fix for AMD/System/UMD `@outFile` bundling with `@resolveJsonModule`:
+(a) `outFileName` in TypeScriptCompiler.kt now preserves the full path when
+`@fullEmitPaths` is set (e.g. `out/output.js` instead of stripping to `output.js`).
+(b) When `@module` is AMD/System/UMD AND `@resolveJsonModule` is set AND `@outFile`
+is set, JSON fixture files are now collected into `jsonOutputs` and prepended to
+the bundle as `define("X", [], JSON_CONTENT);` — module name is JSON basename
+without `.json` extension. Previously the JSON files were not re-emitted under
+`@outFile` (the JSON re-emit branch gated on `outDir != null`). The JSON define
+appears BEFORE the importing file's `define()` to match TypeScript's emit order.
+Full-suite 10078/1294/3 (was 10078/1295/3, +1 net). Zero regressions.
+
+
 
 **B44.5 (2026-05-17, +4 — flips `pathMappingBasedModuleResolution{4,5}_{classic,node}_ts` JS-emit)** —
 Source echoes are reordered when a tsconfig.json is present: files OUTSIDE the
