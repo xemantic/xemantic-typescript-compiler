@@ -2140,15 +2140,18 @@ class Emitter(
                         }
                     }
                     // Check if the next element starts on the same source line as this element ends.
-                    // Only apply this for compound elements (ObjectLiteralExpression or ArrayLiteralExpression)
-                    // to preserve `}, {` inline formatting when the source has it. Skip for simple elements
-                    // (OmittedExpression, literals) since TypeScript always puts those on separate lines.
+                    // Preserve adjacent inline formatting when the source has it, regardless of
+                    // element kind. Matches TypeScript's emit for arrays like
+                    // `[PropTypes.string, PropTypes.bool, PropTypes.shape({...})]` — first three
+                    // elements stay on the line opened by `[`; the trailing call's multi-line
+                    // object literal forces the closing `})];` onto its own line via the existing
+                    // `closeOnSameLine` logic.
                     val nextElement = if (!isLast) node.elements[index + 1] else null
-                    val isCompound = element is ObjectLiteralExpression || element is ArrayLiteralExpression
-                    val nextOnSameLine = isCompound && nextElement != null
+                    val nextOnSameLine = nextElement != null
                         && element.end >= 0 && nextElement.pos >= 0
                         && element.end < sourceText.length && nextElement.pos <= sourceText.length
                         && !sourceText.substring(element.end, nextElement.pos).contains('\n')
+                        && nextElement.leadingComments.isNullOrEmpty()
                     // When the last element (compound) ends on the same source line as `]`,
                     // keep `}]` or `}]]` inline. Use the stored closing bracket/brace position
                     // (not element.end, which points past the next token due to scanner lookahead).
@@ -2159,11 +2162,23 @@ class Emitter(
                         is ArrowFunction -> element.body.let { it as? Block }?.closeBracePos ?: -1
                         else -> -1
                     }
-                    val closeOnSameLine = isLast && (isCompound || element is FunctionExpression || element is ArrowFunction) && !node.hasTrailingComma
-                        && node.trailingComments.isNullOrEmpty()
+                    val isCompound = element is ObjectLiteralExpression || element is ArrayLiteralExpression
+                    val sameLineByCompound = (isCompound || element is FunctionExpression || element is ArrowFunction)
                         && elementClosingPos >= 0 && node.closeBracketPos >= 0
                         && elementClosingPos <= sourceText.length && node.closeBracketPos <= sourceText.length
                         && !sourceText.substring(elementClosingPos, node.closeBracketPos).contains('\n')
+                    // Generic source-level check: if the last non-whitespace char before `]` in
+                    // source is on the same line as `]` (no newline preceding it), keep `]` inline.
+                    // Captures cases like `PropTypes.shape({...})];` where the last element is a
+                    // CallExpression whose `)` sits next to `]` after a multi-line inner object.
+                    val sameLineBySource = node.closeBracketPos in 1..sourceText.length && run {
+                        var i = node.closeBracketPos - 1
+                        while (i >= 0 && sourceText[i] != '\n' && sourceText[i].isWhitespace()) i--
+                        i >= 0 && sourceText[i] != '\n'
+                    }
+                    val closeOnSameLine = isLast && !node.hasTrailingComma
+                        && node.trailingComments.isNullOrEmpty()
+                        && (sameLineByCompound || sameLineBySource)
                     if (!isLast && nextOnSameLine) {
                         write(" ")
                         prevWasSameLine = true
