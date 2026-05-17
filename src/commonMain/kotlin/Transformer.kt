@@ -1727,7 +1727,7 @@ class Transformer(
                                     pos = -1, end = -1,
                                 )
                             } else stmt.expression
-                            result.add(makeExportAssignment("default", rewrittenExpr, leadingComments = stmt.leadingComments, pos = stmt.pos))
+                            result.add(makeExportAssignment("default", rewrittenExpr, leadingComments = stmt.leadingComments, pos = stmt.pos, trailingComments = stmt.trailingComments))
                         }
                     }
                 }
@@ -6105,7 +6105,7 @@ class Transformer(
         }
     }
 
-    private fun makeExportAssignment(name: String, value: Expression? = null, leadingComments: List<Comment>? = null, pos: Int = -1): Statement {
+    private fun makeExportAssignment(name: String, value: Expression? = null, leadingComments: List<Comment>? = null, pos: Int = -1, trailingComments: List<Comment>? = null): Statement {
         return ExpressionStatement(
             expression = BinaryExpression(
                 left = PropertyAccessExpression(
@@ -6119,6 +6119,7 @@ class Transformer(
             ),
             pos = pos, end = -1,
             leadingComments = leadingComments,
+            trailingComments = trailingComments,
         )
     }
 

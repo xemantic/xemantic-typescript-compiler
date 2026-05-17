@@ -1,9 +1,29 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,763 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,764 / 10,078 tests passing (~86.9%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.1 (2026-05-17, +1 — flips `isolatedModulesExportDeclarationType_ts` JS-emit)** —
+For multi-file `@isolatedModules` with `import { T } from "./type"` where T resolves to
+a type-only export, `isValueExport` was returning true (treating T as runtime) because
+the symbol's `flags` had been polluted by `mergeSymbolTable` — same-name symbols from
+importing files merge their flags into the target file's locals (CLAUDE.md gotcha:
+"ALL file locals merged into globals at Checker init"). The polluted T had
+BlockScopedVariable|Alias|TypeAlias|ExportValue flags from cross-file merging.
+
+`isValueExport` now scans the target file's source statements DIRECTLY to classify
+declarations of `name` as value or type, avoiding the polluted symbol flags. For names
+not found as direct declarations (ambient/aliased cases), falls back to the
+flag-based logic. Companion change: `ExportAssignment` for `export default expr` now
+captures and propagates `trailingComments` through `makeExportAssignment` so the
+`// Ok` comment on `export default T;` survives erasure-vs-emission. Restricted the
+parser change to `export default` only (NOT `export =`): under ES-module emission,
+`export = X` is silently dropped by `Emitter.emitExportAssignment`, and
+`emitTrailingCommentsBeforeNewline` would otherwise back up past the prior statement's
+newline and attach the comment there (`es6ExportAssignment2_ts` regression). Full-suite
+10078/1311/3 (was 10078/1312/3, +1 net). Zero regressions.
 
 **B41.2 (2026-05-17, +1 — flips `numericLiteralsWithTrailingDecimalPoints01_ts` JS-emit)** —
 Multi-line property access (`expr\n  /* comment */ .name`) now preserves the leading
