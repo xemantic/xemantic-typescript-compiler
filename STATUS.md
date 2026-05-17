@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,724 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,725 / 10,078 tests passing (~86.6%).
+
+**B19.2 (2026-05-17, +1 — flips `dontShowCompilerGeneratedMembers_ts` errors-baseline)** —
+Parser recovery for malformed `<NonIdent` call-signature shape inside a type literal /
+interface body. `parseTypeMember`'s `LessThan` branch previously fell through to
+`parseTypeParametersOpt()` (speculative, restores state on failure) and then
+`parseParameterList()`, producing a misleading TS1005 `'(' expected.` at the `<` and
+leaking the malformed tokens into the outer statement parser. Added a pre-check at the
+top of the `LessThan` branch: `scanner.lookAhead { scanner.scan(); ... }` peeks the token
+after `<`; if it is NOT a valid identifier / modifier (`const`/`in`/`out`) / `>` start,
+treat it as a malformed type-parameter list. Consume `<`, emit TS1139 "Type parameter
+declaration expected." at the offending token (length 1), then consume tokens until the
+member terminator (`}` / `;` / `,` / EOF) to prevent leakage. When the terminator is `}`,
+also emit TS1109 "Expression expected." at its position, matching TypeScript's behavior
+of treating the failed call-signature as having stranded the close-brace at an
+expression-expected position. Return null from `parseTypeMember` so the outer loop
+proceeds cleanly. The JS-emit sub-test still fails on a separate issue (`-;` and `;` leak
+from upstream parser state — out of scope; the errors-baseline sub-test, which counts as
+one passing test, now flips).
 
 **B19.1 (2026-05-17, +2 — flips `parseJsxElementInUnaryExpressionNoCrash3_ts` errors-baseline + JS-emit)** —
 Three-piece parser recovery for malformed `<{:>` JSX shape. (1) `Parser.parseJsxElementOrFragmentBody`:
