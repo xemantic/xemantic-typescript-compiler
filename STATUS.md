@@ -1,9 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,768 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,769 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.6 (2026-05-17, +1 — flips `destructionAssignmentError_ts` errors-baseline)** —
+TS2809 "Declaration or statement expected. This '=' follows a block of statements, so if
+you intended to write a destructuring assignment, you might need to wrap the whole
+assignment in parentheses." now fires for `{a, b} = fn();` at the statement level (the
+`=` after a closing `}` is a destructuring-without-parens shape). Previously emitted
+generic TS1109 "Expression expected." Detection in `parsePrimaryExpression`'s else
+branch: when current token is `Equals`, scan source text backward from
+`scanner.getTokenPos()` skipping whitespace; if the immediately-preceding non-trivia
+character is `}`, emit TS2809 instead. Full-suite 10078/1306/3 (was 10078/1307/3, +1
+net). Zero regressions.
 
 **B42.5 (2026-05-17, +1 — flips `errorOnInitializerInObjectTypeLiteralProperty_ts` errors-baseline)** —
 Parser's `parseTypeMember` (shared by interface bodies AND type literals) now emits TS1247

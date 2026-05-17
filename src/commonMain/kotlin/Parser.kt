@@ -4650,6 +4650,22 @@ class Parser(
                     // (not at the start of the virtual next line)
                     if (token == SyntaxKind.EndOfFile) {
                         reportError("Expression expected.", code = 1109, overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+                    } else if (token == SyntaxKind.Equals) {
+                        // TS2809 destructuring-assignment hint: when `=` appears in statement-expression
+                        // context, it often means the user wrote `{a, b} = fn()` without parens around
+                        // the destructuring pattern. Check whether the immediately-preceding non-trivia
+                        // character is `}` to detect this shape.
+                        val text = scanner.getSourceText()
+                        var i = scanner.getTokenPos() - 1
+                        while (i >= 0 && text[i] in " \t\r\n") i--
+                        if (i >= 0 && text[i] == '}') {
+                            reportError(
+                                "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses.",
+                                code = 2809,
+                            )
+                        } else {
+                            reportError("Expression expected.", code = 1109)
+                        }
                     } else {
                         reportError("Expression expected.", code = 1109)
                     }
