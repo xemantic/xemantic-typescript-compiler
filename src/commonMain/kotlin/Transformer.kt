@@ -3289,6 +3289,24 @@ class Transformer(
         // Tracked separately and inserted into the body after the identifier rewrite step.
         val protectedExportAssignments = mutableListOf<Pair<String, Statement>>() // (name → statement)
 
+        // Re-export getters for `export { X }` where X is a named/default import — emitted as
+        // `Object.defineProperty(exports, "X", { enumerable: true, get: function () { return mod_1.X; } })`.
+        // These must NOT be rewritten by the renameMap substitution (their bodies are constructed
+        // post-rename and already use the correct `mod_1.X` form). Inserted between the void0
+        // hoist and the main body, matching TypeScript's emit position for re-exported imports.
+        val reExportGetters = mutableListOf<Statement>()
+
+        // Local names introduced by named/default imports — used to detect re-exports of
+        // imported bindings (CJS path uses the equivalent `namedImportLocalNames` set).
+        val amdImportLocalNames = mutableSetOf<String>()
+
+        // Deferred `exports.X = X` for `export { X }` of LOCAL declarations (not imports).
+        // TypeScript places these right after the variable's declaration statement, not at
+        // the end of the body. Keyed by local name → assignment statement to insert.
+        // Insertion happens during a post-pass over bodyStatements; entries not matched to
+        // a declaration fall through to bodyStatements append.
+        val pendingLocalExportAssignments = mutableMapOf<String, Statement>()
+
         // Track /// <reference path> directives on imports, keyed by paramName.
         // Used after import elision to preserve directives from elided imports.
         val importParamReferenceComments = mutableMapOf<String, List<Comment>>()
@@ -3345,6 +3363,7 @@ class Transformer(
                                     name = syntheticId("default"),
                                     pos = -1, end = -1,
                                 )
+                                amdImportLocalNames.add(localName)
                             }
                             bindings is NamespaceImport -> {
                                 // import * as ns from "mod" → dep "mod", param ns
@@ -3395,6 +3414,7 @@ class Transformer(
                                         name = syntheticId(importedName),
                                         pos = -1, end = -1,
                                     )
+                                    amdImportLocalNames.add(localAlias)
                                 }
                             }
                             clause.name != null && bindings != null -> {
@@ -3428,6 +3448,7 @@ class Transformer(
                                     name = syntheticId("default"),
                                     pos = -1, end = -1,
                                 )
+                                amdImportLocalNames.add(localName)
                             }
                         }
                     }
@@ -3632,8 +3653,36 @@ class Transformer(
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val localName = (spec.propertyName ?: spec.name).text
-                            if (localName in functionAndClassNames) {
+                            if (localName in amdImportLocalNames) {
+                                // Re-export of a named/default import: use Object.defineProperty getter
+                                // (matches TypeScript's emit for `export { X }` where X is imported).
+                                val renamedExpr = renameMap[localName]
+                                val sourceName = (renamedExpr as? PropertyAccessExpression)
+                                    ?.expression?.let { it as? Identifier }?.text
+                                val importedProp = (renamedExpr as? PropertyAccessExpression)?.name?.text
+                                if (sourceName != null && importedProp != null) {
+                                    if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                    val useImportDefault = importedProp == "default" && options.esModuleInterop
+                                    reExportGetters.add(
+                                        makeReExportGetter(exportName, sourceName, importedProp, useImportDefault = useImportDefault)
+                                    )
+                                    continue
+                                }
+                                // Fallback: plain assignment (renameMap missing or wrong shape).
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                bodyStatements.add(makeExportAssignment(exportName, syntheticId(localName)))
+                            } else if (localName in functionAndClassNames) {
                                 functionExportStubs.add(makeExportAssignment(exportName, syntheticId(localName)))
+                            } else if (exportName == localName && localName in runtimeDeclaredNames) {
+                                // `export { c }` where `c` is a local variable: defer the
+                                // assignment so it appears RIGHT AFTER the declaration of `c`
+                                // (matches TypeScript's emit), not at the end of the body.
+                                // Skip the rename path — `pendingLocalExportAssignments` is
+                                // applied after the rewrite step so the assignment isn't
+                                // double-rewritten.
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                                pendingLocalExportAssignments[localName] =
+                                    makeExportAssignment(exportName, syntheticId(localName))
                             } else {
                                 if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
                                 bodyStatements.add(makeExportAssignment(exportName, syntheticId(localName)))
@@ -3709,7 +3758,7 @@ class Transformer(
         }
 
         // Elide unused internal alias statements (`import X = N` → `var X = N` where X not referenced)
-        val finalRenamedBody = if (internalAliasNamesAMD.isNotEmpty()) {
+        val elidedBody = if (internalAliasNamesAMD.isNotEmpty()) {
             renamedBody.filter { stmt ->
                 if (stmt is VariableStatement && stmt.declarationList.declarations.size == 1) {
                     val name = extractIdentifierName(stmt.declarationList.declarations[0].name)
@@ -3718,6 +3767,53 @@ class Transformer(
                 true
             }
         } else renamedBody
+
+        // Insert deferred `exports.X = X` for `export { X }` of LOCAL variables IMMEDIATELY
+        // AFTER the declaration of X (matches TypeScript's emit, which interleaves the
+        // re-export assignment with the declaration rather than appending at end-of-body).
+        // Any unmatched pending entries (declaration not found, e.g. ambient/declare) fall
+        // through to bodyStatements append at the original ExportDeclaration position.
+        val finalRenamedBody = if (pendingLocalExportAssignments.isNotEmpty()) {
+            val result = mutableListOf<Statement>()
+            val emittedNames = mutableSetOf<String>()
+            for (stmt in elidedBody) {
+                result.add(stmt)
+                // Match the declared name(s) on this statement and emit pending assignment after.
+                when (stmt) {
+                    is VariableStatement -> {
+                        for (decl in stmt.declarationList.declarations) {
+                            for (n in collectBoundNames(decl.name)) {
+                                val pending = pendingLocalExportAssignments[n]
+                                if (pending != null && n !in emittedNames) {
+                                    result.add(pending)
+                                    emittedNames.add(n)
+                                }
+                            }
+                        }
+                    }
+                    is FunctionDeclaration -> stmt.name?.text?.let { n ->
+                        val pending = pendingLocalExportAssignments[n]
+                        if (pending != null && n !in emittedNames) {
+                            result.add(pending)
+                            emittedNames.add(n)
+                        }
+                    }
+                    is ClassDeclaration -> stmt.name?.text?.let { n ->
+                        val pending = pendingLocalExportAssignments[n]
+                        if (pending != null && n !in emittedNames) {
+                            result.add(pending)
+                            emittedNames.add(n)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            // Fallback: any pending entries with no matched declaration get appended at end.
+            for ((n, stmt) in pendingLocalExportAssignments) {
+                if (n !in emittedNames) result.add(stmt)
+            }
+            result
+        } else elidedBody
 
         // Elide importReassignments for unused imports
         val unusedParamNames = namedModuleImports
@@ -3795,6 +3891,11 @@ class Transformer(
         for ((_, exportAssignStmt) in protectedExportAssignments) {
             fullBody.add(exportAssignStmt)
         }
+
+        // Re-export getters for `export { X }` where X is a named/default import.
+        // Inserted BEFORE the main body so the getter appears next to the void0 hoist,
+        // matching TypeScript's emit position.
+        fullBody.addAll(reExportGetters)
 
         // Main body
         fullBody.addAll(finalRenamedBody)
