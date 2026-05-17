@@ -118,6 +118,10 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.7, +3, 8781 → 8784 — flips `pathMappingBasedModuleResolution{6_node, 7_classic, 7_node}_ts` JS-emit).** Implement rootDirs virtual file merging in `extractRelativeImports`. New `rootDirs: List<String>?` parameter threaded from `options.rootDirs`. Algorithm: identify the importing file's actual rootDir (longest-prefix match), then for relative specifiers that didn't resolve against the file's directory, try each ALTERNATE rootDir by swapping the file's prefix. Resolves `c:/root/src/file1.ts`'s `./project/file2` to `c:/root/generated/src/project/file2.ts` when `rootDirs: [".", "../generated/src"]`. Probes `.ts/.tsx/.mts/.cts` + `/index.*` variants. The 6_classic variant still fails on a different gap (AMD `define()` factory args + cross-rootDir re-export resolution).
+
+---
+
 **Session 2026-05-17 (B44.6, +1, 8780 → 8781 — flips `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile_ts` JS-emit).** Two-piece fix in `TypeScriptCompiler.kt`:
   - (a) `outFileName` preserves full path under `@fullEmitPaths` (`out/output.js` not `output.js`).
   - (b) When `@module` is AMD/System/UMD AND `@resolveJsonModule` AND `@outFile`, JSON fixture files are collected into `jsonOutputs` and prepended to the bundle as `define("X", [], JSON_CONTENT);`. Previously the JSON re-emit gated on `outDir != null`, so AMD-outFile bundles missed JSON content entirely. JSON define appears before the importer's `define()` to match TypeScript order.

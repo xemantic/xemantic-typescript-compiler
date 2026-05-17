@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,781 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,784 / 10,078 tests passing (~87.1%).
+
+**B44.7 (2026-05-17, +3 — flips `pathMappingBasedModuleResolution{6_node, 7_classic, 7_node}_ts` JS-emit)** —
+Implement `rootDirs` virtual file merging in `extractRelativeImports`. For
+relative specifiers that didn't resolve against the importing file's actual
+directory, try resolving via each alternate `rootDir` base. New `rootDirs`
+parameter threaded through from `options.rootDirs`. Algorithm: identify which
+rootDir contains the importing file (longest-prefix match), then for each
+OTHER rootDir, replace the file's prefix with the alt rootDir and re-resolve
+the relative specifier. Probes `.ts`, `.tsx`, `.mts`, `.cts`, and `/index.*`
+variants. Example: `c:/root/src/file1.ts` imports `./project/file2`; with
+`rootDirs: [".", "../generated/src"]` (tsconfig at `c:/root/src/`), the
+alternate base is `c:/root/generated/src/`, so the import resolves to
+`c:/root/generated/src/project/file2.ts`. Full-suite 10078/1291/3 (was
+10078/1294/3, +3 net). Zero regressions.
+
+
 
 **B44.6 (2026-05-17, +1 — flips `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile_ts` JS-emit)** —
 Two-piece fix for AMD/System/UMD `@outFile` bundling with `@resolveJsonModule`:

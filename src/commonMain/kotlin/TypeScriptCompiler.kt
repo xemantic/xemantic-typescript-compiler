@@ -1114,6 +1114,7 @@ class TypeScriptCompiler {
                     paths = options.paths,
                     baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
+                    rootDirs = options.rootDirs,
                 )
 
                 tsFileNames.add(file.fileName)
@@ -1424,6 +1425,7 @@ private fun extractRelativeImports(
     paths: Map<String, List<String>> = emptyMap(),
     baseUrl: String? = null,
     tsconfigDir: String? = null,
+    rootDirs: List<String>? = null,
 ): List<String> {
     val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
@@ -1543,6 +1545,46 @@ private fun extractRelativeImports(
                 deps.add(dotSlashCandidate)
                 found = true
                 break
+            }
+        }
+        // rootDirs virtual file merging: for RELATIVE specifiers that didn't resolve to
+        // an existing file, try resolving against each rootDir's alternate base. The
+        // importing file may live in one rootDir but the target may live in another
+        // (e.g. `c:/root/src/file1.ts` imports `./project/file2` which actually exists
+        // at `c:/root/generated/src/project/file2.ts` via `rootDirs: [".", "../generated/src"]`).
+        if (!found && (specifier.startsWith("./") || specifier.startsWith("../")) &&
+            !rootDirs.isNullOrEmpty()) {
+            val tcDir = tsconfigDir ?: ""
+            val absoluteRootDirs = rootDirs.map { rd ->
+                when {
+                    rd.startsWith("/") -> rd.trimEnd('/')
+                    rd == "." -> tcDir.trimEnd('/')
+                    rd.startsWith("./") -> {
+                        if (tcDir.isEmpty()) rd.substring(2).trimEnd('/')
+                        else "${tcDir.trimEnd('/')}/${rd.substring(2)}".trimEnd('/')
+                    }
+                    else -> {
+                        if (tcDir.isEmpty()) rd.trimEnd('/')
+                        else resolveRelativePath(tcDir, rd).trimEnd('/')
+                    }
+                }
+            }
+            val matchingRootDir = absoluteRootDirs.firstOrNull { rd ->
+                dir.startsWith("$rd/") || dir == rd
+            }
+            if (matchingRootDir != null) {
+                val relativeFileDir = dir.removePrefix(matchingRootDir).removePrefix("/")
+                for (altRoot in absoluteRootDirs) {
+                    if (altRoot == matchingRootDir) continue
+                    val altDir = if (relativeFileDir.isEmpty()) altRoot else "$altRoot/$relativeFileDir"
+                    val resolved2 = resolveRelativePath(altDir, specifier)
+                    val probes = listOf(
+                        "$resolved2.ts", "$resolved2.tsx", "$resolved2.mts", "$resolved2.cts",
+                        "$resolved2/index.ts", "$resolved2/index.tsx", "$resolved2/index.d.ts",
+                    )
+                    val match = probes.firstOrNull { it in allTsFileNames }
+                    if (match != null) { deps.add(match); found = true; break }
+                }
             }
         }
         // For bare specifiers that didn't resolve via the standard candidates list, try
