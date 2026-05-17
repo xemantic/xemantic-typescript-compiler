@@ -1,9 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,765 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,766 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.3 (2026-05-17, +1 — flips `isolatedModulesExportImportUninstantiatedNamespace_ts` errors-baseline)** —
+New TS1269 emission: "Cannot use 'export import' on a type or type-only namespace
+when 'isolatedModules' is enabled" fires for `export import X = Y` where Y resolves
+to a type-only export from another file. Gate: `options.isolatedModules &&
+!options.verbatimModuleSyntax`, ImportEqualsDeclaration with Export modifier,
+non-ExternalModuleReference (skip `export import X = require(...)` cases), and the
+root identifier resolves to a type-only import alias. Detection extends
+`isExportedNameTypeOnly` to also recognize `export namespace` with
+`ModuleInstanceState.NonInstantiated` — the existing helper missed namespaces.
+Squiggle span: walks backward from `stmt.pos` (which is `import` keyword position)
+to find the preceding `export` keyword, and ends at the trailing `;` (handles the
+`node.end` overshoot gotcha). Full-suite 10078/1309/3 (was 10078/1310/3, +1 net).
+Zero regressions.
 
 **B42.2 (2026-05-17, +1 — flips `isolatedModulesAmbientConstEnum_ts` errors-baseline)** —
 TS2748 "Cannot access ambient const enums when 'isolatedModules' is enabled" now fires
