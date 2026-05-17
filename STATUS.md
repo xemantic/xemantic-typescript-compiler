@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,728 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,730 / 10,078 tests passing (~86.6%).
+
+**B22.1 (2026-05-17, +2 — flips `es6ImportParseErrors_ts` errors-baseline + JS-emit)** —
+Parser recovery for `import` followed by a non-identifier literal (e.g. `import 10;`). In the
+`parseStatement` `ImportKeyword` branch, peek ahead one token; if it's a `NumericLiteral`,
+`BigIntLiteral`, or `RegularExpressionLiteral`, emit TS1128 "Declaration or statement expected."
+at the `import` keyword (length 6), consume only the keyword, return null. The outer
+`parseStatements` loop then re-enters and parses the remainder (e.g. `10;`) as an
+`ExpressionStatement`. Previously the parser fell into `parseImportDeclaration` →
+`parseImportClause` → `parseNamedImports` which emitted TS1005 `'{' expected.`, TS1005
+`'}' expected.`, and a downstream TS2307 "Cannot find module ';'" cascade — and the resulting
+malformed ImportDeclaration made the file appear to be a module (output `export {};` instead
+of the expected `"use strict"; 10;`).
 
 **B21.1 (2026-05-17, +1 — flips `decoratorMetadataNoLibIsolatedModulesTypes_ts` JS-emit)** —
 Decorator metadata safety wrapper for runtime-questionable lib globals under `@noLib && @isolatedModules`.
