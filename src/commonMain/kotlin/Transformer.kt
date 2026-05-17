@@ -1128,20 +1128,24 @@ class Transformer(
                         // Check if the target resolves to a type-only name (interface, type alias,
                         // uninstantiated namespace). If so, the alias itself is type-only.
                         // Exception: `declare import` keeps the ambient binding even for type-only targets.
-                        // For exported aliases, require the root namespace to be exported (TypeScript only
-                        // erases `export import b = a.I` when `a` is itself exported from the module).
+                        // B38.1 (2026-05-17): for QualifiedName targets, require root namespace to be
+                        // EITHER exported OR runtime-instantiated. The prior `requireRootExported = isExported`
+                        // gate erroneously kept aliases like `export import im_public_i_private = m_private.i_private`
+                        // in `privacyTopLevelInternalReferenceImportWithExport_ts` where `m_private` is NOT
+                        // exported but IS runtime-instantiated (has class/enum/var members) and `i_private`
+                        // is type-only — TypeScript erases this alias.
                         val ref = stmt.moduleReference
-                        val requireRootExported = isExported
+                        val requireRuntimeOrExported = isExported
                         val isTypeOnlyTarget = when {
                             ref is Identifier && ref.text in topLevelTypeOnlyNames -> {
-                                if (!requireRootExported) true
+                                if (!requireRuntimeOrExported) true
                                 else {
                                     val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
                                         .firstOrNull { extractIdentifierName(it.name) == ref.text }
                                     rootNs == null || ModifierFlag.Export in rootNs.modifiers
                                 }
                             }
-                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRootExported)
+                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRuntimeOrExported)
                             else -> false
                         }
                         if (isTypeOnlyTarget) {
@@ -3202,20 +3206,20 @@ class Transformer(
                         // Check if the target resolves to a type-only name (interface, type alias,
                         // uninstantiated namespace). If so, the alias itself is type-only.
                         // Exception: `declare import` keeps the ambient binding even for type-only targets.
-                        // For exported aliases, require the root namespace to be exported (TypeScript only
-                        // erases `export import b = a.I` when `a` is itself exported from the module).
+                        // B38.1 (2026-05-17): see CJS pre-scan comment — root must be exported OR
+                        // runtime-instantiated for the qualified-path erase to fire.
                         val ref = stmt.moduleReference
-                        val requireRootExported = isExported
+                        val requireRuntimeOrExported = isExported
                         val isTypeOnlyTarget = when {
                             ref is Identifier && ref.text in topLevelTypeOnlyNames -> {
-                                if (!requireRootExported) true
+                                if (!requireRuntimeOrExported) true
                                 else {
                                     val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
                                         .firstOrNull { extractIdentifierName(it.name) == ref.text }
                                     rootNs == null || ModifierFlag.Export in rootNs.modifiers
                                 }
                             }
-                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRootExported)
+                            ref is QualifiedName -> isQualifiedPathTypeOnly(ref, requireRuntimeOrExported)
                             else -> false
                         }
                         if (isTypeOnlyTarget) {
@@ -8908,9 +8912,12 @@ class Transformer(
         // `export import b = a.I` same — the export produces no JS binding.
         // Exception: `declare export import a = x.c` — `declare` modifier means TypeScript
         // preserves the ambient binding even if the target is type-only.
-        // For exported aliases, TypeScript only erases when the root namespace is itself exported.
-        // `export import b = a.I` where `a` is an exported namespace → erase.
-        // `export import a = x.c` where `x` is NOT exported → keep (TypeScript keeps it with error).
+        // B38.1 (2026-05-17): for exported aliases with a QualifiedName target, the root
+        // namespace must be EITHER exported OR runtime-instantiated. A non-exported,
+        // type-only-namespace root (`namespace x { interface c {} }`) keeps the alias with
+        // a runtime-broken emit (TS2708/TS2694 fire but `exports.a = x.c` is still produced).
+        // The privacy test exercises the runtime-root case: `m_private` is non-exported but
+        // runtime-instantiated, and `m_private.i_private` (interface) erases as expected.
         if (!isDeclare) {
             if (!isExported) {
                 // Non-exported: erase if the ref is a type-only name (Identifier or qualified path).
@@ -8925,19 +8932,16 @@ class Transformer(
                 }
                 if (ref is QualifiedName && isQualifiedPathTypeOnly(ref)) return emptyList()
             } else {
-                // Exported: only erase if the root namespace is itself exported.
-                // TypeScript uses this stricter rule for exported aliases to avoid erasing bindings
-                // that refer to non-exported local namespaces (which could be needed at runtime).
+                // Exported: erase if the root namespace is exported OR runtime-instantiated.
+                // Identifier (single-segment) target: same gate as before (exported root only).
                 if (ref is Identifier && ref.text in topLevelTypeOnlyNames) {
-                    // Check if the root (Identifier) refers to an exported type-only namespace
                     val rootNs = topLevelStatements.filterIsInstance<ModuleDeclaration>()
                         .firstOrNull { extractIdentifierName(it.name) == ref.text }
                     if (rootNs == null || ModifierFlag.Export in rootNs.modifiers) {
-                        // No namespace found (it's a type alias/interface) or it's exported: erase
                         return emptyList()
                     }
                 }
-                if (ref is QualifiedName && isQualifiedPathTypeOnly(ref, requireRootExported = true)) {
+                if (ref is QualifiedName && isQualifiedPathTypeOnly(ref, requireRuntimeOrExportedRoot = true)) {
                     return emptyList()
                 }
             }
@@ -12823,11 +12827,15 @@ class Transformer(
      * Checks whether a qualified namespace path (e.g. `Outer.uninstantiated`) refers to a
      * type-only namespace by traversing the top-level source file namespace hierarchy.
      *
-     * When [requireRootExported] is true, also requires the root namespace to be exported.
-     * This is needed for `export import` alias elision: TypeScript only erases exported import
-     * aliases when the root namespace is itself exported (not just local/non-exported namespaces).
+     * When [requireRuntimeOrExportedRoot] is true, also requires the root namespace to be
+     * EITHER exported OR runtime-instantiated (has at least one value-producing member).
+     * Without this, an alias like `export import a = x.c` where `x` is a non-exported
+     * type-only namespace would be erroneously erased — TypeScript instead emits a broken
+     * `exports.a = x.c` (with TS2708 / TS2694) since `x` itself is not a runtime value.
+     * Only when the root has a runtime form (or is exported, signaling intentional
+     * external value visibility) does TypeScript trust the path enough to elide the alias.
      */
-    private fun isQualifiedPathTypeOnly(ref: QualifiedName, requireRootExported: Boolean = false): Boolean {
+    private fun isQualifiedPathTypeOnly(ref: QualifiedName, requireRuntimeOrExportedRoot: Boolean = false): Boolean {
         // Flatten the qualified name into a list of identifier strings, e.g. [Outer, uninstantiated]
         val parts = mutableListOf<String>()
         var node: Node = ref
@@ -12845,8 +12853,15 @@ class Transformer(
             val ns = stmts.filterIsInstance<ModuleDeclaration>()
                 .firstOrNull { extractIdentifierName(it.name) == part }
             if (ns != null) {
-                // If this is the root (i==0) and we require it to be exported, check
-                if (i == 0 && requireRootExported && ModifierFlag.Export !in ns.modifiers) return false
+                // If this is the root (i==0) and we require root to be exported or runtime,
+                // check both conditions. A non-exported, type-only-namespace root signals
+                // that TypeScript will emit a runtime-broken alias (preserving syntactic shape)
+                // rather than eliding.
+                if (i == 0 && requireRuntimeOrExportedRoot) {
+                    val isExported = ModifierFlag.Export in ns.modifiers
+                    val isRuntime = !isTypeOnlyNamespace(ns)
+                    if (!isExported && !isRuntime) return false
+                }
                 if (i == parts.size - 1) return isTypeOnlyNamespace(ns)
                 val body = ns.body ?: return true
                 stmts = when (body) {

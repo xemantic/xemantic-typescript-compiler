@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,757 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,758 / 10,078 tests passing (~86.9%).
+
+**B38.1 (2026-05-17, +1 — flips `privacyTopLevelInternalReferenceImportWithExport_ts` JS-emit)** —
+Exported `import alias = X.Y` is now erased when `X` is a non-exported but
+runtime-instantiated namespace AND `Y` is a type-only sub-member (interface,
+type alias, or type-only sub-namespace). Previously, the `requireRootExported`
+gate on `isQualifiedPathTypeOnly` was too narrow — it kept aliases that TypeScript
+erases. The new gate `requireRuntimeOrExportedRoot` allows the root to be EITHER
+exported OR runtime-instantiated. Example: `namespace m_private { export class
+c_private {}; export interface i_private {}; export namespace mu_private { export
+interface i {} } }` + `export import im_public_i_private = m_private.i_private;`
++ `export import im_public_mu_private = m_private.mu_private;` — both now erased
+because `m_private` has runtime members (class/enum/var) and `i_private` /
+`mu_private` are type-only. Non-runtime-non-exported roots (e.g. `namespace x {
+interface c {} }` + `export import a = x.c`) still keep the alias with a
+runtime-broken `exports.a = x.c` emit, matching TypeScript's behavior of emitting
+syntactic value references even when they'd fail at runtime. Three call sites
+updated (CJS pre-scan, AMD pre-scan, `transformImportEqualsDeclaration`); helper
+renamed and gate condition extended. Verified zero regressions across 10078-test
+suite — only the target test flips.
 
 **B37.1 (2026-05-17, +1 — flips `moduleResolutionWithExtensions_withPaths_ts` JS-emit)** —
 Pure `.js`/`.cjs`/`.mjs` files with a companion `.d.ts` (same path minus `.js` + `.d.ts`)
