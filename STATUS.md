@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,806 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,807 / 10,078 tests passing (~87.4%).
+
+**B46.4 (2026-05-17, +1 — flips `commentOnArrayElement12_ts` JS-emit)** —
+Refinement of B46.3's array-literal source-line layout: only **consecutive pairs of
+`OmittedExpression`** force a line break in a multi-line array literal. Mixed pairs
+(OmittedExpression followed by a non-Omitted element or vice versa) preserve the source-line
+adjacency rule. Matches TypeScript's emit:
+- `[, [...]]` → keep `, [...]` adjacent (mixed pair — array binding pattern shapes like
+  `[, [primarySkillA = "primary", ...] = ["none", "none"]] = multiRobotA`).
+- `[,, /* comment */]` → split into two lines `,\n    , /* comment */` (consecutive
+  Omitted pair — `commentOnArrayElement12_ts`).
+Implementation: replaced `element !is OmittedExpression && nextElement !is OmittedExpression`
+gate with `!(element is OmittedExpression && nextElement is OmittedExpression)`. Without
+this refinement, B46.3's broader generalization regressed `sourceMapValidationDestructuring
+For{ArrayBinding,OfArrayBinding}PatternDefaultValues2_ts__target_es2015` (which depend on
+mixed-pair adjacency to keep `[, [...]]` shapes inline). Full-suite 10078/1268/3 (was
+10078/1269/3, +1 net). Zero regressions.
+
+
 
 **B46.3 (2026-05-17, +2 — flips `propTypeValidatorInference_ts` JS-emit + 1 more)** —
 `emitArrayLiteral` in `Emitter.kt` now preserves source-line layout for ALL element kinds
