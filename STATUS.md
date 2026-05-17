@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,762 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,763 / 10,078 tests passing (~86.9%).
+
+**B41.2 (2026-05-17, +1 — flips `numericLiteralsWithTrailingDecimalPoints01_ts` JS-emit)** —
+Multi-line property access (`expr\n  /* comment */ .name`) now preserves the leading
+comment between the expression and the dot. Previously, the comment was attached to
+the dot token in the scanner but lost on the next `scanner.scan()` call (which resets
+`leadingComments`). The parser now captures `leadingComments()` BEFORE calling
+`nextToken()` to consume the dot (when `newLineBefore=true`), and merges them into
+the property name's `leadingComments`. The emitter handles them specially when
+`newLineBefore=true`: emit AFTER the indent, BEFORE the dot. Block comments are
+followed by a space (`/* comment */ .toString()` form); line comments are followed
+by newline + indent (`// comment\n    .toString()` form). Full-suite 10078/1312/3
+(was 10078/1313/3, +1 net). Zero regressions; only the target test flips.
 
 **B41.1 (2026-05-17, +2 — flips `functionsMissingReturnStatementsAndExpressions_ts` target_es5/target_es2015)** —
 TS2355 ("function whose declared type is neither 'undefined', 'void', nor 'any' must

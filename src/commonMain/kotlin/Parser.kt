@@ -4125,6 +4125,13 @@ class Parser(
             result = when (token) {
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
+                    // B41.2: Capture leading comments on the dot token BEFORE consuming
+                    // it — these are comments between the expression and the dot (often
+                    // after a newline for multi-line property access like
+                    // `expr\n  /* comment */ .toString()`). Without this capture, the
+                    // comments would be lost when scanner.scan() resets leadingComments
+                    // for the next token (the property name).
+                    val dotLeadingCommentsList = if (newLineBefore) leadingComments() else null
                     nextToken()
                     val afterDotPos = scanner.getPrevTokenEnd() // position right after dot (before trivia of next token)
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
@@ -4161,7 +4168,14 @@ class Parser(
                             Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
                     }
-                    PropertyAccessExpression(expression = result, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
+                    // Merge captured dot-leading comments into the name's leadingComments.
+                    // For newLineBefore=true, the emitter places these comments BEFORE the dot
+                    // (matching TypeScript's `expr\n  /* comment */ .toString()` form).
+                    val finalName = if (dotLeadingCommentsList != null && name is Identifier) {
+                        val mergedLeading = (dotLeadingCommentsList + (name.leadingComments ?: emptyList())).ifEmpty { null }
+                        name.copy(leadingComments = mergedLeading)
+                    } else name
+                    PropertyAccessExpression(expression = result, name = finalName, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
                 }
 
                 OpenBracket -> {

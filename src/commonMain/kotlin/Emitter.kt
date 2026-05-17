@@ -2514,6 +2514,25 @@ class Emitter(
             indentLevel++
             writeIndent()
             indentLevel--
+            // B41.2: For `expr\n  /* comment */ .name` shape, the comment lives in
+            // `node.name.leadingComments` (parseIdentifierName captures both trailing
+            // and leading comments). For newLineBefore=true, emit those leadings
+            // BEFORE the dot to match TypeScript's positioning. Block comments are
+            // followed by a space; line comments by newline+indent (line comments
+            // terminate the line and the dot belongs on the next indented line).
+            if (!options.removeComments) {
+                node.name.leadingComments?.forEach { c ->
+                    write(c.text)
+                    if (c.kind == SyntaxKind.SingleLineComment) {
+                        writeNewLine()
+                        indentLevel++
+                        writeIndent()
+                        indentLevel--
+                    } else {
+                        write(" ")
+                    }
+                }
+            }
         }
         if (node.questionDotToken) {
             write("?.")
@@ -2545,7 +2564,9 @@ class Emitter(
             }
         }
         // Emit inline leading comments on the property name (e.g. `point. /*2*/x`)
-        if (!options.removeComments) {
+        // Skip when newLineBefore was true — those comments were already emitted
+        // BEFORE the dot above (matches TypeScript's `\n  /* comment */ .toString()` form).
+        if (!options.removeComments && !node.newLineBefore) {
             node.name.leadingComments?.forEach { c ->
                 write(" ")
                 write(c.text)
