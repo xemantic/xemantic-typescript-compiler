@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,756 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,757 / 10,078 tests passing (~86.9%).
+
+**B37.1 (2026-05-17, +1 — flips `moduleResolutionWithExtensions_withPaths_ts` JS-emit)** —
+Pure `.js`/`.cjs`/`.mjs` files with a companion `.d.ts` (same path minus `.js` + `.d.ts`)
+are now parsed for type resolution but NOT re-emitted as JS output. TypeScript treats a
+`.js` file paired with its `.d.ts` declaration as an external JavaScript module described
+by the declaration — the JS is referenced for runtime semantics but never re-emitted under
+outDir. Example: with `/relative.js` + `/relative.d.ts` referenced via `import { relative }
+from "./relative.js"`, TypeScript emits the importing file but produces no output for
+`/relative.js` even when `outDir: "lib"` is configured. Added a 14-line gate in
+`TypeScriptCompiler.kt` (~line 1072) immediately after the existing B36.1 outside-tsconfig
+check: when `isPureJsFile` and a same-path companion `.d.ts` exists in `parsed.files`,
+`continue` to skip JS-emit + dependency-ordering registration. Verified the only other
+corpus test matching this companion pattern (`elidedJSImport2_ts`) has no `.js` baseline
+(noEmit-style test) — no regression risk. Verified zero regressions across 10078-test
+suite — only the target test flips from fail to pass.
 
 **B36.1 (2026-05-17, +2 — flips `pathMappingBasedModuleResolution_rootImport_aliasWithRoot_realRootFile_ts` + `pathMappingBasedModuleResolution_rootImport_noAliasWithRoot_realRootFile_ts` JS-emit)** —
 Skip JS emit for `.js`/`.cjs`/`.mjs` files that lie OUTSIDE the tsconfig project directory.

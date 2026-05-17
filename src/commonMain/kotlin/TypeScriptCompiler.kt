@@ -1069,6 +1069,29 @@ class TypeScriptCompiler {
                     }
                 }
 
+                // Pure .js files with a companion `.d.ts` (same path minus `.js` + `.d.ts`)
+                // are treated as external JavaScript described by their `.d.ts` — TypeScript
+                // uses them for type resolution but does NOT re-emit them as JS output, even
+                // when an outDir is set. Example: `/relative.js` + `/relative.d.ts` referenced
+                // via `import { relative } from "./relative.js"` — TypeScript emits no
+                // `relative.js` under outDir, only the imports in the importing file.
+                if (isPureJsFile) {
+                    val base = when {
+                        file.fileName.endsWith(".js") -> file.fileName.removeSuffix(".js")
+                        file.fileName.endsWith(".cjs") -> file.fileName.removeSuffix(".cjs")
+                        file.fileName.endsWith(".mjs") -> file.fileName.removeSuffix(".mjs")
+                        else -> null
+                    }
+                    if (base != null) {
+                        val companionDts = "$base.d.ts"
+                        val hasCompanionDts = parsed.files.any { it.fileName == companionDts }
+                        if (hasCompanionDts) {
+                            // Parse for diagnostics but skip emit + dependency ordering
+                            continue
+                        }
+                    }
+                }
+
                 // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
                 if (skipJsEmit) continue
 
