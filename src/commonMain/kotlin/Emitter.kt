@@ -135,7 +135,78 @@ class Emitter(
                     (it is EnumDeclaration && ModifierFlag.Export in it.modifiers) ||
                     (it is ModuleDeclaration && ModifierFlag.Export in it.modifiers) ||
                     (it is InterfaceDeclaration && ModifierFlag.Export in it.modifiers) ||
-                    (it is TypeAliasDeclaration && ModifierFlag.Export in it.modifiers)
+                    (it is TypeAliasDeclaration && ModifierFlag.Export in it.modifiers) ||
+                    // dynamic import() calls also make a file an external module
+                    statementContainsDynamicImport(it)
+        }
+    }
+
+    /** Returns true if [stmt] contains a dynamic `import(...)` call anywhere in its subtree. */
+    private fun statementContainsDynamicImport(stmt: Statement): Boolean = when (stmt) {
+        is ExpressionStatement -> expressionContainsDynamicImport(stmt.expression)
+        is VariableStatement -> stmt.declarationList.declarations.any {
+            it.initializer?.let { init -> expressionContainsDynamicImport(init) } == true
+        }
+        is ReturnStatement -> stmt.expression?.let { expressionContainsDynamicImport(it) } == true
+        is ThrowStatement -> stmt.expression?.let { expressionContainsDynamicImport(it) } == true
+        is Block -> stmt.statements.any { statementContainsDynamicImport(it) }
+        is IfStatement -> expressionContainsDynamicImport(stmt.expression) ||
+                statementContainsDynamicImport(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { statementContainsDynamicImport(it) } == true)
+        is WhileStatement -> statementContainsDynamicImport(stmt.statement)
+        is DoStatement -> statementContainsDynamicImport(stmt.statement)
+        is ForStatement -> statementContainsDynamicImport(stmt.statement)
+        is ForOfStatement -> statementContainsDynamicImport(stmt.statement)
+        is ForInStatement -> statementContainsDynamicImport(stmt.statement)
+        is FunctionDeclaration -> stmt.body?.statements?.any { statementContainsDynamicImport(it) } == true
+        else -> false
+    }
+
+    private fun expressionContainsDynamicImport(expr: Expression): Boolean {
+        if (expr is CallExpression &&
+            (expr.expression as? Identifier)?.text == "import" &&
+            expr.arguments.size == 1
+        ) return true
+        return when (expr) {
+            is CallExpression -> expressionContainsDynamicImport(expr.expression) ||
+                    expr.arguments.any { expressionContainsDynamicImport(it) }
+            is PropertyAccessExpression -> expressionContainsDynamicImport(expr.expression)
+            is ElementAccessExpression -> expressionContainsDynamicImport(expr.expression) ||
+                    expressionContainsDynamicImport(expr.argumentExpression)
+            is ArrowFunction -> when (val body = expr.body) {
+                is Expression -> expressionContainsDynamicImport(body)
+                is Block -> body.statements.any { statementContainsDynamicImport(it) }
+                else -> false
+            }
+            is FunctionExpression -> expr.body.statements.any { statementContainsDynamicImport(it) }
+            is AwaitExpression -> expressionContainsDynamicImport(expr.expression)
+            is YieldExpression -> expr.expression?.let { expressionContainsDynamicImport(it) } == true
+            is ParenthesizedExpression -> expressionContainsDynamicImport(expr.expression)
+            is ConditionalExpression -> expressionContainsDynamicImport(expr.condition) ||
+                    expressionContainsDynamicImport(expr.whenTrue) ||
+                    expressionContainsDynamicImport(expr.whenFalse)
+            is NewExpression -> expressionContainsDynamicImport(expr.expression) ||
+                    (expr.arguments?.any { expressionContainsDynamicImport(it) } == true)
+            is SpreadElement -> expressionContainsDynamicImport(expr.expression)
+            is ArrayLiteralExpression -> expr.elements.any { expressionContainsDynamicImport(it) }
+            is PrefixUnaryExpression -> expressionContainsDynamicImport(expr.operand)
+            is PostfixUnaryExpression -> expressionContainsDynamicImport(expr.operand)
+            is BinaryExpression -> {
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    if (expressionContainsDynamicImport(current.right)) return true
+                    current = current.left
+                }
+                expressionContainsDynamicImport(current)
+            }
+            is ObjectLiteralExpression -> expr.properties.any { prop ->
+                when (prop) {
+                    is PropertyAssignment -> expressionContainsDynamicImport(prop.initializer)
+                    is MethodDeclaration -> prop.body?.statements?.any { statementContainsDynamicImport(it) } == true
+                    else -> false
+                }
+            }
+            else -> false
         }
     }
 

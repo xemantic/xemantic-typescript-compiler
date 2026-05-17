@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,751 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,752 / 10,078 tests passing (~86.8%).
+
+**B33.1 (2026-05-17, +1 — flips `syntheticDefaultExportsWithDynamicImports_ts` JS-emit)** —
+System module format now rewrites dynamic `import(spec)` calls to `context_1.import(spec)` and
+recognizes dynamic imports as making a file a module file. Previously: under
+`@module: system`, a file like `import("package").then(({default: foo}) => foo(42));` produced
+two bugs: (a) the raw `import("package")` call was preserved without being routed through System's
+runtime context API, and (b) the Emitter's `hasModuleStatements` helper didn't detect dynamic
+imports as a module-signal, so it emitted a stray `"use strict";` at the top of the file BEFORE
+`System.register(...)` (which already inserts `"use strict"` inside its function body). Added
+`buildSystemDynamicImport(spec)` + `rewriteSystemDynExpr/Stmt` helpers in `Transformer.kt` mirroring
+the existing CJS dynamic-import rewrite shape; invoked on `renamedExecute` + `functionHoists` in
+`transformToSystem`. Mirrored `statementContainsDynamicImport`/`expressionContainsDynamicImport`
+walkers in `Emitter.kt` and OR'd them into the `hasModuleStatements` predicate so System-format
+module detection and "use strict" elision now agree with `Transformer.isModuleFile`.
 
 **B32.1 (2026-05-17, +1 — flips `declarationEmitBundleWithAmbientReferences_ts` JS-emit)** —
 AMD outFile-bundle `define("<name>", ...)` module name is now relative to the longest common
