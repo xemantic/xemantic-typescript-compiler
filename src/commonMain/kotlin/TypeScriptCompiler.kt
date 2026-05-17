@@ -1102,6 +1102,19 @@ class TypeScriptCompiler {
                 longestCommonPathPrefix(parentDirs)
             } else null
 
+            // commonSourceDir for AMD/System outFile-bundle module-name derivation:
+            // when bundling, the `define("<name>", ...)` module name is the source file's
+            // path relative to the longest common ancestor of the bundled files. E.g.
+            // `src/datastore_result.ts` + `src/conditional_directive_field.ts` under
+            // `outFile: out/datastore.bundle.js` produces `define("datastore_result", ...)`,
+            // not `define("src/datastore_result", ...)`. Only TS source files (no .d.ts)
+            // contribute. Computed independently of `commonSourceDir` because the latter is
+            // gated on `outDir != null && outFile == null`.
+            val amdBundleCommonSourceDir: String? = if (options.outFile != null && tsFileNames.size > 1) {
+                val parentDirs = tsFileNames.map { it.substringBeforeLast('/', "") }
+                longestCommonPathPrefix(parentDirs).ifEmpty { null }
+            } else null
+
             // Phase 3: Transform and emit each file
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
                 // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
@@ -1135,7 +1148,10 @@ class TypeScriptCompiler {
                     }
                 }
 
-                val transformer = Transformer(options, checker, crossFileNamespaceExports, sharedModuleNameCounter)
+                val transformer = Transformer(
+                    options, checker, crossFileNamespaceExports, sharedModuleNameCounter,
+                    amdBundleCommonSourceDir = amdBundleCommonSourceDir,
+                )
                 val transformed = transformer.transform(sourceFile)
 
                 val emitter = Emitter(options)

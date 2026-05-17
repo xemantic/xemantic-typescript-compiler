@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,750 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,751 / 10,078 tests passing (~86.8%).
+
+**B32.1 (2026-05-17, +1 — flips `declarationEmitBundleWithAmbientReferences_ts` JS-emit)** —
+AMD outFile-bundle `define("<name>", ...)` module name is now relative to the longest common
+ancestor of bundled source files. Previously, `src/datastore_result.ts` +
+`src/conditional_directive_field.ts` under `outFile: out/datastore.bundle.js` emitted
+`define("src/datastore_result", ...)` and `define("src/conditional_directive_field", ...)`,
+but TypeScript bundles use `define("datastore_result", ...)` and
+`define("conditional_directive_field", ...)` — module IDs are relative to the common dir,
+not to the bundle root. Added `amdBundleCommonSourceDir` parameter to `Transformer` (computed
+in `TypeScriptCompiler.kt` as `longestCommonPathPrefix` of `tsFileNames`' parent dirs when
+`outFile != null && tsFileNames.size > 1`). In the AMD `define()` call builder, when the
+derived module name starts with the common-dir prefix, strip it. `.d.ts` files don't
+participate in the common-dir calc (they're not emitted into the bundle). Common-dir is null
+for single-file bundles or when files don't share a subdirectory ancestor — fallback is the
+original full-path-minus-extension behavior.
 
 **B31.1 (2026-05-17, +1 — flips `commonSourceDirectory_dts_ts` JS-emit)** —
 `commonSourceDirectory` computation now also considers `.d.ts` files that share the tsconfig
