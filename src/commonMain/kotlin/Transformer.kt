@@ -43,6 +43,14 @@ class Transformer(
      * Null for single-file compilation — each file restarts at `_1`.
      */
     private val sharedModuleNameCounter: MutableMap<String, Int>? = null,
+    /**
+     * Longest common path ancestor of all TS source files in an `outFile` AMD/System
+     * bundle. Used to derive the AMD `define("<name>", ...)` module name as the source
+     * file's path relative to this ancestor (matching TypeScript's bundle convention).
+     * Null for single-file or non-outFile compilations — falls back to the full file
+     * path stripped of the extension.
+     */
+    private val amdBundleCommonSourceDir: String? = null,
 ) {
 
     // Modifiers that are TypeScript-only and should be stripped from class members
@@ -3949,6 +3957,9 @@ class Transformer(
         // Build the define() call args
         // Module name: explicit <amd-module name='n'/> takes priority;
         // when outFile is set, derive from source file path (AMD bundling convention).
+        // When all bundled files share a common subdirectory (e.g. `src/`), strip it from
+        // the module name — matches TypeScript's bundle convention where module IDs are
+        // relative to the longest common ancestor of the bundled source files.
         val amdModuleName = amdDirectives.moduleName ?: if (options.outFile != null) {
             originalSourceFile.fileName
                 .removePrefix("./")
@@ -3960,6 +3971,13 @@ class Transformer(
                     if (name.length >= 3 && name[1] == ':' && name[2] == '/' &&
                         (name[0] in 'a'..'z' || name[0] in 'A'..'Z')
                     ) name.substring(3) else name
+                }
+                .let { name ->
+                    // Strip common source-dir prefix when bundling spans a single subdir.
+                    val csd = amdBundleCommonSourceDir?.trimStart('/')?.trimEnd('/')
+                    if (csd != null && csd.isNotEmpty() && name.startsWith("$csd/")) {
+                        name.removePrefix("$csd/")
+                    } else name
                 }
         } else null
         val defineArgs = mutableListOf<Expression>()
