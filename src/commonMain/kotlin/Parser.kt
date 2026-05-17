@@ -45,6 +45,11 @@ class Parser(
     // followed by a redundant TS1005.
     private var interfaceMembersBailedOnKeyword = false
 
+    // True while parsing the body of a type literal (`{ ... }` in a type position) as opposed
+    // to an interface body. Used to pick TS1247 ("A type literal property cannot have an
+    // initializer.") vs TS1246 ("An interface property cannot have an initializer.").
+    private var inTypeLiteralForErrorWording = false
+
     /** True if the file uses JSX syntax (`.tsx` or `.jsx`, or forcibly enabled). */
     private val isJsxFile = forceJsx || fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
 
@@ -2253,21 +2258,28 @@ class Parser(
         }
 
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
-        // 17.180: TS1246 — interface property cannot have an initializer.
+        // 17.180: TS1246 / TS1247 — type literal / interface property cannot have an initializer.
         // When `=` follows the type annotation, consume the initializer
-        // (so subsequent members parse cleanly) and emit TS1246 at the
+        // (so subsequent members parse cleanly) and emit the appropriate code at the
         // initializer's first character (matches TypeScript's baseline
-        // squiggle position of the value, length 1).
+        // squiggle position of the value, length 1). The TS1247 wording is used
+        // when parsing inside a type literal (`{ ... }` in type position);
+        // TS1246 inside an interface body.
         if (token == SyntaxKind.Equals) {
             nextToken()
             val initStart = scanner.getTokenPos()
-            // Consume the initializer expression so parsing of subsequent
-            // interface members is unaffected.
             parseAssignmentExpression()
-            reportError(
-                "An interface property cannot have an initializer.",
-                code = 1246, overrideStart = initStart, overrideLength = 1,
-            )
+            if (inTypeLiteralForErrorWording) {
+                reportError(
+                    "A type literal property cannot have an initializer.",
+                    code = 1247, overrideStart = initStart, overrideLength = 1,
+                )
+            } else {
+                reportError(
+                    "An interface property cannot have an initializer.",
+                    code = 1246, overrideStart = initStart, overrideLength = 1,
+                )
+            }
         }
         return PropertyDeclaration(
             name = name,
@@ -6407,7 +6419,9 @@ class Parser(
     private fun parseTypeLiteralOrMappedType(): TypeNode {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
-        val members = parseInterfaceMembers()
+        val savedInTypeLiteral = inTypeLiteralForErrorWording
+        inTypeLiteralForErrorWording = true
+        val members = try { parseInterfaceMembers() } finally { inTypeLiteralForErrorWording = savedInTypeLiteral }
         if (interfaceMembersBailedOnKeyword) {
             interfaceMembersBailedOnKeyword = false
         } else {
