@@ -118,6 +118,14 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.10, +1, 8789 → 8790 — flips `requireOfJsonFileWithoutExtensionResolvesToTs_ts` JS-emit).** Two-piece JSON re-emit fix in `TypeScriptCompiler.kt`:
+  - (a) Pre-scan for `.json` imports (`require('./x.json')` or `from './x.json'`). Builds `importedJsonBaseNames` and `jsonBaseNameToImporter`. Only re-emit JSON files in the set when `@resolveJsonModule` is on. Matches TypeScript: unreferenced JSON fixtures like `b.json` in a test that only imports `c.json` are NOT re-emitted.
+  - (b) Interleave JSON outputs with JS outputs: each imported JSON appears RIGHT BEFORE the JS output of the importing TS file. Required for `out/c.js, out/c.json, out/file1.js` order where file1.ts imports both c.ts and c.json. Unimported JSON outputs fall back to the start (legacy behavior, preserved for `requireOfJsonFileTypes_ts` which has JSON-only imports).
+
+  **Initial attempt regression.** First tried gating JSON re-emit on `@declaration: true` — regressed 25 tests. The correct condition is "is the JSON file explicitly imported" (matched via regex on raw source).
+
+---
+
 **Session 2026-05-17 (B44.9, +2, 8787 → 8789 — flips `fileReferencesWithNoExtensions_ts` + `jsFileCompilationErrorOnDeclarationsWithJsFileReferenceWithOutDir_ts` JS-emit).** Enable `/// <reference>` dep edges universally (was outFile-only) with cycle-fallback. Two-piece:
   - (a) `includeReferencePathDeps = true` always. Extended ref-path resolver to try `.ts`/`.tsx`/`.d.ts` extensions when the specifier omits them (e.g. `<reference path="a"/>`).
   - (b) New `hasCycle` helper (3-color DFS). When the full deps graph (with ref-path edges) has any cycle, fall back to the deps map WITHOUT ref-path edges (just import-based deps). Required to keep `doNotemitTripleSlashComments_ts` and `doNotEmitTripleSlashCommentsOnNotEmittedNode_ts` passing — those have 3-way mutual `<reference>` cycles between files; TypeScript emits in input order in that case.
