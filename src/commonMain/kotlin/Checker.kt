@@ -49997,6 +49997,40 @@ interface DataView {
             if (emitTs2339ForMissingSuperMember(expr, source, fileName, enclosingClassType)) return
         }
 
+        // === TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled ===
+        // Fires for `E.X` where E is a `declare const enum E { ... }` declaration in a non-.d.ts file,
+        // under @isolatedModules. With @preserveConstEnums, the ambient const enum is preserved at
+        // runtime as an object (TypeScript still allows the access). Without it, the access has
+        // no runtime referent — isolatedModules transpilation requires per-file independence so
+        // cross-file ambient const enums cannot be inlined.
+        if (options.isolatedModules && !options.preserveConstEnums) {
+            val receiver = expr.expression
+            if (receiver is Identifier) {
+                val sym = resolveNamePath(receiver.text, binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return)
+                if (sym != null) {
+                    val target = resolveAlias(sym)
+                    val isAmbientConstEnum = target.declarations.any { decl ->
+                        decl is EnumDeclaration &&
+                            ModifierFlag.Const in decl.modifiers &&
+                            ModifierFlag.Declare in decl.modifiers
+                    }
+                    if (isAmbientConstEnum) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, receiver.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot access ambient const enums when 'isolatedModules' is enabled.",
+                            category = DiagnosticCategory.Error,
+                            code = 2748,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = receiver.pos,
+                            length = receiver.text.length,
+                        ))
+                    }
+                }
+            }
+        }
+
         // === TS2341: Private member accessibility check ===
         if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
 
