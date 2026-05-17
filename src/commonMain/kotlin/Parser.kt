@@ -3680,7 +3680,19 @@ class Parser(
         }
 
         // Parse tag name
-        val tagName = parseJsxTagName()
+        // Malformed-input recovery: when `<` is immediately followed by `{`,
+        // the tag name is missing. Emit TS1003 "Identifier expected." at the
+        // `{` position and use an empty-text Identifier as the tag name. Do
+        // NOT consume `{` — leave it for parseJsxAttributes to treat as a
+        // (malformed) spread attribute `{...expr}`, which will then emit
+        // TS1005 "'...' expected." against whatever follows the `{`.
+        val tagName = if (token == SyntaxKind.OpenBrace) {
+            val emptyTagPos = scanner.getPrevTokenEnd()
+            reportError("Identifier expected.", code = 1003)
+            Identifier(text = "", pos = emptyTagPos, end = emptyTagPos + 1)
+        } else {
+            parseJsxTagName()
+        }
 
         // Parse attributes
         val attributes = parseJsxAttributes()
@@ -3709,6 +3721,9 @@ class Parser(
                     "JSX element '$tagNameStr' has no corresponding closing tag.",
                     code = 17008,
                     overrideStart = tagName.pos,
+                    // Empty tag-name (parser-recovered for `<{...`) yields a
+                    // zero-length squiggle to match TypeScript's baseline; named
+                    // tags get the full tag-name span.
                     overrideLength = jsxTagNameLength(tagName),
                 )
                 reportError("'</' expected.", code = 1005)
@@ -3837,10 +3852,26 @@ class Parser(
         // Spread attribute: {...expr}
         if (token == SyntaxKind.OpenBrace) {
             nextToken() // consume {
-            parseExpected(SyntaxKind.DotDotDot)
-            val expr = parseAssignmentExpression()
-            parseExpected(SyntaxKind.CloseBrace)
-            return JsxSpreadAttribute(expression = expr, pos = pos, end = getEnd())
+            if (parseExpected(SyntaxKind.DotDotDot)) {
+                val expr = parseAssignmentExpression()
+                parseExpected(SyntaxKind.CloseBrace)
+                return JsxSpreadAttribute(expression = expr, pos = pos, end = getEnd())
+            }
+            // Recovery: parseExpected emitted TS1005 "'...' expected." but didn't
+            // consume. Skip tokens until we reach `}`, `/`, `>`, or EOF — do NOT
+            // attempt parseAssignmentExpression on whatever follows (it may consume
+            // tokens that legitimately close the opening tag, causing JS-emit drift).
+            while (token != SyntaxKind.CloseBrace && token != SyntaxKind.Slash &&
+                   token != SyntaxKind.GreaterThan && token != SyntaxKind.EndOfFile) {
+                nextToken()
+            }
+            // Consume `}` if present (the spread block close).
+            if (token == SyntaxKind.CloseBrace) nextToken()
+            val dummyEnd = getEnd()
+            return JsxSpreadAttribute(
+                expression = Identifier(text = "", pos = pos, end = dummyEnd),
+                pos = pos, end = dummyEnd,
+            )
         }
         // Named attribute
         val name = scanner.getTokenValue()
@@ -6552,6 +6583,7 @@ class Parser(
         LessThan -> "<"
         GreaterThan -> ">"
         EqualsGreaterThan -> "=>"
+        DotDotDot -> "..."
         else -> kind.name
     }
 

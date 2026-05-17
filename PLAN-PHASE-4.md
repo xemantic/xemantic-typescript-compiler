@@ -2474,6 +2474,23 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B19.1, +2, 8722 → 8724 passing — flips `parseJsxElementInUnaryExpressionNoCrash3_ts` errors-baseline + JS-emit).** Continuation /loop iteration after B18.4. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3 EXTRA / 62 MISSING / 12 SWAP). Spot-checked the EXTRA and SWAP buckets — all confirmed as Blocker #2/#3/#4 architectural per skip-log. Ran MAINT-1-style stale-skip audit (proper section boundary this time — the prior MAINT-1 was thorough; only ~0 stale entries surfaced). With the surgical pool genuinely exhausted, picked the `parseJsxElementInUnaryExpressionNoCrash3_ts` target from B10.1's "Foundation for follow-ons" — flagged as needing different span/tag-name extraction for the malformed `!< {:>` shape.
+
+  **Root cause.** For source `!< {:>`: after `<` is consumed, the next token is `{` which is NOT a valid JSX tag-name-start. The existing `parseJsxTagName` unconditionally takes any token's text as the tag name, so it consumed `{` as tagName="{". Subsequent attribute parsing consumed `:` as a boolean attribute, and the `>` closed the opening tag. Result: TS17008 emitted with tag name `{` at wrong position (1,4) instead of empty-string at (1,3); no TS1003, no inner TS1005.
+
+  **Three-piece fix in Parser.kt:**
+  - **`parseJsxElementOrFragmentBody` (Parser.kt ~3682):** added a new pre-check before `parseJsxTagName()`. When `token == SyntaxKind.OpenBrace`, emit TS1003 "Identifier expected." at the `{` position (default scanner.getTokenPos()), construct `Identifier(text = "", pos = scanner.getPrevTokenEnd(), end = ...+1)` as the synthetic tag name, and DO NOT consume `{`. The leftover `{` then gets handled by `parseJsxAttributes` → `parseJsxAttribute` as a (malformed) spread attribute.
+  - **`parseJsxAttribute` (Parser.kt ~3850):** changed the spread-attribute branch to gate on the `parseExpected(DotDotDot)` return value. When it returns false (the malformed-spread case `{:` where `:` is where `...` should be), skip tokens until `}`, `/`, `>`, or EOF — do NOT call `parseAssignmentExpression`. The prior behavior called the expression parser on whatever followed `{`, which consumed `:` and the closing `>` of the opening tag as part of an expression, producing wrong JS emit `!< {...} :>` instead of `!< {...}>`. The recovery uses an empty-text `Identifier` as the spread expression — the emitter renders `{...}` literally for empty-text expressions.
+  - **`tokenToString` (Parser.kt ~6566):** added `DotDotDot -> "..."` so TS1005's `'...' expected.` message reads correctly. Previously it fell through to `else -> kind.name` and produced `'DotDotDot' expected.`.
+
+  **Verification.** Full-suite 10078/1351/3 (was 10078/1353/3, +2 net). Zero regressions. Both target sub-tests flip clean: errors-baseline (4 emissions in correct order — TS17008 at (1,3) empty tag, TS1003 at (1,4), TS1005 `'...' expected.` at (1,5), TS1005 `'</' expected.` at (3,1)) and JS-emit (`!< {...}>` + `</>;`).
+
+  **Risk profile that materialized.** Bounded as projected. The `<{` tag-name guard fires only when the IMMEDIATE post-`<` token is `OpenBrace` — a malformed input pattern. The spread-attribute recovery only takes the new path when `parseExpected(DotDotDot)` fails (the missing-`...` shape) — properly-formed `{...expr}` spread attributes are unchanged. The `tokenToString` extension is purely additive (other call sites already had explicit message text). The `coerceAtLeast(1)` for TS17008 squiggle length that I added during exploration was reverted — TypeScript's baseline expects a zero-length squiggle for empty tag names (no `~` in the source-echo squiggle line).
+
+  **Foundation for follow-ons:** The B11.1 fragment-EOF code in `parseJsxElementOrFragmentBody` could be extended to detect mid-source unclosed cases (B10.3 candidate), but no failing test currently demands it. The `<{` recovery established here also handles future malformed-input tests of the same shape — should one surface in the corpus.
+
+  ---
+
 **Session 2026-05-17 (B18.3 v3, +2, 8720 → 8722 passing — flips `recursiveBaseCheck2_ts`
 errors-baseline + 1 other).** Re-attempt of the reverted B18.3 v2 with both
 lessons-learned gates applied. Implementation: (1) new pre-pass

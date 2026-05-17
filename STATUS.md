@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,722 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,724 / 10,078 tests passing (~86.6%).
+
+**B19.1 (2026-05-17, +2 — flips `parseJsxElementInUnaryExpressionNoCrash3_ts` errors-baseline + JS-emit)** —
+Three-piece parser recovery for malformed `<{:>` JSX shape. (1) `Parser.parseJsxElementOrFragmentBody`:
+when token after `<` is `OpenBrace` (not a valid tag-name-start), emit TS1003 "Identifier expected." at
+the `{` position and use an empty-text Identifier as the tag name without consuming `{`. (2)
+`Parser.parseJsxAttribute`: when `parseExpected(DotDotDot)` fails inside the spread-attribute branch
+`{...expr}`, skip tokens until `}`, `/`, `>`, or EOF instead of calling `parseAssignmentExpression` —
+this prevents consuming `:` and the closing `>` of the opening tag as expression tokens. Synthesizes
+an empty-text Identifier as the spread expression so the emitter renders `{...}`. (3)
+`Parser.tokenToString`: add `DotDotDot -> "..."` so the TS1005 message reads `'...' expected.` instead
+of `'DotDotDot' expected.`. With these, the malformed shape `!< {:>` correctly produces TS17008
+(empty tag), TS1003 (at `{`), TS1005 `'...' expected.` (at `:`), TS1005 `'</' expected.` (at EOF), and
+JS emits `!< {...}>` + `</>;`.
 
 **B18.3 (2026-05-17, +2 — flips `recursiveBaseCheck2_ts` errors-baseline + 1 other)** —
 Detect circular `extends` in ambient `declare namespace` blocks for
