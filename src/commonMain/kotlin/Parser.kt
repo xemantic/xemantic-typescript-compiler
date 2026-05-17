@@ -24,6 +24,11 @@ class Parser(
     forceJsx: Boolean = false,
     topLevelAwait: Boolean = false,
     private val needsJsxFlag: Boolean = false,
+    /**
+     * True when `noImplicitAny` (or `strict`) is enabled. Drives parser-side
+     * implicit-any diagnostics like TS7039 (mapped type without value type).
+     */
+    private val noImplicitAny: Boolean = false,
 ) {
 
     private val scanner = Scanner(source)
@@ -2335,7 +2340,27 @@ class Parser(
                 }
                 else -> {}
             }
-            if (parseOptional(SyntaxKind.Colon)) parseType() // value type
+            val mappedTypeEnd = scanner.getPrevTokenEnd()
+            val hasValueType = parseOptional(SyntaxKind.Colon)
+            if (hasValueType) parseType() // value type
+            // TS7039: mapped type without an explicit value type implicitly types
+            // members as `any`. Fires under noImplicitAny/strict. TypeScript's
+            // squiggle covers the OUTER braces (`{[P in K]}`), not just the
+            // bracketed part, so scan back from `pos` (start of `[`) to find the
+            // enclosing `{` and emit from there.
+            if (!hasValueType && noImplicitAny) {
+                var braceStart = pos - 1
+                while (braceStart > 0 && source[braceStart] != '{') braceStart--
+                val sqStart = if (braceStart >= 0 && source[braceStart] == '{') braceStart else pos
+                // Scan forward from `mappedTypeEnd` to include the closing `}`.
+                var braceEnd = mappedTypeEnd
+                while (braceEnd < source.length && source[braceEnd] != '}') braceEnd++
+                val sqEnd = if (braceEnd < source.length && source[braceEnd] == '}') braceEnd + 1 else mappedTypeEnd
+                reportError(
+                    "Mapped object type implicitly has an 'any' template type.",
+                    code = 7039, overrideStart = sqStart, overrideLength = (sqEnd - sqStart).coerceAtLeast(1),
+                )
+            }
             return PropertyDeclaration(
                 name = Identifier(text = "", pos = pos, end = pos),
                 modifiers = modifiers,

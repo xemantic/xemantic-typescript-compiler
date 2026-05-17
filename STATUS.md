@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,770 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,771 / 10,078 tests passing (~87.0%).
+
+**B43.2 (2026-05-17, +1 — flips `anyMappedTypesError_ts` errors-baseline)** —
+Parser now emits TS7039 "Mapped object type implicitly has an 'any' template type." when
+a mapped type `{[P in K]}` lacks a value type (`: T`) AND `noImplicitAny` (or `strict`)
+is enabled. Threaded a new `noImplicitAny: Boolean` parameter through Parser (default
+false). All three Parser construction sites in `TypeScriptCompiler.kt` now pass
+`options.noImplicitAny || options.strict`. Squiggle covers the entire mapped type
+expression INCLUDING the outer `{...}` braces — scans backward from the bracketed
+position to find the enclosing `{` and forward from end of `]` to the closing `}`.
+Suppression for `@strict: false` tests (`mappedTypeNoTypeNoCrash_ts` still fires
+TS2304 only, as expected). Full-suite 10078/1304/3 (was 10078/1305/3, +1 net).
+Zero regressions.
+
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
