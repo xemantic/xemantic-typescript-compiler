@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,760 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,762 / 10,078 tests passing (~86.9%).
+
+**B41.1 (2026-05-17, +2 — flips `functionsMissingReturnStatementsAndExpressions_ts` target_es5/target_es2015)** —
+TS2355 ("function whose declared type is neither 'undefined', 'void', nor 'any' must
+return a value") now fires for union-with-undefined return types like `undefined | number`
+when the function has no explicit return statements. Previously, the "nullable"
+classification suppressed TS2355 entirely; the early-return in `checkBodyForImplicitReturn`
+matched union-with-undefined unconditionally. Per TypeScript's actual behavior, `undefined`
+in a union does not satisfy the "must return a value" rule — only `void`/`any`/`never` (in
+a union) or `undefined` (as a bare keyword, or as the single arg to `Promise<...>` for
+async functions) suppress TS2355. The fix: replaced the bare early-return with a TS2355
+emission for "nullable + !hasAnyReturn"; updated the "pure-undefined" check to also accept
+`Promise<undefined>` (where the arg is a `KeywordTypeNode` for `undefined`) so async
+`Promise<undefined>` return types still suppress TS2355. Both non-strict (`f23(): undefined
+| number`) and strict (`f11(): undefined | number`, `f31(): Promise<undefined | number>`)
+behavior covered. Full-suite 10078/1313/3 (was 10078/1315/3, +2 net). Zero regressions.
 
 **B40.1 (2026-05-17, +1 — flips `declarationEmitResolveTypesIfNotReusable_ts` JS-emit)** —
 Parser's `TypeOfKeyword` branch in `parseNonArrayType` now handles indexed-access
