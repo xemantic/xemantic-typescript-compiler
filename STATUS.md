@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,787 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,789 / 10,078 tests passing (~87.2%).
+
+**B44.9 (2026-05-17, +2 — flips `fileReferencesWithNoExtensions_ts` + `jsFileCompilationErrorOnDeclarationsWithJsFileReferenceWithOutDir_ts` JS-emit)** —
+Enable `/// <reference path="..."/>` dep edges UNIVERSALLY (was outFile-only),
+with cycle detection that falls back to input order when mutual refs form a
+cycle. Two-piece fix:
+(a) `includeReferencePathDeps = true` always (no longer gated on outFile).
+    Also handles ref-path specifiers without `.ts` extension (e.g.
+    `<reference path="a"/>` resolves to `a.ts/.tsx/.d.ts`).
+(b) New `hasCycle(fileNames, deps)` helper in TypeScriptCompiler.kt using
+    3-color DFS (WHITE/GRAY/BLACK). If the full deps graph (with ref-path
+    edges) has any cycle, fall back to the deps map WITHOUT ref-path edges
+    (preserving the import-only dep ordering). Required to keep
+    `doNotemitTripleSlashComments_ts` passing (3-way cycle file0↔file1↔file2).
+Also computes the no-ref-path deps map alongside the full map and selects
+between them based on cycle detection. Full-suite 10078/1286/3 (was
+10078/1288/3, +2 net). Zero regressions.
+
+
 
 **B44.8 (2026-05-17, +3 — flips `tslib{Missing,MultipleMissing,NotFoundDifferent}Helper_ts` JS-emit)** —
 Extend B44.5 source-echo reordering rule: when tsconfig.json is present, the

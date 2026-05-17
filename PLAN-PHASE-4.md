@@ -118,6 +118,14 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.9, +2, 8787 → 8789 — flips `fileReferencesWithNoExtensions_ts` + `jsFileCompilationErrorOnDeclarationsWithJsFileReferenceWithOutDir_ts` JS-emit).** Enable `/// <reference>` dep edges universally (was outFile-only) with cycle-fallback. Two-piece:
+  - (a) `includeReferencePathDeps = true` always. Extended ref-path resolver to try `.ts`/`.tsx`/`.d.ts` extensions when the specifier omits them (e.g. `<reference path="a"/>`).
+  - (b) New `hasCycle` helper (3-color DFS). When the full deps graph (with ref-path edges) has any cycle, fall back to the deps map WITHOUT ref-path edges (just import-based deps). Required to keep `doNotemitTripleSlashComments_ts` and `doNotEmitTripleSlashCommentsOnNotEmittedNode_ts` passing — those have 3-way mutual `<reference>` cycles between files; TypeScript emits in input order in that case.
+
+  **Previous attempts (B42.4 era) regressed on the cycle cases.** The B44.9 fix is the same idea but with explicit cycle detection rather than dep-edge filtering. The two computed deps maps (with and without ref-path) are both built in the parsing loop; selection between them is post-loop based on cycle check on the full deps.
+
+---
+
 **Session 2026-05-17 (B44.8, +3, 8784 → 8787 — flips `tslib{Missing,MultipleMissing,NotFoundDifferent}Helper_ts` JS-emit).** Extend the B44.5 source-echo reordering: when tsconfig.json is present, the canonical order is (1) out-of-tree files, (2) in-tree `node_modules/...` files, (3) in-tree non-node_modules files (project sources). Required for tests like `tslibMissingHelper_ts` where the test's @filename order is `package1/index.ts, package2/index.ts, node_modules/tslib/...` but TypeScript reorders to `node_modules/tslib/..., package1/index.ts, package2/index.ts`. Tests like `compositeWithNodeModulesSourceFile_ts` already had matching input order (node_modules @filename declared first), so they continue passing. The first attempt (node_modules LAST) regressed 14 tests; the corrected direction (node_modules BEFORE project source) flips 3 tests cleanly.
 
 ---

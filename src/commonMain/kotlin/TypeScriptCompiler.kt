@@ -865,6 +865,9 @@ class TypeScriptCompiler {
             val jsonOutputs = mutableListOf<Pair<String, String>>()
             // Map from tsFileName -> list of tsFileNames it imports (for dependency sort)
             val importDeps = mutableMapOf<String, List<String>>()
+            // Fallback deps map without `///<reference>` paths. Used when the full
+            // deps form a cycle (TypeScript falls back to input order in that case).
+            val importDepsNoRefPath = mutableMapOf<String, List<String>>()
             // Ordered list of compilable TS file names
             val tsFileNames = mutableListOf<String>()
             // Parsed source files for two-phase bind+transform
@@ -1110,7 +1113,18 @@ class TypeScriptCompiler {
                 // Extract relative imports for dependency ordering
                 importDeps[file.fileName] = extractRelativeImports(
                     sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
-                    includeReferencePathDeps = options.outFile != null,
+                    includeReferencePathDeps = true,
+                    paths = options.paths,
+                    baseUrl = options.baseUrl,
+                    tsconfigDir = computedTsconfigDir,
+                    rootDirs = options.rootDirs,
+                )
+                // Also compute deps WITHOUT ref-path edges as a fallback. If the
+                // full deps graph forms a cycle (mutual `/// <reference>` between
+                // files), we drop the ref-path edges and rely on input order.
+                importDepsNoRefPath[file.fileName] = extractRelativeImports(
+                    sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                    includeReferencePathDeps = false,
                     paths = options.paths,
                     baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
@@ -1274,7 +1288,16 @@ class TypeScriptCompiler {
 
             // Sort JS outputs by dependency order (dependencies first)
             // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
-            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, importDeps)
+            // If the full deps graph (with `///<reference>` edges) has a cycle, fall back
+            // to the deps map without ref-path edges. This matches TypeScript's behavior
+            // of using input order when triple-slash refs form mutual cycles
+            // (e.g. `doNotemitTripleSlashComments_ts`).
+            val depsForSort = when {
+                options.noResolve -> emptyMap()
+                hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
+                else -> importDeps
+            }
+            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file.
@@ -1461,7 +1484,23 @@ private fun extractRelativeImports(
             } else {
                 refPath
             }
-            if (resolved in allTsFileNames) deps.add(resolved)
+            // Try the raw resolved path first; if absent, try common extensions
+            // (some reference paths omit the .ts extension, e.g. `<reference path="a"/>`).
+            if (resolved in allTsFileNames) {
+                deps.add(resolved)
+            } else {
+                val ext = listOf(".ts", ".tsx", ".d.ts").firstOrNull { resolved.endsWith(it) }
+                if (ext == null) {
+                    val probes = listOf("$resolved.ts", "$resolved.tsx", "$resolved.d.ts")
+                    val match2 = probes.firstOrNull { it in allTsFileNames }
+                    if (match2 != null) deps.add(match2)
+                } else if (ext == ".ts") {
+                    // Reference paths can use `.js` extension or end in `.ts` (try `.d.ts` too)
+                    val base = resolved.dropLast(ext.length)
+                    val match2 = listOf("$base.d.ts").firstOrNull { it in allTsFileNames }
+                    if (match2 != null) deps.add(match2)
+                }
+            }
         }
     }
 
@@ -1769,6 +1808,33 @@ private fun resolveRelativePath(dir: String, specifier: String): String {
  * order, recursively emit its unvisited dependencies first, then the file itself.
  * This keeps dependents close to their dependencies in the original source order.
  */
+/** Detect whether the given dep graph has any cycle. DFS with 3-color marking:
+ *  WHITE (unvisited), GRAY (on stack), BLACK (fully processed). A back-edge to
+ *  a GRAY node indicates a cycle. */
+private fun hasCycle(fileNames: List<String>, deps: Map<String, List<String>>): Boolean {
+    if (fileNames.size <= 1) return false
+    val fileSet = fileNames.toSet()
+    val WHITE = 0; val GRAY = 1; val BLACK = 2
+    val color = mutableMapOf<String, Int>()
+    var found = false
+    fun visit(f: String) {
+        if (found) return
+        if (color[f] == BLACK) return
+        if (color[f] == GRAY) { found = true; return }
+        color[f] = GRAY
+        for (d in (deps[f] ?: emptyList())) {
+            if (d in fileSet) visit(d)
+            if (found) return
+        }
+        color[f] = BLACK
+    }
+    for (f in fileNames) {
+        visit(f)
+        if (found) return true
+    }
+    return false
+}
+
 private fun topologicalSort(
     fileNames: List<String>,
     deps: Map<String, List<String>>,
