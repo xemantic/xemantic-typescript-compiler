@@ -845,6 +845,8 @@ class Checker(
         checkImportConflictsWithLocal()
         // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
         checkIsolatedModulesExportDefaultIsType()
+        // 68aa. Check `export import X = Y` where Y is a type-only entity under isolatedModules (TS1269)
+        checkIsolatedModulesExportImportIsType()
         // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
         checkVerbatimModuleSyntax()
         // 69. Check namespace used as type (TS2709)
@@ -61026,6 +61028,107 @@ interface DataView {
      * at the expression's position. Skipped when `verbatimModuleSyntax` is enabled (different
      * diagnostic family fires there).
      */
+    /**
+     * TS1269: "Cannot use 'export import' on a type or type-only namespace when
+     * 'isolatedModules' is enabled." Fires for `export import X = Y` (or `export import X = A.B`)
+     * where Y resolves to a type alias, interface, or type-only namespace under
+     * `@isolatedModules`. The transpiler cannot keep the runtime binding if Y has no value side.
+     */
+    private fun checkIsolatedModulesExportImportIsType() {
+        if (!options.isolatedModules || options.verbatimModuleSyntax) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+
+            // Detect: is the local binding `name` an import alias of a type-only export
+            // from some other file in this program?
+            fun importedFromTypeOnlyExport(name: String): Boolean {
+                for (stmt in stmts) {
+                    if (stmt !is ImportDeclaration) continue
+                    val clause = stmt.importClause ?: continue
+                    val moduleSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val nb = clause.namedBindings
+                    if (nb is NamedImports) {
+                        val element = nb.elements.firstOrNull { it.name.text == name } ?: continue
+                        if (clause.isTypeOnly || element.isTypeOnly) return true
+                        val sourceName = (element.propertyName ?: element.name).text
+                        if (isExportedNameTypeOnly(sourceName, moduleSpec)) return true
+                        // Also handle exported namespace whose members are all types — the
+                        // existing helper doesn't yet walk ModuleDeclaration.
+                        val targetFile = resolveModuleSpecifier(moduleSpec, null) ?: continue
+                        val targetResult = fileResults[targetFile] ?: continue
+                        for (s in targetResult.sourceFile.statements) {
+                            if (s !is ModuleDeclaration) continue
+                            val moduleName = s.name
+                            val n = if (moduleName is Identifier) moduleName.text
+                                else if (moduleName is StringLiteralNode) moduleName.text
+                                else null
+                            if (n != sourceName) continue
+                            if (ModifierFlag.Export !in s.modifiers) continue
+                            // Check via binder's moduleInstanceState — a non-instantiated namespace
+                            // (only type members) qualifies.
+                            val state = binderResults.firstNotNullOfOrNull { br ->
+                                br.moduleInstanceStates[nodeKey(s)]
+                            }
+                            if (state == ModuleInstanceState.NonInstantiated) return true
+                        }
+                    }
+                    if (nb is NamespaceImport && nb.name.text == name) {
+                        // `import * as X from "./m"` — X is a namespace import. Treat as
+                        // type-only if the target file exports ONLY types (no value
+                        // declarations). Skip for now to avoid over-firing; this is the
+                        // narrower namespaced-from-import path.
+                    }
+                }
+                return false
+            }
+
+            for (stmt in stmts) {
+                if (stmt !is ImportEqualsDeclaration) continue
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                // Only fires for `export import X = SomeIdent` where SomeIdent resolves to type-only.
+                // Skip `export import X = require("...")` (external module ref) — different code path.
+                val ref = stmt.moduleReference
+                if (ref is ExternalModuleReference) continue
+                val rootName = when (ref) {
+                    is Identifier -> ref.text
+                    is QualifiedName -> {
+                        var leftmost: Node = ref
+                        while (leftmost is QualifiedName) leftmost = leftmost.left
+                        (leftmost as? Identifier)?.text
+                    }
+                    else -> null
+                } ?: continue
+                if (!importedFromTypeOnlyExport(rootName)) continue
+                // The parser's stmt.pos points to `import` (after the `export` modifier was
+                // consumed). Walk backward through whitespace to find the start of `export`.
+                var startPos = stmt.pos
+                var p = startPos - 1
+                while (p >= 0 && source[p] in " \t\r\n") p--
+                if (p >= 5 && source.substring(p - 5, p + 1) == "export") {
+                    startPos = p - 5
+                }
+                // End at the semicolon (stmt.end overshoots per CLAUDE.md gotcha).
+                val semi = source.indexOf(';', stmt.pos)
+                val endPos = if (semi >= 0) semi + 1 else stmt.end
+                val length = endPos - startPos
+                val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot use 'export import' on a type or type-only namespace when 'isolatedModules' is enabled.",
+                    category = DiagnosticCategory.Error,
+                    code = 1269,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = startPos,
+                    length = length,
+                ))
+            }
+        }
+    }
+
     private fun checkIsolatedModulesExportDefaultIsType() {
         if (!options.isolatedModules || options.verbatimModuleSyntax) return
         for (result in binderResults) {
