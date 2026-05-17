@@ -1,6 +1,27 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,733 / 10,078 tests passing (~86.7%).
+**Phase 4 — Checker buildout.** 8,734 / 10,078 tests passing (~86.7%).
+
+**B26.1 (2026-05-17, +1 — flips `declarationMapsOutFile_ts` JS-emit)** —
+AMD `export { X }` re-export getter for named/default imports + post-declaration hoist
+of `exports.X = X` for local-variable re-exports. In `transformToAMD`, track
+`amdImportLocalNames` (mirror of CJS `namedImportLocalNames`) — local names introduced
+by `import {X}`, `import X from`, or combined-clause imports. In the `ExportDeclaration`
+named-exports branch (Transformer.kt ~3629), three sub-cases now: (a) when `localName in
+amdImportLocalNames`, build an `Object.defineProperty(exports, "X", { enumerable: true,
+get: function () { return mod_1.X; } })` statement via `makeReExportGetter` and queue it
+in a new `reExportGetters` list inserted between the void0 hoist and the main body
+(matches TypeScript's emit position; bypasses the `renameMap` rewrite because the getter
+body is constructed post-rename with the correct `mod_1.X` form); (b) when `exportName ==
+localName && localName in runtimeDeclaredNames`, queue the `exports.X = X` assignment in
+`pendingLocalExportAssignments` (a post-pass over the rewritten body inserts each pending
+entry IMMEDIATELY after the matching `VariableStatement` / `FunctionDeclaration` /
+`ClassDeclaration` declaring `X`, falling back to end-of-body for unmatched names); (c)
+otherwise keep the existing `exports.X = X` body-append + `functionAndClassNames`
+function-stub paths unchanged. Net: AMD `declarationMapsOutFile_ts` now matches
+TypeScript's `Object.defineProperty(exports, "Foo", { ..., get: function () { return
+a_1.Foo; } })` emit for `export { Foo }` (Foo imported) AND interleaves `exports.c = c`
+right after `const c = new a_1.Foo();` for `export { c }` (c local-declared).
 
 **B25.1 (2026-05-17, +1 — flips `importHelpersWithLocalCollisions_ts__module_es2015` JS-emit)** —
 Helper-name vs local-declaration collision resolution for `importHelpers: true` under ESM
