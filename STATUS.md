@@ -1,6 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,731 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,732 / 10,078 tests passing (~86.6%).
+
+**B24.1 (2026-05-17, +1 — flips `bindingPatternOmittedExpressionNesting_ts` JS-emit)** —
+Recursive walk of nested `ArrayBindingPattern` elements when all top-level bound names are empty
+(side-effect destructuring): for every nested `ArrayBindingPattern` element, emit a
+`_tn = parentTemp[i]` index access into the comma-joined RHS so the runtime side effect of indexing
+into the intermediate arrays is preserved. Source `export let [,,[,[],,[]]] = undefined as any` now
+emits `_a = undefined, _b = _a[2], _c = _b[1], _d = _b[3];` instead of bare `_a = undefined;`.
+Also collapsed the `sideEffectTempVars` hoist into a single `var _a, _b, _c, _d;`
+`VariableStatement` with multiple declarators (was one statement per temp), matching TypeScript's
+emit style for nested empty patterns.
 
 **B23.1 (2026-05-17, +1 — flips `optionalChainWithInstantiationExpression2_ts__target_es2019` JS-emit)** —
 Parser recovery for instantiation-expression followed by optional CALL or INDEX (not property access).
