@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,719 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,720 / 10,078 tests passing (~86.5%).
+
+**B18.2 (2026-05-17, +1 — flips `restParamModifier_ts` errors-baseline sub-test)** —
+Three-piece fix on top of B17.7's comma-recovery. (1) `Ast.Parameter`: new
+`commaRecovered: Boolean = false` field marking the parameter created
+post-recovery. (2) `Parser.parseParameterList`: B17.7's recovery branch now
+sets `nextParamFromCommaRecovery = true`, and the NEXT parsed parameter
+gets `commaRecovered = true`. Squiggle length now uses
+`scanner.getPos() - scanner.getTokenPos()` (covers the unexpected next
+token, e.g. `rest` length 4 in `(...public rest)`) instead of length-0.
+(3) `Checker`: `checkRestLastInParams` skips TS1014 on a rest parameter
+when the following parameter has `commaRecovered = true`; new
+`checkParamsForStrictReserved` helper iterates parameters but skips a
+rest parameter when the next is `commaRecovered = true` — used at
+FunctionDeclaration / ClassDeclaration constructor & methods /
+InterfaceDeclaration members sites. Both suppressions match TypeScript's
+behavior of treating the parser-recovery TS1005 as the sole diagnostic
+for malformed shapes like `(...public rest)`.
 
 **B18.1 (2026-05-16, +1 — flips `instantiateTypeParameter_ts` errors-baseline sub-test)** —
 Two-piece fix. (1) `Parser.parseInterfaceMembers`: when bailing out on a top-level

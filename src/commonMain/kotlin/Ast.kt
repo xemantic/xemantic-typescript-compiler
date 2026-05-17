@@ -1541,6 +1541,13 @@ data class Parameter(
      *  (sub-Parser positions point into the JSDoc text rather than the original source).
      *  Walkers that emit position-bearing diagnostics on the type node should skip when set. */
     val typeFromJSDoc: Boolean = false,
+    /** B18.2: when true, this parameter was created via B17.7's comma-recovery path
+     *  (the parser emitted TS1005 `,` expected and continued the loop instead of
+     *  bailing). Walkers (TS1014 rest-must-be-last; TS1213 strict-reserved on names)
+     *  use this to suppress secondary diagnostics on this parameter and on the rest
+     *  parameter immediately preceding it — matches TypeScript's behavior of only
+     *  emitting the parser-recovery TS1005 for these malformed shapes. */
+    val commaRecovered: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

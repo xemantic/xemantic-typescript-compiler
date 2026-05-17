@@ -29549,6 +29549,10 @@ interface DataView {
         for (i in 0 until realParams.size - 1) {
             val param = realParams[i]
             if (param.dotDotDotToken) {
+                // B18.2: suppress TS1014 when the FOLLOWING parameter was created via
+                // B17.7's comma-recovery — the parser already emitted TS1005 for the
+                // malformed `...x y` shape, and TypeScript treats it as the sole diagnostic.
+                if (realParams[i + 1].commaRecovered) continue
                 val name = param.name
                 // TS1014 span covers only `...` (3 chars), not the param name
                 val start = if (name is Identifier) name.pos - 3 else param.pos
@@ -33082,8 +33086,7 @@ interface DataView {
             is FunctionDeclaration -> if (isStrict) {
                 val name = stmt.name
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
-                // Check parameters
-                for (p in stmt.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                checkParamsForStrictReserved(stmt.parameters, source, fileName, inClass, isModule)
                 stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
             }
             is ClassDeclaration -> if (isStrict) {
@@ -33092,11 +33095,11 @@ interface DataView {
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true, isModule = isModule)
+                            checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
                             member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
                         }
                         is Constructor -> {
-                            for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass = true, isModule = isModule)
+                            checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
                             member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
                         }
                         else -> {}
@@ -33107,9 +33110,9 @@ interface DataView {
                 checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
                 for (member in stmt.members) {
                     when (member) {
-                        is MethodDeclaration -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
-                        is Constructor -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
-                        is IndexSignature -> for (p in member.parameters) checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
+                        is MethodDeclaration -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
+                        is Constructor -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
+                        is IndexSignature -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
                         else -> {}
                     }
                 }
@@ -33191,6 +33194,22 @@ interface DataView {
                 }
             }
             else -> {}
+        }
+    }
+
+    /** B18.2: iterate parameters checking strict-reserved names while suppressing
+     *  diagnostics on a rest parameter that is immediately followed by a parameter
+     *  created via B17.7's comma-recovery (e.g. `(...public rest)`). TypeScript
+     *  treats the parser's TS1005 as the only diagnostic for this shape. */
+    private fun checkParamsForStrictReserved(
+        params: List<Parameter>,
+        source: String, fileName: String,
+        inClass: Boolean = false, isModule: Boolean = false,
+    ) {
+        for ((i, p) in params.withIndex()) {
+            val next = params.getOrNull(i + 1)
+            if (p.dotDotDotToken && next?.commaRecovered == true) continue
+            checkNodeForStrictReserved(p.name, source, fileName, inClass, isModule)
         }
     }
 
