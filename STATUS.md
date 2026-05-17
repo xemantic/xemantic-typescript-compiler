@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,732 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,733 / 10,078 tests passing (~86.7%).
+
+**B25.1 (2026-05-17, +1 — flips `importHelpersWithLocalCollisions_ts__module_es2015` JS-emit)** —
+Helper-name vs local-declaration collision resolution for `importHelpers: true` under ESM
+output. When the current file contains a top-level runtime declaration whose name matches a
+tslib helper (e.g. `declare var __decorate: any` shadows the imported `__decorate`), build a
+`helperLocalCollisionMap` of `<helperName> -> <helperName>_1` from the intersection of
+`topLevelRuntimeNames` with the helper set (`__decorate`, `__metadata`, `__param`,
+`__awaiter`, `__asyncGenerator`, `__await`, `__asyncDelegator`, `__asyncValues`, `__rest`,
+`__makeTemplateObject`). The ESM tslib import builder then emits
+`ImportSpecifier(propertyName=<helper>, name=<helper>_1)` instead of the plain
+`ImportSpecifier(name=<helper>)`, and `helperExpr()` returns `syntheticId(<helper>_1)` for
+all subsequent call sites. CJS path (`tslib_1.__decorate`) is unaffected — the `tslib_1`
+prefix already prevents collision. Map is cleared per `transform()` call.
 
 **B24.1 (2026-05-17, +1 — flips `bindingPatternOmittedExpressionNesting_ts` JS-emit)** —
 Recursive walk of nested `ArrayBindingPattern` elements when all top-level bound names are empty

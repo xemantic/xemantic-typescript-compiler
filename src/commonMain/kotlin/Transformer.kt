@@ -227,6 +227,12 @@ class Transformer(
     // import aliases to type-only names must be kept (they may be globally referenced).
     private var isCurrentFileModule: Boolean = false
 
+    // When `importHelpers: true` and the current file declares a local with the same name as a
+    // tslib helper (e.g. `declare var __decorate: any`), the import binding must be aliased to
+    // avoid shadowing the helper. Maps helper name → renamed local name (e.g.
+    // `__decorate` → `__decorate_1`). Empty when no collision exists.
+    private val helperLocalCollisionMap = mutableMapOf<String, String>()
+
     private fun nextTempVarName(): String {
         val n = tempVarCounter++
         // TypeScript skips both `_i` and `_n` in temp variable names.
@@ -379,6 +385,22 @@ class Transformer(
         // In script files (no imports/exports), import aliases to type-only names must be kept
         // since they may be referenced from other script files in the same compilation.
         isCurrentFileModule = isModuleFile(sourceFile)
+        // Compute helper-name collisions with locally-declared names. Only relevant when
+        // `importHelpers: true` AND the file is a module (helpers come from tslib import/require).
+        // When a local declaration shadows a helper name (e.g. `declare var __decorate: any`),
+        // TypeScript renames the imported alias / property to `<helper>_1` so the helper is
+        // still callable without clashing with the user's local.
+        helperLocalCollisionMap.clear()
+        if (options.importHelpers && isCurrentFileModule) {
+            val helperNames = setOf(
+                "__makeTemplateObject", "__awaiter", "__asyncGenerator", "__await",
+                "__asyncDelegator", "__asyncValues", "__rest", "__decorate",
+                "__metadata", "__param",
+            )
+            for (name in topLevelRuntimeNames) {
+                if (name in helperNames) helperLocalCollisionMap[name] = "${name}_1"
+            }
+        }
         // Pre-pass: collect all exported names for each namespace across merged blocks.
         // This lets later blocks qualify references to members exported from earlier blocks.
         collectMergedNamespaceExports(sourceFile.statements)
@@ -550,12 +572,24 @@ class Transformer(
                         name = null,
                         namedBindings = NamedImports(
                             elements = tslibNames.map { name ->
-                                ImportSpecifier(
-                                    name = Identifier(text = name, pos = -1, end = -1),
-                                    propertyName = null,
-                                    isTypeOnly = false,
-                                    pos = -1, end = -1,
-                                )
+                                // If a local declaration shadows this helper name, emit
+                                // `import { __X as __X_1 }` so the import doesn't collide.
+                                val aliasName = helperLocalCollisionMap[name]
+                                if (aliasName != null) {
+                                    ImportSpecifier(
+                                        name = Identifier(text = aliasName, pos = -1, end = -1),
+                                        propertyName = Identifier(text = name, pos = -1, end = -1),
+                                        isTypeOnly = false,
+                                        pos = -1, end = -1,
+                                    )
+                                } else {
+                                    ImportSpecifier(
+                                        name = Identifier(text = name, pos = -1, end = -1),
+                                        propertyName = null,
+                                        isTypeOnly = false,
+                                        pos = -1, end = -1,
+                                    )
+                                }
                             },
                             pos = -1, end = -1,
                         ),
@@ -12788,7 +12822,9 @@ class Transformer(
         val isCjsFile = currentFileName.endsWith(".cjs") || currentFileName.endsWith(".cts")
         val isEsm = !isCjsFile && isESModuleFormat(options.effectiveModule, currentFileName)
         return if (isEsm) {
-            syntheticId(helperName)
+            // If a local declaration shadows the helper name, use the import-alias (`_1` suffix).
+            val effectiveName = helperLocalCollisionMap[helperName] ?: helperName
+            syntheticId(effectiveName)
         } else {
             PropertyAccessExpression(
                 expression = syntheticId("tslib_1"),
