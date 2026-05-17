@@ -2476,6 +2476,37 @@ class Transformer(
             // e.g. `var y = x` counts as a reference to `x` in the require import `const x = require(...)`)
             val referenced = collectValueReferences(result)
             val toElide = mutableSetOf<VariableStatement>()
+            // Build map: each import const Statement → set of DEFAULT-import local names whose
+            // binding is SHADOWED by a same-name top-level VariableStatement/FunctionDeclaration
+            // declaration in the original source. In that case TypeScript keeps the require
+            // const even when the temp identifier is unused — the imported name's references
+            // get rewritten to `exports.X` (via Direct path) instead of `<temp>.default`, so
+            // the temp appears unused, but the require side effect must still be preserved.
+            // Limited to default imports (named imports could be type-only via `export type`
+            // resolution) and shadowed cases only (otherwise breaks normal elision e.g. const
+            // enum imports whose references get inlined to `0 /* X.Foo */`).
+            val shadowedNames = mutableSetOf<String>()
+            for (origStmt in originalSourceFile.statements) {
+                when (origStmt) {
+                    is VariableStatement -> origStmt.declarationList.declarations.forEach { decl ->
+                        extractIdentifierName(decl.name)?.let { shadowedNames.add(it) }
+                    }
+                    is FunctionDeclaration -> origStmt.name?.text?.let { shadowedNames.add(it) }
+                    is ClassDeclaration -> origStmt.name?.text?.let { shadowedNames.add(it) }
+                    else -> {}
+                }
+            }
+            val importStmtShadowedDefaults = mutableMapOf<Statement, MutableSet<String>>()
+            for (origStmt in originalSourceFile.statements) {
+                if (origStmt is ImportDeclaration) {
+                    val clause = origStmt.importClause ?: continue
+                    if (clause.isTypeOnly) continue
+                    val defaultName = clause.name?.text ?: continue
+                    if (defaultName !in shadowedNames) continue
+                    val importConst = importStmtForLocalName[defaultName] ?: continue
+                    importStmtShadowedDefaults.getOrPut(importConst) { mutableSetOf() }.add(defaultName)
+                }
+            }
             // When a file uses JSX (indicated by .tsx/.jsx extension and jsx option), the JSX factory
             // namespace (e.g. "React") is implicitly referenced by all JSX elements, even when no
             // explicit identifier reference appears in the source text.
@@ -2488,7 +2519,17 @@ class Transformer(
                 if (stmt in requireSet) {
                     // Require imports: erase if name unused in value positions.
                     // Exception: JSX factory namespace is implicitly used by JSX elements.
-                    if (name !in referenced && name != jsxFactoryNs) toElide.add(stmt)
+                    if (name !in referenced && name != jsxFactoryNs) {
+                        // Second exception: a DEFAULT-import binding name is shadowed by a
+                        // same-name top-level VariableStatement and that name is referenced in
+                        // value positions of the original source. Catches `import Obj from "x";
+                        // export const Obj = void Obj;` — the local `Obj` references got
+                        // rewritten to `exports.Obj`, leaving the temp const unused, but
+                        // TypeScript still emits `const _1 = __importDefault(require("x"))`.
+                        val shadowedDefaults = importStmtShadowedDefaults[stmt] ?: emptySet()
+                        val keepForShadow = shadowedDefaults.any { it in valueReferencedNames }
+                        if (!keepForShadow) toElide.add(stmt)
+                    }
                 } else {
                     // Internal alias: erase only if eligible (namespace root known) and unused
                     if (name in unusedInternalAliasNames) toElide.add(stmt)
