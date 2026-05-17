@@ -2474,6 +2474,10 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (post-B41.2 recon, +0 net, 8763 stable).** Continuation /loop iteration after B41.2. Re-ran `find_candidates.py --fresh` (0/0/0 from 3/60/12) and JS-emit ranker (157 candidates after B41.2). Surveyed top-of-range candidates: `parserUnparsedTokenCrash2_ts` (parser-recovery `====` token split), `classMemberWithMissingIdentifier2_ts` (parser-recovery `[name:string]` interpretation), `externModule_ts` (parser-recovery `declare module {`), `commonSourceDir6_ts` (cross-module-counter for AMD), `namespaceDisambiguationInUnion_ts` (Type.Union member display needs namespace qualification — requires symbol.parent walk in typeToString). All architectural or multi-piece. SWAP and MISSING pools confirmed exhausted at +1 per-commit level.
+
+  **Conclusion.** After B41.2's win, surgical pool is again exhausted. Recommended next session focus: pursue an architectural blocker substep (control flow narrowing, generic argument inference, or cross-file scope conflation) per the multi-session plan documented in "Known architectural blockers."
+
 **Session 2026-05-17 (B41.2, +1, 8762 → 8763 passing — flips `numericLiteralsWithTrailingDecimalPoints01_ts` JS-emit).** Continuation /loop iteration after post-B41.1 recon. Re-investigated the comment-preservation case after initial attempts failed; the root cause was deeper than expected.
 
   **Root cause.** For `expr\n  /* comment */ .toString()` shape, the scanner captures `/* comment */` as `leadingComments` on the `.` token. The Parser then calls `nextToken()` to consume `.`. On the NEXT `scanner.scan()` call (for the property name `toString`), the scanner resets `leadingComments = null` (Scanner.kt:253), losing the comments. The `parseIdentifierName()` for `toString` sees empty leading comments. Subsequent emitter logic in `emitPropertyAccess` had no way to find the comment.
