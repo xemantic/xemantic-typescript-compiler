@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,754 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,756 / 10,078 tests passing (~86.9%).
+
+**B36.1 (2026-05-17, +2 — flips `pathMappingBasedModuleResolution_rootImport_aliasWithRoot_realRootFile_ts` + `pathMappingBasedModuleResolution_rootImport_noAliasWithRoot_realRootFile_ts` JS-emit)** —
+Skip JS emit for `.js`/`.cjs`/`.mjs` files that lie OUTSIDE the tsconfig project directory.
+TypeScript treats `.js` root files outside the tsconfig's `rootDir` as ambient JS (parsed for
+type-only use under `allowJs`) but never re-emits them as output. Example: under
+`/root/tsconfig.json` with `paths: {"/*": ["./src/*"]}`, a stray `/bar.js` referenced via
+`import { bar } from "/bar"` (where `paths` doesn't match) is used as input but does not
+produce `bar.js` in the output. Equivalent `.ts` files outside the dir DO still emit
+(handled by commonSourceDir prefix calc). The gate is restricted to absolute-path
+tsconfig directories: relative paths like `tsconfig.json` (no leading `/`) produce a
+malformed `computedTsconfigDir == "tsconfig.json"` that would FP-skip files in the
+same directory (e.g. `commonJsIsolatedModules`'s `index.js`). The "/" tsconfigDir (root)
+is handled specially: every absolute-path file is "inside" it, so the prefix check
+uses `/` (not `//`) — without that case, `/foo.js` in `moduleResolutionWithSuffixes_one_jsModule`
+would have FP-skipped. Verified zero regressions across 10078-test suite — only the two
+target tests flip from fail to pass.
 
 **B35.1 (2026-05-17, +1 — flips `moduleAugmentationInDependency2_ts` JS-emit)** —
 node_modules `.ts` root files are now emitted to JS in the no-tsconfig non-bundler

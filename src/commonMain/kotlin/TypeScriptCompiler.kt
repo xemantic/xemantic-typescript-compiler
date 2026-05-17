@@ -1046,6 +1046,29 @@ class TypeScriptCompiler {
 
                 diagnostics.addAll(parser.getDiagnostics())
 
+                // .js/.cjs/.mjs files OUTSIDE the tsconfig project directory must still be
+                // parsed/bound (for type-only use under `allowJs`) but never emitted as JS.
+                // TypeScript skips JS-emit for non-TS root files that lie outside the
+                // tsconfig's rootDir. Example: `/bar.js` referenced from `/root/a.ts` via
+                // path mapping under `/root/tsconfig.json` — TS uses bar.js as input but
+                // does NOT produce `bar.js` in the output. Equivalent `.ts` files OUTSIDE
+                // the dir DO still emit (handled by commonSourceDir prefix calc).
+                // Gate is restricted to absolute-path tsconfig directories — relative
+                // paths like `tsconfig.json` (no leading `/`) produce a malformed
+                // `computedTsconfigDir == "tsconfig.json"` that would FP-skip files in
+                // the same directory (e.g. `commonJsIsolatedModules`'s `index.js`).
+                // When tsconfigDir == "/" (root), every absolute-path file is "inside"
+                // it, so the prefix check uses "/" (not "//") to avoid FP-skipping
+                // /foo.js etc.
+                if (isPureJsFile && computedTsconfigDir != null && computedTsconfigDir.startsWith('/')
+                    && file.fileName.startsWith('/')) {
+                    val prefix = if (computedTsconfigDir == "/") "/" else "$computedTsconfigDir/"
+                    if (!file.fileName.startsWith(prefix)) {
+                        // Parse for diagnostics but skip emit + dependency ordering
+                        continue
+                    }
+                }
+
                 // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
                 if (skipJsEmit) continue
 
