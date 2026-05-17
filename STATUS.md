@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,804 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,806 / 10,078 tests passing (~87.4%).
+
+**B46.3 (2026-05-17, +2 — flips `propTypeValidatorInference_ts` JS-emit + 1 more)** —
+`emitArrayLiteral` in `Emitter.kt` now preserves source-line layout for ALL element kinds
+(was: only ObjectLiteral/ArrayLiteral compound elements). Source: `const arrayOfTypes =
+[PropTypes.string, PropTypes.bool, PropTypes.shape({...})];` — first three elements on one
+line, then a multi-line shape call. TypeScript emits the SAME shape (keeps first three on the
+line opened by `[`). Two changes:
+(a) Removed `isCompound` gate on `nextOnSameLine` — relies on raw source-position check that
+no newline exists between consecutive elements' source positions. Added
+`nextElement.leadingComments.isNullOrEmpty()` to prevent same-line merging when the next
+element has comments that need their own line.
+(b) New generic `sameLineBySource` close check: scan backward from `]`'s source position
+through whitespace; if we hit a non-whitespace char without crossing a `\n`, the source has
+`...)];` shape — keep `]` on the same line as the closing of the last element. Captures the
+case where the last element is a `CallExpression` (not previously covered by the
+compound-only `sameLineByCompound` check). Combined via OR.
+Full-suite 10078/1269/3 (was 10078/1271/3, +2 net). Zero regressions.
+
+
 
 **B46.2 (2026-05-17, +2 — flips `computedEnumMemberSyntacticallyString2_ts__isolatedmodules_{true,false}` JS-emit)** —
 Builds on B46.1's cross-file const inlining. Type-only operators on the ORIGINAL enum-member
