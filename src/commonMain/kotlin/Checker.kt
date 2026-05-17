@@ -1472,6 +1472,69 @@ class Checker(
     }
 
     /**
+     * Resolve a bare identifier `name` to its literal constant value, walking through
+     * `import { name } from "..."` aliases to find the underlying `const name = <literal>`
+     * declaration in another file. Used by the Transformer's enum-value compute path to
+     * inline cross-file imported literal consts into enum member emit (TypeScript's
+     * behavior for `enum E { a = bar }` where `bar` is an imported literal-typed const).
+     *
+     * Only recognizes top-level `const X = <stringLiteral|numericLiteral>` declarations in
+     * the target file. Negative numeric literals (`-1`) and parenthesized literals are
+     * unwrapped. Returns null for everything else (function calls, non-const, computed init,
+     * type-only imports, etc.).
+     */
+    fun resolveImportedConstLiteralValue(
+        name: String,
+        sourceFileName: String,
+    ): ConstantValue? {
+        val result = fileResults[sourceFileName] ?: return null
+        val symbol = result.locals[name] ?: return null
+        val target = resolveAlias(symbol)
+        for (decl in target.declarations) {
+            if (decl !is VariableDeclaration) continue
+            val parent = findContainingVariableStatement(decl, target) ?: continue
+            if (parent.declarationList.flags != ConstKeyword) continue
+            val init = decl.initializer ?: continue
+            val value = literalConstantValue(init)
+            if (value != null) return value
+        }
+        return null
+    }
+
+    private fun findContainingVariableStatement(
+        decl: VariableDeclaration,
+        symbol: Symbol,
+    ): VariableStatement? {
+        // Walk all binder results' source files and look for a top-level VariableStatement
+        // whose declarationList.declarations contains `decl`. Symbol-declarations are stored
+        // without parent pointers, so a small scan is the simplest path.
+        for (br in binderResults) {
+            for (stmt in br.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (decl in stmt.declarationList.declarations) return stmt
+            }
+        }
+        return null
+    }
+
+    private fun literalConstantValue(expr: Expression): ConstantValue? = when (expr) {
+        is StringLiteralNode -> ConstantValue.StringValue(expr.text)
+        is NoSubstitutionTemplateLiteralNode -> ConstantValue.StringValue(expr.text)
+        is NumericLiteralNode -> expr.text.toDoubleOrNull()?.let { ConstantValue.NumberValue(it) }
+        is PrefixUnaryExpression -> {
+            val inner = (expr.operand as? NumericLiteralNode)?.text?.toDoubleOrNull()
+            when {
+                inner == null -> null
+                expr.operator == SyntaxKind.Minus -> ConstantValue.NumberValue(-inner)
+                expr.operator == SyntaxKind.Plus -> ConstantValue.NumberValue(inner)
+                else -> null
+            }
+        }
+        is ParenthesizedExpression -> literalConstantValue(expr.expression)
+        else -> null
+    }
+
+    /**
      * Get the module instance state for a module/namespace declaration.
      */
     fun getModuleInstanceState(node: ModuleDeclaration): ModuleInstanceState {

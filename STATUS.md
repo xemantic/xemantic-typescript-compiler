@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,800 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,802 / 10,078 tests passing (~87.3%).
+
+**B46.1 (2026-05-17, +2 — flips `enumWithNonLiteralStringInitializer_ts` JS-emit + 1 more)** —
+Cross-file `const X = <stringLiteral|numericLiteral>` imports are now inlined into
+enum-value compute (matching TypeScript's behavior even under `@isolatedModules`).
+Three-piece fix:
+(a) `Checker.kt:resolveImportedConstLiteralValue(name, sourceFileName)` — new helper that
+walks `result.locals[name]` → `resolveAlias` to find the originating `const X = literal`
+declaration in another file. Recognizes StringLiteralNode / NoSubstitutionTemplateLiteralNode
+/ NumericLiteralNode / `+`/`-` PrefixUnaryExpression of numeric / ParenthesizedExpression
+of literal. Returns ConstantValue.StringValue / NumberValue or null.
+(b) Transformer.kt wiring: `evaluateConstantStringExpression` Identifier branch now consults
+the new helper after `stringMemberValues`; new TemplateExpression branch evaluates head +
+each span's expression (string or numeric stringified) + literal text for shapes like
+`` `${foo}` ``; `evaluateConstantExpression` Identifier branch consults the helper after
+`topLevelNumericConstants`; `isSyntacticallyStringEnum` Identifier branch recognizes
+cross-file string-const imports so the string-enum emit path fires for `enum A { a = bar }`.
+(c) Import-elision preservation: new per-Transformer set `enumInlinedCrossFileImports`
+tracks each name whose value was inlined via the wrapper helper `resolveImportedLiteralAndTrack`.
+The import-elision pass adds a third "keep" exception alongside JSX-factory and shadowed-default:
+when at least one of a require const's bound named-import locals is in
+`enumInlinedCrossFileImports`, keep the `const helpers_1 = require("./helpers");` even though
+the local binding (e.g. `bar`) is now syntactically unreferenced — matches TypeScript's emit.
+Full-suite 10078/1273/3 (was 10078/1275/3, +2 net). Zero regressions.
+
+
 
 **B45.6 (2026-05-17, +2 — flips `jsxSpreadTag_ts__target_{es2015,esnext}` JS-emit)** —
 JSX attribute emit now inlines spreads of static object literals into the parent
