@@ -5213,13 +5213,21 @@ class Transformer(
             functionHoists.clear()
             functionHoists.addAll(rewritten)
         }
+        // Rewrite dynamic `import(spec)` calls in execute + function hoists to
+        // `context_1.import(spec)` — System format's runtime context API.
+        val dynRewrittenExecute = renamedExecute.map { rewriteSystemDynStmt(it) }
+        if (functionHoists.isNotEmpty()) {
+            val rewritten = functionHoists.map { rewriteSystemDynStmt(it) }
+            functionHoists.clear()
+            functionHoists.addAll(rewritten)
+        }
 
         // Apply live binding export substitution: wrap assignments to exported vars in exports_1 calls.
         // Only needed when there are exported vars that could be assigned to after declaration.
         val exportedVarNamesForSubst = localExportNames.filter { it in hoistedVarNamesSet }.toSet()
         val finalExecute = if (exportedVarNamesForSubst.isNotEmpty()) {
-            substituteSystemExportAssignments(renamedExecute, exportedVarNamesForSubst)
-        } else renamedExecute
+            substituteSystemExportAssignments(dynRewrittenExecute, exportedVarNamesForSubst)
+        } else dynRewrittenExecute
         if (exportedVarNamesForSubst.isNotEmpty() && functionHoists.isNotEmpty()) {
             val substituted = substituteSystemExportAssignments(functionHoists, exportedVarNamesForSubst)
             functionHoists.clear()
@@ -6372,6 +6380,113 @@ class Transformer(
             is ForInStatement -> stmt.copy(statement = rewriteCjsDynStmt(stmt.statement, needImportStar))
             is FunctionDeclaration -> stmt.copy(body = stmt.body?.let { block ->
                 block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+            })
+            else -> stmt
+        }
+    }
+
+    /**
+     * Builds the System replacement for `import(spec)`:
+     * Calls `context_1.import(spec)` — System's runtime context API.
+     */
+    private fun buildSystemDynamicImport(spec: Expression): Expression =
+        CallExpression(
+            expression = PropertyAccessExpression(
+                expression = syntheticId("context_1"),
+                name = Identifier("import", pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            arguments = listOf(spec),
+            pos = -1, end = -1,
+        )
+
+    /** Recursively rewrites dynamic `import(spec)` calls in [expr] to `context_1.import(spec)`. */
+    private fun rewriteSystemDynExpr(expr: Expression): Expression {
+        if (isDynamicImportCall(expr)) {
+            val spec = rewriteSystemDynExpr((expr as CallExpression).arguments[0])
+            return buildSystemDynamicImport(spec)
+        }
+        return when (expr) {
+            is CallExpression -> expr.copy(
+                expression = rewriteSystemDynExpr(expr.expression),
+                arguments = expr.arguments.map { rewriteSystemDynExpr(it) }
+            )
+            is PropertyAccessExpression -> expr.copy(expression = rewriteSystemDynExpr(expr.expression))
+            is ElementAccessExpression -> expr.copy(
+                expression = rewriteSystemDynExpr(expr.expression),
+                argumentExpression = rewriteSystemDynExpr(expr.argumentExpression)
+            )
+            is BinaryExpression -> expr.copy(
+                left = rewriteSystemDynExpr(expr.left),
+                right = rewriteSystemDynExpr(expr.right)
+            )
+            is ConditionalExpression -> expr.copy(
+                condition = rewriteSystemDynExpr(expr.condition),
+                whenTrue = rewriteSystemDynExpr(expr.whenTrue),
+                whenFalse = rewriteSystemDynExpr(expr.whenFalse)
+            )
+            is AwaitExpression -> expr.copy(expression = rewriteSystemDynExpr(expr.expression))
+            is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteSystemDynExpr(it) })
+            is ParenthesizedExpression -> expr.copy(expression = rewriteSystemDynExpr(expr.expression))
+            is PrefixUnaryExpression -> expr.copy(operand = rewriteSystemDynExpr(expr.operand))
+            is PostfixUnaryExpression -> expr.copy(operand = rewriteSystemDynExpr(expr.operand))
+            is NewExpression -> expr.copy(
+                expression = rewriteSystemDynExpr(expr.expression),
+                arguments = expr.arguments?.map { rewriteSystemDynExpr(it) }
+            )
+            is SpreadElement -> expr.copy(expression = rewriteSystemDynExpr(expr.expression))
+            is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteSystemDynExpr(it) })
+            is ObjectLiteralExpression -> expr.copy(properties = expr.properties.map { prop ->
+                when (prop) {
+                    is PropertyAssignment -> prop.copy(initializer = rewriteSystemDynExpr(prop.initializer))
+                    is MethodDeclaration -> prop.copy(body = prop.body?.let { block ->
+                        block.copy(statements = block.statements.map { rewriteSystemDynStmt(it) })
+                    })
+                    else -> prop
+                }
+            })
+            is ArrowFunction -> when (val body = expr.body) {
+                is Expression -> expr.copy(body = rewriteSystemDynExpr(body))
+                is Block -> expr.copy(body = body.copy(statements = body.statements.map { rewriteSystemDynStmt(it) }))
+                else -> expr
+            }
+            is FunctionExpression -> expr.copy(body = expr.body.let { block ->
+                block.copy(statements = block.statements.map { rewriteSystemDynStmt(it) })
+            })
+            else -> expr
+        }
+    }
+
+    /** Recursively rewrites dynamic `import(spec)` calls in [stmt] to `context_1.import(spec)`. */
+    private fun rewriteSystemDynStmt(stmt: Statement): Statement {
+        return when (stmt) {
+            is ExpressionStatement -> stmt.copy(expression = rewriteSystemDynExpr(stmt.expression))
+            is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteSystemDynExpr(it) })
+            is ThrowStatement -> stmt.copy(expression = stmt.expression?.let { rewriteSystemDynExpr(it) })
+            is VariableStatement -> stmt.copy(declarationList = stmt.declarationList.copy(
+                declarations = stmt.declarationList.declarations.map { decl ->
+                    decl.copy(initializer = decl.initializer?.let { rewriteSystemDynExpr(it) })
+                }
+            ))
+            is Block -> stmt.copy(statements = stmt.statements.map { rewriteSystemDynStmt(it) })
+            is IfStatement -> stmt.copy(
+                expression = rewriteSystemDynExpr(stmt.expression),
+                thenStatement = rewriteSystemDynStmt(stmt.thenStatement),
+                elseStatement = stmt.elseStatement?.let { rewriteSystemDynStmt(it) }
+            )
+            is WhileStatement -> stmt.copy(
+                expression = rewriteSystemDynExpr(stmt.expression),
+                statement = rewriteSystemDynStmt(stmt.statement)
+            )
+            is DoStatement -> stmt.copy(
+                expression = rewriteSystemDynExpr(stmt.expression),
+                statement = rewriteSystemDynStmt(stmt.statement)
+            )
+            is ForStatement -> stmt.copy(statement = rewriteSystemDynStmt(stmt.statement))
+            is ForOfStatement -> stmt.copy(statement = rewriteSystemDynStmt(stmt.statement))
+            is ForInStatement -> stmt.copy(statement = rewriteSystemDynStmt(stmt.statement))
+            is FunctionDeclaration -> stmt.copy(body = stmt.body?.let { block ->
+                block.copy(statements = block.statements.map { rewriteSystemDynStmt(it) })
             })
             else -> stmt
         }
