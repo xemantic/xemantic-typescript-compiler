@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,798 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,800 / 10,078 tests passing (~87.2%).
+
+**B45.6 (2026-05-17, +2 — flips `jsxSpreadTag_ts__target_{es2015,esnext}` JS-emit)** —
+JSX attribute emit now inlines spreads of static object literals into the parent
+properties object BEFORE calling `transformObjectLiteral`. Pattern: `<Comp
+{...{ wrong: <div>x</div> }}/>` → `React.createElement(Comp, { wrong: ... })`
+instead of `Object.assign({}, { wrong: ... })`. TypeScript performs this
+syntactic replacement for JSX attribute objects regardless of target (es2015..
+esnext) since the spread of an object literal is equivalent to its keys both
+syntactically and for the override-order semantics of JSX attribute merging.
+Scoped to the JSX attribute-builder path in `Transformer.kt`'s
+`transformJsxSelfClosingElement`/`transformJsxElement` only — a prior attempt
+to inline globally in `transformObjectLiteral` regressed -2 tests due to
+unrelated object-spread expectations. The JSX-specific inlining is safe because
+the JSX transform path only fires for `<X .../>` JSX syntax. Full-suite
+10078/1275/3 (was 10078/1277/3, +2 net). Zero regressions.
+
+
 
 **B45.5 (2026-05-17, +2 — flips `moduleResolutionWithSuffixes_one_jsonModule_ts` + 1 other JS-emit)** —
 Two-piece fix for JSON imports under `moduleSuffixes` config:
