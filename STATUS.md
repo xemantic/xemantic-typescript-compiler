@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,758 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,759 / 10,078 tests passing (~86.9%).
+
+**B39.1 (2026-05-17, +1 — flips `exportAssignmentImportMergeNoCrash_ts` JS-emit)** —
+Preserve `const tempName = __importDefault(require(...))` for a default import whose
+user-facing local binding name is SHADOWED by a same-name top-level
+`VariableStatement`/`FunctionDeclaration`/`ClassDeclaration` declaration in the
+original source AND the binding name is referenced in value positions. TypeScript
+keeps the require's side-effect emit even when the temp const's identifier becomes
+unused in the rewritten output because the shadowing local wins the rename map
+(`Obj → exports.Obj` via Direct path) instead of `Obj → <temp>.default`. Example:
+`import Obj from "./assignment"; export const Obj = void Obj;` previously elided
+`const assignment_1 = __importDefault(require("./assignment"))` because
+`assignment_1` appeared unused in the result — now kept. Gate is strictly limited
+to default imports (not named — those may resolve to type-only targets via
+`export type` re-resolution) AND shadowed cases only (not normal const-enum
+imports whose references get inlined to `0 /* X.Foo */` and which must still
+elide). 22-line addition in `Transformer.kt` `transformToCommonJS` Step 2
+elision (~line 2486). Full-suite 10078/1316/3 (was 10078/1317/3, +1 net). Zero
+regressions.
 
 **B38.1 (2026-05-17, +1 — flips `privacyTopLevelInternalReferenceImportWithExport_ts` JS-emit)** —
 Exported `import alias = X.Y` is now erased when `X` is a non-exported but

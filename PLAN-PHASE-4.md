@@ -2474,6 +2474,18 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B39.1, +1, 8758 → 8759 passing — flips `exportAssignmentImportMergeNoCrash_ts` JS-emit).** Continuation /loop iteration after B38.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 160 candidates. Picked `exportAssignmentImportMergeNoCrash_ts` (4-line diff, CJS module + `import Obj from "./assignment"; export const Obj = void Obj;` — local `Obj` collides with imported `Obj`).
+
+  **Root cause.** The CJS transform emitted `const assignment_1 = __importDefault(require("./assignment"))` as expected, but the post-CJS elision pass (Transformer.kt Step 2, ~line 2486) removed it because `assignment_1` was never referenced in the rewritten output. Why? The local `Obj` (from `export const Obj = ...`) takes the Direct path: `renameMap["Obj"] = exports.Obj`, overriding the import alias's `renameMap["Obj"] = assignment_1.default`. So all `Obj` references in the body become `exports.Obj` and `assignment_1` truly is unused. TypeScript however still emits the require for its side effects, because the imported default binding `Obj` IS referenced in the original source (`void Obj` on the RHS of the const declaration — TDZ-style).
+
+  **Fix.** Added a second exemption to the elision check (Transformer.kt:2486-2547): identify import const stmts whose user-facing DEFAULT-binding name (from `clause.name`) is BOTH (a) shadowed by a same-name top-level `VariableStatement`/`FunctionDeclaration`/`ClassDeclaration`, AND (b) referenced in `valueReferencedNames` (original-source value references). For such stmts, skip elision. Gate is intentionally narrow:
+  - **Default imports only** — named-import bindings can resolve to type-only targets (`import { X }` where `X` came via `export type`), and those should still elide.
+  - **Shadowed cases only** — without shadow, normal const-enum imports (whose references get inlined to `0 /* X.Foo */`) would be erroneously kept.
+
+  Initial attempt (broader rule: keep any import where user-facing names are referenced) regressed 3 const-enum tests because const enum imports rely on the post-rewriting elision after their references are inlined away. The narrowed shadow-only gate resolves all 3 regressions.
+
+  **Full-suite verification:** 10078/1316/3 (was 10078/1317/3, +1 net). Zero regressions. Only the target test flips.
+
 **Session 2026-05-17 (B38.1, +1, 8757 → 8758 passing — flips `privacyTopLevelInternalReferenceImportWithExport_ts` JS-emit).** Continuation /loop iteration after B37.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 161 candidates. Picked `privacyTopLevelInternalReferenceImportWithExport_ts` (4-line diff, AMD module + `namespace m_private { ...; export interface i_private {}; export namespace mu_private { interface i {} } }` + top-level `export import im_public_i_private = m_private.i_private;`).
 
   **Root cause.** Two-piece divergence: (a) the void0 reset chain included `exports.im_public_i_private` and `exports.im_public_mu_private` where TypeScript skipped them; (b) body assignments `exports.im_public_i_private = m_private.i_private;` and `exports.im_public_mu_private = m_private.mu_private;` were emitted but TypeScript erased them. Both stem from one decision: should the `export import X = m_private.Y` alias be elided when `Y` is type-only but `m_private` is non-exported?
