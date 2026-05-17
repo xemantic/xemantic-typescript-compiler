@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,744 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,746 / 10,078 tests passing (~86.8%).
+
+**B28.1 (2026-05-17, +2 — flips `nodeNextPackageSelfNameWithOutDirDeclDirNestedDirs_ts` + `nodeNextPackageSelfNameWithOutDirDeclDirCompositeNestedDirs_ts` JS-emit)** —
+Dependency-ordering fix for relative imports that use a `.js`/`.mjs`/`.cjs`/`.jsx`
+extension (common under `nodenext` ESM where explicit extensions are required). Previously
+`extractRelativeImports` (`TypeScriptCompiler.kt`) tried only the literal resolved candidate
+`./src/thing.js`, which is NOT in `allTsFileNames` (the actual TS file is `src/thing.ts`),
+so the dependency edge was lost. The lost edge made `topologicalSort` emit `index.js`
+BEFORE `thing.js`, while TypeScript emits `thing.js` first (dependencies first). Added
+TS-equivalent candidates after the JS-extension candidate: `.js → .ts/.tsx`, `.mjs → .mts`,
+`.cjs → .cts`, `.jsx → .tsx/.ts`. The order is "JS-literal first, then TS-equivalents",
+preserving any existing tests that match the literal JS path. Both target tests flip
+clean (the `Composite` and `Nested` variants share the same fixture shape).
 
 **B27.1 (2026-05-17, +10 — flips `nodeNextImportModeImplicitIndexResolution_ts` JS-emit + 9 others)** —
 `package.json` `"type": "module"` / `"type": "commonjs"` lookup for Node16/Node18/Node20/NodeNext

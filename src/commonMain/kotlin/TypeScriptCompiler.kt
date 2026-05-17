@@ -1324,7 +1324,18 @@ private fun extractRelativeImports(
                 }
             }
         } else if (resolvedExt != null) {
-            listOf(resolved)
+            // For dependency ordering, when specifier uses JS extension (./foo.js, ./foo.mjs,
+            // etc.) — common under nodenext where ESM specifiers require explicit extension —
+            // also try the TS-equivalent file (./foo.ts, ./foo.mts) since that's the source
+            // we actually compile and need to order correctly.
+            val tsEquivalents = when (resolvedExt) {
+                ".js" -> listOf("$resolvedBase.ts", "$resolvedBase.tsx")
+                ".mjs" -> listOf("$resolvedBase.mts")
+                ".cjs" -> listOf("$resolvedBase.cts")
+                ".jsx" -> listOf("$resolvedBase.tsx", "$resolvedBase.ts")
+                else -> emptyList()
+            }
+            listOf(resolved) + tsEquivalents
         } else {
             listOf(
                 "$resolved.ts", "$resolved.tsx", "$resolved.mts", "$resolved.cts",
