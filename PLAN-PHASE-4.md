@@ -118,6 +118,14 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.2, +1, 8773 → 8774 — flips `requireOfJsonFileTypes_ts` JS-emit).** Continuation of session after B44.1. Picked from JS-emit ranker (16-line diff). Source has multiple JSON fixtures with single-line array/object literals (`[-10, 30]`, `[true, false]`, `["a", null, "string"]`). Our re-emit was expanding all to multi-line.
+
+  **Fix.** Single-file change in `TypeScriptCompiler.kt` `reformatJson`: fast-path when `trimmed` contains no `\n`. Normalize whitespace (`,` → `, `, `:` → `: `, drop runs of whitespace) and return on one line, preserving quoted-string spans verbatim (with `\\` escape handling). The existing multi-line path is unchanged. JSON files in the corpus that ARE multi-line (e.g. `{\n  "a": 1\n}`) still get re-formatted as before.
+
+  **Risk profile.** LOW. The fast-path only activates when the source has zero newlines — a strict subset of inputs. Multi-line JSON, all object/array shapes that already span lines, follow the existing path. Single-line input with computed-property-keys is already an early-return above (regex `]\s*:` check).
+
+---
+
 **Session 2026-05-17 (B44.1, +1, 8772 → 8773 — flips `inferTypePredicates_ts` JS-emit).** Continuation /loop iteration after B43.4. `find_candidates.py --fresh` returned 0/0/0; surveyed JS-emit ranker for previously-unclassified candidates. Picked `inferTypePredicates_ts` (13-line diff) — source contains multiple `// should error` / `// should ok` line comments between `=` and a multi-line array-method-chain initializer, plus comments between `arr` and `.filter` in arrow-body chained calls.
 
   **Two-piece fix.** Both shapes require capturing same-line `// line comment` that the scanner classifies as "trailing of the previous token" but where the next non-trivia token is on a new line. `scanner.getTrailingComments()` returns these immediately after the parse step that consumed the relevant token; they are lost on the next scan.

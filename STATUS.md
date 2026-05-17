@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,773 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,774 / 10,078 tests passing (~87.1%).
+
+**B44.2 (2026-05-17, +1 — flips `requireOfJsonFileTypes_ts` JS-emit)** —
+JSON reformatter `reformatJson` in TypeScriptCompiler.kt now preserves
+single-line shape when the entire (trimmed) JSON content has no newline.
+Previously, the reformatter unconditionally expanded all `[...]` and `{...}`
+to multi-line — turning `["a", null, "string"]` into 5 lines. Per
+TypeScript, JSON files preserve source layout: single-line arrays/objects
+stay single-line, multi-line stay multi-line. Fast-path implemented at the
+top of `reformatJson`: when `trimmed` contains no `\n`, normalize whitespace
+(`,` → `, `, `:` → `: `, collapse runs of whitespace) and return on one
+line. Quoted-string spans (with `\\` escape handling) preserved verbatim.
+The existing multi-line path is unchanged. Full-suite 10078/1301/3 (was
+10078/1302/3, +1 net). Zero regressions.
+
+
 
 **B44.1 (2026-05-17, +1 — flips `inferTypePredicates_ts` JS-emit)** —
 Preserve same-line `// line comment` between (a) `=` and a multi-line initializer
