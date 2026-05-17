@@ -873,6 +873,27 @@ class TypeScriptCompiler {
             // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
             // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
             val emptyJsxTsxFixtures = mutableSetOf<String>()
+            // `.d.ts` files that share the tsconfig directory prefix (when there is a
+            // tsconfig). Used in commonSourceDir computation so the longest-common
+            // ancestor across emitted files reflects `.d.ts` siblings under the same
+            // project root. `.d.ts` files outside the tsconfig directory (e.g. under
+            // `/types/` while sources live in `/app/`) — typically picked up via
+            // `typeRoots` — are excluded.
+            val dtsFileNamesInProjectDir = mutableListOf<String>()
+
+            // Tsconfig directory (parent dir of `tsconfig.json` when present). Used for
+            // resolving outDir paths AND for filtering `.d.ts` files into commonSourceDir
+            // computation (only `.d.ts` under the project root contribute).
+            val computedTsconfigDir: String? = run {
+                val tsconfigFile = parsed.files
+                    .find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
+                    ?.fileName
+                tsconfigFile?.let { tf ->
+                    val dir = tf.substringBeforeLast('/')
+                    // "/tsconfig.json".substringBeforeLast('/') = "" but dir is "/"
+                    if (dir.isEmpty() && tf.startsWith('/')) "/" else dir
+                }
+            }
 
             // Resolve outDir to an absolute path when fullEmitPaths is set.
             // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
@@ -882,16 +903,8 @@ class TypeScriptCompiler {
                 if (outDir.startsWith('/')) {
                     outDir
                 } else {
-                    val tsconfigFile = parsed.files
-                        .find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
-                        ?.fileName
-                    val tsconfigDir = tsconfigFile?.let { tf ->
-                        val dir = tf.substringBeforeLast('/')
-                        // "/tsconfig.json".substringBeforeLast('/') = "" but dir is "/"
-                        if (dir.isEmpty() && tf.startsWith('/')) "/" else dir
-                    }
-                    if (tsconfigDir != null && tsconfigDir.startsWith('/')) {
-                        val root = tsconfigDir.trimEnd('/')
+                    if (computedTsconfigDir != null && computedTsconfigDir.startsWith('/')) {
+                        val root = computedTsconfigDir.trimEnd('/')
                         "$root/$outDir"
                     } else outDir
                 }
@@ -1004,9 +1017,18 @@ class TypeScriptCompiler {
                 // Skip node_modules files — they are third-party and never reported on.
                 val isNodeModulesFile = file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")
 
-                // .d.ts files are parsed and bound (for checker globals) but not emitted
+                // .d.ts files are parsed and bound (for checker globals) but not emitted.
+                // Track those that live under the tsconfig directory so they contribute
+                // to commonSourceDirectory (e.g. `/app/lib/bar.d.ts` referenced from
+                // `/app/src/index.ts` should make commonSourceDir `/app`, not `/app/src`).
                 if (isDtsFile) {
-                    if (!isNodeModulesFile) diagnostics.addAll(parser.getDiagnostics())
+                    if (!isNodeModulesFile) {
+                        diagnostics.addAll(parser.getDiagnostics())
+                        if (computedTsconfigDir != null && computedTsconfigDir.isNotEmpty()
+                            && file.fileName.startsWith("$computedTsconfigDir/")) {
+                            dtsFileNamesInProjectDir.add(file.fileName)
+                        }
+                    }
                     continue
                 }
 
@@ -1024,8 +1046,7 @@ class TypeScriptCompiler {
                     includeReferencePathDeps = options.outFile != null,
                     paths = options.paths,
                     baseUrl = options.baseUrl,
-                    tsconfigDir = parsed.files.firstOrNull { it.fileName.substringAfterLast('/') == "tsconfig.json" }
-                        ?.fileName?.substringBeforeLast('/', ""),
+                    tsconfigDir = computedTsconfigDir,
                 )
 
                 tsFileNames.add(file.fileName)
@@ -1066,14 +1087,18 @@ class TypeScriptCompiler {
                 if (options.outFile != null) mutableMapOf() else null
 
             // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
-            // never emitted). Used to preserve subdirectory structure under outDir+fullEmitPaths.
+            // never emitted) AND any `.d.ts` files under the tsconfig project directory.
+            // Used to preserve subdirectory structure under outDir+fullEmitPaths.
             // When all input files are in the same directory, commonSourceDir == that directory,
             // and the existing basename-only behavior is preserved (no subdir component).
             // When files span subdirectories (e.g. `/src/a/x.ts`, `/src/b/y.ts`), commonSourceDir
             // is `/src` and each output keeps its `a/x.js` / `b/y.js` suffix under outDir.
+            // `.d.ts` files outside the tsconfig dir (e.g. under a `typeRoots` location like
+            // `/types/`) are excluded so they don't shift commonSourceDir upward.
             // Skipped when outFile is set (concatenation) or when no outDir.
             val commonSourceDir: String? = if (resolvedOutDir != null && options.outFile == null && tsFileNames.isNotEmpty()) {
-                val parentDirs = tsFileNames.map { it.substringBeforeLast('/', "") }
+                val parentDirs = (tsFileNames + dtsFileNamesInProjectDir)
+                    .map { it.substringBeforeLast('/', "") }
                 longestCommonPathPrefix(parentDirs)
             } else null
 
