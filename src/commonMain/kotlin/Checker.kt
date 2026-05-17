@@ -36755,7 +36755,22 @@ interface DataView {
             retType == null -> null
             retTypeName == null -> "non-void"  // unknown type (complex type we can't parse) → treat as non-void
             isVoidLikeTypeName(retTypeName) && retTypeName != "undefined" && !(retTypeName == "unknown" && options.noImplicitReturns) -> "truly-void"  // void/any/never/unknown (unknown only when !noImplicitReturns)
-            retTypeName == "undefined" -> if (retType is KeywordTypeNode) "pure-undefined" else "nullable"
+            retTypeName == "undefined" -> {
+                // "pure-undefined": the return type is exactly `undefined`, satisfied by implicit
+                // return. For async, also accept `Promise<undefined>` since async-unwrap pulls out
+                // a bare `undefined` keyword.
+                // "nullable": a UNION containing undefined alongside non-undefined non-void types
+                // (e.g. `undefined | number`) — implicit return only satisfies the `undefined`
+                // member, so TS2355 must fire when there are no explicit returns. Mirrors `Promise<undefined | number>`.
+                val unwrappedArg = if (isAsync && retType is TypeReference
+                    && (retType.typeName as? Identifier)?.text == "Promise"
+                    && retType.typeArguments?.size == 1) retType.typeArguments[0] else null
+                when {
+                    retType is KeywordTypeNode -> "pure-undefined"
+                    unwrappedArg is KeywordTypeNode -> "pure-undefined"
+                    else -> "nullable"
+                }
+            }
             else -> "non-void"  // number, string, unknown, union, function-type, etc.
         }
 
@@ -36823,8 +36838,27 @@ interface DataView {
 
         // For explicit return type annotations: report at the return type annotation
         if (retType != null) {
-            // "nullable" (e.g. `string | undefined`) only triggers TS7030 if there are some return-with-value stmts
-            if (retTypeClass == "nullable" && !hasAnyReturn) return
+            // "nullable" (union containing undefined, e.g. `undefined | number`):
+            //   - !hasAnyReturn → TS2355 (function with such a type still must return a value).
+            //     TypeScript treats `undefined | T` as requiring an explicit return because
+            //     the implicit `undefined` only satisfies the `undefined` member, not the `T` member.
+            //   - hasAnyReturn → falls through to TS7030 (mixed returns).
+            if (retTypeClass == "nullable" && !hasAnyReturn) {
+                val start = retType.pos
+                val spanLen = getRetTypeSpanLength(source, start)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.",
+                    category = DiagnosticCategory.Error,
+                    code = 2355,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = spanLen,
+                ))
+                return
+            }
 
             val start = retType.pos
             val spanLen = getRetTypeSpanLength(source, start)

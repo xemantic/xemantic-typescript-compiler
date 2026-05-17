@@ -2474,6 +2474,19 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B41.1, +2, 8760 → 8762 passing — flips `functionsMissingReturnStatementsAndExpressions_ts` target_es5 and target_es2015).** Continuation /loop iteration after B40.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). With XMLs still fresh from B40.1, surveyed the non-fresh MISSING DIAGS pool of 62 candidates. Found `functionsMissingReturnStatementsAndExpressions_ts` (MISS TS2355 @ 107,17) had a tractable root cause.
+
+  **Root cause.** The "nullable" classification in `checkBodyForImplicitReturn` (Checker.kt:36758) suppressed TS2355 entirely via a bare `return` early-exit: `if (retTypeClass == "nullable" && !hasAnyReturn) return`. The "nullable" classification matched any TYPE position where `getTypeNodeName` returned "undefined" but `retType` was not a `KeywordTypeNode` — i.e. UnionType containing `undefined`. But TypeScript's actual rule is narrower: `undefined` in a union does NOT satisfy "must return a value" — only `void`/`any`/`never` (in a union) or `undefined` (as bare keyword) suppress TS2355.
+
+  **Fix.** Replaced the bare early-return with a TS2355 emission for "nullable + !hasAnyReturn". Also updated the "pure-undefined" classification to also accept `Promise<undefined>` (where the Promise's single type argument is a `KeywordTypeNode` for `undefined`) — for async functions, `Promise<undefined>` is satisfied by implicit undefined return. The classification split:
+  - `KeywordTypeNode(undefined)` → "pure-undefined" (suppressed)
+  - `TypeReference(Promise<KeywordTypeNode(undefined)>)` for async → "pure-undefined" (suppressed)
+  - Other `undefined`-containing types (UnionType, `Promise<UnionType>`) → "nullable" (TS2355 fires when no returns)
+
+  **Verification.** Full-suite 10078/1313/3 (was 10078/1315/3, +2 net). Zero regressions. Both target_es5 and target_es2015 variants of `functionsMissingReturnStatementsAndExpressions_ts` flip clean. The strict variant (`functionsMissingReturnStatementsAndExpressionsStrictNullChecks_ts`) was already failing on a separate TS2345 case (`f(h1)` arg passing) — my fix correctly adds 4 new TS2355 diagnostics that match baseline but the test remains failing on the unrelated TS2345 gap; net effect on that test: still failing but closer (3 missed → 1 missed).
+
+  **CLAUDE.md gotcha update.** Added a note about how `undefined`-in-union does NOT satisfy "must return a value" — only bare `undefined` keyword (or `Promise<undefined>` for async) does. Mirrors TypeScript's narrower rule.
+
 **Session 2026-05-17 (post-B40.1 recon, +0 net).** Continuation /loop iteration after B40.1. With B40.1 the suite reached 10078/1315/3. Re-ran `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12) and the JS-emit ranker — 158 candidates. Surveyed top candidates by line-diff:
 
   - **`asyncArrowInClassES5_ts__target_es2015`** (2-line diff) — missing `var _a;` + `_a = Test;` capture. TypeScript emits a class-instance capture for static-arrow members even when the arrow body doesn't reference `this`. Underlying motivation unclear without TypeScript source — defensive capture. Skipped per session-prompt risk guidance.

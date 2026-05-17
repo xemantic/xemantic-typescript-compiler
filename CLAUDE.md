@@ -258,6 +258,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Abstract classes still need TS2564**: Only `declare` classes are exempt, NOT `abstract`.
 - **TS7030 guard**: Requires `strictNullChecks || noImplicitReturns`. TS2355 fires regardless.
 - **TS2366 requires strictNullChecks**: TS2366 ("Function lacks ending return statement and return type does not include 'undefined'") fires ONLY under `strictNullChecks`. Without it, use TS7030 ("Not all code paths return a value"). Do NOT gate TS2366 on `noImplicitReturns` alone.
+- **TS2355 for `undefined` in unions**: TS2355 fires for `function f(): undefined | T {}` (where T is non-void) when there are no return statements — `undefined` in a UNION does NOT satisfy "must return a value", only as a BARE `undefined` keyword (or `Promise<undefined>` for async) does. The classification in `checkBodyForImplicitReturn` (Checker.kt): `KeywordTypeNode(undefined)` and `TypeReference(Promise<KeywordTypeNode(undefined)>)` for async → "pure-undefined" (suppress all checks); UnionType-containing-undefined or `Promise<UnionType>` → "nullable" (TS2355 fires when no returns; TS7030 falls through when mixed returns).
 - **`NumericLiteralNode` in method names**: All method-name extraction functions must handle it, not just `Identifier` and `StringLiteralNode`.
 - **Bare specifier TS2882**: Always emit for bare (non-relative) specifiers except in AMD/System/UMD modules.
 
