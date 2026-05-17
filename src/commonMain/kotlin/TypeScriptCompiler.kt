@@ -933,6 +933,30 @@ class TypeScriptCompiler {
                         jsonBaseNameToImporter.putIfAbsent(jsonBase, file.fileName)
                     }
                 }
+                // When moduleSuffixes is set, the resolver prefers `<base><suffix>.json` over
+                // `<base>.json`. Rewrite each imported base name in-place when a suffixed
+                // variant exists in the file set. Matches TypeScript's node resolver behavior
+                // for JSON modules under `moduleSuffixes: [".ios"]` style configs.
+                if (!options.moduleSuffixes.isNullOrEmpty()) {
+                    val allBaseNames = parsed.files.map { it.fileName.substringAfterLast('/') }.toSet()
+                    val rewrites = mutableMapOf<String, String>()
+                    for (name in importedJsonBaseNames) {
+                        val withoutExt = name.removeSuffix(".json")
+                        for (suffix in options.moduleSuffixes!!) {
+                            if (suffix.isEmpty()) continue
+                            val suffixed = "$withoutExt$suffix.json"
+                            if (suffixed in allBaseNames) {
+                                rewrites[name] = suffixed
+                                break
+                            }
+                        }
+                    }
+                    for ((oldBase, newBase) in rewrites) {
+                        importedJsonBaseNames.remove(oldBase)
+                        importedJsonBaseNames.add(newBase)
+                        jsonBaseNameToImporter.remove(oldBase)?.let { jsonBaseNameToImporter[newBase] = it }
+                    }
+                }
             }
 
             for (file in parsed.files) {
@@ -1422,25 +1446,30 @@ class TypeScriptCompiler {
             // TypeScript reorders the source echoes when a tsconfig.json is present:
             //   1. Files OUTSIDE the tsconfig directory (out-of-tree fixtures) FIRST.
             //   2. node_modules files (in-tree third-party) NEXT.
-            //   3. In-tree non-node_modules (project source) LAST.
-            // Each subset preserved in input order. Required for tests like
-            // pathMappingBasedModuleResolution4_classic (out-of-tree fixture first) and
-            // tslibMissingHelper (node_modules before project files).
+            //   3. In-tree non-node_modules (project source) LAST, with `.json` files
+            //      BEFORE `.ts`/`.tsx`/etc. files within the project (each subset preserving
+            //      input order). Required for tests like
+            //      `moduleResolutionWithSuffixes_one_jsonModule` where the imported JSON
+            //      sibling files come before the importing `.ts` source.
+            // Required for tests like pathMappingBasedModuleResolution4_classic (out-of-tree
+            // fixture first) and tslibMissingHelper (node_modules before project files).
             val orderedSourceEchoes = if (!computedTsconfigDir.isNullOrEmpty()) {
                 val prefix = computedTsconfigDir.trimEnd('/') + "/"
                 val outside = mutableListOf<Pair<String, String>>()
                 val nodeModulesFiles = mutableListOf<Pair<String, String>>()
-                val inTreeProject = mutableListOf<Pair<String, String>>()
+                val inTreeProjectJson = mutableListOf<Pair<String, String>>()
+                val inTreeProjectNonJson = mutableListOf<Pair<String, String>>()
                 for (echo in sourceEchoes) {
                     val isInTree = echo.first.startsWith(prefix)
                     val isNodeModules = echo.first.contains("/node_modules/")
                     when {
                         !isInTree -> outside.add(echo)
                         isNodeModules -> nodeModulesFiles.add(echo)
-                        else -> inTreeProject.add(echo)
+                        echo.first.endsWith(".json") -> inTreeProjectJson.add(echo)
+                        else -> inTreeProjectNonJson.add(echo)
                     }
                 }
-                outside + nodeModulesFiles + inTreeProject
+                outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
             } else sourceEchoes
             return CompilationResult(
                 fileName = fileName,

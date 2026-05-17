@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,796 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,798 / 10,078 tests passing (~87.2%).
+
+**B45.5 (2026-05-17, +2 — flips `moduleResolutionWithSuffixes_one_jsonModule_ts` + 1 other JS-emit)** —
+Two-piece fix for JSON imports under `moduleSuffixes` config:
+(a) `TypeScriptCompiler.kt:extractRelativeImports` JSON re-emit pre-scan now post-processes
+`importedJsonBaseNames` when `moduleSuffixes` is set: for each imported base name, if a
+sibling file `<base><suffix>.json` exists in `parsed.files`, rewrite the entry in-place to
+the suffixed variant. Also rewrites `jsonBaseNameToImporter` accordingly. Matches
+TypeScript's node resolver behavior: with `moduleSuffixes: [".ios"]`, `import "./foo.json"`
+resolves to `/foo.ios.json` when that variant exists.
+(b) Source-echo reorder: split the existing in-tree-project bucket (introduced in B44.8)
+into two sub-buckets — `.json` files BEFORE `.ts/.tsx/...` files (each preserving input
+order). Required because TypeScript groups JSON source echoes before TS source echoes
+within a project. Pattern: under `moduleResolutionWithSuffixes_one_jsonModule_ts`, expected
+order is `[foo.ios.json, foo.json, index.ts]`; input order is `[index.ts, foo.ios.json,
+foo.json]`. Full-suite 10078/1277/3 (was 10078/1279/3, +2 net). Zero regressions.
+
+
 
 **B45.4 (2026-05-17, +1 — flips `verbatim-declarations-parameters_ts` JS-emit)** —
 `emitParameters` comma-after branch (`Emitter.kt`) now groups consecutive parameters
