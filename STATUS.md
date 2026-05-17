@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,730 / 10,078 tests passing (~86.6%).
+**Phase 4 — Checker buildout.** 8,731 / 10,078 tests passing (~86.6%).
+
+**B23.1 (2026-05-17, +1 — flips `optionalChainWithInstantiationExpression2_ts__target_es2019` JS-emit)** —
+Parser recovery for instantiation-expression followed by optional CALL or INDEX (not property access).
+In the LessThan postfix branch's instantiation-expression sub-case, when the token after the
+type-args is `?.`, peek one more token via `scanner.lookAhead`: if it's `(` or `[` (optional
+call / index), suppress TS1477 and wrap `result` in a synthetic `ParenthesizedExpression`
+(tagged with `instantiationEnd`) so the postfix loop continues to consume `?.()` / `?.[i]`,
+and downlevel optional-chain emit captures it in a temp var (non-trivial LHS). For property
+access (`a<b>?.IDENTIFIER`), keep the existing TS1477 emit. Paired with a transformer change
+in the CallExpression branch's non-downlevel path: when `target >= ES2020` and the optional
+call's LHS is a synthetic instantiation paren wrapping an Identifier, strip the paren — so
+ES2020 emits bare `a?.()` while ES2019 captures `(a)` in a temp var.
 
 **B22.1 (2026-05-17, +2 — flips `es6ImportParseErrors_ts` errors-baseline + JS-emit)** —
 Parser recovery for `import` followed by a non-identifier literal (e.g. `import 10;`). In the

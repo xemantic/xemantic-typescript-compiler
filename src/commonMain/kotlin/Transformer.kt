@@ -7175,7 +7175,16 @@ class Transformer(
                     val call = expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
                     ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = call, pos = -1, end = -1)
                 } else {
-                    expr.copy(expression = transformedExpr, typeArguments = null, arguments = transformedArgs)
+                    // B23.1: when not downleveling, strip synthetic instantiation parens
+                    // from optional-chain LHS: `a<b>?.()` → `a?.()` for ES2020+.
+                    val finalExpr = if (expr.questionDotToken
+                        && transformedExpr is ParenthesizedExpression
+                        && transformedExpr.instantiationEnd != null
+                        && transformedExpr.expression is Identifier
+                    ) {
+                        transformedExpr.expression
+                    } else transformedExpr
+                    expr.copy(expression = finalExpr, typeArguments = null, arguments = transformedArgs)
                 }
             }
 

@@ -4238,24 +4238,48 @@ class Parser(
                                 when (token) {
                                     SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> result
                                     SyntaxKind.Dot, SyntaxKind.QuestionDot -> {
-                                        // TS1477: an instantiation expression cannot be followed by a property access.
-                                        reportError(
-                                            "An instantiation expression cannot be followed by a property access.",
-                                            code = 1477,
-                                            overrideStart = typeArgsStart,
-                                            overrideLength = typeArgsEnd - typeArgsStart,
-                                        )
-                                        if (expressionHasOptionalChain(result))
-                                            // 17.44: tag synthetic-from-instantiation paren with the type-args
-                                            // end position so the checker can emit TS2532 with the correct
-                                            // squiggle covering `expr<T>` (not including the trailing `.`).
+                                        // B23.1: `?.` after instantiation expr may be an optional CALL
+                                        // (`a<b>?.()`) or optional INDEX (`a<b>?.[i]`) — both valid.
+                                        // Only `?.IDENTIFIER` (optional property access) is rejected
+                                        // with TS1477. Peek past `?.` to distinguish.
+                                        val isOptionalCallOrIndex = token == SyntaxKind.QuestionDot && scanner.lookAhead {
+                                            scanner.scan() // skip `?.`
+                                            val next = scanner.getToken()
+                                            next == SyntaxKind.OpenParen || next == SyntaxKind.OpenBracket
+                                        }
+                                        if (isOptionalCallOrIndex) {
+                                            // Wrap `a<b>` in a synthetic ParenthesizedExpression so
+                                            // downlevel optional-chain emit captures it in a temp var
+                                            // (non-trivial chain LHS). `instantiationEnd` tags this as
+                                            // synthetic so the transformer can drop the paren when no
+                                            // downlevel is needed (ES2020+). Continue the postfix loop
+                                            // to consume `?.()` / `?.[i]`.
                                             ParenthesizedExpression(
                                                 expression = result,
                                                 instantiationEnd = typeArgsEnd,
                                                 pos = result.pos,
                                                 end = getEnd(),
                                             )
-                                        else result
+                                        } else {
+                                            // TS1477: an instantiation expression cannot be followed by a property access.
+                                            reportError(
+                                                "An instantiation expression cannot be followed by a property access.",
+                                                code = 1477,
+                                                overrideStart = typeArgsStart,
+                                                overrideLength = typeArgsEnd - typeArgsStart,
+                                            )
+                                            if (expressionHasOptionalChain(result))
+                                                // 17.44: tag synthetic-from-instantiation paren with the type-args
+                                                // end position so the checker can emit TS2532 with the correct
+                                                // squiggle covering `expr<T>` (not including the trailing `.`).
+                                                ParenthesizedExpression(
+                                                    expression = result,
+                                                    instantiationEnd = typeArgsEnd,
+                                                    pos = result.pos,
+                                                    end = getEnd(),
+                                                )
+                                            else result
+                                        }
                                     }
                                     else -> ParenthesizedExpression(
                                         expression = result,
