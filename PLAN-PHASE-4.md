@@ -118,7 +118,11 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
-**Session 2026-05-17 (B42.1 + B42.2 + B42.3 + B42.4, +4 net, 8763 → 8767 passing).** Continuation /loop iteration after B41.2. Four surgical fixes landed in one session — three in `@isolatedModules` cross-file analysis, one in multi-file dependency-ordering for bare specifiers.
+**Session 2026-05-17 (B42.1 + B42.2 + B42.3 + B42.4 + B42.5 + B42.6, +6 net, 8763 → 8769 passing).** Continuation /loop iteration after B41.2. Six surgical fixes landed in one session — three in `@isolatedModules` cross-file analysis (B42.1/B42.2/B42.3), one in multi-file dependency-ordering for bare specifiers (B42.4), two in parser error-recovery wording (B42.5 TS1247-vs-TS1246, B42.6 TS2809 destructuring-assignment hint).
+
+**B42.6 (+1, flips `destructionAssignmentError_ts`).** Added TS2809 detection in `parsePrimaryExpression`'s else branch: when the current token is `Equals` and the immediately-preceding non-trivia character (via direct source-text scan from `scanner.getTokenPos()`) is `}`, emit TS2809 with the destructuring-assignment hint instead of generic TS1109. Other paths to TS1109 (template-literal EOF, yield-as-type-assertion-arg, etc.) are unaffected.
+
+**B42.5 (+1, flips `errorOnInitializerInObjectTypeLiteralProperty_ts`).** Parser's `parseTypeMember` (shared by interface bodies and type literals) now picks TS1247 ("A type literal property cannot have an initializer.") vs TS1246 ("An interface property cannot have an initializer.") based on a new class-level flag `inTypeLiteralForErrorWording` toggled by `parseTypeLiteralOrMappedType` with try/finally restore.
 
 **B42.4 (+1, flips `requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs_ts` JS-emit).** `extractRelativeImports` now walks up from the current file's directory looking for `node_modules/<specifier>.ts` / `.tsx` / `.d.ts` / `/index.{ts,tsx,d.ts}` when a bare specifier didn't resolve via the standard candidate list. Probe-dir walk: start at `dir`, try probes; on no match move up one segment via `lastIndexOf('/')` and retry; stop at empty string. Only fires for non-relative specifiers AFTER standard candidates failed — bounded fallback. Multi-file test fixtures that set up `@Filename: /src/node_modules/X.ts` and import via bare specifier from a sibling rely on this dep edge for `topologicalSort` to produce the correct emit order (node_modules/X.js before the importer).
 
