@@ -60355,6 +60355,15 @@ interface DataView {
     /** Returns true if [typeNode] (object side of an IndexedAccessType) refers to at
      * least one class with a private/protected member named [propName]. An intersection
      * constraint returns false — TS allows indexed access through intersection. */
+    /**
+     * Returns true when [typeNode] names a TYPE PARAMETER (or contains one in a
+     * union) whose constraint exposes a private/protected member named [propName].
+     * Direct class/interface references that happen to have a same-named private
+     * member do NOT count — TS4105's message ("cannot be accessed on a type
+     * parameter") only applies when the access is THROUGH a type parameter.
+     * `(Foo | Bar)["foo"]` where Foo/Bar are concrete classes with `protected foo`
+     * should fire TS2339, not TS4105.
+     */
     private fun indexedAccessHasPrivateMember(
         typeNode: TypeNode, propName: String,
         tpConstraints: Map<String, TypeNode>, visited: MutableSet<String>,
@@ -60365,19 +60374,35 @@ interface DataView {
             is IntersectionType -> false
             is TypeReference -> {
                 val baseName = (typeNode.typeName as? Identifier)?.text ?: return false
-                val constraint = tpConstraints[baseName]
-                if (constraint != null) {
-                    if (baseName in visited) return false
-                    visited.add(baseName)
-                    val r = indexedAccessHasPrivateMember(constraint, propName, tpConstraints, visited)
-                    visited.remove(baseName)
-                    r
-                } else {
-                    classOrInterfaceHasPrivatePropByName(baseName, propName)
-                }
+                val constraint = tpConstraints[baseName] ?: return false
+                if (baseName in visited) return false
+                visited.add(baseName)
+                val r = constraintHasPrivatePropByName(constraint, propName)
+                visited.remove(baseName)
+                r
             }
             else -> false
         }
+    }
+
+    /**
+     * Walks a type-parameter constraint to determine whether it exposes a
+     * private/protected member named [propName]. Used by TS4105: the constraint
+     * (e.g. `T extends A`) is what determines whether T["x"] would access a
+     * private member. Walks through Parenthesized/Union/Intersection wrappers.
+     */
+    private fun constraintHasPrivatePropByName(typeNode: TypeNode, propName: String): Boolean = when (typeNode) {
+        is ParenthesizedType -> constraintHasPrivatePropByName(typeNode.type, propName)
+        is UnionType -> typeNode.types.any { constraintHasPrivatePropByName(it, propName) }
+        // IntersectionType constraint: TypeScript treats `T extends A & B` indexed
+        // access as compatible — the intersection has "merged" access. Do NOT fire
+        // TS4105 here (mirrors the pre-existing IntersectionType -> false rule).
+        is IntersectionType -> false
+        is TypeReference -> {
+            val baseName = (typeNode.typeName as? Identifier)?.text
+            if (baseName != null) classOrInterfaceHasPrivatePropByName(baseName, propName) else false
+        }
+        else -> false
     }
 
     private fun classOrInterfaceHasPrivatePropByName(className: String, propName: String): Boolean {
