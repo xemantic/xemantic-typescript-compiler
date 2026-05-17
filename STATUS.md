@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,759 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,760 / 10,078 tests passing (~86.9%).
+
+**B40.1 (2026-05-17, +1 — flips `declarationEmitResolveTypesIfNotReusable_ts` JS-emit)** —
+Parser's `TypeOfKeyword` branch in `parseNonArrayType` now handles indexed-access
+suffix `typeof X[K]` in addition to the existing array-suffix `typeof X[]` case.
+Previously, `(o: typeof a['a']) => {}` would parse `typeof a` as the type and leave
+`['a']` for the outer parser, which misinterpreted it as a destructured second
+parameter (yielding `(o, []) => 'a';\n{ }`). The extended `while` loop now follows
+the same pattern as the primary-type path immediately below — when the bracket is
+not empty, consume `[`, parse an index type, expect `]`, wrap in `IndexedAccessType`.
+ASI guard added (`!scanner.hasPrecedingLineBreak()`) to match the primary-type
+loop's behavior. Full-suite 10078/1315/3 (was 10078/1316/3 post-B39.1, +1 net).
+Zero regressions; only the target test flips.
 
 **B39.1 (2026-05-17, +1 — flips `exportAssignmentImportMergeNoCrash_ts` JS-emit)** —
 Preserve `const tempName = __importDefault(require(...))` for a default import whose

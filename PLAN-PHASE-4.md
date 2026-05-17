@@ -2474,6 +2474,16 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B40.1, +1, 8759 → 8760 passing — flips `declarationEmitResolveTypesIfNotReusable_ts` JS-emit).** Continuation /loop iteration after B39.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 159 candidates. Spotted `declarationEmitResolveTypesIfNotReusable_ts` (3-line diff) — source contains `(o: typeof a['a']) => {}` and we parse it as `(o, []) => 'a'; { }` (the `['a']` is misinterpreted as a destructured second parameter).
+
+  **Root cause.** Parser's `TypeOfKeyword` branch in `parseNonArrayType` (Parser.kt:6109-6127) handles array suffix `typeof X[]` but does NOT handle indexed-access suffix `typeof X[K]`. So `typeof a['a']` parses as `typeof a` (returning early at the bracket-with-non-`]`), leaving `['a']` for the outer parameter-parser to misinterpret. The non-TypeOf branch (a few lines below) DOES handle `T[K]` via the same `while (token == OpenBracket)` loop.
+
+  **Fix.** Extended the TypeOf branch's loop to handle the indexed-access case via the existing pattern: when bracket is not empty, consume `[`, parse an index type, expect `]`, wrap in `IndexedAccessType`. Also added `!scanner.hasPrecedingLineBreak()` ASI guard to match the primary-type loop's behavior — protects against consuming `[` on a new line.
+
+  **Verification.** Full-suite 10078/1315/3 (was 10078/1316/3, +1 net). Zero regressions; only target test flips clean.
+
+  **Risk profile that materialized.** LOW as expected. Existing array-suffix `typeof X[]` and `typeof X<T>[]` cases preserved (still hit the lookahead-empty-bracket arm first). The new arm only fires for non-empty bracket content — adds previously-missing IndexedAccess parsing for `typeof X[K]`. The ASI guard is purely additive (the prior code didn't guard against bracket-on-new-line; the primary-type path already does).
+
 **Session 2026-05-17 (B39.1, +1, 8758 → 8759 passing — flips `exportAssignmentImportMergeNoCrash_ts` JS-emit).** Continuation /loop iteration after B38.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 160 candidates. Picked `exportAssignmentImportMergeNoCrash_ts` (4-line diff, CJS module + `import Obj from "./assignment"; export const Obj = void Obj;` — local `Obj` collides with imported `Obj`).
 
   **Root cause.** The CJS transform emitted `const assignment_1 = __importDefault(require("./assignment"))` as expected, but the post-CJS elision pass (Transformer.kt Step 2, ~line 2486) removed it because `assignment_1` was never referenced in the rewritten output. Why? The local `Obj` (from `export const Obj = ...`) takes the Direct path: `renameMap["Obj"] = exports.Obj`, overriding the import alias's `renameMap["Obj"] = assignment_1.default`. So all `Obj` references in the body become `exports.Obj` and `assignment_1` truly is unused. TypeScript however still emits the require for its side effects, because the imported default binding `Obj` IS referenced in the original source (`void Obj` on the RHS of the const declaration — TDZ-style).
