@@ -453,7 +453,25 @@ class Parser(
             // import( = dynamic import call; import. = import.meta — parse as expression
             val nextIsParen = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.OpenParen }
             val nextIsDot = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Dot }
+            // B22.1: when the token after `import` is clearly not a valid import-clause start
+            // (e.g. `import 10;` — numeric/bigint/regex literal), emit TS1128 at the `import`
+            // keyword and skip only the keyword so the remainder parses as a regular statement.
+            // Valid import starts: StringLiteral (side-effect), Identifier (default name),
+            // OpenBrace (named), Asterisk (namespace), TypeKeyword (type-only).
+            val nextIsInvalid = scanner.lookAhead {
+                scanner.scan()
+                when (scanner.getToken()) {
+                    SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral,
+                    SyntaxKind.RegularExpressionLiteral -> true
+                    else -> false
+                }
+            }
             if (nextIsParen || nextIsDot) parseExpressionStatement()
+            else if (nextIsInvalid) {
+                reportError("Declaration or statement expected.", code = 1128, overrideLength = 6)
+                nextToken()
+                null
+            }
             else parseImportDeclaration()
         }
         ExportKeyword -> parseExportDeclaration()
