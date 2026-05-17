@@ -1,6 +1,34 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,772 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,773 / 10,078 tests passing (~87.1%).
+
+**B44.1 (2026-05-17, +1 — flips `inferTypePredicates_ts` JS-emit)** —
+Preserve same-line `// line comment` between (a) `=` and a multi-line initializer
+or (b) an expression and the dot of a chained property access on the next line.
+Source shapes:
+```
+const x = // should error
+   [1, 2, 3]
+const y = list.map((arr) => arr // should error
+   .filter(...));
+```
+Previously both comments were dropped. Two-piece fix: (a) new optional
+`initializerLeadingTrailingComments` field on `VariableDeclaration` — populated
+in `parseVariableDeclaration` from `scanner.getTrailingComments()` right after
+consuming `=`, when `scanner.hasPrecedingLineBreak()` is true (initializer
+starts on next line). Emitted by `emitVariableDeclaration` as `= <comment>\n
+<value>`. (b) new optional `expressionTrailingLineComments` field on
+`PropertyAccessExpression` — populated in the `Dot` branch of
+`parseCallAndAccess` when `newLineBefore=true` AND `result.trailingComments`
+is empty (CallExpression already captures these via `callTrailing` when
+chained — re-capturing would double-emit, see B44.1 fix). Emitted by
+`emitPropertyAccess` after the expression's regular trailing comments,
+BEFORE the newline+indent+dot. Both gates: `text.startsWith("//")` AND
+`hasTrailingNewLine` AND `!hasPrecedingNewLine` (same-line line comment
+that terminates the line). Full-suite 10078/1302/3 (was 10078/1303/3, +1
+net). Zero regressions.
+
+
 
 **B43.3 (2026-05-17, +1 — flips `referenceSatisfiesExpression_ts` errors-baseline)** —
 Three-part definite-assignment fix for `(b satisfies T) = ...`, `[(c satisfies T)] = [...]`
