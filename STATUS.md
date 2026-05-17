@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,791 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,792 / 10,078 tests passing (~87.2%).
+
+**B45.2 (2026-05-17, +1 — flips `moduleResolutionWithSuffixes_one_dirModuleWithIndex_ts` JS-emit)** —
+`extractRelativeImports` moduleSuffixes branch now probes BOTH sibling-file form
+(`./foo<suffix>.ts`) and directory-index form (`./foo/index<suffix>.ts`) when the
+specifier has no extension. TypeScript's node resolver consults both shapes; we
+were only probing the sibling-file form. Required for the target test where
+`import { ios } from "./foo"` under `moduleSuffixes: [".ios"]` must resolve to
+`/foo/index.ios.ts`. Without the dep edge, `/index.ts` (importer) was emitted
+BEFORE `/foo/index.ios.ts` (its actual import target), violating expected
+topo order. Two new probes per suffix: `"${resolvedBase}${sep}index$suffix.ts"`
+and `"${resolvedBase}${sep}index$suffix.tsx"`. Full-suite 10078/1283/3 (was
+10078/1284/3, +1 net). Zero regressions.
+
+
 
 **B45.1 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution6_classic_ts` JS-emit)** —
 Two-piece fix for AMD `export {x} from "mod"` re-export emission + rootDirs `.d.ts` probe:
