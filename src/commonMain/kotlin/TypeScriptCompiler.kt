@@ -1032,8 +1032,17 @@ class TypeScriptCompiler {
                     continue
                 }
 
-                // node_modules files are never re-emitted by TypeScript (they're third-party code)
-                if (isNodeModulesFile) continue
+                // node_modules files are typically third-party and not re-emitted by
+                // TypeScript. EXCEPTION: when there's no `tsconfig.json` AND neither
+                // `@noImplicitReferences: true` nor `@moduleResolution: bundler` are
+                // set, all `@filename` files behave like command-line root files —
+                // TypeScript emits root `.ts` files even when they live under
+                // `node_modules/`. The two excluding flags identify the "treat
+                // node_modules strictly as external" modes used by bundler/lib-resolution
+                // tests where node_modules content must NEVER reach JS output.
+                val isBundlerOrNoImplicit = options.moduleResolution?.lowercase() == "bundler" ||
+                    options.noImplicitReferences
+                if (isNodeModulesFile && (computedTsconfigDir != null || isBundlerOrNoImplicit)) continue
 
                 diagnostics.addAll(parser.getDiagnostics())
 

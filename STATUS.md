@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,753 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,754 / 10,078 tests passing (~86.9%).
+
+**B35.1 (2026-05-17, +1 — flips `moduleAugmentationInDependency2_ts` JS-emit)** —
+node_modules `.ts` root files are now emitted to JS in the no-tsconfig non-bundler
+mode used by `moduleAugmentationInDependency2`. Previously, every file whose path
+contained `node_modules/` was unconditionally skipped from JS emit at
+`TypeScriptCompiler.kt:1036`, dropping `index.js` for `/node_modules/A/index.ts`
+when the test had no `tsconfig.json`. TypeScript itself only treats node_modules
+files as "non-emit external code" under specific conditions: when a `tsconfig.json`
+is present (project mode — the tsconfig's `include`/`files`/exclude defines
+roots and node_modules is implicitly excluded), or when `@noImplicitReferences:
+true` or `@moduleResolution: bundler` is set (modes that treat node_modules as
+strictly external). In the absence of all three, `@filename` root files behave
+like command-line root inputs and ARE emitted regardless of path. Mirrored via
+new gate `if (isNodeModulesFile && (computedTsconfigDir != null ||
+options.noImplicitReferences || options.moduleResolution?.lowercase() ==
+"bundler")) continue`. Verified zero regressions across 10078-test suite — the
+other tests with node_modules `.ts` roots (`nodeResolution6/8`,
+`noBundledEmitFromNodeModules`, `requireOfJsonFile*` series, `commonSourceDirectory`,
+`compositeWithNodeModulesSourceFile`, `moduleResolutionWithSuffixes_one_externalTSModule`)
+all set at least one of those flags or include a `tsconfig.json`.
 
 **B34.1 (2026-05-17, +1 — flips `reexportMissingDefault5_ts` JS-emit)** —
 System module format now emits ONE `exports_1({...})` call per source `export { ... } from "X"`
