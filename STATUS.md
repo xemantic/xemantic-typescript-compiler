@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,802 / 10,078 tests passing (~87.3%).
+**Phase 4 — Checker buildout.** 8,804 / 10,078 tests passing (~87.4%).
+
+**B46.2 (2026-05-17, +2 — flips `computedEnumMemberSyntacticallyString2_ts__isolatedmodules_{true,false}` JS-emit)** —
+Builds on B46.1's cross-file const inlining. Type-only operators on the ORIGINAL enum-member
+initializer (`as` / `<T>` type assertion, `!` non-null assertion, `satisfies`) now suppress
+the string-enum fold path — TypeScript preserves the runtime expression form even when the
+underlying expression would normally fold to a string literal. New helper
+`isTypeOnlyOperatorWrapping(expr)` in `Transformer.kt` walks ParenthesizedExpression at
+outermost layer and returns true for the four wrapper kinds. Wired into `transformEnum`'s
+member loop: when `initIsTypeWrapped` is true, force `constStringVal = null` (skip string
+fold) AND `isSyntacticallyStr = false` (skip string-enum-emit path). This matches TypeScript's
+emit for `enum Foo { E1 = (`${BAR}`) as string, E2 = `${BAR}`! }` which emits the reverse-
+mapping form `Foo[Foo["E1"] = (`${BAR}`)] = "E1";` not the inlined string form. Side effect:
+the original `import { BAR }` is preserved (referenced by E1/E2 runtime emission), and the
+spurious `export {};` marker is no longer emitted (file is already a module via the import).
+Full-suite 10078/1271/3 (was 10078/1273/3, +2 net). Zero regressions.
+
+
 
 **B46.1 (2026-05-17, +2 — flips `enumWithNonLiteralStringInitializer_ts` JS-emit + 1 more)** —
 Cross-file `const X = <stringLiteral|numericLiteral>` imports are now inlined into
