@@ -21468,6 +21468,14 @@ interface DataView {
                             is Constructor -> member.body?.let {
                                 checkNullUndefinedInStatements(it.statements, source, fileName)
                             }
+                            // B18.4: descend into accessor bodies so TS18050 fires inside
+                            // `get x() { throw undefined.; }` and similar patterns.
+                            is GetAccessor -> member.body?.let {
+                                checkNullUndefinedInStatements(it.statements, source, fileName)
+                            }
+                            is SetAccessor -> member.body?.let {
+                                checkNullUndefinedInStatements(it.statements, source, fileName)
+                            }
                             else -> {}
                         }
                     }
