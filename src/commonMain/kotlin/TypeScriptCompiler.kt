@@ -1606,13 +1606,19 @@ private fun extractRelativeImports(
         val resolvedExt = knownExtensions.firstOrNull { resolved.endsWith(it) }
         val resolvedBase = if (resolvedExt != null) resolved.dropLast(resolvedExt.length) else resolved
         val candidates: List<String> = if (!moduleSuffixes.isNullOrEmpty()) {
-            // Only try suffixed variants
+            // Only try suffixed variants. For a no-extension specifier "./foo", try BOTH
+            // sibling-file form ("./foo<suffix>.ts") AND directory-index form
+            // ("./foo/index<suffix>.ts") — TypeScript's node resolver consults both.
             moduleSuffixes.flatMap { suffix ->
                 if (resolvedExt != null) {
                     listOf("$resolvedBase$suffix$resolvedExt")
                 } else {
-                    listOf("$resolvedBase$suffix.ts", "$resolvedBase$suffix.tsx",
-                        "$resolvedBase$suffix.mts", "$resolvedBase$suffix.cts")
+                    listOf(
+                        "$resolvedBase$suffix.ts", "$resolvedBase$suffix.tsx",
+                        "$resolvedBase$suffix.mts", "$resolvedBase$suffix.cts",
+                        "${resolvedBase}${sep}index$suffix.ts",
+                        "${resolvedBase}${sep}index$suffix.tsx",
+                    )
                 }
             }
         } else if (resolvedExt != null) {
