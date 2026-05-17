@@ -2474,6 +2474,17 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (post-B41.1 recon + MAINT chore, +0 net, 8762 stable).** Continuation /loop iteration after B41.1. Surveyed remaining MISSING DIAGS candidates after B41.1 flipped the non-strict variants of `functionsMissingReturnStatementsAndExpressions_ts`. Items investigated and classified as architectural / multi-piece (not landed this session):
+
+- `augmentExportEquals1/1_1/2/2_1/7_ts`: needs BOTH TS2671 (augment-non-module) AND TS2503 (alias-as-namespace) emissions to flip. Attempted TS2671 fix — fires correctly for ambient `declare module "X" { function foo; export = foo }` patterns (excludes namespace-merged exports), but TS2503 fix (alias resolving to Function) doesn't fire because the `import X = require("ambient-name")` alias resolution path doesn't surface the underlying Function flag through `resolveAlias`. Reverted.
+- `numericLiteralsWithTrailingDecimalPoints01_ts`: comment-preservation for `expr\n  /* comment */ .name` shape. Attempted leading-comment-before-dot emission for `newLineBefore=true` — comments aren't captured on `node.name.leadingComments` for this shape; would need parser/scanner trivia-attachment work. Reverted.
+- `promiseDefinitionTest_ts`: TS2300 duplicate-identifier against lib. Cross-symbol-table collision detection — needs lib-vs-user-decl merging logic. Out of scope.
+- `awaitedTypeNoLib_ts`: MISS TS2304 PromiseLike + TS2318 Awaited + TS2345 long chain. Adding "Awaited" to hardcoded `missingGlobals` list would regress other noLib tests that lack Awaited expectation. Out of scope.
+
+**MAINT-1 audit (2026-05-17).** Cross-referenced skip-log entries against current failing test list. Strikethrough'd 5 stale entries: `functionsMissingReturnStatementsAndExpressions_ts` (flipped B41.1), `moduleAugmentationInDependency2_ts` + `compositeWithNodeModulesSourceFile_ts` + `nodeResolution6_ts` + `nodeResolution8_ts` (all resolved by B35.1 gate), `moduleResolutionWithRequireAndImport_ts` (audit confirms passing). Post-audit: 107 active entries, 0 stale. No test-count delta.
+
+**Conclusion.** Surgical pool is genuinely exhausted at +1/+2 per-commit level. Next sessions should commit to architectural blockers per the existing recommendation (Blocker #1 control flow narrowing, Blocker #2 generic argument inference, Blocker #3 cross-file scope conflation).
+
 **Session 2026-05-17 (B41.1, +2, 8760 → 8762 passing — flips `functionsMissingReturnStatementsAndExpressions_ts` target_es5 and target_es2015).** Continuation /loop iteration after B40.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). With XMLs still fresh from B40.1, surveyed the non-fresh MISSING DIAGS pool of 62 candidates. Found `functionsMissingReturnStatementsAndExpressions_ts` (MISS TS2355 @ 107,17) had a tractable root cause.
 
   **Root cause.** The "nullable" classification in `checkBodyForImplicitReturn` (Checker.kt:36758) suppressed TS2355 entirely via a bare `return` early-exit: `if (retTypeClass == "nullable" && !hasAnyReturn) return`. The "nullable" classification matched any TYPE position where `getTypeNodeName` returned "undefined" but `retType` was not a `KeywordTypeNode` — i.e. UnionType containing `undefined`. But TypeScript's actual rule is narrower: `undefined` in a union does NOT satisfy "must return a value" — only `void`/`any`/`never` (in a union) or `undefined` (as bare keyword) suppress TS2355.
