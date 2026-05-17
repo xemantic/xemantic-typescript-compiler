@@ -8294,8 +8294,23 @@ class Transformer(
                     }
                 }
                 val objLit = ObjectLiteralExpression(properties = props, pos = -1, end = -1)
+                // For JSX attribute objects, TypeScript inlines spreads of static
+                // object literals into the parent properties (regardless of target).
+                // E.g. `<Comp {...{ wrong: x }}/>` → `React.createElement(Comp, { wrong: x })`
+                // instead of `Object.assign({}, { wrong: x })`. We do this expansion BEFORE
+                // calling `transformObjectLiteral` so the result has no remaining spreads
+                // for typical JSX patterns where the spread expression is `{...literal}`.
+                val inlinedProps = objLit.properties.flatMap { p ->
+                    if (p is SpreadAssignment && p.expression is ObjectLiteralExpression) {
+                        p.expression.properties
+                    } else listOf(p)
+                }
+                val inlinedObjLit = if (inlinedProps.size != objLit.properties.size ||
+                    inlinedProps.zip(objLit.properties).any { (a, b) -> a !== b }) {
+                    objLit.copy(properties = inlinedProps)
+                } else objLit
                 // Convert spread attributes to Object.assign() for targets below ES2018
-                transformObjectLiteral(objLit)
+                transformObjectLiteral(inlinedObjLit)
             }
         }
 
