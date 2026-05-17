@@ -3700,6 +3700,33 @@ class Transformer(
                 is ExportDeclaration -> {
                     if (stmt.isTypeOnly) {
                         // Type-only: erased
+                    } else if (stmt.exportClause is NamedExports && stmt.moduleSpecifier != null) {
+                        // export { x as y } from "m" — AMD: add dep+param, emit defineProperty getter per spec
+                        val moduleSpecifier = stmt.moduleSpecifier
+                        var reSpecStr = (normalizeModuleSpecifier(moduleSpecifier) as? StringLiteralNode)?.text
+                            ?: (moduleSpecifier as? StringLiteralNode)?.text ?: ""
+                        if (options.outFile != null && (reSpecStr.startsWith("./") || reSpecStr.startsWith("../"))) {
+                            reSpecStr = resolveAmdModuleName(reSpecStr, originalSourceFile.fileName)
+                        }
+                        val nonTypeSpecs = stmt.exportClause.elements.filter { !it.isTypeOnly }
+                        if (nonTypeSpecs.isNotEmpty()) {
+                            val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
+                            namedModuleImports.add(reSpecStr to tempName)
+                            for (spec in nonTypeSpecs) {
+                                val exportName = spec.name.text
+                                if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
+                            }
+                            for (spec in nonTypeSpecs) {
+                                val importedName = (spec.propertyName ?: spec.name).text
+                                val exportName = spec.name.text
+                                if (importedName == "default" && options.esModuleInterop) {
+                                    needsImportDefault = true
+                                    reExportGetters.add(makeReExportGetter(exportName, tempName, importedName, useImportDefault = true))
+                                } else {
+                                    reExportGetters.add(makeReExportGetter(exportName, tempName, importedName))
+                                }
+                            }
+                        }
                     } else if (stmt.exportClause is NamedExports) {
                         // export { x, y }
                         for (spec in stmt.exportClause.elements) {
@@ -3800,10 +3827,11 @@ class Transformer(
         } else renamedBody0
 
         // Import elision: determine which namedModuleImports are actually used.
-        // Collect refs from body + function stubs + deferred + protected export assignments,
+        // Collect refs from body + function stubs + deferred + protected export assignments +
+        // re-export getters (which use the import's param name inside the getter return expr),
         // but NOT importReassignments (otherwise every reassigned import would count as "used").
         val protectedAssignStmts = protectedExportAssignments.map { it.second }
-        val allRefs = collectValueReferences(renamedBody + functionExportStubs + deferredExportAssignments + protectedAssignStmts)
+        val allRefs = collectValueReferences(renamedBody + functionExportStubs + deferredExportAssignments + protectedAssignStmts + reExportGetters)
 
         // Filter namedModuleImports to keep only used ones
         val usedNamedModuleImports = namedModuleImports.filter { (_, paramName) ->

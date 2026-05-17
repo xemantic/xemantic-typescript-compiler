@@ -1,6 +1,28 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,790 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,791 / 10,078 tests passing (~87.2%).
+
+**B45.1 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution6_classic_ts` JS-emit)** —
+Two-piece fix for AMD `export {x} from "mod"` re-export emission + rootDirs `.d.ts` probe:
+(a) `Transformer.kt:transformToAMD` — new branch in the `ExportDeclaration` switch (ordered
+BEFORE the existing `NamedExports` branch) that handles `export { x as y } from "m"`.
+Adds `(spec, tempName)` to `namedModuleImports` (so `m` appears in AMD `define()` deps
+and `m_1` in the factory params), adds each export name to `exportedVarNames` (for the
+`exports.x = void 0` hoist), and emits one `Object.defineProperty(exports, exportName,
+{ enumerable: true, get: function () { return m_1.importedName; } })` per spec into
+`reExportGetters` (so the assignment goes through the same elision-aware path as the
+existing `export { X }` re-exports of named/default imports). Also extends
+`collectValueReferences` inputs in the import-elision pass to include `reExportGetters`
+— the new dep's `m_1` param appears only inside the getter return expr, so without this
+extension the elision pass would prune the dep as "unused" and strip it from the
+`define()` args list. (b) `TypeScriptCompiler.kt:extractRelativeImports` rootDirs probes
+— add `"$resolved2.d.ts"` to the list (sibling to the existing `.ts/.tsx/.mts/.cts` and
+`/index.*` probes). Required for the target test where `export {x} from "../file2"`
+under `rootDirs: [".", "../generated/src"]` must resolve `c:/root/generated/src/file2`
+to the actual `c:/root/src/file2.d.ts` file (one of the rootDir alternates). Full-suite
+10078/1284/3 (was 10078/1285/3, +1 net). Zero regressions.
+
+
 
 **B44.10 (2026-05-17, +1 — flips `requireOfJsonFileWithoutExtensionResolvesToTs_ts` JS-emit)** —
 Two-piece JSON re-emit fix in TypeScriptCompiler.kt:
