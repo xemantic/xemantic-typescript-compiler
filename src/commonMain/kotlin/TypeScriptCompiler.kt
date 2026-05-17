@@ -1498,6 +1498,28 @@ private fun extractRelativeImports(
                 break
             }
         }
+        // For bare specifiers that didn't resolve via the standard candidates list, try
+        // baseUrl-anchored lookup first (when set): "<baseUrl>/<specifier>.ts" / .tsx / .d.ts.
+        // This is required for tsconfig-style projects with `baseUrl` that import via
+        // non-relative paths (e.g. `import {x} from "folder2/file2"` with `baseUrl: c:/root`
+        // resolves to c:/root/folder2/file2.ts). Path-mapping via `paths` was already tried
+        // above; this branch is the bare baseUrl fallback.
+        if (!found && !specifier.startsWith("./") && !specifier.startsWith("../") && !baseUrl.isNullOrEmpty()) {
+            val baseDir = baseUrl.trimEnd('/')
+            val probes = listOf(
+                "$baseDir/$specifier.ts",
+                "$baseDir/$specifier.tsx",
+                "$baseDir/$specifier.d.ts",
+                "$baseDir/$specifier/index.ts",
+                "$baseDir/$specifier/index.tsx",
+                "$baseDir/$specifier/index.d.ts",
+            )
+            val match = probes.firstOrNull { it in allTsFileNames }
+            if (match != null) {
+                deps.add(match)
+                found = true
+            }
+        }
         // For bare specifiers that didn't resolve via the standard candidates list, walk up
         // from the current file's directory looking for node_modules/<specifier>.ts / .tsx / .d.ts.
         // This is required for test fixtures that set up @Filename: /src/node_modules/<X>.ts and

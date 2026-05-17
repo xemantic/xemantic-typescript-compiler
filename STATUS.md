@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,774 / 10,078 tests passing (~87.1%).
+**Phase 4 — Checker buildout.** 8,775 / 10,078 tests passing (~87.1%).
+
+**B44.3 (2026-05-17, +1 — flips `pathMappingBasedModuleResolution3_node_ts` JS-emit)** —
+`extractRelativeImports` in TypeScriptCompiler.kt now adds a `baseUrl`-anchored
+dep-edge probe for non-relative specifiers that didn't resolve via the standard
+candidate list AND didn't match a `paths` mapping. Probes: `$baseDir/$specifier.ts`,
+`.tsx`, `.d.ts`, `/index.{ts,tsx,d.ts}`. Required for tsconfig-style projects that
+use `baseUrl` (no `paths`) for non-relative imports: e.g. `baseUrl: c:/root` +
+`import {x} from "folder2/file2"` → resolves to `c:/root/folder2/file2.ts`. The
+existing node_modules walk-up fallback runs after (bare specifier check still
+fires when neither `paths` nor `baseUrl` matched). Full-suite 10078/1300/3 (was
+10078/1301/3, +1 net). Zero regressions.
+
+
 
 **B44.2 (2026-05-17, +1 — flips `requireOfJsonFileTypes_ts` JS-emit)** —
 JSON reformatter `reformatJson` in TypeScriptCompiler.kt now preserves

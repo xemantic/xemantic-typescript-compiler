@@ -118,6 +118,10 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.3, +1, 8774 → 8775 — flips `pathMappingBasedModuleResolution3_node_ts` JS-emit).** Continuation /loop after B44.2. From small-diff bucket of failing tests. `pathMappingBasedModuleResolution3_node_ts` has source `@baseUrl: c:/root` + `import {x} from "folder2/file2"` — TypeScript resolves to `c:/root/folder2/file2.ts`. Our `extractRelativeImports` only consulted `paths` (empty here) and node_modules walk-up (irrelevant); both bypass baseUrl-only setups. Without the dep edge, `file1` (the importer) had no deps so topo sort emitted it first; expected order is `file3 → file2 → file1` (file1 last). Fix: new probe block in `extractRelativeImports` before the node_modules walk-up — `$baseDir/$specifier.{ts,tsx,d.ts}` and `/index.{ts,tsx,d.ts}` — only runs when `paths` lookup failed AND `baseUrl` is set. Other 12-line and 18-line diff `pathMappingBasedModuleResolution*` siblings still fail on different gaps (resolved-vs-relative require strings, AMD `define` factory arg lists). Zero regressions.
+
+---
+
 **Session 2026-05-17 (B44.2, +1, 8773 → 8774 — flips `requireOfJsonFileTypes_ts` JS-emit).** Continuation of session after B44.1. Picked from JS-emit ranker (16-line diff). Source has multiple JSON fixtures with single-line array/object literals (`[-10, 30]`, `[true, false]`, `["a", null, "string"]`). Our re-emit was expanding all to multi-line.
 
   **Fix.** Single-file change in `TypeScriptCompiler.kt` `reformatJson`: fast-path when `trimmed` contains no `\n`. Normalize whitespace (`,` → `, `, `:` → `: `, drop runs of whitespace) and return on one line, preserving quoted-string spans verbatim (with `\\` escape handling). The existing multi-line path is unchanged. JSON files in the corpus that ARE multi-line (e.g. `{\n  "a": 1\n}`) still get re-formatted as before.
