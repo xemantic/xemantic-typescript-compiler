@@ -1,9 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,764 / 10,078 tests passing (~86.9%).
+**Phase 4 — Checker buildout.** 8,765 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.2 (2026-05-17, +1 — flips `isolatedModulesAmbientConstEnum_ts` errors-baseline)** —
+TS2748 "Cannot access ambient const enums when 'isolatedModules' is enabled" now fires
+for `E.X` where `E` is a `declare const enum E { ... }` in a non-.d.ts file under
+`@isolatedModules: true` (without `@preserveConstEnums`). Per-file check in
+`checkSinglePropertyAccess` (Checker.kt:50001): resolves the receiver identifier,
+walks `declarations` for `EnumDeclaration` with both Const + Declare modifiers, and
+emits TS2748 at the receiver position with squiggle length = identifier text length.
+Skip when `preserveConstEnums` is set (TypeScript still allows the access — the const
+enum is preserved at runtime as an object). Per-file scope: uses `binderResults` lookup
+matching the file's `sourceFile.fileName`, not a global enum cache, so cross-file
+const enums declared via `declare const enum` in OTHER files are still flagged.
+Full-suite 10078/1310/3 (was 10078/1311/3, +1 net). Zero regressions.
 
 **B42.1 (2026-05-17, +1 — flips `isolatedModulesExportDeclarationType_ts` JS-emit)** —
 For multi-file `@isolatedModules` with `import { T } from "./type"` where T resolves to
