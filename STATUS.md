@@ -1,9 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,769 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,770 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B43.1 (2026-05-17, +1 — flips `decoratorMetadataNoLibIsolatedModulesTypes_ts` errors-baseline)** —
+TS2583 "Cannot find name 'X'. Do you need to change your target library? Try changing the
+'lib' compiler option to 'es2015' or later." now fires in type-position for forward-declarable
+ES2015+ lib types (`Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, `Symbol`, `Iterable`,
+`IterableIterator`, `Iterator`) when `@noLib: true` is set OR `@lib` is non-empty but contains
+no `es2015`/`es6`/`esnext`/`es2.*` entries. Companion change: TS2564 ("Property has no
+initializer...") is suppressed for properties whose type references such an unavailable name —
+the type is effectively an error type at that point and TS2583 already flags the missing-lib
+issue. New helper `isLibTypeUnavailableEs2015(name)` and `typeContainsUnavailableLibName(type)`
+walks ArrayType/TupleType/UnionType/IntersectionType/TypeReference recursively.
+`es6`/`es2015` aliased in the lib-check to avoid FP TS2583 emission for `@lib: es6` tests
+(`asyncAwaitWithCapturedBlockScopeVar_ts`). Full-suite 10078/1305/3 (was 10078/1306/3, +1 net).
+Zero regressions.
 
 **B42.6 (2026-05-17, +1 — flips `destructionAssignmentError_ts` errors-baseline)** —
 TS2809 "Declaration or statement expected. This '=' follows a block of statements, so if
