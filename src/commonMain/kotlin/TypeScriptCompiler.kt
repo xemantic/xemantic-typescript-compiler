@@ -1483,16 +1483,44 @@ private fun extractRelativeImports(
                 "${resolved}${sep}index.ts", "${resolved}${sep}index.tsx"
             )
         }
+        var found = false
         for (candidate in candidates) {
             if (candidate in allTsFileNames) {
                 deps.add(candidate)
+                found = true
                 break
             }
             // Also try with "./" prefix (test files like @filename: ./foo.ts store as "./foo.ts")
             val dotSlashCandidate = "./$candidate"
             if (dotSlashCandidate in allTsFileNames) {
                 deps.add(dotSlashCandidate)
+                found = true
                 break
+            }
+        }
+        // For bare specifiers that didn't resolve via the standard candidates list, walk up
+        // from the current file's directory looking for node_modules/<specifier>.ts / .tsx / .d.ts.
+        // This is required for test fixtures that set up @Filename: /src/node_modules/<X>.ts and
+        // import via bare specifier from a sibling file — the dep edge must exist for emit-order
+        // correctness. Only fires for non-relative specifiers when standard resolution failed.
+        if (!found && !specifier.startsWith("./") && !specifier.startsWith("../")) {
+            var probeDir = dir
+            while (probeDir.isNotEmpty()) {
+                val probes = listOf(
+                    "$probeDir/node_modules/$specifier.ts",
+                    "$probeDir/node_modules/$specifier.tsx",
+                    "$probeDir/node_modules/$specifier.d.ts",
+                    "$probeDir/node_modules/$specifier/index.ts",
+                    "$probeDir/node_modules/$specifier/index.tsx",
+                    "$probeDir/node_modules/$specifier/index.d.ts",
+                )
+                val match = probes.firstOrNull { it in allTsFileNames }
+                if (match != null) {
+                    deps.add(match)
+                    break
+                }
+                val nextSlash = probeDir.lastIndexOf('/')
+                probeDir = if (nextSlash < 0) "" else probeDir.substring(0, nextSlash)
             }
         }
     }

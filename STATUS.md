@@ -1,9 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,766 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,767 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.4 (2026-05-17, +1 — flips `requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs_ts` JS-emit)** —
+`extractRelativeImports` now walks up from the current file's directory looking for
+`node_modules/<specifier>.ts` / `.tsx` / `.d.ts` / `/index.{ts,tsx,d.ts}` when a bare
+specifier didn't resolve via the standard candidate list. For multi-file test
+fixtures that set up `@Filename: /src/node_modules/X.ts` and import via bare
+specifier from a sibling, this adds the missing dep edge so `topologicalSort`
+produces the correct emit order (`node_modules/X.js` before the importer).
+Probe-dir walk: start at `dir`, try probes; on no match move up one segment
+(`lastIndexOf('/')`) and retry; stop at empty string. Only fires for non-relative
+specifiers AFTER standard candidates failed — bounded fallback. Full-suite
+10078/1308/3 (was 10078/1309/3, +1 net). Zero regressions.
 
 **B42.3 (2026-05-17, +1 — flips `isolatedModulesExportImportUninstantiatedNamespace_ts` errors-baseline)** —
 New TS1269 emission: "Cannot use 'export import' on a type or type-only namespace
