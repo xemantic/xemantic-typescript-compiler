@@ -1341,19 +1341,27 @@ class TypeScriptCompiler {
             else finalJsOutputs
 
             // TypeScript reorders the source echoes when a tsconfig.json is present:
-            // files OUTSIDE the tsconfig directory (parsed from `@filename` paths) appear
-            // FIRST, then files inside the tsconfig directory (each set in input order).
-            // Required for tests like pathMappingBasedModuleResolution4_classic_ts where
-            // `c:/root/tsconfig.json` is the project root and `c:/file4.ts` is an
-            // out-of-tree fixture; expected echo starts with file4.ts then file1/2/3.
+            //   1. Files OUTSIDE the tsconfig directory (out-of-tree fixtures) FIRST.
+            //   2. node_modules files (in-tree third-party) NEXT.
+            //   3. In-tree non-node_modules (project source) LAST.
+            // Each subset preserved in input order. Required for tests like
+            // pathMappingBasedModuleResolution4_classic (out-of-tree fixture first) and
+            // tslibMissingHelper (node_modules before project files).
             val orderedSourceEchoes = if (!computedTsconfigDir.isNullOrEmpty()) {
                 val prefix = computedTsconfigDir.trimEnd('/') + "/"
                 val outside = mutableListOf<Pair<String, String>>()
-                val inside = mutableListOf<Pair<String, String>>()
+                val nodeModulesFiles = mutableListOf<Pair<String, String>>()
+                val inTreeProject = mutableListOf<Pair<String, String>>()
                 for (echo in sourceEchoes) {
-                    if (echo.first.startsWith(prefix)) inside.add(echo) else outside.add(echo)
+                    val isInTree = echo.first.startsWith(prefix)
+                    val isNodeModules = echo.first.contains("/node_modules/")
+                    when {
+                        !isInTree -> outside.add(echo)
+                        isNodeModules -> nodeModulesFiles.add(echo)
+                        else -> inTreeProject.add(echo)
+                    }
                 }
-                outside + inside
+                outside + nodeModulesFiles + inTreeProject
             } else sourceEchoes
             return CompilationResult(
                 fileName = fileName,
