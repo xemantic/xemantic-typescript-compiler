@@ -598,7 +598,37 @@ class Transformer(
             }
         } else elided
 
-        return sourceFile.copy(statements = finalStatements)
+        // Post-process: under `noLib && isolatedModules`, wrap `__metadata("design:type", X)`
+        // args where X is a bare Identifier in `NOLIB_RUNTIME_QUESTIONABLE` (Map, Set, …).
+        // TypeScript emits a safety check pattern since these may not exist at runtime.
+        // Applied here (after module-format-specific transforms have run) so it covers
+        // ESM/AMD/UMD/System/CJS outputs uniformly.
+        val noLibWrapped = if (options.noLib && options.isolatedModules && needsMetadataHelper) {
+            val didWrapArr = BooleanArray(1) { false }
+            val wrappedList = finalStatements.map { stmt ->
+                wrapNoLibMetadataArgsInStatement(stmt, didWrapArr)
+            }
+            if (didWrapArr[0]) {
+                // Insert `var _a;` at the front (after any leading helpers/use-strict).
+                val aVarDecl = VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(VariableDeclaration(
+                            name = Identifier(text = "_a", pos = -1, end = -1),
+                            type = null, initializer = null, pos = -1, end = -1,
+                        )),
+                        flags = VarKeyword, pos = -1, end = -1,
+                    ),
+                    modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                )
+                // Find insertion point: after RawStatement (helpers) but before any
+                // other statement. This matches TypeScript's `var _a;` placement.
+                val insertPos = wrappedList.indexOfFirst { it !is RawStatement }
+                    .let { if (it < 0) wrappedList.size else it }
+                wrappedList.subList(0, insertPos) + aVarDecl + wrappedList.subList(insertPos, wrappedList.size)
+            } else finalStatements
+        } else finalStatements
+
+        return sourceFile.copy(statements = noLibWrapped)
     }
 
     /**
@@ -2322,6 +2352,7 @@ class Transformer(
             }
         }
 
+
         // Collect internal import alias names (from `import x = M.N`) for elision.
         // Only erase when the module reference root is a namespace declared in this file,
         // AND the alias name never appears elsewhere in the source (including type positions).
@@ -2665,6 +2696,127 @@ class Transformer(
             pos = -1, end = -1,
         )
         // Build: _a = (typeof X_1.default !== "undefined" && X_1.default.memberName)
+        val assignExpr = BinaryExpression(
+            left = syntheticId("_a"),
+            operator = SyntaxKind.Equals,
+            right = andExpr,
+            pos = -1, end = -1,
+        )
+        // Build: typeof (_a = ...) === "function"
+        val typeofAssign = TypeOfExpression(
+            expression = ParenthesizedExpression(expression = assignExpr, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val isFunctionCheck = BinaryExpression(
+            left = typeofAssign,
+            operator = SyntaxKind.EqualsEqualsEquals,
+            right = StringLiteralNode(text = "function", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // Build: typeof (...) === "function" ? _a : Object
+        return ConditionalExpression(
+            condition = isFunctionCheck,
+            whenTrue = syntheticId("_a"),
+            whenFalse = syntheticId("Object"),
+            pos = -1, end = -1,
+        )
+    }
+
+    /**
+     * Under `@noLib && @isolatedModules`, runtime availability of common ES library
+     * globals like `Map`, `Set`, `Promise`, etc. cannot be guaranteed (they may be
+     * polyfilled, may be absent). TypeScript safety-wraps `__metadata("design:type", X)`
+     * args when `X` is one of these names:
+     *   `typeof (_a = typeof X !== "undefined" && X) === "function" ? _a : Object`
+     */
+    private val NOLIB_RUNTIME_QUESTIONABLE = setOf(
+        "Map", "Set", "WeakMap", "WeakSet", "Promise", "Symbol", "BigInt",
+        "Proxy", "Reflect", "ArrayBuffer", "SharedArrayBuffer", "DataView",
+        "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+        "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+        "BigInt64Array", "BigUint64Array",
+    )
+
+    /**
+     * Wraps `__metadata("design:type", X)` args where `X` is a bare Identifier matching
+     * `NOLIB_RUNTIME_QUESTIONABLE`, using the safety check pattern. Returns the (possibly
+     * rewritten) statement and tracks whether any wrap happened via [didWrap].
+     */
+    private fun wrapNoLibMetadataArgsInStatement(stmt: Statement, didWrap: BooleanArray): Statement =
+        when (stmt) {
+            is ExpressionStatement -> {
+                val newExpr = wrapNoLibMetadataArgsInExpr(stmt.expression, didWrap)
+                if (newExpr !== stmt.expression) stmt.copy(expression = newExpr) else stmt
+            }
+            else -> stmt
+        }
+
+    private fun wrapNoLibMetadataArgsInExpr(expr: Expression, didWrap: BooleanArray): Expression =
+        when (expr) {
+            is BinaryExpression -> {
+                val newLeft = wrapNoLibMetadataArgsInExpr(expr.left, didWrap)
+                val newRight = wrapNoLibMetadataArgsInExpr(expr.right, didWrap)
+                if (newLeft !== expr.left || newRight !== expr.right) expr.copy(left = newLeft, right = newRight) else expr
+            }
+            is CallExpression -> {
+                val callee = expr.expression
+                val isMetadataCall = isHelperCall(callee, "__metadata")
+                if (isMetadataCall && expr.arguments.size == 2) {
+                    val key = (expr.arguments[0] as? StringLiteralNode)?.text
+                    if (key == "design:type") {
+                        val valueArg = expr.arguments[1]
+                        val wrapped = wrapNoLibIdentifier(valueArg)
+                        if (wrapped != null) {
+                            didWrap[0] = true
+                            expr.copy(arguments = listOf(expr.arguments[0], wrapped))
+                        } else expr
+                    } else if (key == "design:paramtypes" && expr.arguments[1] is ArrayLiteralExpression) {
+                        val arr = expr.arguments[1] as ArrayLiteralExpression
+                        val newElements = arr.elements.map { elem ->
+                            wrapNoLibIdentifier(elem) ?: elem
+                        }
+                        if (newElements.zip(arr.elements).any { (n, o) -> n !== o }) {
+                            didWrap[0] = true
+                            expr.copy(arguments = listOf(expr.arguments[0], arr.copy(elements = newElements)))
+                        } else expr
+                    } else expr
+                } else {
+                    val newArgs = expr.arguments.map { wrapNoLibMetadataArgsInExpr(it, didWrap) }
+                    val newCallee = wrapNoLibMetadataArgsInExpr(callee, didWrap)
+                    if (newArgs.zip(expr.arguments).any { (n, o) -> n !== o } || newCallee !== callee)
+                        expr.copy(expression = newCallee, arguments = newArgs) else expr
+                }
+            }
+            is ArrayLiteralExpression -> {
+                val newElements = expr.elements.map { wrapNoLibMetadataArgsInExpr(it, didWrap) }
+                if (newElements.zip(expr.elements).any { (n, o) -> n !== o })
+                    expr.copy(elements = newElements) else expr
+            }
+            else -> expr
+        }
+
+    /**
+     * If `expr` is a bare Identifier with text in `NOLIB_RUNTIME_QUESTIONABLE`, build the
+     * safety-wrap conditional. Returns null if no wrap applies.
+     */
+    private fun wrapNoLibIdentifier(expr: Expression): Expression? {
+        val id = expr as? Identifier ?: return null
+        if (id.text !in NOLIB_RUNTIME_QUESTIONABLE) return null
+        // Build: typeof X !== "undefined"
+        val typeofCheck = BinaryExpression(
+            left = TypeOfExpression(expression = id, pos = -1, end = -1),
+            operator = SyntaxKind.ExclamationEqualsEquals,
+            right = StringLiteralNode(text = "undefined", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        // Build: typeof X !== "undefined" && X
+        val andExpr = BinaryExpression(
+            left = typeofCheck,
+            operator = SyntaxKind.AmpersandAmpersand,
+            right = id,
+            pos = -1, end = -1,
+        )
+        // Build: _a = (typeof X !== "undefined" && X)
         val assignExpr = BinaryExpression(
             left = syntheticId("_a"),
             operator = SyntaxKind.Equals,
