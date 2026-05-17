@@ -2141,13 +2141,19 @@ class Emitter(
                     }
                     // Check if the next element starts on the same source line as this element ends.
                     // Preserve adjacent inline formatting when the source has it, regardless of
-                    // element kind. Matches TypeScript's emit for arrays like
+                    // element kind — but skip OmittedExpression (blank `,,` slot), which TypeScript
+                    // always emits on its own line in a multi-line array.
+                    // Matches TypeScript's emit for arrays like
                     // `[PropTypes.string, PropTypes.bool, PropTypes.shape({...})]` — first three
                     // elements stay on the line opened by `[`; the trailing call's multi-line
                     // object literal forces the closing `})];` onto its own line via the existing
                     // `closeOnSameLine` logic.
                     val nextElement = if (!isLast) node.elements[index + 1] else null
-                    val nextOnSameLine = nextElement != null
+                    // Two consecutive OmittedExpressions go on separate lines (TypeScript
+                    // emits each `,,` blank slot on its own line in a multi-line array).
+                    // Mixed Omitted+non-Omitted stays adjacent (e.g. `[, [...]]`).
+                    val omitOmitPair = element is OmittedExpression && nextElement is OmittedExpression
+                    val nextOnSameLine = nextElement != null && !omitOmitPair
                         && element.end >= 0 && nextElement.pos >= 0
                         && element.end < sourceText.length && nextElement.pos <= sourceText.length
                         && !sourceText.substring(element.end, nextElement.pos).contains('\n')
