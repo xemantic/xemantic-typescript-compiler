@@ -7569,6 +7569,11 @@ class Checker(
             // Skip if type annotation is a bare generic reference (would trigger TS2314)
             // TypeScript doesn't flag TS2564 on error types
             if (isUnresolvedGenericType(member.type)) continue
+            // Skip when type names a forward-declarable es2015+ lib type that the
+            // current options' lib config doesn't provide (e.g. `Map` under @noLib).
+            // TS2583 already flags the missing-lib-name; TS2564 would be a redundant
+            // diagnostic on an effective error type.
+            if (typeContainsUnavailableLibName(member.type)) continue
             // Skip import types (e.g. `import('./b').B`) — we can't resolve them
             if (typeContainsImportType(member.type)) continue
             // Skip `typeof X` where X is a class member or unresolved name — TypeScript resolves
@@ -12145,6 +12150,28 @@ class Checker(
         if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
         // Skip keywords that parse as identifiers in our AST
         if (name in KEYWORD_IDENTIFIERS) return
+        // TS2583: forward-declarable ES2015+ lib type referenced in type position
+        // under `@noLib: true` or `@lib` that excludes es2015+. The KNOWN_GLOBALS set
+        // contains these names, so they would otherwise pass via `scope.has` silently.
+        // When the lib doesn't actually provide them, emit TS2583 with a migration hint
+        // instead. Skip if name shadowed by a real user declaration in scope (binder local).
+        if (inTypePosition && isLibTypeUnavailableEs2015(name) &&
+            currentFileLocals?.get(name) == null) {
+            val start = node.pos
+            val length = name.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Cannot find name '$name'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2015' or later.",
+                category = DiagnosticCategory.Error,
+                code = 2583,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
+        }
         // Skip well-known globals that don't need declaration
         if (scope.has(name)) {
             // 16.4ct: TS2749 — name is in scope but is value-only (var/function/etc.)
@@ -19858,6 +19885,49 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * Returns true when [name] is a forward-declarable ES2015+ lib type and the active
+     * compiler options exclude the lib that would provide it (either `@noLib: true` or
+     * `@lib` listing only pre-es2015 entries). Used to swap TS2304 → TS2583 in type
+     * position and to suppress TS2564 on properties whose type references such a name.
+     */
+    private fun isLibTypeUnavailableEs2015(name: String): Boolean {
+        if (name !in FORWARD_DECLARABLE_LIB_TYPES_ES2015) return false
+        if (options.noLib) return true
+        if (options.lib.isEmpty()) return false
+        return options.lib.none { lname ->
+            val lower = lname.lowercase()
+            // es6/es2015 alias, plus any es2*/esnext entry.
+            lower == "es6" || lower == "es2015" ||
+                lower.startsWith("es2") || lower == "esnext" ||
+                lower.startsWith("es6.") || lower.startsWith("es2015.")
+        }
+    }
+
+    /**
+     * Returns true when [type] (or any nested type reference) names a forward-declarable
+     * ES2015+ lib type that the active lib config doesn't provide. Used by TS2564 emission
+     * to suppress on `member: Map<string,number>` under `@noLib`/restricted-lib (TS2583
+     * already fires at the type-name position; TS2564 would be a duplicate diagnostic
+     * about an effective error type).
+     */
+    private fun typeContainsUnavailableLibName(type: TypeNode?): Boolean {
+        if (type == null) return false
+        when (type) {
+            is TypeReference -> {
+                val nm = (type.typeName as? Identifier)?.text
+                if (nm != null && isLibTypeUnavailableEs2015(nm)) return true
+                type.typeArguments?.forEach { if (typeContainsUnavailableLibName(it)) return true }
+            }
+            is ArrayType -> if (typeContainsUnavailableLibName(type.elementType)) return true
+            is UnionType -> type.types.forEach { if (typeContainsUnavailableLibName(it)) return true }
+            is IntersectionType -> type.types.forEach { if (typeContainsUnavailableLibName(it)) return true }
+            is TupleType -> type.elements.forEach { if (typeContainsUnavailableLibName(it)) return true }
+            else -> {}
+        }
+        return false
     }
 
     /**
