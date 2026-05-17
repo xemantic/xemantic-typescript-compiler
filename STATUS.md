@@ -1,6 +1,25 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,789 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,790 / 10,078 tests passing (~87.2%).
+
+**B44.10 (2026-05-17, +1 — flips `requireOfJsonFileWithoutExtensionResolvesToTs_ts` JS-emit)** —
+Two-piece JSON re-emit fix in TypeScriptCompiler.kt:
+(a) Pre-scan all parsed source files for `.json` imports (via
+`require('./x.json')` or `from './x.json'`). Builds
+`importedJsonBaseNames: Set<String>` and `jsonBaseNameToImporter: Map<String,
+String>`. Only re-emit JSON files whose basename is in this set when
+`@resolveJsonModule` is on (matches TypeScript — unreferenced JSON fixtures
+like `b.json` in a test that only imports `c.json` are NOT re-emitted).
+(b) Interleave JSON outputs with JS outputs in the final output list: each
+imported JSON appears RIGHT BEFORE the JS output of the file that imports it.
+Required for shapes like `out/c.js, out/c.json, out/file1.js` where file1.ts
+imports both c.ts and c.json — c.js (from c.ts) comes BEFORE c.json (the
+JSON fixture re-emit), and file1.js (the importer) comes LAST. Unimported
+JSON outputs fall back to the start of the list (legacy behavior, preserved
+for tests like `requireOfJsonFileTypes_ts` that have JSON-only imports).
+Full-suite 10078/1285/3 (was 10078/1286/3, +1 net). Zero regressions.
+
+
 
 **B44.9 (2026-05-17, +2 — flips `fileReferencesWithNoExtensions_ts` + `jsFileCompilationErrorOnDeclarationsWithJsFileReferenceWithOutDir_ts` JS-emit)** —
 Enable `/// <reference path="..."/>` dep edges UNIVERSALLY (was outFile-only),

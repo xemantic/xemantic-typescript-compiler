@@ -913,6 +913,28 @@ class TypeScriptCompiler {
                 }
             } else options.outDir
 
+            // Pre-scan: collect basenames of JSON files imported via `require('./x.json')`
+            // or `from "./x.json"`. Also map each imported JSON basename to the FIRST file
+            // that imports it — used to interleave JSON outputs with their importer's JS
+            // output (e.g. `out/c.js, out/c.json, out/file1.js` when file1.ts imports both
+            // c.ts and c.json). Populated only when @resolveJsonModule is on.
+            val importedJsonBaseNames = mutableSetOf<String>()
+            val jsonBaseNameToImporter = mutableMapOf<String, String>()
+            if (options.resolveJsonModule) {
+                val jsonImportRegex = Regex("""(?:require|from)\s*\(?\s*['"]([^'"]*\.json)['"]""")
+                for (file in parsed.files) {
+                    if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") &&
+                        !file.fileName.endsWith(".mts") && !file.fileName.endsWith(".cts") &&
+                        !file.fileName.endsWith(".js") && !file.fileName.endsWith(".jsx")
+                    ) continue
+                    for (match in jsonImportRegex.findAll(file.content)) {
+                        val jsonBase = match.groupValues[1].substringAfterLast('/')
+                        importedJsonBaseNames.add(jsonBase)
+                        jsonBaseNameToImporter.putIfAbsent(jsonBase, file.fileName)
+                    }
+                }
+            }
+
             for (file in parsed.files) {
                 // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
                 val baseName = file.fileName.substringAfterLast('/')
@@ -928,9 +950,16 @@ class TypeScriptCompiler {
                         options.outFile != null && options.resolveJsonModule &&
                         baseName != "tsconfig.json" && baseName != "package.json" &&
                         !file.fileName.contains("node_modules/")
+                // When @resolveJsonModule is on, only re-emit JSON fixtures that are
+                // explicitly imported (matches TypeScript's behavior — unreferenced JSON
+                // fixtures like b.json in a test where only c.json is imported are NOT
+                // re-emitted).
+                val jsonIsImportedOrLegacy = !options.resolveJsonModule ||
+                        baseName in importedJsonBaseNames
                 if (file.fileName.endsWith(".json") && options.outDir != null
                     && baseName != "tsconfig.json" && baseName != "package.json"
-                    && !file.fileName.contains("node_modules/")) {
+                    && !file.fileName.contains("node_modules/")
+                    && jsonIsImportedOrLegacy) {
                     val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
                     if (options.fullEmitPaths) {
                         val outDir = resolvedOutDir!!.trimEnd('/')
@@ -1355,7 +1384,34 @@ class TypeScriptCompiler {
                     listOf(outFileName to concatenated)
                 }
             } else {
-                jsonOutputs + jsOutputs
+                // Interleave JSON outputs with JS outputs: each imported JSON appears RIGHT
+                // BEFORE the JS output of the importing TS file. JSON outputs without a
+                // recorded importer fall back to the start of the list (legacy behavior).
+                // Required for `requireOfJsonFileWithoutExtensionResolvesToTs_ts` where the
+                // expected order is `out/c.js, out/c.json, out/file1.js` (file1 imports both
+                // c.ts and c.json).
+                if (jsonOutputs.isEmpty() || jsonBaseNameToImporter.isEmpty()) {
+                    jsonOutputs + jsOutputs
+                } else {
+                    val importerToJsons = mutableMapOf<String, MutableList<Pair<String, String>>>()
+                    val unimportedJsons = mutableListOf<Pair<String, String>>()
+                    for (jsonOut in jsonOutputs) {
+                        val jsonBase = jsonOut.first.substringAfterLast('/')
+                        val importer = jsonBaseNameToImporter[jsonBase]
+                        if (importer != null) {
+                            importerToJsons.getOrPut(importer) { mutableListOf() }.add(jsonOut)
+                        } else {
+                            unimportedJsons.add(jsonOut)
+                        }
+                    }
+                    val merged = mutableListOf<Pair<String, String>>()
+                    merged.addAll(unimportedJsons)
+                    for (tsFileName in sortedTsFiles) {
+                        importerToJsons[tsFileName]?.let { merged.addAll(it) }
+                        jsOutputMap[tsFileName]?.let { merged.add(it) }
+                    }
+                    merged
+                }
             }
 
             // When noEmitOnError is set and there are errors, suppress all JS output
