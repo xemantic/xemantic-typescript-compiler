@@ -1,9 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,767 / 10,078 tests passing (~87.0%).
+**Phase 4 — Checker buildout.** 8,768 / 10,078 tests passing (~87.0%).
 
 Only the most recent ~5 B-entries are kept here. Older session notes live in
 `STATUS-HISTORY.md` (and in `git log`, where every B-entry has a matching commit).
+
+**B42.5 (2026-05-17, +1 — flips `errorOnInitializerInObjectTypeLiteralProperty_ts` errors-baseline)** —
+Parser's `parseTypeMember` (shared by interface bodies AND type literals) now emits TS1247
+"A type literal property cannot have an initializer" when parsing inside a type literal
+`{ ... }` in type position, and TS1246 "An interface property cannot have an initializer."
+when parsing inside an interface body. Distinguished via a new class-level flag
+`inTypeLiteralForErrorWording` toggled by `parseTypeLiteralOrMappedType` with try/finally
+restore. Checker.kt's TS1246 emission was already correctly scoped to InterfaceDeclaration.
+Full-suite 10078/1307/3 (was 10078/1308/3, +1 net). Zero regressions.
 
 **B42.4 (2026-05-17, +1 — flips `requireOfJsonFileNonRelativeWithoutExtensionResolvesToTs_ts` JS-emit)** —
 `extractRelativeImports` now walks up from the current file's directory looking for
