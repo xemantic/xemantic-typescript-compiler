@@ -2474,6 +2474,16 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B41.2, +1, 8762 → 8763 passing — flips `numericLiteralsWithTrailingDecimalPoints01_ts` JS-emit).** Continuation /loop iteration after post-B41.1 recon. Re-investigated the comment-preservation case after initial attempts failed; the root cause was deeper than expected.
+
+  **Root cause.** For `expr\n  /* comment */ .toString()` shape, the scanner captures `/* comment */` as `leadingComments` on the `.` token. The Parser then calls `nextToken()` to consume `.`. On the NEXT `scanner.scan()` call (for the property name `toString`), the scanner resets `leadingComments = null` (Scanner.kt:253), losing the comments. The `parseIdentifierName()` for `toString` sees empty leading comments. Subsequent emitter logic in `emitPropertyAccess` had no way to find the comment.
+
+  **Fix.** Two-piece:
+  - **Parser** (`Parser.kt:parseCallAndAccess`, Dot branch): capture `leadingComments()` BEFORE `nextToken()` consumes the dot (when `newLineBefore=true`); merge them into the property name's `leadingComments` via `.copy(leadingComments=...)`. Only fires for newLineBefore=true to preserve existing semantics for inline `point. /*2*/ x` shape.
+  - **Emitter** (`Emitter.kt:emitPropertyAccess`): when `newLineBefore=true` and `name.leadingComments` is non-empty, emit comments AFTER indent / BEFORE dot. Block comments (`MultiLineComment` kind) followed by space; line comments (`SingleLineComment` kind) followed by newline + indent (line comment terminates the line, dot belongs on next indented line). The existing inline-after-dot emission is suppressed when `newLineBefore=true` to avoid double-emit.
+
+  **Verification.** Full-suite 10078/1312/3 (was 10078/1313/3, +1 net). Zero regressions. The target test `numericLiteralsWithTrailingDecimalPoints01_ts` JS-emit sub-test flips clean. The errors-baseline sub-test still fails on a separate gap (TS1351 "Identifier or keyword cannot immediately follow numeric literal" not emitted for `1.toString()` / `2.toString()` patterns; unrelated to this fix). Both test12 (`3\n  /* comment */ .toString()`) and test13 (`3.\n  /* comment */ .toString()`) and test14/15 (line-comment variants) now emit correctly.
+
 **Session 2026-05-17 (post-B41.1 recon + MAINT chore, +0 net, 8762 stable).** Continuation /loop iteration after B41.1. Surveyed remaining MISSING DIAGS candidates after B41.1 flipped the non-strict variants of `functionsMissingReturnStatementsAndExpressions_ts`. Items investigated and classified as architectural / multi-piece (not landed this session):
 
 - `augmentExportEquals1/1_1/2/2_1/7_ts`: needs BOTH TS2671 (augment-non-module) AND TS2503 (alias-as-namespace) emissions to flip. Attempted TS2671 fix — fires correctly for ambient `declare module "X" { function foo; export = foo }` patterns (excludes namespace-merged exports), but TS2503 fix (alias resolving to Function) doesn't fire because the `import X = require("ambient-name")` alias resolution path doesn't surface the underlying Function flag through `resolveAlias`. Reverted.
