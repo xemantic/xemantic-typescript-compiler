@@ -491,7 +491,7 @@ class Transformer(
         // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
         val effectiveModule = options.effectiveModule
         val fileName = sourceFile.fileName
-        val useCJS = !isESModuleFormat(effectiveModule, fileName) &&
+        val useCJS = !isESModuleFormat(options, fileName) &&
                 (effectiveModule == ModuleKind.CommonJS ||
                 effectiveModule == ModuleKind.None ||
                 effectiveModule.isNodeNext ||
@@ -548,7 +548,7 @@ class Transformer(
         // Note: .cjs/.cts files use CJS semantics even with module:preserve.
         val isCjsFileName = fileName.endsWith(".cjs") || fileName.endsWith(".cts")
         val withTslib = if (options.importHelpers && isCurrentFileModule &&
-            !isCjsFileName && isESModuleFormat(effectiveModule, fileName)
+            !isCjsFileName && isESModuleFormat(options, fileName)
         ) {
             val tslibNames = mutableListOf<String>()
             // Collect helpers that are actually used, in first-usage order.
@@ -8811,7 +8811,7 @@ class Transformer(
         // In ESM mode, `import x = require("mod")` handling depends on module kind:
         // - preserve: keep if referenced, drop if unused
         // - other ESM: drop entirely (not valid ESM syntax)
-        if (isRequire && isESModuleFormat(options.effectiveModule, currentFileName)) {
+        if (isRequire && isESModuleFormat(options, currentFileName)) {
             if (options.effectiveModule == ModuleKind.Preserve) {
                 // In preserve mode, only keep import=require() if it's referenced in value positions
                 if (checker?.isReferencedAliasDeclaration(decl) != true) {
@@ -9049,7 +9049,7 @@ class Transformer(
             // This is because the decorator reassigns `Foo = __decorate(...)`, and exported bindings
             // can't be reassigned in ESM. For CJS, `export` stays on the let (handled by CJS transform).
             val isExported = ModifierFlag.Export in strippedModifiers
-            val isESM = isESModuleFormat(options.effectiveModule, currentFileName)
+            val isESM = isESModuleFormat(options, currentFileName)
             val varModifiers = when {
                 isExported && !isESM -> setOf(ModifierFlag.Export)
                 else -> emptySet()
@@ -9092,7 +9092,7 @@ class Transformer(
 
         // Emit class-level __decorate call
         val isExportedClassDecorator = hasClassDecorators && ModifierFlag.Export in strippedModifiers
-        val isESM = isESModuleFormat(options.effectiveModule, currentFileName)
+        val isESM = isESModuleFormat(options, currentFileName)
         if (hasClassDecorators) {
             val constructor = decl.members.filterIsInstance<Constructor>().firstOrNull()
             val constructorParams = constructor?.parameters
@@ -12921,7 +12921,7 @@ class Transformer(
         // `const tslib_1 = require("tslib")` and `tslib_1.__helperName`.
         // Note: .cjs/.cts files override even module:preserve (they're always CJS).
         val isCjsFile = currentFileName.endsWith(".cjs") || currentFileName.endsWith(".cts")
-        val isEsm = !isCjsFile && isESModuleFormat(options.effectiveModule, currentFileName)
+        val isEsm = !isCjsFile && isESModuleFormat(options, currentFileName)
         return if (isEsm) {
             // If a local declaration shadows the helper name, use the import-alias (`_1` suffix).
             val effectiveName = helperLocalCollisionMap[helperName] ?: helperName

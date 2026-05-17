@@ -16528,7 +16528,7 @@ class Checker(
                     namedBindingsEM is NamedImports) {
                     val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                         fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-                    val isEsmTarget = isESModuleFormat(options.effectiveModule, fileName)
+                    val isEsmTarget = isESModuleFormat(options, fileName)
                     for (importSpecifier in namedBindingsEM.elements) {
                         if (importSpecifier.isTypeOnly) continue
                         val nameNode = importSpecifier.propertyName ?: importSpecifier.name
@@ -16580,7 +16580,7 @@ class Checker(
                 // in an ESM output target AND esModuleInterop is NOT explicitly false
                 // (default or true). TypeScript emits TS2595 per named import and TS2497
                 // at the module specifier with an "allowSyntheticDefaultImports" wording.
-                val isEsmOutputForEquals = isESModuleFormat(options.effectiveModule, fileName)
+                val isEsmOutputForEquals = isESModuleFormat(options, fileName)
                 if (isEsmOutputForEquals && hasExportEquals && !options.esModuleInteropExplicitlyFalse &&
                     namedBindingsEM is NamedImports) {
                     var anyNamedImportEmitted = false
@@ -16627,7 +16627,7 @@ class Checker(
                 // function). Only fires when the namespace alias is actually referenced
                 // as a value — plain `import * as X from "./a"` without any use of X
                 // compiles away cleanly.
-                val isEsmOutput = isESModuleFormat(options.effectiveModule, fileName)
+                val isEsmOutput = isESModuleFormat(options, fileName)
                 val nsBinding = importClause.namedBindings
                 if (isEsmOutput && hasExportEquals && nsBinding is NamespaceImport) {
                     val aliasName = nsBinding.name.text
@@ -60998,7 +60998,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            val isCjs = !isESModuleFormat(options.effectiveModule, fileName)
+            val isCjs = !isESModuleFormat(options, fileName)
 
             fun emitTs1295(pos: Int, length: Int) {
                 val (line, character) = getLineAndCharacterOfPosition(source, pos)

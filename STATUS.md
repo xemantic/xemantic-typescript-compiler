@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,734 / 10,078 tests passing (~86.7%).
+**Phase 4 — Checker buildout.** 8,744 / 10,078 tests passing (~86.8%).
+
+**B27.1 (2026-05-17, +10 — flips `nodeNextImportModeImplicitIndexResolution_ts` JS-emit + 9 others)** —
+`package.json` `"type": "module"` / `"type": "commonjs"` lookup for Node16/Node18/Node20/NodeNext
+module-format determination. Added `packageJsonTypes: Map<String, Boolean>` field to
+`CompilerOptions` (directory path → `true` for `"type": "module"`, `false` for `"type":
+"commonjs"`, absent otherwise). New helper `collectPackageJsonTypes` in `TypeScriptCompiler.kt`
+scans `parsed.files` for `package.json` (skipping `node_modules/`), regex-extracts the `"type"`
+field, and populates the map keyed by the containing directory. The map is populated in the
+multi-file entry path right after option parsing, gated on `options.effectiveModule.isNodeNext`
+(no overhead for non-nodenext compilations). Added a new `isESModuleFormat(options, fileName)`
+overload that walks the file's directory tree upward and consults `packageJsonTypes` for the
+nearest enclosing `package.json` — returning `true` for `type: "module"`, `false` otherwise.
+All 14 callers across `Emitter.kt`, `Transformer.kt`, and `Checker.kt` migrated to the new
+overload. When `packageJsonTypes` is empty (most existing tests have no `package.json`), the
+new overload falls back to the legacy "plain .ts → CJS under nodenext" behavior, so no
+existing test regresses. Tests flipped span the nodenext + package-json-type matrix.
 
 **B26.1 (2026-05-17, +1 — flips `declarationMapsOutFile_ts` JS-emit)** —
 AMD `export { X }` re-export getter for named/default imports + post-declaration hoist

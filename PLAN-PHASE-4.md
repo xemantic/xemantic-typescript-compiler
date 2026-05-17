@@ -2474,6 +2474,21 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B27.1, +10, 8734 → 8744 passing — flips `nodeNextImportModeImplicitIndexResolution_ts` JS-emit + 9 others).** Continuation /loop iteration after B26.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran JS-emit ranker — 184 candidates. `nodeNextImportModeImplicitIndexResolution_ts` (3-line diff) surfaced: under `// @module: nodenext` with a root `package.json` declaring `"type": "module"`, the expected output for `index.ts` is bare `export {};` (ESM), but we emit CJS (`"use strict"; Object.defineProperty(exports, "__esModule", { value: true });`).
+
+  **Root cause.** `isESModuleFormat(module, fileName)` had a hard-coded behavior under nodenext: plain `.ts` files default to CJS. The comment in `CompilerOptions.kt:206` explicitly noted "In the real TypeScript compiler, `.ts` files check package.json 'type' field, but we don't have that context". Multi-file test sources DO include the `package.json` files (via `// @filename`), but the existing helper had no way to consult them.
+
+  **Fix.**
+  - **Added `packageJsonTypes: Map<String, Boolean>` field to `CompilerOptions`**: directory path → `true` for `"type": "module"`, `false` for `"type": "commonjs"`. Default empty.
+  - **New helper `collectPackageJsonTypes` (`TypeScriptCompiler.kt` ~1206)**: scans `parsed.files` for `package.json` files (skipping `node_modules/`), regex-extracts `"type": "..."`, and populates the map keyed by the containing directory (preserves leading `/`, empty string for root).
+  - **New `isESModuleFormat(options, fileName)` overload (`CompilerOptions.kt` ~240)**: walks the file's directory tree upward (`/a/b/c.ts` → probe `/a/b`, then `/a`, then `""`) and consults `packageJsonTypes` at the nearest enclosing entry. Falls back to the legacy `module + fileName` logic when no enclosing `package.json` is found.
+  - **Populated in `TypeScriptCompiler.compile`** (gated on `options.effectiveModule.isNodeNext` — no overhead for non-nodenext compilations).
+  - **Migrated all 14 callers** in `Emitter.kt` (2), `Transformer.kt` (5), and `Checker.kt` (4) to the new overload. The legacy `isESModuleFormat(module, fileName)` overload remains for unmigrated call sites (none in the current tree, but kept for callers that don't have `options` in scope).
+
+  **Verification.** Full-suite 10078/1331/3 (was 10078/1341/3 in B26.1, +10 net). The +10 figure suggests the lookup affected many tests with similar `package.json type: "module"` shapes — likely `nodeNextPackageSelfNameWithOutDirDeclDirRootDir` family, `nodeModulesPackageImports`, etc.
+
+  **Pool follow-on.** JS-emit ranker pool dropped from 184 → 174. Remaining low-hanging picks are parser-recovery clusters (skipped per session guidance) or large-diff architectural cases.
+
 **Session 2026-05-17 (B26.1, +1, 8733 → 8734 passing — flips `declarationMapsOutFile_ts` JS-emit).** Continuation /loop iteration after B25.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the B24.1 JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 185 JS-emit candidates surfaced. Most 2-4 line diffs are parser-recovery clusters (skipped per session-prompt guidance). `declarationMapsOutFile_ts` (4-line diff) surfaced as a non-parser transformer/emitter candidate: `export { c, Foo }` where `Foo` is from `import {Foo} from "./a"` and `c` is a local `const c = new Foo()` (AMD output). Expected: `Object.defineProperty(exports, "Foo", { ..., get: function () { return a_1.Foo; } })` getter between hoist and body, AND `exports.c = c` IMMEDIATELY after `const c = ...` declaration (not at end of body).
 
   **Root cause.** The CJS path (`Transformer.kt` ~2059) detects `localName in namedImportLocalNames` and routes through `makeReExportGetter`; the AMD path (line 3629) does not. Additionally, the AMD path appends `exports.X = X` for local-var re-exports at the source position of the `ExportDeclaration` (typically end-of-body), but TypeScript hoists the assignment to immediately after the declaration of `X` so the export becomes available as soon as `X` is bound.

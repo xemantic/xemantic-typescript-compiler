@@ -85,7 +85,7 @@ class Emitter(
         if (effectiveModule == ModuleKind.Preserve) return
 
         // Only emit export {} for ES module format files
-        val isESModuleFormat = isESModuleFormat(effectiveModule, originalSourceFile.fileName)
+        val isESModuleFormat = isESModuleFormat(options, originalSourceFile.fileName)
         if (!isESModuleFormat) return
 
         // Emit export {} when the transformed file has no module-level statements remaining.
@@ -154,7 +154,7 @@ class Emitter(
         // no explicit "use strict" needed. But for .mts/.mjs under CommonJS module setting,
         // TypeScript still emits "use strict".
         val effectiveModule = options.effectiveModule
-        val isESM = isESModuleFormat(effectiveModule, sourceFile.fileName)
+        val isESM = isESModuleFormat(options, sourceFile.fileName)
         val isCommonJSOverride = effectiveModule == ModuleKind.CommonJS &&
                 (sourceFile.fileName.endsWith(".mts") || sourceFile.fileName.endsWith(".mjs"))
         if (hasModuleStatements(sourceFile) && isESM && !isCommonJSOverride) return
