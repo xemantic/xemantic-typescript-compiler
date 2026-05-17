@@ -4340,8 +4340,11 @@ class Transformer(
         // Export star paths — each needs a setter that calls exportStar_N
         val exportStarPaths = mutableListOf<String>()  // list of (path) in order
         // Named re-exports from a module: export {a2, b2, c2 as d2} from "bar"
-        // path → list of (exportName, importedOriginalName) pairs
-        val pathToNamedReExports = mutableMapOf<String, MutableList<Pair<String, String>>>()
+        // path → list of groups (each group is one source ExportDeclaration emitting one
+        // exports_1({...}) call) → list of (exportName, importedOriginalName) pairs.
+        // Per-declaration grouping is preserved because TypeScript emits one exports_1
+        // call per `export { ... } from "X"` statement, not one combined call per path.
+        val pathToNamedReExports = mutableMapOf<String, MutableList<MutableList<Pair<String, String>>>>()
         // Names that are namespace imports (import * as X) — for execute ordering
         val namespaceImportNames = mutableSetOf<String>()
 
@@ -4634,12 +4637,18 @@ class Transformer(
                             pathToSetterParam[specStr] = "${pathBaseName}_1_1"
                             pathToTempVars[specStr] = mutableListOf()
                         }
-                        // Collect named re-exports for this path's setter
+                        // Collect named re-exports for this path's setter, preserving
+                        // the per-statement grouping (one exports_1({...}) call per
+                        // source `export { ... } from "X"` declaration).
+                        val group = mutableListOf<Pair<String, String>>()
                         for (spec in stmt.exportClause.elements) {
                             if (spec.isTypeOnly) continue
                             val exportName = spec.name.text
                             val importedName = (spec.propertyName ?: spec.name).text
-                            pathToNamedReExports.getOrPut(specStr) { mutableListOf() }.add(exportName to importedName)
+                            group.add(exportName to importedName)
+                        }
+                        if (group.isNotEmpty()) {
+                            pathToNamedReExports.getOrPut(specStr) { mutableListOf() }.add(group)
                         }
                     }
                 }
@@ -5328,36 +5337,41 @@ class Transformer(
                 }
 
                 // 5. Named re-exports from this module: export { a2, b2, c2 as d2 } from "mod"
-                // Emit as: exports_1({ "a2": param["a2"], "b2": param["b2"], "d2": param["c2"] })
-                val namedReExports = pathToNamedReExports[path]
-                if (!namedReExports.isNullOrEmpty()) {
-                    val objProps = namedReExports.map { (exportName, importedName) ->
-                        PropertyAssignment(
-                            name = StringLiteralNode(text = exportName, pos = -1, end = -1),
-                            initializer = ElementAccessExpression(
-                                expression = syntheticId(setterParam),
-                                argumentExpression = StringLiteralNode(text = importedName, pos = -1, end = -1),
-                                pos = -1, end = -1,
-                            ),
-                            pos = -1, end = -1,
-                        )
-                    }
-                    setterBodyStmts.add(
-                        ExpressionStatement(
-                            expression = CallExpression(
-                                expression = syntheticId("exports_1"),
-                                arguments = listOf(
-                                    ObjectLiteralExpression(
-                                        properties = objProps,
-                                        multiLine = true,
-                                        pos = -1, end = -1,
-                                    )
+                // TypeScript emits ONE exports_1({...}) call PER source `export { ... } from "X"`
+                // statement, preserving the per-declaration grouping (NOT one combined call per
+                // path even when multiple ExportDeclarations share the same module specifier).
+                val namedReExportGroups = pathToNamedReExports[path]
+                if (!namedReExportGroups.isNullOrEmpty()) {
+                    for (group in namedReExportGroups) {
+                        if (group.isEmpty()) continue
+                        val objProps = group.map { (exportName, importedName) ->
+                            PropertyAssignment(
+                                name = StringLiteralNode(text = exportName, pos = -1, end = -1),
+                                initializer = ElementAccessExpression(
+                                    expression = syntheticId(setterParam),
+                                    argumentExpression = StringLiteralNode(text = importedName, pos = -1, end = -1),
+                                    pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
-                            ),
-                            pos = -1, end = -1,
+                            )
+                        }
+                        setterBodyStmts.add(
+                            ExpressionStatement(
+                                expression = CallExpression(
+                                    expression = syntheticId("exports_1"),
+                                    arguments = listOf(
+                                        ObjectLiteralExpression(
+                                            properties = objProps,
+                                            multiLine = true,
+                                            pos = -1, end = -1,
+                                        )
+                                    ),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )
                         )
-                    )
+                    }
                 }
 
                 setterFunctions.add(

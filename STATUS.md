@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,752 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,753 / 10,078 tests passing (~86.9%).
+
+**B34.1 (2026-05-17, +1 — flips `reexportMissingDefault5_ts` JS-emit)** —
+System module format now emits ONE `exports_1({...})` call per source `export { ... } from "X"`
+declaration, preserving per-statement grouping when multiple `export {...} from "X"` share the
+same module specifier. Previously the Transformer used a flat `Map<String,
+MutableList<Pair<String, String>>>` keyed on the module path, so two consecutive
+`export { b } from "./b"; export { default as Foo } from "./b";` declarations collapsed into a
+single `exports_1({ "b": b_1_1["b"], "Foo": b_1_1["default"] })` call. TypeScript instead
+emits two separate calls (one per source declaration). Restructured `pathToNamedReExports` to
+`Map<String, MutableList<MutableList<Pair<String, String>>>>` (outer list = per-source-statement
+groups), populated by appending a fresh inner list at each `ExportDeclaration` with a
+`NamedExports` clause and a module specifier. The setter-body generator iterates groups and
+emits one `exports_1({...})` call per non-empty group.
 
 **B33.1 (2026-05-17, +1 — flips `syntheticDefaultExportsWithDynamicImports_ts` JS-emit)** —
 System module format now rewrites dynamic `import(spec)` calls to `context_1.import(spec)` and

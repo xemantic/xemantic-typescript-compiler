@@ -2474,6 +2474,38 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B34.1, +1, 8752 → 8753 passing — flips `reexportMissingDefault5_ts` JS-emit).** Continuation /loop iteration after B33.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 166 candidates. Top picks `asyncArrowInClassES5_ts__target_es2015`, `ClassDeclaration26_ts`, `dontShowCompilerGeneratedMembers_ts`, `parserUnparsedTokenCrash2_ts`, `moduleResolutionWithRequire_ts`, `reactReduxLikeDeferredInferenceAllowsAssignment_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `manyCompilerErrorsInTheTwoFiles_ts`, `enumWithNonLiteralStringInitializer_ts`, `moduleNoneDynamicImport_ts`, `moduleResolutionWithExtensions_withPaths_ts`, and `fatarrowfunctionsOptionalArgs_ts` all classified as out-of-scope for surgical:
+- `asyncArrowInClassES5`/`ClassDeclaration26`: niche TS heuristic / parser-recovery
+- `dontShowCompilerGeneratedMembers`: parser-recovery leak (skipped per B19.2)
+- `parserUnparsedTokenCrash2`: deep tokenizer (skipped per session notes)
+- `moduleResolutionWithRequire`: program-model refactoring (skipped per B32.1)
+- `reactReduxLikeDeferredInferenceAllowsAssignment`/`mappedTypeGenericIndexedAccess`: async destructured-param flattening (skipped per B22.1)
+- `parseUnaryExpressionNoTypeAssertionInJsx4`/`ambiguousGenericAssertion1`/`destructuringControlFlowNoCrash`: JSX or generic-cast parser recovery
+- `manyCompilerErrorsInTheTwoFiles`/`errorRecoveryInClassDeclaration`/`classMemberWithMissingIdentifier2`: parser error recovery
+- `enumWithNonLiteralStringInitializer`: cross-file string-const inlining (would need Checker constStringValues plumbing)
+- `moduleNoneDynamicImport`: `@module: none` should not route through CJS transform — touches `useCJS` gate, regression-prone
+- `moduleResolutionWithExtensions_withPaths`: emitting `/relative.js` without `allowJs` — too broad to gate (246 tests use `@filename: *.js`)
+- `fatarrowfunctionsOptionalArgs`: ASI for arrow-with-block-body in ternary — deep parser
+
+  **Landed: System format named re-export per-statement grouping.** Picked `reexportMissingDefault5_ts` (4-line diff). Source:
+  ```ts
+  // @module: system
+  // @filename: a.ts
+  export { b } from "./b";
+  export { default as Foo } from "./b";
+  ```
+  Expected: TWO `exports_1({...})` calls (one per source statement). Actual: ONE combined call.
+
+  **Root cause.** `Transformer.kt`'s `pathToNamedReExports` was `Map<String, MutableList<Pair<String, String>>>` — a flat list of (exportName, importedName) per module path. Two consecutive `export {...} from "./b"` statements both appended to the same list, and the setter-body generator at line ~5332 built ONE `ObjectLiteralExpression` from all pairs and emitted ONE `exports_1({...})` call. TypeScript emits one call per source statement, not one combined call per path.
+
+  **Single-piece fix in `Transformer.kt`.** Restructured `pathToNamedReExports` to `Map<String, MutableList<MutableList<Pair<String, String>>>>` (outer-list = per-statement groups). The population site (~line 4626) builds a fresh `group: MutableList<Pair<String, String>>` per `ExportDeclaration` with `NamedExports` clause and module specifier, populates it from `stmt.exportClause.elements`, and appends to the outer list (skipping empty groups). The consumer site (~line 5332) iterates groups, emitting one `ObjectLiteralExpression` + one `exports_1({...})` `ExpressionStatement` per non-empty group.
+
+  **Verification.** Full-suite 10078/1322/3 (was 10078/1323/3 in B33.1, +1 net). Zero regressions. Target test flips clean.
+
+  **Risk profile.** Bounded. The only structural change is grouping behavior under `@module: system` when multiple `export {...} from "X"` declarations share the same module specifier. Single-declaration cases collapse to a single group → identical output to the prior flat form. The empty-group skip preserves prior behavior for type-only `export type { ... } from "X"` statements where all specs filter out as type-only. Other `pathToNamedReExports` consumers (membership checks at lines 5240/5250 — `path in pathToNamedReExports` and `path !in pathToNamedReExports`) keep working since the key set is unchanged.
+
+  **Foundation for follow-ons.** JS-emit ranker pool drops 166 → 165. The per-statement grouping pattern (one emit per source declaration) may apply to similar AMD/CJS re-export emit paths if a candidate surfaces. Most remaining JS-emit candidates are deep-parser-recovery (`manyCompilerErrors`, `classMemberWithMissingIdentifier2`, `errorRecoveryInClassDeclaration`, `parserUnparsedTokenCrash2`, JSX `<{`-recovery follow-ups) or architectural-blocker (`enumWithNonLiteralStringInitializer` needs cross-file const-string tracking; `moduleNoneDynamicImport` needs `@module: none` CJS-routing carve-out; `moduleResolutionWithExtensions_withPaths` needs `.js`-emit gate respecting `allowJs`). Surgical pool genuinely thinning.
+
 **Session 2026-05-17 (B33.1, +1, 8751 → 8752 passing — flips `syntheticDefaultExportsWithDynamicImports_ts` JS-emit).** Continuation /loop iteration after B32.1. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/62/12). Recent commit log healthy (B25.1 → B32.1 stack — no recon-only pattern). Anti-loop rule satisfied. Re-ran the JS-emit ranker (`/tmp/find_js_emit_candidates.py`) — 167 candidates. Picked `syntheticDefaultExportsWithDynamicImports_ts` (3-line diff, System module + `import("package")` dynamic-import).
 
   **Root cause.** Under `@module: system @target: es6 @moduleResolution: bundler`, the source `import("package").then(({default: foo}) => foo(42));` has two issues: (a) raw `import("package")` left untransformed in the System format `execute` body — TypeScript rewrites it to `context_1.import("package")` using System's runtime context API; (b) Emitter's `hasModuleStatements()` doesn't recognize dynamic imports, so it returned `false` and `emitUseStrict()` emitted `"use strict";` at the top BEFORE `System.register(...)` — the System format already emits `"use strict"` inside its function body, so the top-level emission is duplicate. `Transformer.isModuleFile()` already recognizes dynamic imports via `stmtContainsDynamicImport`/`exprContainsDynamicImport`, but `Emitter.hasModuleStatements()` doesn't — the two helpers had diverged.
