@@ -781,7 +781,22 @@ class Parser(
             scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine && !it.text.startsWith("//") }
         } else null
         val nameTrailing = (nameTrailingFromName?.ifEmpty { null } ?: nameTrailingFromType?.ifEmpty { null })
-        val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+        val initLeadingTrailing: List<Comment>?
+        val init: Expression?
+        if (parseOptional(SyntaxKind.Equals)) {
+            // Capture inline comments between `=` and the initializer value
+            // (e.g. `= // should error\n   [1,2,3]`). These are trailing-of-`=`
+            // line comments that terminate the line before the initializer.
+            // Only meaningful when the initializer is on a new line — otherwise
+            // existing parsePrimaryExpression inlineCmts path handles them.
+            initLeadingTrailing = scanner.getTrailingComments()
+                ?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") && it.hasTrailingNewLine }
+                ?.takeIf { it.isNotEmpty() && scanner.hasPrecedingLineBreak() }
+            init = parseAssignmentExpression()
+        } else {
+            initLeadingTrailing = null
+            init = null
+        }
         return VariableDeclaration(
             name = name,
             type = type,
@@ -790,6 +805,7 @@ class Parser(
             pos = pos,
             end = getEnd(),
             nameTrailingComments = nameTrailing,
+            initializerLeadingTrailingComments = initLeadingTrailing,
         )
     }
 
@@ -4174,6 +4190,18 @@ class Parser(
                     // comments would be lost when scanner.scan() resets leadingComments
                     // for the next token (the property name).
                     val dotLeadingCommentsList = if (newLineBefore) leadingComments() else null
+                    // Capture trailing line comments that terminated the line BEFORE the
+                    // newline preceding the dot (e.g. `arr // should error\n  .filter`).
+                    // These are NOT leading-of-dot (because there's no newline between
+                    // the previous expression and the comment), but they MUST be preserved
+                    // before the newline in the output.
+                    // Skip when `result` already captured them via its own trailingComments
+                    // (CallExpression in chained-call position uses `callTrailing` for this).
+                    val expressionTrailingLineComments = if (newLineBefore && result.trailingComments.isNullOrEmpty()) {
+                        scanner.getTrailingComments()
+                            ?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") && it.hasTrailingNewLine }
+                            ?.takeIf { it.isNotEmpty() }
+                    } else null
                     nextToken()
                     val afterDotPos = scanner.getPrevTokenEnd() // position right after dot (before trivia of next token)
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
@@ -4217,7 +4245,7 @@ class Parser(
                         val mergedLeading = (dotLeadingCommentsList + (name.leadingComments ?: emptyList())).ifEmpty { null }
                         name.copy(leadingComments = mergedLeading)
                     } else name
-                    PropertyAccessExpression(expression = result, name = finalName, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, pos = result.pos, end = getEnd())
+                    PropertyAccessExpression(expression = result, name = finalName, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, expressionTrailingLineComments = expressionTrailingLineComments, pos = result.pos, end = getEnd())
                 }
 
                 OpenBracket -> {

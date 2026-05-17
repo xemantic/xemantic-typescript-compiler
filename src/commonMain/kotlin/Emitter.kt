@@ -428,6 +428,20 @@ class Emitter(
         if (node.initializer != null) {
             write(" = ")
             if (!options.removeComments) {
+                // Same-line `// line comment` after `=` but before the initializer (which
+                // is on a new line): emit comment, newline, single space, then the value.
+                //   const x = // should error
+                //    [1,2,3]
+                val equalsTrailing = node.initializerLeadingTrailingComments
+                if (!equalsTrailing.isNullOrEmpty()) {
+                    for (comment in equalsTrailing) {
+                        write(comment.text)
+                    }
+                    writeNewLine()
+                    write(" ")
+                    emitExpression(node.initializer)
+                    return
+                }
                 // Check if the initializer has own-line leading comments (hasPrecedingNewLine=true).
                 // In that case, emit them on their own lines before the value (TypeScript style):
                 //   var yy = \n/// value comment\n20;
@@ -2508,6 +2522,14 @@ class Emitter(
         // but skip if the expression already handles its own trailing comments (e.g. numeric literals).
         if (node.expression is CallExpression || node.expression is Identifier) {
             emitTrailingComments(node.expression)
+        }
+        // Emit line-terminating `//` comments captured between [expression] and the
+        // newline preceding the dot (e.g. `arr // should error\n  .filter`).
+        if (!options.removeComments && !node.expressionTrailingLineComments.isNullOrEmpty()) {
+            for (c in node.expressionTrailingLineComments) {
+                write(" ")
+                write(c.text)
+            }
         }
         if (node.newLineBefore) {
             writeNewLine()

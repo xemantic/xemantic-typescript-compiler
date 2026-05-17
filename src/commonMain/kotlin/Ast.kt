@@ -536,6 +536,10 @@ data class VariableDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** Same-line comments between the name (or type annotation) and the `=` initializer. */
     val nameTrailingComments: List<Comment>? = null,
+    /** Same-line comments AFTER the `=` token but BEFORE the initializer value
+     *  (e.g. `= // should error\n  [1,2,3]` — the `// should error` comment).
+     *  Typically `//` line comments on the same line as `=`. */
+    val initializerLeadingTrailingComments: List<Comment>? = null,
     /** True when [type] was synthesized from a leading primitive JSDoc `@type {...}` comment in a JS file. */
     val typeFromJSDoc: Boolean = false,
 ) : Declaration {
@@ -694,6 +698,10 @@ data class PropertyAccessExpression(
     val newLineBefore: Boolean = false,
     /** True when the property name appears on a new line after the `.` (dot at end of previous line). */
     val newLineAfterDot: Boolean = false,
+    /** Same-line `// ...` line comments that appeared between [expression] and the newline
+     *  preceding the dot (e.g. `arr // should error\n  .filter(...)`). These terminate
+     *  the expression line before the dot drops to a new line. */
+    val expressionTrailingLineComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
