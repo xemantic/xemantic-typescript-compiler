@@ -1,6 +1,35 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,795 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,796 / 10,078 tests passing (~87.2%).
+
+**B45.4 (2026-05-17, +1 — flips `verbatim-declarations-parameters_ts` JS-emit)** —
+`emitParameters` comma-after branch (`Emitter.kt`) now groups consecutive parameters
+without newline-leading-comments on the same emit line. Previously, every parameter
+got an unconditional newline before it (in the multi-line-with-leading-comments
+shape). Expected: only params with a newline-leading-comment (typically a JSDoc
+block above) get a newline; subsequent uncommented params stay on the previous
+param's line. Matches TypeScript's emit for:
+```
+(
+    // c
+    a,
+    b,
+    // d
+    c
+)  →  (
+    // c
+    a, b, 
+    // d
+    c)
+```
+Implementation: split the existing `else` arm of the `firstParamCommentIsInline`
+check into two cases — (a) `index == 0 || hasNewlineLeadingComment` → newline +
+emit leading + indent (unchanged); (b) subsequent param without newline-leading
+comment → stay on same line, emit any inline (`!hasPrecedingNewLine`) leading
+comments before the param. Full-suite 10078/1279/3 (was 10078/1280/3, +1 net).
+Zero regressions.
+
+
 
 **B45.3 (2026-05-17, +3 — flips `moduleNodeImportRequireEmit_ts__target_{es2016,es2020,esnext}` JS-emit)** —
 `import X = require("mod")` under module:nodenext/Node16/Node18/Node20 + ESM file

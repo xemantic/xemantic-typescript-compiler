@@ -3632,10 +3632,13 @@ class Emitter(
                 // First parameter's comment stays on the same line as `(` IF it has no preceding newline
                 // (e.g., `func(/** inline */ a, ...)`). If the first param's comment has hasPrecedingNewLine=true
                 // (source has `func(\n  /** comment */\n  a`), emit on its own line like subsequent params.
+                // Subsequent params without a newline-leading-comment stay on the same line as the
+                // previous param (groups consecutive uncommented params together — matches TypeScript's
+                // emit for `(\n  // c\n  a,\n  b,\n  // d\n  c)` → `(\n  // c\n  a, b,\n  // d\n  c)`).
                 for ((index, param) in emittableParams.withIndex()) {
                     val isLast = index == emittableParams.size - 1
-                    val firstParamCommentIsInline = index == 0 &&
-                        param.leadingComments?.any { it.hasPrecedingNewLine } != true
+                    val hasNewlineLeadingComment = param.leadingComments?.any { it.hasPrecedingNewLine } == true
+                    val firstParamCommentIsInline = index == 0 && !hasNewlineLeadingComment
                     if (firstParamCommentIsInline) {
                         // First param with inline comment(s): emit comments on same line as `(`
                         val leading = param.leadingComments
@@ -3645,10 +3648,20 @@ class Emitter(
                                 write(" ")
                             }
                         }
-                    } else {
+                    } else if (index == 0 || hasNewlineLeadingComment) {
+                        // First param OR subsequent param with a newline-leading-comment:
+                        // emit on its own indented line.
                         writeNewLine()
                         emitLeadingComments(param)
                         writeIndent()
+                    } else {
+                        // Subsequent param without newline-leading-comment: stay on same line.
+                        // Inline leading comments (if any) are emitted right before the param.
+                        if (!options.removeComments) {
+                            param.leadingComments?.filter { !it.hasPrecedingNewLine }?.forEach {
+                                write(it.text); write(" ")
+                            }
+                        }
                     }
                     emitParameter(param, emitInlineTrailingOnly = false)
                     // Comma goes AFTER the parameter (if not the last)
