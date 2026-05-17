@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,749 / 10,078 tests passing (~86.8%).
+**Phase 4 — Checker buildout.** 8,750 / 10,078 tests passing (~86.8%).
+
+**B31.1 (2026-05-17, +1 — flips `commonSourceDirectory_dts_ts` JS-emit)** —
+`commonSourceDirectory` computation now also considers `.d.ts` files that share the tsconfig
+directory prefix. Previously only `tsFileNames` (excluding `.d.ts`) contributed to
+`longestCommonPathPrefix`, so a single TS file at `/app/src/index.ts` with a referenced
+`.d.ts` at `/app/lib/bar.d.ts` produced commonSourceDir=`/app/src`, collapsing the `src/`
+subdir under `outDir`. Now `dtsFileNamesInProjectDir` tracks `.d.ts` files whose path
+starts with `$tsconfigDir/`, and they're concatenated into the `parentDirs` list before
+the LCP call. Result: `/app/lib/bar.d.ts` + `/app/src/index.ts` → commonSourceDir=`/app`,
+so `index.js` correctly emits as `/app/bin/src/index.js`. `.d.ts` files outside the
+tsconfig directory (e.g. `typeRoots` locations under `/types/`) are excluded so they
+don't shift commonSourceDir upward — preserving `commonSourceDirectory_ts` (which has
+`bar.d.ts` at `/types/` outside `/app/`). `node_modules` `.d.ts` files were already
+excluded via the existing `isNodeModulesFile` gate. Also extracted `computedTsconfigDir`
+to a single local at the top of the multi-file branch (was previously computed twice).
 
 **B30.1 (2026-05-17, +2 — flips `pathMappingBasedModuleResolution8_node_ts` + `pathMappingBasedModuleResolution8_classic_ts` JS-emit)** —
 `paths` compiler-options mapping is now consulted during dependency-ordering extraction
