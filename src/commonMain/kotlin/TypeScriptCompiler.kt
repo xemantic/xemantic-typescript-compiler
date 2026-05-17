@@ -1683,6 +1683,7 @@ private fun extractRelativeImports(
                     val resolved2 = resolveRelativePath(altDir, specifier)
                     val probes = listOf(
                         "$resolved2.ts", "$resolved2.tsx", "$resolved2.mts", "$resolved2.cts",
+                        "$resolved2.d.ts",
                         "$resolved2/index.ts", "$resolved2/index.tsx", "$resolved2/index.d.ts",
                     )
                     val match = probes.firstOrNull { it in allTsFileNames }
