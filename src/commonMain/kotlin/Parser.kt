@@ -2805,13 +2805,15 @@ class Parser(
                 else -> {
                     val expr = parseAssignmentExpression()
                     parseSemicolon()
+                    val trailing = trailingComments()
                     ExportAssignment(
                         expression = expr,
                         isExportEquals = false,
                         modifiers = modifiers,
                         pos = pos,
                         end = getEnd(),
-                        leadingComments = comments
+                        leadingComments = comments,
+                        trailingComments = trailing,
                     )
                 }
             }
@@ -2821,12 +2823,15 @@ class Parser(
         if (parseOptional(SyntaxKind.Equals)) {
             val expr = parseAssignmentExpression()
             parseSemicolon()
+            // Don't capture trailing comments for `export = X`: under ES module emission this
+            // statement is silently dropped (Emitter.emitExportAssignment es-module early return),
+            // and emitTrailingCommentsBeforeNewline would then attach them to the prior statement.
             return ExportAssignment(
                 expression = expr,
                 isExportEquals = true,
                 pos = pos,
                 end = getEnd(),
-                leadingComments = comments
+                leadingComments = comments,
             )
         }
 

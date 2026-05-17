@@ -958,14 +958,61 @@ class Checker(
         val targetResult = fileResults[targetFile] ?: return true
         val symbol = targetResult.locals[name] ?: return true // safe default: keep
         val resolved = resolveAlias(symbol)
-        // Const enums without preserveConstEnums are type-only (inlined at use sites)
+        // Scan target file's source statements directly to classify declarations of `name` —
+        // avoids consulting symbol flags / declarations list, which `mergeSymbolTable` pollutes
+        // by merging same-name symbols from importing files (CLAUDE.md gotcha: "ALL file locals
+        // merged into globals at Checker init"). Identifies a value declaration in the target
+        // file if present; otherwise falls back to flag-based logic for cross-file ambient cases.
+        var hasValueDecl = false
+        var hasTypeOnlyDecl = false
+        var hasInstantiatedModule = false
+        for (stmt in targetResult.sourceFile.statements) {
+            when (stmt) {
+                is TypeAliasDeclaration -> if (stmt.name.text == name) hasTypeOnlyDecl = true
+                is InterfaceDeclaration -> if (stmt.name.text == name) hasTypeOnlyDecl = true
+                is ClassDeclaration -> if (stmt.name?.text == name) hasValueDecl = true
+                is FunctionDeclaration -> if (stmt.name?.text == name) hasValueDecl = true
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        val declName = decl.name
+                        if (declName is Identifier && declName.text == name) hasValueDecl = true
+                    }
+                }
+                is EnumDeclaration -> if (stmt.name.text == name) {
+                    val isConstEnum = ModifierFlag.Const in stmt.modifiers
+                    if (isConstEnum && !options.preserveConstEnums && !options.isolatedModules &&
+                        !options.verbatimModuleSyntax) {
+                        hasTypeOnlyDecl = true
+                    } else {
+                        hasValueDecl = true
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val moduleName = stmt.name
+                    val n = if (moduleName is Identifier) moduleName.text
+                            else if (moduleName is StringLiteralNode) moduleName.text
+                            else null
+                    if (n == null || n != name) continue
+                    val state = binderResults.firstNotNullOfOrNull { br ->
+                        br.moduleInstanceStates[nodeKey(stmt)]
+                    }
+                    if (state == ModuleInstanceState.Instantiated) {
+                        hasInstantiatedModule = true
+                    } else {
+                        hasTypeOnlyDecl = true
+                    }
+                }
+                else -> {}
+            }
+        }
+        if (hasValueDecl || hasInstantiatedModule) return true
+        if (hasTypeOnlyDecl) return false
+        // Name not found as a direct declaration in target file — fall back to symbol-flag logic
+        // for ambient/aliased cases (e.g. `export { X }` from another module).
         if (!options.preserveConstEnums && !options.isolatedModules && !options.verbatimModuleSyntax &&
             resolved.flags.hasAny(SymbolFlags.ConstEnum)) return false
-        // Check if the symbol has value flags
         if (resolved.flags.hasAny(SymbolFlags.Value)) return true
-        // Non-instantiated namespaces (no value content) are type-only
         if (resolved.flags.hasAny(SymbolFlags.Module) && !resolved.flags.hasAny(SymbolFlags.Value)) {
-            // Check module instance state from binder
             for (br in binderResults) {
                 for (decl in resolved.declarations) {
                     if (decl is ModuleDeclaration) {
@@ -974,7 +1021,7 @@ class Checker(
                     }
                 }
             }
-            return false // non-instantiated namespace
+            return false
         }
         return false
     }
