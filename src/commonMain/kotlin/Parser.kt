@@ -6116,12 +6116,18 @@ class Parser(
             val name = parseQualifiedName()
             val typeArgs = parseTypeArgumentsOpt()
             var type: TypeNode = TypeQuery(exprName = name, typeArguments = typeArgs, pos = pos, end = getEnd())
-            // Handle array suffix: `typeof X[]` → ArrayType(TypeQuery(X))
-            while (token == SyntaxKind.OpenBracket) {
+            // Handle array suffix `typeof X[]` and indexed-access `typeof X[K]`.
+            // ASI: do not consume [ on a new line.
+            while (token == SyntaxKind.OpenBracket && !scanner.hasPrecedingLineBreak()) {
                 if (scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.CloseBracket }) {
                     nextToken(); nextToken()
                     type = ArrayType(elementType = type, pos = pos, end = getEnd())
-                } else break
+                } else {
+                    nextToken()
+                    val indexType = parseType()
+                    parseExpected(SyntaxKind.CloseBracket)
+                    type = IndexedAccessType(objectType = type, indexType = indexType, pos = pos, end = getEnd())
+                }
             }
             return type
         }
