@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,720 / 10,078 tests passing (~86.5%).
+**Phase 4 — Checker buildout.** 8,722 / 10,078 tests passing (~86.5%).
+
+**B18.3 (2026-05-17, +2 — flips `recursiveBaseCheck2_ts` errors-baseline + 1 other)** —
+Detect circular `extends` in ambient `declare namespace` blocks for
+qualified-name base references AND suppress TS2449 there (TS2506 is the
+primary diagnostic, TS2449 only fires in NON-ambient cycles). Re-attempt of
+the reverted B18.3 v2 with the lessons learned: (a) the rightmost-name
+extraction from B18.3 v2 conflated unrelated same-name classes across
+namespaces — fixed by requiring the qualifier to exactly match the enclosing
+ambient namespace path (`appendNamespacePath` walks PropertyAccessExpression
+left spine; `resolveBaseNameInNamespace` checks qualifier equality).
+(b) TS2449 suppression was too broad — fixed by restricting to AMBIENT
+cycles only (per-file `ambientCyclicBaseClassNamesByFile`). Non-ambient
+cycles like `recursiveBaseCheck3_ts` correctly retain BOTH TS2506 + TS2449.
+A new pre-pass `populateAmbientCyclicBaseClasses` runs before
+`checkUseBeforeDeclaration` to populate the set; the existing
+`checkCircularBaseClasses` then emits TS2506 (also extended to handle
+qualified extends inside ambient namespaces).
 
 **B18.2 (2026-05-17, +1 — flips `restParamModifier_ts` errors-baseline sub-test)** —
 Three-piece fix on top of B17.7's comma-recovery. (1) `Ast.Parameter`: new
