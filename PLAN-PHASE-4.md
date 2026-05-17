@@ -2474,6 +2474,18 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B18.2, +1, 8719 → 8720 passing).** Continuation iteration.
+`find_candidates.py --fresh` returned `restParamModifier_ts` as the sole remaining
+EXTRA candidate (TS1014 + TS1213 emissions where TypeScript's baseline has only
+TS1005). Three-piece fix to suppress the two checker diagnostics on the
+parser-recovery shape `(...public rest)`: new `commaRecovered: Boolean` on
+`Parameter`, set by parser when a parameter is parsed AFTER B17.7's comma-recovery
+TS1005. Checker uses it to skip TS1014 on the rest parameter immediately preceding
+a recovered parameter, and skip TS1213 strict-reserved checking on the same rest
+parameter's name (via new `checkParamsForStrictReserved` helper). Also fixed B17.7's
+recovery squiggle to span the unexpected next token (length = scanner.getPos() -
+scanner.getTokenPos(), e.g. `rest` length 4) instead of length-0. Zero regressions.
+
 **Session 2026-05-16 (B18.1, +1, 8718 → 8719 passing).** Single surgical iteration on
 top of B17.10. `find_candidates.py --fresh` returned 2 candidates (filtered from
 4/62/13). Picked the SWAP candidate: `instantiateTypeParameter_ts` errors-baseline

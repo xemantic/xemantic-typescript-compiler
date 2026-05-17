@@ -5211,8 +5211,16 @@ class Parser(
         // Comments to prepend to the next parameter's leadingComments (captured from before a comma).
         // Initialize with openParenComments so inline comments after '(' attach to the first param.
         var pendingLeadingComments: List<Comment>? = openParenComments?.takeIf { it.isNotEmpty() }
+        // B18.2: when the previous loop iteration ended in B17.7's comma-recovery
+        // path, the next parameter is marked so checker diagnostics on it (and the
+        // rest param preceding it) can be suppressed.
+        var nextParamFromCommaRecovery = false
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
             var param = parseParameter()
+            if (nextParamFromCommaRecovery) {
+                param = param.copy(commaRecovered = true)
+                nextParamFromCommaRecovery = false
+            }
             // Prepend any comments collected from before the previous comma into this param's leadingComments.
             if (pendingLeadingComments != null) {
                 val merged = pendingLeadingComments + (param.leadingComments ?: emptyList())
@@ -5236,9 +5244,16 @@ class Parser(
                         token == SyntaxKind.OpenBrace ||
                         token == SyntaxKind.OpenBracket)
                 if (nextLooksLikeParam) {
-                    reportError("',' expected.", code = 1005, overrideLength = 0,
-                        overrideStart = scanner.getTokenPos())
+                    // B18.2: squiggle covers the unexpected next token (e.g. `rest`
+                    // in `(...public rest)`) — TypeScript points TS1005 at the
+                    // identifier that should have been separated by a comma. For
+                    // `...`/`{`/`[` (length-1 punctuation), the same span works.
+                    val recPos = scanner.getTokenPos()
+                    val recLen = (scanner.getPos() - recPos).coerceAtLeast(1)
+                    reportError("',' expected.", code = 1005,
+                        overrideStart = recPos, overrideLength = recLen)
                     params.add(param)
+                    nextParamFromCommaRecovery = true
                     continue
                 }
                 // No comma and next token doesn't look like a param — we're done. Capture
