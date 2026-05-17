@@ -771,7 +771,7 @@ class TypeScriptCompiler {
                     m == ModuleKind.Preserve || m == ModuleKind.System
             }
             val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
-            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag)
+            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
@@ -836,7 +836,7 @@ class TypeScriptCompiler {
                                 m == ModuleKind.Preserve || m == ModuleKind.System
                         }
                         val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
-                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag)
+                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
                         val sourceFile = parser.parse()
                         diagnostics.addAll(parser.getDiagnostics())
                         parsedFiles[file.fileName] = sourceFile
@@ -1009,7 +1009,7 @@ class TypeScriptCompiler {
                         m == ModuleKind.Preserve || m == ModuleKind.System
                 }
                 val needsJsxFlagMulti = computeNeedsJsxFlag(file.fileName, options, forceJsxForJsMulti)
-                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti)
+                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti, noImplicitAny = options.noImplicitAny || options.strict)
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
 
