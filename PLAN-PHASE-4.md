@@ -118,6 +118,12 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B44.6, +1, 8780 → 8781 — flips `requireOfJsonFileWithModuleNodeResolutionEmitAmdOutFile_ts` JS-emit).** Two-piece fix in `TypeScriptCompiler.kt`:
+  - (a) `outFileName` preserves full path under `@fullEmitPaths` (`out/output.js` not `output.js`).
+  - (b) When `@module` is AMD/System/UMD AND `@resolveJsonModule` AND `@outFile`, JSON fixture files are collected into `jsonOutputs` and prepended to the bundle as `define("X", [], JSON_CONTENT);`. Previously the JSON re-emit gated on `outDir != null`, so AMD-outFile bundles missed JSON content entirely. JSON define appears before the importer's `define()` to match TypeScript order.
+
+---
+
 **Session 2026-05-17 (B44.5, +4, 8776 → 8780 — flips `pathMappingBasedModuleResolution{4,5}_{classic,node}_ts` JS-emit).** Continuation /loop. Looked at the remaining pathMapping JS-emit diffs and observed the source-echo section was reordered: out-of-tree `@filename` fixtures (those outside the tsconfig directory) appear FIRST in the expected baseline, then in-tree sources in input order.
 
   **Fix.** Post-loop partition of `sourceEchoes` in `TypeScriptCompiler.kt`: when `computedTsconfigDir` is non-empty, split into `outside` and `inside` lists keyed on `fileName.startsWith("$tsconfigDir/")`, and concatenate as `outside + inside`. Tests without `tsconfig.json` keep input order (no behavior change).

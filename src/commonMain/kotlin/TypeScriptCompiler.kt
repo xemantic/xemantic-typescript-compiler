@@ -918,7 +918,13 @@ class TypeScriptCompiler {
                 }
 
                 // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
-                // and not files from node_modules which TypeScript never re-emits)
+                // and not files from node_modules which TypeScript never re-emits).
+                // Also collect under outFile+resolveJsonModule so AMD/System/UMD outFile bundling
+                // can wrap them as `define("X", [], { ... })`.
+                val collectForOutFileBundle = file.fileName.endsWith(".json") &&
+                        options.outFile != null && options.resolveJsonModule &&
+                        baseName != "tsconfig.json" && baseName != "package.json" &&
+                        !file.fileName.contains("node_modules/")
                 if (file.fileName.endsWith(".json") && options.outDir != null
                     && baseName != "tsconfig.json" && baseName != "package.json"
                     && !file.fileName.contains("node_modules/")) {
@@ -931,6 +937,12 @@ class TypeScriptCompiler {
                         val jsonBaseName = file.fileName.substringAfterLast('/')
                         jsonOutputs.add(jsonBaseName to jsonContent)
                     }
+                    continue
+                }
+                if (collectForOutFileBundle) {
+                    val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
+                    val jsonBaseName = file.fileName.substringAfterLast('/')
+                    jsonOutputs.add(jsonBaseName to jsonContent)
                     continue
                 }
 
@@ -1268,7 +1280,9 @@ class TypeScriptCompiler {
             // Exception: isolatedModules is incompatible with outFile — TypeScript ignores outFile
             // and produces separate output files for each input file.
             val finalJsOutputs = if (options.outFile != null && !options.isolatedModules && jsOutputs.isNotEmpty()) {
-                val outFileName = options.outFile.substringAfterLast('/')
+                // When fullEmitPaths is set, preserve the full outFile path (e.g. "out/output.js")
+                // rather than stripping to the basename.
+                val outFileName = if (options.fullEmitPaths) options.outFile else options.outFile.substringAfterLast('/')
                 // Concatenate, hoisting a single "use strict"; to the very top.
                 // In outFile bundles, TypeScript places "use strict" at the global scope
                 // before all file content (including AMD define() wrappers).
@@ -1291,13 +1305,31 @@ class TypeScriptCompiler {
                     }
                     result
                 }
-                val body = parts.joinToString("\n")
+                // For AMD bundles with resolveJsonModule, wrap each JSON file content as
+                // `define("X", [], JSON_CONTENT);` and prepend to the bundle. TypeScript places
+                // JSON defines BEFORE the file defines that import them. The module name "X" is
+                // the JSON file's basename without the .json extension.
+                val isAmdLike = options.module == ModuleKind.AMD ||
+                        options.module == ModuleKind.System ||
+                        options.module == ModuleKind.UMD
+                val jsonDefines = if (isAmdLike && options.resolveJsonModule && jsonOutputs.isNotEmpty()) {
+                    jsonOutputs.map { (path, content) ->
+                        val baseName = path.substringAfterLast('/').removeSuffix(".json")
+                        "define(\"$baseName\", [], $content);"
+                    }
+                } else emptyList()
+                val body = (jsonDefines + parts).joinToString("\n")
                 val prefix = buildString {
                     if (anyShebang != null) append(anyShebang)
                     if (anyUseStrict) append("\"use strict\";\n")
                 }
                 val concatenated = prefix + body
-                listOf(outFileName to concatenated)
+                // JSON defines are bundled INTO the outFile; don't ALSO emit them separately.
+                if (jsonDefines.isNotEmpty()) {
+                    listOf(outFileName to concatenated)
+                } else {
+                    listOf(outFileName to concatenated)
+                }
             } else {
                 jsonOutputs + jsOutputs
             }
