@@ -2474,6 +2474,29 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B18.3 attempt, reverted — net -3 regressions).** Continuation
+iteration after B18.2 closed the last fresh candidate. `find_candidates.py --fresh`
+returned 0/0/0; investigated `recursiveBaseCheck2_ts` (SWAP not in fresh pool but
+visible in unfiltered output): expected TS2506 at class name for circular
+`extends`; we emit TS2449 on the bare base reference. Two-piece fix attempted:
+(1) `Checker.checkCircularBaseInStatements` handle `PropertyAccessExpression`
+base (rightmost name extraction); (2) suppress TS2449 when class is in cyclic
+set + move `checkCircularBaseClasses` from step 64f3 to step 36b so the cyclic
+set is populated before TS2449 fires. **Reverted** — full-suite 10078/1358/3
+(was 1355, -3 net). Five regressions surfaced: rightmost-name extraction
+conflates DIFFERENT classes that happen to share a name across namespaces
+(`declFileWithClassNameConflictingWithClassReferredByExtendsClause_ts`:
+`namespace X.Y.base { class W extends A.B.Base.W }` falsely detected as W→W
+cycle); and TS2449 suppression is too broad — `recursiveBaseCheck3_ts`
+(top-level non-ambient cycle) EXPECTS BOTH TS2506 + TS2449 to fire, only the
+ambient-namespace variant suppresses TS2449. **Future approach** for
+`recursiveBaseCheck2_ts`: (a) resolve PropertyAccessExpression base via
+qualified-name walk that verifies the qualifier matches the enclosing
+namespace chain (not bare rightmost-name extraction); (b) gate TS2449
+suppression on ambient context (the cyclic class is inside `declare
+namespace`). Skipped this session — both pieces touch sensitive areas with
+high regression risk for a +1 yield.
+
 **Session 2026-05-17 (B18.2, +1, 8719 → 8720 passing).** Continuation iteration.
 `find_candidates.py --fresh` returned `restParamModifier_ts` as the sole remaining
 EXTRA candidate (TS1014 + TS1213 emissions where TypeScript's baseline has only
