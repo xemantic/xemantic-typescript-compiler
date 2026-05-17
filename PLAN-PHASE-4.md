@@ -2474,6 +2474,25 @@ All remaining items require major infrastructure:
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-17 (B18.3 v3, +2, 8720 → 8722 passing — flips `recursiveBaseCheck2_ts`
+errors-baseline + 1 other).** Re-attempt of the reverted B18.3 v2 with both
+lessons-learned gates applied. Implementation: (1) new pre-pass
+`populateAmbientCyclicBaseClasses` runs in init step 36b (before
+`checkUseBeforeDeclaration`) and tracks AMBIENT-namespace cycles into
+`ambientCyclicBaseClassNamesByFile`; (2) `resolveBaseNameInNamespace`
+PropertyAccessExpression handler now requires the qualifier to exactly match
+the enclosing ambient namespace path (walks the left spine and compares lists)
+instead of bare rightmost-name extraction — this avoids the
+`declFileWithClassNameConflictingWithClassReferredByExtendsClause_ts` style
+regression where unrelated same-name classes in different namespaces were
+falsely detected as cycles; (3) `emitTS2449` suppresses only when the class
+is in the AMBIENT cyclic set — non-ambient cycles (`recursiveBaseCheck3_ts`)
+correctly retain BOTH TS2506 + TS2449 per TypeScript's baseline.
+`checkCircularBaseInStatements` also extended to handle qualified extends
+inside ambient namespaces so TS2506 fires for `recursiveBaseCheck2_ts`'s
+inner `extends Box2D.Collision.Shapes.b2CircleShape`. Full-suite: 1353/3
+(was 1355/3, +2 net). Zero regressions.
+
 **Session 2026-05-17 (B18.3 attempt, reverted — net -3 regressions).** Continuation
 iteration after B18.2 closed the last fresh candidate. `find_candidates.py --fresh`
 returned 0/0/0; investigated `recursiveBaseCheck2_ts` (SWAP not in fresh pool but

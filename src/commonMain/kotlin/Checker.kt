@@ -423,6 +423,13 @@ class Checker(
      */
     private val moduleFiles: MutableSet<String> = mutableSetOf()
 
+    /** B18.3 v3: class names known to be in a circular `extends` chain INSIDE an
+     *  ambient `declare namespace`. TypeScript suppresses TS2449 in that case
+     *  (TS2506 is the primary diagnostic); non-ambient cycles fire BOTH. Per-file
+     *  tracking. Declared before `init` because the init block invokes both
+     *  `checkCircularBaseClasses` (populates) and the UBD walker (reads). */
+    private val ambientCyclicBaseClassNamesByFile: MutableMap<String, MutableSet<String>> = mutableMapOf()
+
     init {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
@@ -677,6 +684,10 @@ class Checker(
         }
         // 36. Check import declarations with modifiers (TS1191)
         checkImportModifiers()
+        // 36b. B18.3 v3: Pre-populate the ambient-cyclic-base-class set so TS2449
+        // can be suppressed for those (TS2506 is the primary diagnostic; non-ambient
+        // cycles still fire BOTH). Must run before [checkUseBeforeDeclaration].
+        populateAmbientCyclicBaseClasses()
         // 37. Check block-scoped variable use before declaration (TS2448)
         checkUseBeforeDeclaration()
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
@@ -28893,6 +28904,10 @@ interface DataView {
     }
 
     private fun emitTS2449(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String) {
+        // B18.3 v3: suppress TS2449 for classes in an ambient-namespace circular
+        // base chain — TypeScript only emits TS2506 there. Non-ambient cycles
+        // (`recursiveBaseCheck3_ts`) fire BOTH, and aren't tracked in this set.
+        if (ambientCyclicBaseClassNamesByFile[fileName]?.contains(name) == true) return
         val start = useNode.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -44651,12 +44666,112 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             try {
-                checkCircularBaseInStatements(result.sourceFile.statements, source, fileName)
+                checkCircularBaseInStatements(result.sourceFile.statements, source, fileName,
+                    inAmbientNamespace = false, namespacePath = emptyList())
             } catch (_: StackOverflowError) {}
         }
     }
 
-    private fun checkCircularBaseInStatements(statements: List<Statement>, source: String, fileName: String) {
+    /** B18.3 v3: dry-run of [checkCircularBaseClasses] for the AMBIENT-namespace
+     *  case only — populates [ambientCyclicBaseClassNamesByFile] so TS2449 can
+     *  be suppressed for those classes. Runs BEFORE [checkUseBeforeDeclaration].
+     *  The main [checkCircularBaseClasses] still runs later to emit TS2506. */
+    private fun populateAmbientCyclicBaseClasses() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            try {
+                collectAmbientCyclicNamesIn(result.sourceFile.statements, fileName,
+                    inAmbientNamespace = false, namespacePath = emptyList())
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun collectAmbientCyclicNamesIn(
+        statements: List<Statement>, fileName: String,
+        inAmbientNamespace: Boolean, namespacePath: List<String>,
+    ) {
+        if (inAmbientNamespace) {
+            // Collect class extends targets in this scope (qualified or bare).
+            val classExtends = mutableMapOf<String, String>()
+            for (stmt in statements) {
+                if (stmt !is ClassDeclaration) continue
+                val name = stmt.name?.text ?: continue
+                val extendsClause = stmt.heritageClauses?.firstOrNull {
+                    it.token == SyntaxKind.ExtendsKeyword
+                } ?: continue
+                val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
+                val baseName = resolveBaseNameInNamespace(baseExpr, namespacePath) ?: continue
+                classExtends[name] = baseName
+            }
+            for ((className, _) in classExtends) {
+                if (chainCyclesBackTo(className, classExtends)) {
+                    ambientCyclicBaseClassNamesByFile.getOrPut(fileName) { mutableSetOf() }.add(className)
+                }
+            }
+        }
+        // Recurse into nested modules, extending namespace path.
+        for (stmt in statements) {
+            if (stmt is ModuleDeclaration) {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    val newPath = appendNamespacePath(namespacePath, stmt.name)
+                    val nestedAmbient = inAmbientNamespace || ModifierFlag.Declare in stmt.modifiers
+                    collectAmbientCyclicNamesIn(body.statements, fileName,
+                        nestedAmbient, newPath)
+                }
+            }
+        }
+    }
+
+    private fun chainCyclesBackTo(className: String, classExtends: Map<String, String>): Boolean {
+        val visited = mutableSetOf<String>()
+        var current: String? = className
+        while (current != null) {
+            if (!visited.add(current)) return current == className
+            current = classExtends[current]
+        }
+        return false
+    }
+
+    private fun resolveBaseNameInNamespace(baseExpr: Expression, namespacePath: List<String>): String? {
+        return when (baseExpr) {
+            is Identifier -> baseExpr.text
+            is PropertyAccessExpression -> {
+                // For qualified extends like `NS.Sub.C`, only treat as in-scope when
+                // the qualifier matches the enclosing namespace path exactly.
+                // Otherwise (e.g. `A.B.Base.W` from a DIFFERENT namespace) skip —
+                // see `declFileWithClassNameConflictingWithClassReferredByExtendsClause_ts`.
+                val parts = mutableListOf<String>()
+                var cur: Expression = baseExpr
+                while (cur is PropertyAccessExpression) {
+                    parts.add(0, cur.name.text)
+                    cur = cur.expression
+                }
+                if (cur !is Identifier) return null
+                val tail = parts.removeAt(parts.lastIndex)
+                val qualifier = listOf(cur.text) + parts
+                if (qualifier == namespacePath) tail else null
+            }
+            else -> null
+        }
+    }
+
+    private fun appendNamespacePath(path: List<String>, name: Expression): List<String> {
+        val parts = mutableListOf<String>()
+        var cur: Expression = name
+        while (cur is PropertyAccessExpression) {
+            parts.add(0, cur.name.text)
+            cur = cur.expression
+        }
+        if (cur is Identifier) parts.add(0, cur.text)
+        return path + parts
+    }
+
+    private fun checkCircularBaseInStatements(
+        statements: List<Statement>, source: String, fileName: String,
+        inAmbientNamespace: Boolean, namespacePath: List<String>,
+    ) {
         // Collect all class names and their extends targets in this scope
         val classExtends = mutableMapOf<String, String>() // className → baseClassName
         val classDecls = mutableMapOf<String, ClassDeclaration>()
@@ -44669,16 +44784,24 @@ interface DataView {
                         it.token == SyntaxKind.ExtendsKeyword
                     } ?: continue
                     val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
-                    val baseName = when (baseExpr) {
+                    // B18.3 v3: bare identifier always counts; qualified extends only
+                    // counts inside an ambient namespace whose path matches the qualifier.
+                    val baseName: String? = when (baseExpr) {
                         is Identifier -> baseExpr.text
-                        else -> continue
+                        is PropertyAccessExpression ->
+                            if (inAmbientNamespace) resolveBaseNameInNamespace(baseExpr, namespacePath) else null
+                        else -> null
                     }
+                    if (baseName == null) continue
                     classExtends[name] = baseName
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
                     if (body is ModuleBlock) {
-                        checkCircularBaseInStatements(body.statements, source, fileName)
+                        val newPath = appendNamespacePath(namespacePath, stmt.name)
+                        val nestedAmbient = inAmbientNamespace || ModifierFlag.Declare in stmt.modifiers
+                        checkCircularBaseInStatements(body.statements, source, fileName,
+                            nestedAmbient, newPath)
                     }
                 }
                 else -> {}
