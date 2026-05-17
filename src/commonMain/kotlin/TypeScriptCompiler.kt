@@ -128,6 +128,15 @@ class TypeScriptCompiler {
         for ((key, value) in optionOverrides) {
             options = applyDirective(options, key.lowercase(), value)
         }
+        // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
+        // `"type": "commonjs"`. Under Node16/Node18/Node20/NodeNext, this determines whether
+        // plain `.ts`/`.js` files emit as ESM or CJS. Without this, plain `.ts` defaults to CJS.
+        if (options.effectiveModule.isNodeNext) {
+            val pkgTypes = collectPackageJsonTypes(parsed.files)
+            if (pkgTypes.isNotEmpty()) {
+                options = options.copy(packageJsonTypes = pkgTypes)
+            }
+        }
         val diagnostics = mutableListOf<Diagnostic>()
 
         // Helper to look up tsconfig.json position for a given option key (lowercase)
@@ -1188,6 +1197,41 @@ class TypeScriptCompiler {
         }
     }
 
+}
+
+/**
+ * Scans multi-file sources for `package.json` files. For each `package.json`, extracts the
+ * `"type"` field: `"module"` → `true`, `"commonjs"` → `false`, absent/other → not added.
+ * Returns a map keyed by the directory containing the `package.json` (no trailing `/`, or
+ * `""` for the implicit root). Used to determine ESM vs CJS for plain `.ts`/`.js` files
+ * under Node16/Node18/Node20/NodeNext.
+ *
+ * Files inside `node_modules/` are skipped — their `package.json` describes the package's
+ * own format, not the consuming code's format. Only consumer-facing `package.json` files
+ * (at the project root or sub-directories) affect emit.
+ */
+private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, Boolean> {
+    val result = mutableMapOf<String, Boolean>()
+    for (file in files) {
+        val base = file.fileName.substringAfterLast('/')
+        if (base != "package.json") continue
+        if (file.fileName.contains("/node_modules/")) continue
+        // Find "type" field; primitive regex scan over the JSON text. JSON is small (test fixtures).
+        val text = file.content
+        // Naive but sufficient match for `"type" : "module"` / `"type": "commonjs"` ignoring whitespace.
+        val typeMatch = Regex("\"type\"\\s*:\\s*\"([^\"]+)\"").find(text)
+        val typeValue = typeMatch?.groupValues?.getOrNull(1) ?: continue
+        val isModule = when (typeValue) {
+            "module" -> true
+            "commonjs" -> false
+            else -> continue
+        }
+        // Directory key: drop the `/package.json` suffix. Empty string for root.
+        // Preserves leading `/` (matches caller's file paths which may be absolute or relative).
+        val dir = if (file.fileName.contains('/')) file.fileName.substringBeforeLast('/') else ""
+        result[dir] = isModule
+    }
+    return result
 }
 
 /**

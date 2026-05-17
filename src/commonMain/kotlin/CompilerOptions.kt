@@ -188,6 +188,13 @@ data class CompilerOptions(
     val tsconfigOptionPositions: Map<String, TsconfigOptionPosition> = emptyMap(),
     /** Diagnostics from paths validation in tsconfig.json (TS5061/5062/5063/5064/5066/5090). */
     val pathsDiagnostics: List<Diagnostic> = emptyList(),
+    /**
+     * Maps directory path (with trailing `/`, or `""` for the implicit root when no leading slash)
+     * to `true` if its `package.json` contains `"type": "module"`, `false` if `"type": "commonjs"`,
+     * absent otherwise. Used under Node16/Node18/Node20/NodeNext to determine whether plain `.ts`
+     * files emit as ESM or CJS (matching TypeScript's package-json-type lookup behavior).
+     */
+    val packageJsonTypes: Map<String, Boolean> = emptyMap(),
 ) {
 
     val effectiveTarget: ScriptTarget
@@ -203,8 +210,10 @@ data class CompilerOptions(
 /**
  * Returns true if the given module kind and file name indicate ES module format.
  * For Node16/NodeNext, `.cts` files are CJS; all others (`.ts`, `.mts`) default to ESM.
- * (In the real TypeScript compiler, `.ts` files check package.json "type" field,
- * but we don't have that context, so we default to ESM.)
+ *
+ * **Note**: this overload has NO `package.json "type"` context. For correct behavior under
+ * Node16/Node18/Node20/NodeNext, prefer the `isESModuleFormat(options, fileName)` overload
+ * which consults `options.packageJsonTypes`.
  */
 fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
     // module: preserve passes through all file formats as-is (ESM syntax)
@@ -219,6 +228,50 @@ fun isESModuleFormat(module: ModuleKind, fileName: String): Boolean {
             // In node resolution modes, only .mts/.mjs files are ESM by default.
             // Plain .ts files are CJS (we don't have package.json "type" context).
             // .mts/.mjs already handled above, so only those reach here as true.
+            false
+        }
+        else -> false
+    }
+}
+
+/**
+ * CompilerOptions-aware overload: consults [CompilerOptions.packageJsonTypes] for plain
+ * `.ts`/`.js` files under Node16/Node18/Node20/NodeNext to determine ESM vs CJS based on
+ * the nearest enclosing `package.json`'s `"type"` field.
+ *
+ * Lookup walks up the file's directory tree, picking the closest ancestor directory that
+ * has an entry in `packageJsonTypes`. If `type: "module"` → ESM; if `type: "commonjs"` (or
+ * absent type field, false) → CJS. If no enclosing package.json is found, falls back to
+ * the legacy behavior (CJS for `.ts` under nodenext).
+ */
+fun isESModuleFormat(options: CompilerOptions, fileName: String): Boolean {
+    val module = options.effectiveModule
+    if (module == ModuleKind.Preserve) return true
+    if (fileName.endsWith(".cjs") || fileName.endsWith(".cts")) return false
+    if (fileName.endsWith(".mjs") || fileName.endsWith(".mts")) return true
+    return when (module) {
+        ModuleKind.ES2015, ModuleKind.ES2020, ModuleKind.ES2022, ModuleKind.ESNext -> true
+        ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20, ModuleKind.NodeNext -> {
+            // Walk up directory tree looking for a package.json type entry.
+            // packageJsonTypes is keyed by directory path (no trailing /, or "/" for root, or "" for relative root).
+            val pkgTypes = options.packageJsonTypes
+            if (pkgTypes.isEmpty()) return false
+            // Strip leading "./", normalize.
+            val normalized = fileName.removePrefix("./")
+            var dir = if (normalized.contains('/')) normalized.substringBeforeLast('/') else ""
+            while (true) {
+                val key = if (dir.isEmpty()) "" else dir
+                pkgTypes[key]?.let { return it }
+                if (dir.isEmpty()) break
+                if (dir == "/") {
+                    // Root-relative, also probe empty string before bailing
+                    pkgTypes[""]?.let { return it }
+                    break
+                }
+                val parent = if (dir.contains('/')) dir.substringBeforeLast('/') else ""
+                if (parent == dir) break
+                dir = parent
+            }
             false
         }
         else -> false
