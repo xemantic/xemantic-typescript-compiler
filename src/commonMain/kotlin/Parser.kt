@@ -2103,6 +2103,51 @@ class Parser(
         }
 
         if (token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan) {
+            // B19.2: Malformed call signature recovery. When `<` is followed by a non-
+            // identifier (and non-modifier) token, `parseTypeParametersOpt()` fails
+            // speculatively and `parseParameterList()` then errors at the `<` with
+            // TS1005 `'('` expected. TypeScript's actual diagnostic for shapes like
+            // `<-` inside a type literal is TS1139 "Type parameter declaration
+            // expected." at the offending token, followed by TS1109 "Expression
+            // expected." at the closing brace position. Detect this by checking the
+            // token immediately after `<` before invoking the speculative parser.
+            if (token == SyntaxKind.LessThan) {
+                val malformedTypeParam = scanner.lookAhead {
+                    scanner.scan() // skip `<`
+                    val t = scanner.getToken()
+                    // Not a valid identifier / modifier / `>` start for type params.
+                    !isIdentifierToken(t) && t != SyntaxKind.ConstKeyword &&
+                        t != SyntaxKind.InKeyword && t != SyntaxKind.OutKeyword &&
+                        t != SyntaxKind.GreaterThan
+                }
+                if (malformedTypeParam) {
+                    nextToken() // consume `<`
+                    val tpPos = scanner.getTokenPos()
+                    reportError(
+                        "Type parameter declaration expected.",
+                        code = 1139, overrideStart = tpPos, overrideLength = 1,
+                    )
+                    // Consume the offending tokens up to but not including the
+                    // member terminator (`}` / `;` / `,` / EOF). This prevents
+                    // the failed-call-signature payload (e.g. `<-`) from leaking
+                    // into the outer statement parser as expression statements.
+                    while (token != SyntaxKind.CloseBrace && token != SyntaxKind.Semicolon
+                        && token != SyntaxKind.Comma && token != SyntaxKind.EndOfFile
+                    ) {
+                        nextToken()
+                    }
+                    // Emit TS1109 at the close-brace position to match TypeScript's
+                    // baseline (the failed call-signature triggers an Expression-
+                    // expected diagnostic at the position where the parser bails).
+                    if (token == SyntaxKind.CloseBrace) {
+                        reportError(
+                            "Expression expected.",
+                            code = 1109, overrideStart = scanner.getTokenPos(), overrideLength = 1,
+                        )
+                    }
+                    return null
+                }
+            }
             // Call signature
             val typeParams = parseTypeParametersOpt()
             val params = parseParameterList()
