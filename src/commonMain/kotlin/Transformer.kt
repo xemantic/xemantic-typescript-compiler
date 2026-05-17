@@ -128,6 +128,12 @@ class Transformer(
     // the existing top-level pre-pass in `transform`. Cleared per file.
     private val topLevelNumericConstants = mutableMapOf<String, Long>()
 
+    // Names of imported identifiers whose value was inlined during enum-value compute via
+    // `Checker.resolveImportedConstLiteralValue`. TypeScript preserves the underlying
+    // `require(...)` even when the local binding becomes syntactically unreferenced — so
+    // the import-elision pass adds these names to the value-reference set. Cleared per file.
+    private val enumInlinedCrossFileImports = mutableSetOf<String>()
+
     // True once we've seen a runtime (non-erased) statement at the top level.
     // Orphaned comments from erased declarations are only preserved before any runtime code.
     private var hasSeenRuntimeStatement = false
@@ -293,6 +299,7 @@ class Transformer(
         helperUsageOrder.clear()
         topLevelNumericConstants.clear()
         allEnumStringValues.clear()
+        enumInlinedCrossFileImports.clear()
         topLevelStatements = sourceFile.statements
         // Pre-pass: collect top-level type-only names (interfaces/type aliases with no runtime counterpart).
         // Used to erase export specifiers that only refer to types, e.g. `export { A, B }` where A, B
@@ -2580,6 +2587,13 @@ class Transformer(
                 (currentFileName.endsWith(".tsx") || currentFileName.endsWith(".jsx"))) {
                 getJsxFactoryNamespace()
             } else null
+            // Build reverse map: require const statement → set of LOCAL named-import binding
+            // names backed by this statement. Used to keep the require alive when at least one
+            // bound name was inlined during enum-value compute (cross-file literal const).
+            val importStmtBoundNames = mutableMapOf<Statement, MutableSet<String>>()
+            for ((localName, importConst) in importStmtForLocalName) {
+                importStmtBoundNames.getOrPut(importConst) { mutableSetOf() }.add(localName)
+            }
             for (stmt in importLikeStmts) {
                 val name = extractIdentifierName(stmt.declarationList.declarations[0].name) ?: continue
                 if (stmt in requireSet) {
@@ -2594,7 +2608,13 @@ class Transformer(
                         // TypeScript still emits `const _1 = __importDefault(require("x"))`.
                         val shadowedDefaults = importStmtShadowedDefaults[stmt] ?: emptySet()
                         val keepForShadow = shadowedDefaults.any { it in valueReferencedNames }
-                        if (!keepForShadow) toElide.add(stmt)
+                        // Third exception: a NAMED-import binding's value was inlined into an
+                        // enum during transformEnum (cross-file literal const). The local
+                        // binding is now syntactically unreferenced but TypeScript preserves
+                        // the require side-effect — matches `enumWithNonLiteralStringInitializer_ts`.
+                        val boundNames = importStmtBoundNames[stmt] ?: emptySet()
+                        val keepForEnumInline = boundNames.any { it in enumInlinedCrossFileImports }
+                        if (!keepForShadow && !keepForEnumInline) toElide.add(stmt)
                     }
                 } else {
                     // Internal alias: erase only if eligible (namespace root known) and unused
@@ -11544,6 +11564,20 @@ class Transformer(
         return when (expr) {
             is StringLiteralNode -> expr.text
             is NoSubstitutionTemplateLiteralNode -> expr.text
+            is TemplateExpression -> {
+                // Compose head + (each span's evaluated expression + literal text).
+                val sb = StringBuilder(expr.head.text)
+                for (span in expr.templateSpans) {
+                    val partStr = evaluateConstantStringExpression(span.expression, stringMemberValues, currentEnumName)
+                        ?: (evaluateConstantExpression(span.expression, emptyMap(), currentEnumName)?.toString())
+                        ?: tryEvaluateNumericLiteral(span.expression)?.toString()
+                        ?: return null
+                    sb.append(partStr)
+                    val lit = span.literal as? StringLiteralNode ?: return null
+                    sb.append(lit.text)
+                }
+                sb.toString()
+            }
             is ParenthesizedExpression ->
                 evaluateConstantStringExpression(expr.expression, stringMemberValues, currentEnumName)
             is BinaryExpression -> {
@@ -11563,7 +11597,10 @@ class Transformer(
                 null
             }
             // Bare reference to a same-enum string-valued member: `AB = A + B`.
+            // Falls through to cross-file imported `const X = stringLiteral` resolution
+            // (TypeScript inlines these in enum-value compute even under isolatedModules).
             is Identifier -> stringMemberValues[expr.text]
+                ?: (resolveImportedLiteralAndTrack(expr.text) as? ConstantValue.StringValue)?.value
             // Cross-enum (or qualified same-enum) reference: `Str.AB + D`.
             is PropertyAccessExpression -> {
                 val obj = expr.expression
@@ -11609,7 +11646,20 @@ class Transformer(
             obj is Identifier && obj.text == enumName && prop in stringValuedMembers
         }
         is Identifier -> expr.text in stringValuedMembers
+            || (resolveImportedLiteralAndTrack(expr.text) is ConstantValue.StringValue)
         else -> false
+    }
+
+    /**
+     * Wraps `Checker.resolveImportedConstLiteralValue` and records the resolved name in
+     * `enumInlinedCrossFileImports` so the import-elision pass preserves the underlying
+     * `require(...)` even when the local binding becomes syntactically unreferenced.
+     * Returns null when no checker, or no cross-file literal const matches.
+     */
+    private fun resolveImportedLiteralAndTrack(name: String): ConstantValue? {
+        val value = checker?.resolveImportedConstLiteralValue(name, currentFileName) ?: return null
+        enumInlinedCrossFileImports.add(name)
+        return value
     }
 
     /**
@@ -11966,7 +12016,9 @@ class Transformer(
                     else -> null
                 }
             }
-            is Identifier -> memberValues[expr.text] ?: topLevelNumericConstants[expr.text]
+            is Identifier -> memberValues[expr.text]
+                ?: topLevelNumericConstants[expr.text]
+                ?: (resolveImportedLiteralAndTrack(expr.text) as? ConstantValue.NumberValue)?.value?.toLong()
             is PropertyAccessExpression -> {
                 // Handle cross-enum references like Foo.a or M.N.Foo.a where Foo is a previously-defined enum.
                 // For qualified paths (M.N.E1.a), extract the enum name (second-to-last segment) and member name.
