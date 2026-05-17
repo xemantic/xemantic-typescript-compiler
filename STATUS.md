@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,792 / 10,078 tests passing (~87.2%).
+**Phase 4 — Checker buildout.** 8,795 / 10,078 tests passing (~87.2%).
+
+**B45.3 (2026-05-17, +3 — flips `moduleNodeImportRequireEmit_ts__target_{es2016,es2020,esnext}` JS-emit)** —
+`import X = require("mod")` under module:nodenext/Node16/Node18/Node20 + ESM file
+(per package.json `"type": "module"`) now desugars to TypeScript's createRequire emit:
+```
+import { createRequire as _createRequire } from "module";
+const __require = _createRequire(import.meta.url);
+...
+const X = __require("mod");
+```
+Two-piece fix in `Transformer.kt`:
+(a) New branch in `transformImportEqualsDeclaration`, ordered BEFORE the type-only
+target-erasure and ESM-drop paths (so that ambient `declare module "mod"` targets
+under nodenext still produce the runtime require — Node's require still loads the
+module even when only types are exposed). Builds `const X = __require("mod")` with
+the original decl's leading/trailing comments preserved, sets a new per-file flag
+`needsCreateRequireHelper = true`.
+(b) New header-injection block at the ESM exit path of `transform()`: when
+`needsCreateRequireHelper` is set, prepend two synthetic statements at the file
+top — `import { createRequire as _createRequire } from "module";` and
+`const __require = _createRequire(import.meta.url);`. Both statements use
+synthetic positions; the `__require` const uses a `MetaProperty(import.meta).url`
+AST shape. Full-suite 10078/1280/3 (was 10078/1283/3, +3 net). Zero regressions.
+
+
 
 **B45.2 (2026-05-17, +1 — flips `moduleResolutionWithSuffixes_one_dirModuleWithIndex_ts` JS-emit)** —
 `extractRelativeImports` moduleSuffixes branch now probes BOTH sibling-file form
