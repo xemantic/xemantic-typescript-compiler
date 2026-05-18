@@ -10887,6 +10887,11 @@ class Transformer(
             ))
         }
 
+        // useDefineForClassFields=true + target<ES2022: lower instance fields to
+        // `Object.defineProperty(this, "p", {enumerable:true, configurable:true,
+        // writable:true, value:init})` in the constructor body. Properties with no
+        // initializer still get a defineProperty call with `value: void 0`.
+        val needsDefineLowering = useDefineForClassFields && options.effectiveTarget < ScriptTarget.ES2022
         // Instance property initializers (only when not using define semantics)
         // Increment functionScopeDepth so arrow functions in property initializers
         // capture `this` correctly (they will be moved into the constructor body).
@@ -10938,6 +10943,57 @@ class Transformer(
                         )
                     }
                 }
+            }
+            functionScopeDepth--
+        } else if (needsDefineLowering) {
+            functionScopeDepth++
+            for (prop in instanceProperties) {
+                val nameNode = prop.name
+                if (nameNode is Identifier && nameNode.text.startsWith("#")) continue
+                // Build the key expression for Object.defineProperty 2nd arg:
+                //   Identifier name → "name" (string literal)
+                //   StringLiteralNode → reuse the literal
+                //   NumericLiteralNode → reuse the literal
+                //   ComputedPropertyName → the expression itself
+                val keyExpr: Expression = when (val pn = prop.name) {
+                    is Identifier -> StringLiteralNode(text = pn.text, pos = -1, end = -1)
+                    is StringLiteralNode -> pn.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
+                    is NumericLiteralNode -> pn.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
+                    is ComputedPropertyName -> transformExpression(pn.expression)
+                    else -> continue
+                }
+                val valueExpr: Expression = prop.initializer?.let { transformExpression(it) }
+                    ?: VoidExpression(
+                        expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    )
+                propInitStatements.add(ExpressionStatement(
+                    expression = CallExpression(
+                        expression = PropertyAccessExpression(
+                            expression = syntheticId("Object"),
+                            name = syntheticId("defineProperty"),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = listOf(
+                            syntheticId("this"),
+                            keyExpr,
+                            ObjectLiteralExpression(
+                                properties = listOf(
+                                    PropertyAssignment(name = syntheticId("enumerable"), initializer = syntheticId("true"), pos = -1, end = -1),
+                                    PropertyAssignment(name = syntheticId("configurable"), initializer = syntheticId("true"), pos = -1, end = -1),
+                                    PropertyAssignment(name = syntheticId("writable"), initializer = syntheticId("true"), pos = -1, end = -1),
+                                    PropertyAssignment(name = syntheticId("value"), initializer = valueExpr, pos = -1, end = -1),
+                                ),
+                                multiLine = true,
+                                pos = -1, end = -1,
+                            ),
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                    leadingComments = prop.leadingComments,
+                    trailingComments = prop.trailingComments,
+                ))
             }
             functionScopeDepth--
         }
@@ -11106,15 +11162,21 @@ class Transformer(
                     // else: moved to constructor body or trailing statements — skip here
                 }
                 member is PropertyDeclaration && useDefineForClassFields -> {
-                    outputMembers.add(
-                        member.copy(
-                            type = null,
-                            initializer = member.initializer?.let { transformExpression(it) },
-                            modifiers = stripMemberModifiers(member.modifiers),
-                            questionToken = false,
-                            exclamationToken = false,
+                    if (needsDefineLowering && ModifierFlag.Static !in member.modifiers &&
+                        !(member.name is Identifier && member.name.text.startsWith("#"))) {
+                        // Instance field already routed to constructor body as Object.defineProperty —
+                        // drop the class-body member.
+                    } else {
+                        outputMembers.add(
+                            member.copy(
+                                type = null,
+                                initializer = member.initializer?.let { transformExpression(it) },
+                                modifiers = stripMemberModifiers(member.modifiers),
+                                questionToken = false,
+                                exclamationToken = false,
+                            )
                         )
-                    )
+                    }
                 }
                 member is Constructor && member.body != null -> {
                     if (member === existingConstructor && transformedConstructor != null) {
