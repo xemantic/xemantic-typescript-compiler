@@ -11085,6 +11085,9 @@ class Checker(
             } else {
                 "Cannot find name '$factoryRoot'."
             }
+            // TS2728 related info: point to the suggestion's declaration (e.g. lib.dom.d.ts for
+            // KNOWN_GLOBALS, real source location for user-declared bindings).
+            val related = suggestion?.let { findDeclarationRelatedInfo(it, fileName, source) }
             diagnostics.add(Diagnostic(
                 message = message,
                 category = DiagnosticCategory.Error,
@@ -11094,6 +11097,7 @@ class Checker(
                 character = character,
                 start = tagStart,
                 length = tagLength,
+                relatedInformation = related?.let { listOf(it) } ?: emptyList(),
             ))
         } else {
             // TS2874: This JSX tag requires 'X' to be in scope, but it could not be found.

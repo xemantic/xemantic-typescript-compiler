@@ -1,6 +1,13 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,827 / 10,078 tests passing (~87.6%).
+**Phase 4 — Checker buildout.** 8,828 / 10,078 tests passing (~87.6%).
+
+**B48.11 (2026-05-18, +1 — flips `jsxFactoryQualifiedNameResolutionError_ts`)** —
+Add TS2728 "'X' is declared here" related info to the B48.10 TS2552 JSX factory suggestion case.
+For `@jsxFactory: MyElement.createElement` where `MyElement` isn't in scope, TypeScript suggests
+`Element` (lib.dom) with TS2728 related info pointing to `lib.dom.d.ts:--:--`. Added call to
+`findDeclarationRelatedInfo(suggestion, fileName, source)` in the TS2552 emit path. Full-suite
+10078/1247/3 (was 10078/1248/3, +1 net). Zero regressions.
 
 **B48.10 (2026-05-18, +1 — flips `jsxFactoryMissingErrorInsideAClass_ts`)** —
 TS2874 emission for JSX runtime factory not in scope. New `checkJsxFactoryInScope` runs alongside the
