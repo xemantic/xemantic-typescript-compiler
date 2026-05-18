@@ -39868,6 +39868,34 @@ interface DataView {
                     val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val returnKeywordLength = 6
                     val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    // B49.3: TS2739/TS2740 missing-properties emission for return-statement
+                    // assignability, mirroring the var-decl/assignment paths. When the source
+                    // is missing 2+ properties of the target, emit TS2739 (no truncation, all
+                    // properties listed) or TS2740 (with "and N more" truncation, when 6+ are
+                    // missing) instead of the generic TS2322. The threshold mirrors
+                    // formatTs2740Message: truncation kicks in for size > 5. Skip for source
+                    // unions / function-typed sources (those have their own elaboration
+                    // paths) and for Type.Reference sources (handled by class/interface
+                    // structural elaboration elsewhere).
+                    if (sourceType is Type.Object && targetType is Type.Object &&
+                        sourceType.callSignatures.isNullOrEmpty() &&
+                        targetType.callSignatures.isNullOrEmpty() &&
+                        sourceType !is Type.Reference) {
+                        val allMissing = collectMissingProperties(sourceType, targetType)
+                        if (allMissing.size >= 2) {
+                            diagnostics.add(Diagnostic(
+                                message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                                category = DiagnosticCategory.Error,
+                                code = if (allMissing.size <= 5) 2739 else 2740,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = stmt.pos,
+                                length = returnKeywordLength,
+                            ))
+                            return
+                        }
+                    }
                     val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                     val chain = mutableListOf<String>()
                     // Object→Object: property-level or function elaboration (16.1)
