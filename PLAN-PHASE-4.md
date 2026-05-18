@@ -969,6 +969,21 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Substantial JS-emit candidates surveyed 2026-05-18 (session B47.x, all skipped — feature-scale):**
+- `superAccess2_ts`: super-in-static via `Reflect.get(_b, "key", _a)` with class+base captures. Requires resolution of `super` in static-initializer/static-method context.
+- `commonSourceDir6_ts`: AMD outFile shared module-name counter ordering needs allocation deferred until emit-order instead of compile-order.
+- `staticInitializersAndLegacyClassDecorators_ts`: legacy decorator class-rename capture (`C1 = C1_1 = __decorate(...)`) for class self-reference inside static-initializer + decorated class.
+- `tslibReExportHelpers2_ts` / `importHelpersES6_ts` / `importHelpersNoHelpersForPrivateFields_ts` / `accessorInAmbientContextES5_ts__target_es2015`: class private fields (`#field`) downleveling via `__classPrivateFieldGet/Set/In` helpers (and inverse: emit `#field`/`#test()` natively under target=es2022+).
+- `emitClassExpressionInDeclarationFile2_ts` / `blockScopedVariablesUseBeforeDef_ts__target_es2015`: `__setFunctionName(_a, "name")` helper for named class expressions assigned to bindings.
+- `javascriptThisAssignmentInStaticBlock_ts`: `static { _a = ClassName }` capture + `Reflect.get(super_)` for `this`/`super` in static blocks.
+- `destructuringAssignmentWithExportedName_ts`: CJS destructuring-assignment rewrite for exported names with multiple temp vars.
+- `nestedObjectRest_ts`: `__rest` helper for destructuring with object-rest pattern (vs Object.assign for spread).
+- `expressionTypeNodeShouldError_ts` / `parseInvalidNames_ts` / `errorRecoveryWithDotFollowedByNamespaceKeyword_ts` / `manyCompilerErrorsInTheTwoFiles_ts` / `bigintArbirtraryIdentifier_ts`: parser-recovery, each bespoke.
+- `importExportInternalComments_ts` / `elementAccessExpressionInternalComments_ts`: inline `/*N*/` block-comment preservation between tokens in import/export/element-access statements; requires AST extension to capture between-token comments + emit changes.
+- `convertKeywordsYes_ts` (both alwaysstrict variants): reserved-future-word class names; parser would need to accept + checker emit TS1213 (currently emits TS1212) + cascading impact on class body parser-recovery for reserved-word class members.
+
+All remain in the JS-emit candidate pool but are feature-scale work, not surgical fixes.
+
 **JSX-vs-generic-arrow disambiguation in `.tsx` — net-zero attempted 2026-05-18:**
 - `declarationEmitRecursiveConditionalAliasPreserved_ts`: JS-emit (6-line diff). Source is `.tsx` with `<Num extends number, PowerOf extends number>(num, powerOf): Power<Num, PowerOf> => ...`. Our parser treats `<Num extends ...>` as JSX (always JSX in `.tsx` files for `<...>` in expression position). TypeScript disambiguates: `<Identifier extends ...>` is unambiguously a generic arrow (JSX tags can't have `extends`). Attempt: added lookahead in `parseUnaryExpression`'s `LessThan` branch — if first token inside `<` is Identifier and next is `extends`, fall through to generic-arrow detection. Target test flipped clean BUT full-suite count unchanged (+1 / -1). The regression is in a `.tsx` test that previously parsed `<X extends`-like content as JSX (probably a test that has `<X extends Y>` in actual JSX context — JSX-spread-with-rest or similar). Reverted. Re-attempt would need a TIGHTER disambig: e.g. also check what FOLLOWS the `<Id extends Y>` chain — if it's `(` (open paren for arrow params) or `,` (multiple type params), it's a generic arrow; if it's `>` followed by JSX content, it's JSX.
 
