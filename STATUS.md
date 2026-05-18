@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,810 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,811 / 10,078 tests passing (~87.4%).
+
+**B47.3 (2026-05-18, +1 — flips `reactReduxLikeDeferredInferenceAllowsAssignment_ts` JS-emit)** —
+Async-arrow destructuring-parameter capture. When an async arrow has any BindingPattern param
+(ObjectBindingPattern or ArrayBindingPattern), the outer arrow now gets renamed simple-identifier
+proxies (Identifier params get `<name>_<i+1>`, BindingPatterns get fresh `_a`/`_b`/...), and
+the generator function inside `__awaiter` keeps the ORIGINAL parameter shapes (preserving
+destructuring inside the generator). The proxies are passed as the args array (`secondArg`) to
+`__awaiter`. Example: `async (dispatch, { foo }) => ...` → outer arrow params `(dispatch_1, _a)`,
+generator params `(dispatch, { foo })`, `__awaiter(thisArg, [dispatch_1, _a], void 0, function*...)`.
+New branch in `transformExpression`'s `is ArrowFunction` path (line ~7990, after rest-param
+detection): `hasBindingPattern = !hasRestParam && expr.parameters.any { p -> p.name is ObjectBindingPattern || p.name is ArrayBindingPattern }`. Full-suite 10078/1264/3 (was 10078/1265/3, +1 net).
+Zero regressions.
 
 **B47.2 (2026-05-18, +1 — flips `experimentalDecoratorMetadataUnresolvedTypeObjectInEmit_ts` JS-emit)** —
 Chained safety wrap for cross-file `declare namespace` qualified names in

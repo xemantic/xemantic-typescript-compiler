@@ -7991,6 +7991,40 @@ class Transformer(
                     // flatten rest parameters BEFORE generating the __awaiter wrapper.
                     val hasRestParam = options.effectiveTarget < ScriptTarget.ES2018 &&
                         expr.parameters.any { p -> p.name is ObjectBindingPattern && p.name.elements.any { it.dotDotDotToken } }
+                    // Detect destructuring binding patterns. When any param has a BindingPattern,
+                    // TypeScript moves all params to the inner generator (preserving the original
+                    // destructuring) and renames the outer arrow's params to simple proxies.
+                    // The proxies' values are passed via the __awaiter's `args` array.
+                    val hasBindingPattern = !hasRestParam && expr.parameters.any { p ->
+                        p.name is ObjectBindingPattern || p.name is ArrayBindingPattern
+                    }
+                    if (hasBindingPattern) {
+                        // Outer arrow gets renamed proxies (Identifier params get `<name>_<i+1>`,
+                        // BindingPatterns get fresh temp `_a`/`_b`/...).
+                        val outerParams = mutableListOf<Parameter>()
+                        val argRefs = mutableListOf<Expression>()
+                        expr.parameters.forEachIndexed { i, p ->
+                            val proxyName: Identifier = when (val n = p.name) {
+                                is Identifier -> Identifier(text = "${n.text}_${i + 1}", pos = -1, end = -1)
+                                else -> Identifier(text = nextTempVarName(), pos = -1, end = -1)
+                            }
+                            outerParams.add(Parameter(name = proxyName, pos = -1, end = -1))
+                            argRefs.add(proxyName)
+                        }
+                        val argsArray = ArrayLiteralExpression(
+                            elements = argRefs, pos = -1, end = -1,
+                        )
+                        // Inner generator: keep original parameter shapes (destructuring preserved).
+                        val innerParams = transformParameters(expr.parameters)
+                        expr.copy(
+                            typeParameters = null,
+                            parameters = outerParams,
+                            type = null,
+                            body = makeAwaiterCall(thisArg, secondArg = argsArray, body = generatorBody, generatorParams = innerParams),
+                            modifiers = strippedModifiers - ModifierFlag.Async,
+                            hasParenthesizedParameters = true,
+                        )
+                    } else {
                     val (finalParams, finalBody) = if (hasRestParam) {
                         flattenRestParameters(expr.parameters, generatorBody)
                     } else {
@@ -8004,6 +8038,7 @@ class Transformer(
                         modifiers = strippedModifiers - ModifierFlag.Async,
                         hasParenthesizedParameters = true,
                     )
+                    }
                 } else {
                     val hasRestParam = options.effectiveTarget < ScriptTarget.ES2018 &&
                         expr.parameters.any { p -> p.name is ObjectBindingPattern && p.name.elements.any { it.dotDotDotToken } }
