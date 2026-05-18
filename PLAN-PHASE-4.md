@@ -118,7 +118,24 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
-**Session 2026-05-18 retrospective — B48.x series (+5 tests, 8815 → 8820).** /goal session targeting 20 iterations. Landed 5 surgical wins before the candidate pool again ran dry. All B48.x wins were narrow Transformer/Emitter changes gated tightly to avoid regression risk:
+**Session 2026-05-18 retrospective — B48.x series (+15 tests, 8815 → 8830, 12 commits).** /goal session targeting 20 iterations. Landed 12 substantive wins across Transformer / Checker / Compiler with zero regressions. After initial B48.1-B48.5 surgical wins, broke through to feature-scale work in B48.6-B48.12:
+
+- **B48.1-B48.5 (+5)** — surgical Transformer/Emitter wins (CJS export destructuring-with-rest, useDefineForClassFields downlevel, namespace-scoped type-only import elision, late-export mutation rewrite, synthetic-array emit gate).
+- **B48.6 (+1)** — `__setFunctionName` helper for anonymous class expressions assigned to named bindings. New helper template + transient `pendingClassExprBindingName` field + `computedPropHoistNames` reuse for `var _a;` CJS hoist + `prependedCount` adjustment for `functionExportStubs` insertion position.
+- **B48.7 (+1)** — Helper-emit order: `__setFunctionName` after `__awaiter` but before `__asyncGenerator`, regardless of first-usage order. Matches TypeScript's helper emit position.
+- **B48.8 (+1)** — Two-piece AMD outFile module ordering fix: (a) `resolveAmdModuleName` separator-chain bug (`substringBeforeLast` chain returning empty), (b) transform-loop iteration order via topological sort BEFORE the transform loop so shared module-name counter increments match emit order.
+- **B48.9 (+3)** — TS2304 emission for JSX tag names. Custom components (uppercase first char) and qualified names checked for unresolved identifiers; intrinsic elements (lowercase) skip (compile to string literals). Recurses into JSX attributes and children.
+- **B48.10 (+1)** — TS2874 ("JSX tag requires X to be in scope") + TS2552-with-spelling-suggestion. Per-JSX-element check that the configured runtime factory (jsxFactory first segment, reactNamespace, or default React) is in scope. Gated narrowly: only fires when `jsx` mode is explicitly set to react-style classic emit.
+- **B48.11 (+1)** — TS2728 "declared here" related info on B48.10's TS2552 spelling suggestion via `findDeclarationRelatedInfo`.
+- **B48.12 (+2)** — TS5067 "Invalid value for 'jsxFactory'" + invalid-format fallback to default React/reactNamespace for the B48.10 in-scope check. New `isValidJsxFactoryString` helper validates dotted identifier sequence.
+
+**Session-end note (2026-05-18 post-B48.12).** Test count: 8830 passing (was 8815 pre-session). Surgical pool again exhausted at the +1 commit level. Three late-session feature attempts surveyed but reverted: spelling suggestion Levenshtein threshold (createElement→frameElement requires sub-cost 1 in our weighted distance; current cost 2 keeps distance too high); function/constructor type display parens in array element / union member positions (needed for `isDeclarationVisibleNodeKinds_ts`; my formatTypeForDisplay edits not reaching the emission site, the diagnostic must flow through a different display path); param-default ClassExpression bindings for B48.6's __setFunctionName (`capturedParametersInInitializers2` needs param-default downleveling to `if (y === void 0)` form, which is a separate feature). Each remaining JS-emit candidate is feature-scale work catalogued in earlier session notes.
+
+Next session: continue Stage 3 decorator support (`__esDecorate` + `__runInitializers` helpers, flips ≥3 tests) OR Blocker #1 control-flow narrowing substep.
+
+---
+
+**Earlier 2026-05-18 retrospective (kept for context) — B48.1-B48.5 (+5 tests).** Initial surgical wins before the feature push.
 
 - **B48.1** — CJS export destructuring-with-rest rewrite at target≥ES2018: `export const { x, ...rest } = expr` → `_a = expr, exports.x = _a.x, exports.rest = __rest(_a, ["x"])`. Flips `exportObjectRest_ts__module_commonjs_target_esnext`.
 - **B48.2** — `useDefineForClassFields=true` downlevel at target<ES2022: instance class fields lower to `Object.defineProperty(this, "p", { ..., value: <init> })` in constructor body. Flips `classMemberInitializerScoping2_ts__target_es2017_useDefineForClassFields_true`.
