@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,819 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,820 / 10,078 tests passing (~87.5%).
+
+**B48.5 (2026-05-18, +1 — flips `decoratorUsedBeforeDeclaration_ts` JS-emit)** —
+Synthetic-array same-line emit gate. `emitArrayLiteral` in `Emitter.kt` consults `sourceText.substring(element.end, nextElement.pos)` to decide whether to keep two elements on the same line. For SYNTHETIC arrays
+(pos == -1, e.g. the `__decorate([...])` array built in `Transformer.kt`'s decorator emit), the elements'
+`pos`/`end` come from the original source decorator expressions, but the surrounding source text near each
+element's end is unrelated to the synthetic array's layout. The check could read a substring that doesn't
+contain a newline (because `element.end` overshoots past the source decorator's `)` into the next decorator's
+`@`), making the emitter conclude the two decorators share a line — collapsing the multi-line `__decorate([
+... ])` array into a single-line form. Added `node.pos >= 0` to the `nextOnSameLine` gate so synthetic arrays
+always emit each element on its own new line. Flips `decoratorUsedBeforeDeclaration_ts`. Full-suite
+10078/1255/3 (was 10078/1256/3, +1 net). Zero regressions.
 
 **B48.4 (2026-05-18, +1 — flips `es6ExportClauseWithAssignmentInEs5_ts__target_{es5,es2015}` JS-emit)** —
 CJS late-export mutation tracking for compound and unary assignments. Previously the `namedExportLocalToExport`

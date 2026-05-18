@@ -2153,7 +2153,13 @@ class Emitter(
                     // emits each `,,` blank slot on its own line in a multi-line array).
                     // Mixed Omitted+non-Omitted stays adjacent (e.g. `[, [...]]`).
                     val omitOmitPair = element is OmittedExpression && nextElement is OmittedExpression
+                    // Synthetic arrays (pos == -1, e.g. `__decorate([...])` decorator arrays built
+                    // in the Transformer) have no meaningful source range; in those cases the
+                    // source-newline heuristic would misread the surrounding-source text near each
+                    // element's end and incorrectly conclude two elements share a line. Skip the
+                    // same-line check for synthetic arrays and always emit each element on a new line.
                     val nextOnSameLine = nextElement != null && !omitOmitPair
+                        && node.pos >= 0
                         && element.end >= 0 && nextElement.pos >= 0
                         && element.end < sourceText.length && nextElement.pos <= sourceText.length
                         && !sourceText.substring(element.end, nextElement.pos).contains('\n')
