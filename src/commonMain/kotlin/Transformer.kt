@@ -468,7 +468,15 @@ class Transformer(
         // Script files (non-module) can't import tslib, so they still need inline helpers.
         val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
         if (!skipHelpers) {
-            for (helperName in helperUsageOrder) {
+            // TypeScript emits `__setFunctionName` AFTER `__awaiter` but BEFORE `__asyncGenerator`
+            // (which inlines as `__await` + `__asyncGenerator`). If both helpers are needed, move
+            // `__setFunctionName` to that position regardless of first-usage order.
+            val orderedHelpers = if (helperUsageOrder.contains("__setFunctionName") && helperUsageOrder.contains("__awaiter")) {
+                val withoutSetFn = helperUsageOrder.filter { it != "__setFunctionName" }
+                val awaiterIdx = withoutSetFn.indexOf("__awaiter")
+                withoutSetFn.subList(0, awaiterIdx + 1) + "__setFunctionName" + withoutSetFn.subList(awaiterIdx + 1, withoutSetFn.size)
+            } else helperUsageOrder
+            for (helperName in orderedHelpers) {
                 when (helperName) {
                     "__makeTemplateObject" -> helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
                     "__awaiter" -> helpers.add(RawStatement(code = AWAITER_HELPER))

@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,821 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,822 / 10,078 tests passing (~87.5%).
+
+**B48.7 (2026-05-18, +1 — flips `blockScopedVariablesUseBeforeDef_ts__target_es2015` JS-emit)** —
+Helper-emit order fix: TypeScript emits `__setFunctionName` AFTER `__awaiter` but BEFORE `__asyncGenerator`
+(which inlines as `__await` + `__asyncGenerator`). When both `__setFunctionName` and `__awaiter` are
+required, our previous `helperUsageOrder` (first-usage-tracked) emitted `__setFunctionName` first because
+source-order put the class with static fields BEFORE the async functions. New reorder logic in `Transformer.kt`:
+when both helpers are in `helperUsageOrder`, move `__setFunctionName` to right after `__awaiter`. Full-suite
+10078/1253/3 (was 10078/1254/3, +1 net). Zero regressions.
 
 **B48.6 (2026-05-18, +1 — flips `emitClassExpressionInDeclarationFile2_ts` JS-emit)** —
 Emit `__setFunctionName(_a, "X")` for anonymous class expressions assigned to a named binding (`var/let/const X = class {...}`) when the class has trailing statements (static initializers etc.) that benefit from the temp-var capture pattern. Four-piece fix:
