@@ -12998,6 +12998,12 @@ class Transformer(
                     if (ref is QualifiedName) {
                         val rootName = generateSequence(ref) { (it.left as? QualifiedName) }.last().left
                         if (rootName is Identifier && rootName.text in topLevelTypeOnlyNames) continue
+                        // Mirror B38.1: erase qualified-path aliases whose final segment is type-only
+                        // (interface, type alias, or type-only sub-namespace) AND whose root is
+                        // exported OR runtime-instantiated. Matches the top-level
+                        // `transformImportEqualsDeclaration` elision so namespace-scoped exports of
+                        // type-only sub-members don't emit a broken `nsName.X = R` assignment.
+                        if (isQualifiedPathTypeOnly(ref, requireRuntimeOrExportedRoot = true)) continue
                     }
                     // For non-exported internal imports (import Y = X), erase if the alias
                     // is not used in any value position in the namespace body.
