@@ -982,6 +982,9 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Type-display normalization for TS2322 nullable target — surveyed 2026-05-18 (feature-scale):**
+- `elaboratedErrorsOnNullableTargets01_ts`: errors-baseline SWAP +3. Target type `null | { foo: ... } | undefined` should display as `{ foo: ... | undefined }` (outer null/undefined stripped) when SOURCE is non-nullable. When source IS nullable (e.g. `y = x` direction), keep null/undefined at end of source display. Rule: in TS2322 emission, when source is non-Union-with-null-or-undefined AND target is Union-with-null-or-undefined, strip outer null/undefined from target display via a new `typeToStringDropOuterNullish(targetType)` helper. Requires touching 20+ TS2322 emission sites OR introducing a single elaboration-display helper used in all paths. Out-of-scope for surgical fix.
+
 **Substantial JS-emit candidates surveyed 2026-05-18 (session B47.x, all skipped — feature-scale):**
 - `superAccess2_ts`: super-in-static via `Reflect.get(_b, "key", _a)` with class+base captures. Requires resolution of `super` in static-initializer/static-method context.
 - `commonSourceDir6_ts`: AMD outFile shared module-name counter ordering needs allocation deferred until emit-order instead of compile-order.
