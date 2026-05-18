@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,816 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,817 / 10,078 tests passing (~87.5%).
+
+**B48.2 (2026-05-18, +1 — flips `classMemberInitializerScoping2_ts__target_es2017_usedefineforclassfields_true` JS-emit)** —
+Class field downlevel under `useDefineForClassFields=true` AT target<ES2022. When `useDefineForClassFields=true`
+is explicitly set AND `effectiveTarget < ES2022`, instance class fields are now lowered to
+`Object.defineProperty(this, "p", { enumerable: true, configurable: true, writable: true, value: <init> })`
+calls inserted into the constructor body. Properties without initializer emit `value: void 0`. The class-body
+member is dropped (would otherwise be illegal `class C { p = val }` at target<ES2022). Private fields
+(`#field`) and static fields are unaffected by this branch (handled elsewhere). Implementation: new
+`needsDefineLowering` flag + parallel branch in `transformClass` after the existing `!useDefineForClassFields`
+instance-init loop, plus a gate in the outputMembers PropertyDeclaration+`useDefineForClassFields` branch to
+skip emission when the field has been routed to the constructor body. Full-suite 10078/1258/3 (was
+10078/1259/3, +1 net). Zero regressions.
 
 **B48.1 (2026-05-18, +1 — flips `exportObjectRest_ts__module_commonjs_target_esnext` JS-emit)** —
 CJS export destructuring-with-rest rewrite at target≥ES2018. For `export const { x, y, ...rest } = expr`
