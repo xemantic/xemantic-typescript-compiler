@@ -22,6 +22,9 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Scanner/Parser gotchas
 
+- **JSX-vs-generic-arrow disambiguation in `.tsx` files**: In `parsePrimaryExpression`'s `LessThan` branch, when `isJsxFile`, peek at `<Identifier extends X...>`. If X is an Identifier / type-keyword / open delimiter / `typeof` → generic arrow, fall through to the existing generic-arrow / type-assertion detection. If X is `/`, `>`, or `=` → JSX (boolean attr shorthand `<T extends/>` or attr=value `<T extends={x}/>`). The broader gate `<Identifier extends` (without checking what follows) regresses `parseJsxExtends2_ts`. Tightened gate fixes both `parseJsxExtends2_ts` (JSX) and `declarationEmitRecursiveConditionalAliasPreserved_ts` (generic arrow).
+
+
 - **`lookAhead` vs `tryScan`**: `lookAhead` ALWAYS restores scanner state. `tryScan` keeps scanner state if callback returns truthy. Use `lookAhead` for probe-and-decide patterns; use `tryScan` for "try to parse, keep results if success."
 - **`lookAhead` does NOT restore diagnostics**: The parser's `lookAhead` restores scanner position and the `token` field, but any `reportError`/`parseExpected` failures during the callback permanently add to `diagnostics`. When using `lookAhead` with complex parsing (e.g., `parseComputedPropertyName()`), save `diagnostics.size` before and trim after to discard speculative errors.
 - **`reScanGreaterToken`** (splitting `>>` to `>` for nested generics) was implemented but caused 4-test net regression — left disabled in the parser. The implementation in `Scanner.kt` is correct; the issue is likely subtle interaction with `tryScan` nesting. Re-enable cautiously.

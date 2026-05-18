@@ -1,6 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,814 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,815 / 10,078 tests passing (~87.5%).
+
+**B47.7 (2026-05-18, +1 — flips `declarationEmitRecursiveConditionalAliasPreserved_ts` JS-emit)** —
+JSX-vs-generic-arrow disambiguation in `.tsx` files. In `parsePrimaryExpression`'s `LessThan`
+branch, when `isJsxFile && <Identifier extends <typeExpr>...>`, fall through to the generic-arrow
+detection instead of always going to `parseJsxElementOrFragment`. The disambig requires:
+- After `<`: Identifier
+- After the Identifier: `ExtendsKeyword`
+- After `extends`: Identifier OR type-keyword (number/string/boolean/symbol/bigint/any/unknown/object/never)
+  OR open delimiter (`(`/`{`/`[`) OR `typeof` keyword.
+
+Falls back to JSX for `<T extends/>` (boolean attr shorthand), `<T extends={x}/>` (attr=value),
+`<T extends>` (no value). Earlier net-zero attempt (broader gate matching `<T extends` alone)
+regressed `parseJsxExtends2_ts` (where source `<T extends/>` IS JSX with boolean attribute);
+the tighter disambig fixes both.
+
+Full-suite 10078/1260/3 (was 10078/1261/3, +1 net). Zero regressions.
 
 **B47.6 (2026-05-18, +2 — flips `moduleNoneDynamicImport_ts__target_es2015/es2020` JS-emit)** —
 Builds on B47.5's `./` strip. Two more pieces complete the `@module: none` + `@outFile` story:

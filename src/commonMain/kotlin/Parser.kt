@@ -3638,9 +3638,33 @@ class Parser(
             }
 
             LessThan -> {
-                // In JSX files, <...> is a JSX element, NOT a type assertion.
+                // In JSX files, <...> is normally a JSX element. BUT `<Identifier extends <Type>...>`
+                // is unambiguously a generic arrow function — JSX uses `<Tag attr={value}/>`. An
+                // attribute named `extends` would be a boolean shorthand (no type expression
+                // following). Disambiguate by what follows `extends`: an Identifier or type
+                // keyword means generic arrow; `/`, `>`, `=` means JSX attribute (e.g.
+                // `<T extends/>` or `<T extends={true}/>`).
                 if (isJsxFile) {
-                    return parseJsxElementOrFragment()
+                    val isGenericArrowInJsx = scanner.lookAhead {
+                        scanner.scan() // skip <
+                        if (scanner.getToken() != SyntaxKind.Identifier) return@lookAhead false
+                        scanner.scan() // skip the first identifier
+                        if (scanner.getToken() != SyntaxKind.ExtendsKeyword) return@lookAhead false
+                        scanner.scan() // skip `extends`
+                        when (scanner.getToken()) {
+                            SyntaxKind.Slash, SyntaxKind.GreaterThan, SyntaxKind.Equals -> false
+                            SyntaxKind.Identifier, SyntaxKind.NumberKeyword, SyntaxKind.StringKeyword,
+                            SyntaxKind.BooleanKeyword, SyntaxKind.SymbolKeyword, SyntaxKind.BigIntKeyword,
+                            SyntaxKind.AnyKeyword, SyntaxKind.UnknownKeyword, SyntaxKind.ObjectKeyword,
+                            SyntaxKind.NeverKeyword, SyntaxKind.OpenParen, SyntaxKind.OpenBrace,
+                            SyntaxKind.OpenBracket, SyntaxKind.TypeOfKeyword -> true
+                            else -> false
+                        }
+                    }
+                    if (!isGenericArrowInJsx) {
+                        return parseJsxElementOrFragment()
+                    }
+                    // Fall through to generic-arrow / type-assertion handling below.
                 }
                 // Could be <TypeParams>() => body (generic arrow) or <Type>expr (type assertion)
                 val isGenericArrow = scanner.lookAhead {
