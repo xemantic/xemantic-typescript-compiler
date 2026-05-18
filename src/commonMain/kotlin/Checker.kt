@@ -10993,14 +10993,17 @@ class Checker(
             }
             is JsxElement -> {
                 checkJsxTagName(expr.openingElement.tagName, scope, source, fileName)
+                checkJsxFactoryInScope(expr, scope, source, fileName)
                 expr.openingElement.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
                 expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
             }
             is JsxSelfClosingElement -> {
                 checkJsxTagName(expr.tagName, scope, source, fileName)
+                checkJsxFactoryInScope(expr, scope, source, fileName)
                 expr.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
             }
             is JsxFragment -> {
+                checkJsxFactoryInScope(expr, scope, source, fileName)
                 expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
             }
             else -> {}
@@ -11024,6 +11027,86 @@ class Checker(
                 checkUnresolvedInExpr(tagName.expression, scope, source, fileName)
             }
             else -> {}
+        }
+    }
+
+    /**
+     * Check that the JSX runtime factory identifier (`jsxFactory` first segment, or
+     * `reactNamespace`, or default "React") is in scope at the JSX usage site. Fires
+     * TS2552 with spelling suggestion when `jsxFactory` was explicitly set (TypeScript
+     * treats this as a regular name-resolution failure with suggestion). Fires TS2874
+     * otherwise (default or `reactNamespace`-set case). Skips when `jsx` mode is
+     * `preserve` or `react-native` (those don't generate factory calls).
+     */
+    private fun checkJsxFactoryInScope(jsxNode: Node, scope: NameScope, source: String, fileName: String) {
+        val jsxMode = options.jsx?.lowercase()
+        // Only fire TS2874/TS2552 when:
+        //   (a) `jsx` option is explicitly set (the user opted into react-style emit), AND
+        //   (b) the mode generates factory calls (not `preserve` / `react-native` / `react-jsx*`).
+        // When `jsx` is null, TypeScript doesn't emit this diagnostic even for .tsx files.
+        if (jsxMode == null) return
+        if (jsxMode == "preserve" || jsxMode == "react-native") return
+        if (jsxMode.startsWith("react-jsx")) return  // automatic runtime uses imports, not in-scope factory
+        // Determine factory identifier root.
+        val factoryExplicit = options.jsxFactory
+        val factoryRoot: String = when {
+            factoryExplicit != null -> factoryExplicit.substringBefore('.')
+            options.reactNamespace != null -> options.reactNamespace!!
+            else -> "React"
+        }
+        // Don't re-check intrinsic elements case; this is a SEPARATE per-JSX-element check
+        // for the FACTORY identifier (not the tag).
+        if (factoryRoot.isEmpty()) return
+        // Already in scope? Walk normal scope chain.
+        if (scope.has(factoryRoot) || factoryRoot in globals) return
+        // 5067 is a separate (compile-options) diagnostic emitted elsewhere; this
+        // function only emits the per-JSX-element diagnostic.
+        // Compute position: at the JSX opening tag.
+        val tagStart = when (jsxNode) {
+            is JsxElement -> jsxNode.openingElement.tagName.pos
+            is JsxSelfClosingElement -> jsxNode.tagName.pos
+            is JsxFragment -> jsxNode.pos
+            else -> return
+        }
+        val tagLength = when (jsxNode) {
+            is JsxElement -> (jsxNode.openingElement.tagName as? Identifier)?.text?.length
+                ?: ((jsxNode.openingElement.tagName.end - tagStart).coerceAtLeast(1))
+            is JsxSelfClosingElement -> (jsxNode.tagName as? Identifier)?.text?.length
+                ?: ((jsxNode.tagName.end - tagStart).coerceAtLeast(1))
+            is JsxFragment -> 2 // `<>`
+            else -> 1
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, tagStart)
+        if (factoryExplicit != null) {
+            // TS2552: Cannot find name 'X'. Did you mean 'Y'?
+            val suggestion = getSpellingSuggestion(factoryRoot, scope, fileName = fileName)
+            val message = if (suggestion != null) {
+                "Cannot find name '$factoryRoot'. Did you mean '$suggestion'?"
+            } else {
+                "Cannot find name '$factoryRoot'."
+            }
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = if (suggestion != null) 2552 else 2304,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = tagStart,
+                length = tagLength,
+            ))
+        } else {
+            // TS2874: This JSX tag requires 'X' to be in scope, but it could not be found.
+            diagnostics.add(Diagnostic(
+                message = "This JSX tag requires '$factoryRoot' to be in scope, but it could not be found.",
+                category = DiagnosticCategory.Error,
+                code = 2874,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = tagStart,
+                length = tagLength,
+            ))
         }
     }
 

@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,826 / 10,078 tests passing (~87.6%).
+**Phase 4 — Checker buildout.** 8,827 / 10,078 tests passing (~87.6%).
+
+**B48.10 (2026-05-18, +1 — flips `jsxFactoryMissingErrorInsideAClass_ts`)** —
+TS2874 emission for JSX runtime factory not in scope. New `checkJsxFactoryInScope` runs alongside the
+B48.9 JSX tagName check: when `jsx` mode is set to a `react`-style emit (NOT `preserve` /
+`react-native` / `react-jsx*` automatic) AND the factory root identifier (from `@jsxFactory` first
+segment, or `@reactNamespace`, or default `React`) is not in scope, emit TS2874 ("This JSX tag
+requires 'X' to be in scope, but it could not be found.") at the JSX element/fragment position.
+TS2552 (with spelling suggestion) variant fires when `@jsxFactory` was explicitly set; TS2304
+fallback when no suggestion. Gate is critical: `jsxMode == null` skips entirely (TypeScript doesn't
+emit TS2874 for default-jsx-mode .tsx files), preventing regressions on tests like
+`checkJsxNotSetError_ts`. Full-suite 10078/1248/3 (was 10078/1249/3, +1 net). Zero regressions.
 
 **B48.9 (2026-05-18, +3 — flips `jsxSpreadTag_ts__target_{es2015,esnext}` errors-baseline + 1 more)** —
 TS2304 emission for JSX tag names. Our `checkUnresolvedInExprCore` previously had no JSX branches, so
