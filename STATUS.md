@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,811 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,812 / 10,078 tests passing (~87.4%).
+
+**B47.4 (2026-05-18, +1 — flips `mappedTypeGenericIndexedAccess_ts` JS-emit)** —
+Two-piece fix for optional-call (`obj?.(args)`) downleveling:
+- (a) Arrow-expression-body hoist scope: non-async expression-body arrows now push their own
+  `hoistedVarScopes` entry around body transformation. When the body's optional-chain rewrite
+  allocates a temp var (`_a`), the var is hoisted INSIDE the arrow body (via expression-body
+  → block-body conversion: `{ var _a; return <body>; }`), not at the outer scope.
+- (b) `.call(receiver, args)` preservation: when the LHS of `?.(args)` is a `PropertyAccessExpression`
+  or `ElementAccessExpression` on a simple Identifier receiver, emit `_a.call(receiver, ...args)`
+  instead of `_a(args)` — preserves `this` binding that the `?.()` semantics require.
+Example: `(p) => typeHandlers[p.t]?.(p)` →
+  `(p) => { var _a; return (_a = typeHandlers[p.t]) === null || _a === void 0 ? void 0 : _a.call(typeHandlers, p); }`.
+Both fixes in `Transformer.kt`: (a) in `is ArrowFunction` body branch (`when (val b = expr.body) → is Expression`),
+(b) in `is CallExpression` `questionDotToken` branch. Full-suite 10078/1263/3 (was 10078/1264/3,
++1 net). Zero regressions.
 
 **B47.3 (2026-05-18, +1 — flips `reactReduxLikeDeferredInferenceAllowsAssignment_ts` JS-emit)** —
 Async-arrow destructuring-parameter capture. When an async arrow has any BindingPattern param

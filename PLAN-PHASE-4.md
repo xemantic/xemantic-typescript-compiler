@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.4, +1, 8811 → 8812 — flips `mappedTypeGenericIndexedAccess_ts` JS-emit).** Two-piece fix for optional-call `obj?.(args)` downleveling under target<ES2020.
+
+**Implementation.**
+- (a) **Arrow-body hoist scope**: in `is ArrowFunction` (line ~7973), non-async expression-body arrows now push a fresh `hoistedVarScopes` entry around body transformation. If any temp var is allocated during body transformation (e.g. `_a` for an inner optional chain), the expression body is converted to a block body `{ var <temps>; return <body>; }` so the temp var lives INSIDE the arrow body. Async arrows skip this push because they have their own `__awaiter` body-wrapping logic.
+- (b) **`.call(receiver, args)` preservation**: in the `?.()` downlevel branch of `is CallExpression` (line ~7780-ish), when the original LHS is `PropertyAccessExpression` or `ElementAccessExpression` AND the receiver is a simple `Identifier`, emit `_a.call(<receiver>, ...args)` instead of `_a(args)`. Preserves the `this` binding that `?.()` semantics retain.
+
+**Verification.** Full-suite 10078/1263/3 (was 10078/1264/3, +1 net). Zero regressions. Each piece alone was net-zero (verified mid-session): (a) without (b) doesn't flip target (call still uses wrong `this`); (b) without (a) doesn't flip target (`_a` still hoists outside the arrow). Both together flip clean. The earlier reverted `.call`-alone attempt is now superseded — the `arrowScope` push provides the missing piece.
+
+**CLAUDE.md gotcha update.** Document both pieces alongside the existing optional-chain notes.
+
+---
+
 **Session 2026-05-18 (B47.3, +1, 8810 → 8811 — flips `reactReduxLikeDeferredInferenceAllowsAssignment_ts` JS-emit).** Async-arrow destructuring-parameter capture. Continuation /loop iteration after B47.2. The JS-emit for `async (dispatch, { foo }) => { return foo; }` was emitting `(dispatch, { foo }) => __awaiter(void 0, void 0, void 0, function* () { return foo; })` (no capture, no proxies), but TypeScript emits `(dispatch_1, _a) => __awaiter(void 0, [dispatch_1, _a], void 0, function* (dispatch, { foo }) { return foo; })` (outer params are renamed proxies; the destructuring `{ foo }` happens inside the generator).
 
 **Implementation.** Single-file change in `Transformer.kt` at the async-arrow path (`is ArrowFunction → isAsync` branch, line ~7990). Added detection: `hasBindingPattern = !hasRestParam && expr.parameters.any { p -> p.name is ObjectBindingPattern || p.name is ArrayBindingPattern }`. When true: outer arrow params = renamed proxies (Identifier → `${name}_${i+1}`; BindingPattern → fresh temp via `nextTempVarName()`), inner generator gets `transformParameters(expr.parameters)` (original shapes), and `__awaiter` is called with `secondArg = [proxy1, proxy2, ...]`. The existing `secondArg` parameter on `makeAwaiterCall` was already supported (mirroring the `hasDefaultParams` pattern at FunctionDeclaration line 7176).
