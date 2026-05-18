@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,815 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,816 / 10,078 tests passing (~87.5%).
+
+**B48.1 (2026-05-18, +1 — flips `exportObjectRest_ts__module_commonjs_target_esnext` JS-emit)** —
+CJS export destructuring-with-rest rewrite at target≥ES2018. For `export const { x, y, ...rest } = expr`
+under `module: commonjs` and `target` >= `ES2018`, the Transformer now emits the comma-expression form:
+`_a = expr, exports.x = _a.x, exports.y = _a.y, exports.rest = __rest(_a, ["x","y"])`
+(plus `var _a;` hoisted via `sideEffectTempVars`). Previously emitted native destructuring
+(`const { x, ...rest } = ...`) followed by separate `exports.x = x; exports.rest = rest;` statements.
+New branch in `transformToCommonJS`'s exported VariableStatement path, gated narrowly: single
+declaration, target≥ES2018, ObjectBindingPattern with at least one rest element, all elements have
+identifier names with no default values and no computed property names. The existing
+sub-ES2018 path via `transformVariableDeclarationListWithRest` is preserved. Full-suite 10078/1259/3
+(was 10078/1260/3, +1 net). Zero regressions.
 
 **Session 2026-05-18 (B47.x series, 8808 → 8815, +7).** /loop session landing 7 substantive feature wins via narrow defensive-emit patterns. Each gated tightly to avoid cascading regressions. Summary of substantive landed: B47.1 (defensive class capture for static async-arrow init), B47.2 (chained safety wrap for cross-file `declare namespace` in `design:paramtypes`), B47.3 (async-arrow destructuring-param capture), B47.4 (optional-call `.call(receiver)` + arrow-body hoist scope), B47.5/B47.6 (`module:none` + `outFile` bundling rules — `./` strip + aux `.js` skip + native import preserve for target≥ES2020), B47.7 (JSX-vs-generic-arrow disambig in `.tsx`). Also chores: MAINT-2 (stale skip-log audit), skip-log documentation for several investigated-but-skipped candidates, surgical-pool status update, B47.x retrospective.
 
