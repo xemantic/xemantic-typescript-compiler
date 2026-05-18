@@ -10991,6 +10991,70 @@ class Checker(
                 checkUnresolvedInExpr(expr.expression, scope, source, fileName)
                 checkUnresolvedInType(expr.type, scope, source, fileName)
             }
+            is JsxElement -> {
+                checkJsxTagName(expr.openingElement.tagName, scope, source, fileName)
+                expr.openingElement.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
+                expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
+            }
+            is JsxSelfClosingElement -> {
+                checkJsxTagName(expr.tagName, scope, source, fileName)
+                expr.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
+            }
+            is JsxFragment -> {
+                expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Check JSX tag-name for TS2304. Intrinsic elements (lowercase first char) are
+     * compiled to string literals and don't need name resolution. Custom components
+     * (uppercase first char) and qualified names (`Foo.Bar`) reference identifiers
+     * that must exist in scope.
+     */
+    private fun checkJsxTagName(tagName: Expression, scope: NameScope, source: String, fileName: String) {
+        when (tagName) {
+            is Identifier -> {
+                // Intrinsic elements (lowercase first char) compile to string literals.
+                if (tagName.text.isNotEmpty() && tagName.text[0].isLowerCase()) return
+                checkIdentifierResolved(tagName.text, tagName, scope, source, fileName)
+            }
+            is PropertyAccessExpression -> {
+                checkUnresolvedInExpr(tagName.expression, scope, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Check JSX attribute for TS2304 in any expression-containing value. */
+    private fun checkUnresolvedInJsxAttribute(attr: Node, scope: NameScope, source: String, fileName: String) {
+        when (attr) {
+            is JsxAttribute -> {
+                when (val value = attr.value) {
+                    is JsxExpressionContainer -> value.expression?.let {
+                        checkUnresolvedInExpr(it, scope, source, fileName)
+                    }
+                    is JsxElement -> checkUnresolvedInExpr(value, scope, source, fileName)
+                    is JsxSelfClosingElement -> checkUnresolvedInExpr(value, scope, source, fileName)
+                    is JsxFragment -> checkUnresolvedInExpr(value, scope, source, fileName)
+                    else -> {}
+                }
+            }
+            is JsxSpreadAttribute -> checkUnresolvedInExpr(attr.expression, scope, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Check JSX child for TS2304 in expressions and nested elements. */
+    private fun checkUnresolvedInJsxChild(child: Node, scope: NameScope, source: String, fileName: String) {
+        when (child) {
+            is JsxExpressionContainer -> child.expression?.let {
+                checkUnresolvedInExpr(it, scope, source, fileName)
+            }
+            is JsxElement -> checkUnresolvedInExpr(child, scope, source, fileName)
+            is JsxSelfClosingElement -> checkUnresolvedInExpr(child, scope, source, fileName)
+            is JsxFragment -> checkUnresolvedInExpr(child, scope, source, fileName)
             else -> {}
         }
     }
