@@ -1381,7 +1381,10 @@ class Transformer(
         // Without this pre-scan, when the `__decorate` statement is processed the export hasn't been
         // encountered yet, so `X` is not yet in `exportedVarNames`, and the assignment is emitted without the
         // `exports.Y =` prefix.
-        val namedExportLocalToExport = mutableMapOf<String, String>()
+        // Map local name → list of export names (may be multiple, e.g. `export { X, X as Y }`).
+        // The list preserves source order so chained wraps emit `exports.Y = exports.X = ...`
+        // in TypeScript's reverse-source order via reversed traversal at the wrap site.
+        val namedExportLocalToExport = mutableMapOf<String, MutableList<String>>()
         for (stmt in originalSourceFile.statements) {
             if (stmt is ExportDeclaration && stmt.moduleSpecifier == null && stmt.exportClause is NamedExports) {
                 for (spec in (stmt.exportClause as NamedExports).elements) {
@@ -1392,7 +1395,7 @@ class Transformer(
                     if (localName in functionOnlyNames) continue   // functions use stub path, handled separately
                     if (localName in directExportedVarNames) continue  // direct-exported vars already handled
                     if (localName in runtimeDeclaredNames) {
-                        namedExportLocalToExport[localName] = exportName
+                        namedExportLocalToExport.getOrPut(localName) { mutableListOf() }.add(exportName)
                     }
                 }
             }
@@ -2364,21 +2367,27 @@ class Transformer(
                             // Exclude direct-exported vars (no local var binding) — those are handled by
                             // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
                             var assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
-                            if (assignedExportName == null && stmt is ExpressionStatement) {
-                                // Also handle: `X = __decorate(...)` where X is a locally-declared class
-                                // exported via a later `export { X }` or `export { X as Y }` clause.
-                                // The export clause may not have been processed yet, so X isn't in
-                                // exportedVarNames — use the pre-scanned namedExportLocalToExport map.
-                                val bin = stmt.expression as? BinaryExpression
-                                if (bin != null && bin.operator == Equals) {
-                                    val lhsName = (bin.left as? Identifier)?.text
-                                    if (lhsName != null && lhsName !in directExportedVarNames) {
-                                        assignedExportName = namedExportLocalToExport[lhsName]
-                                    }
-                                }
+                            // Also detect late-export mutations of locally-declared vars:
+                            //   var foo = 2; foo = 3;        + export { foo }       → exports.foo = foo = 3;
+                            //   var baz = 3; baz = 4;        + export { baz, baz as quux } → exports.quux = exports.baz = baz = 4;
+                            //   var buzz = 10; buzz += 3;    + export { buzz }      → exports.buzz = buzz += 3;
+                            //   var bizz = 8; bizz++;        + export { bizz }      → exports.bizz = (bizz++, bizz);
+                            //   var bizz = 8; ++bizz;        + export { bizz }      → exports.bizz = ++bizz;
+                            // Returns the list of export names (in source order) for the mutated local, or null.
+                            val lateExportLocalName: String? = if (stmt is ExpressionStatement) when (val e = stmt.expression) {
+                                is BinaryExpression -> if (isAssignmentOperator(e.operator) && e.left is Identifier) e.left.text else null
+                                is PrefixUnaryExpression -> if ((e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) && e.operand is Identifier) e.operand.text else null
+                                is PostfixUnaryExpression -> if ((e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) && e.operand is Identifier) e.operand.text else null
+                                else -> null
+                            } else null
+                            val lateExportNames: List<String>? = lateExportLocalName?.let { nm ->
+                                if (nm in directExportedVarNames) null
+                                else namedExportLocalToExport[nm]
                             }
                             if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
                                 result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
+                            } else if (!lateExportNames.isNullOrEmpty()) {
+                                result.add(wrapStatementWithLateExports(stmt as ExpressionStatement, lateExportNames))
                             } else {
                                 // Recursively rewrite any nested `export var x = v` to `exports.x = v`.
                                 // TypeScript handles this as error recovery (export inside block is invalid JS).
@@ -6410,6 +6419,52 @@ class Transformer(
             right = bin,
             pos = -1, end = -1,
         )
+        return stmt.copy(expression = wrapped)
+    }
+
+    /**
+     * Wraps a mutation statement with `exports.X =` assignments for each export name.
+     * Handles:
+     *   `X = expr`     → `exports.Y = exports.X = X = expr` (when X has multiple export names [X, Y])
+     *   `X += expr`    → `exports.X = X += expr`
+     *   `X++` / `X--`  → `exports.X = (X++, X)` (rewrap as comma to preserve post-increment effect)
+     *   `++X` / `--X`  → `exports.X = ++X`
+     * Names list is in source order; the FIRST name becomes the innermost wrap so emission reads
+     * `exports.<last> = ... = exports.<first> = <expr>`.
+     */
+    private fun wrapStatementWithLateExports(stmt: ExpressionStatement, names: List<String>): ExpressionStatement {
+        val inner: Expression = when (val e = stmt.expression) {
+            is PostfixUnaryExpression -> {
+                // Rewrite `X++` as `(X++, X)` so the COMMA-expression value is the post-increment
+                // result (matching what `exports.X` should be set to). The outer parens are needed
+                // because `exports.X = X++, X` parses as `(exports.X = X++), X` — wrong evaluation.
+                val operandClone = (e.operand as Identifier).copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
+                ParenthesizedExpression(
+                    expression = BinaryExpression(
+                        left = e,
+                        operator = SyntaxKind.Comma,
+                        right = operandClone,
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            }
+            else -> e
+        }
+        // Chain exports.X = exports.Y = ... = inner (each name wraps OUTER of the previous)
+        var wrapped: Expression = inner
+        for (name in names) {
+            wrapped = BinaryExpression(
+                left = PropertyAccessExpression(
+                    expression = syntheticId("exports"),
+                    name = Identifier(text = name, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.Equals,
+                right = wrapped,
+                pos = -1, end = -1,
+            )
+        }
         return stmt.copy(expression = wrapped)
     }
 
