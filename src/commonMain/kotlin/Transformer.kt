@@ -7792,7 +7792,29 @@ class Transformer(
                     val isNull = BinaryExpression(left = nullCheck, operator = EqualsEqualsEquals, right = syntheticId("null"), pos = -1, end = -1)
                     val isUndefined = BinaryExpression(left = objRef, operator = EqualsEqualsEquals, right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), pos = -1, end = -1)
                     val condition = BinaryExpression(left = isNull, operator = BarBar, right = isUndefined, pos = -1, end = -1)
-                    val call = expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
+                    // Preserve `this` binding when LHS was a method/index access on a simple Identifier:
+                    // `obj.method?.(args)` → `_a.call(obj, args)` (similarly for `obj[key]?.(args)`).
+                    // Without this, the down-leveled `_a(args)` would lose the `this`-binding that
+                    // `?.()` semantics preserve. Only when the receiver is a simple Identifier
+                    // (no extra temp var needed for the receiver).
+                    val receiver: Expression? = when (transformedExpr) {
+                        is PropertyAccessExpression -> transformedExpr.expression
+                        is ElementAccessExpression -> transformedExpr.expression
+                        else -> null
+                    }?.takeIf { it is Identifier }
+                    val call = if (receiver != null) {
+                        CallExpression(
+                            expression = PropertyAccessExpression(
+                                expression = objRef,
+                                name = syntheticId("call"),
+                                pos = -1, end = -1,
+                            ),
+                            arguments = listOf(receiver) + transformedArgs,
+                            pos = -1, end = -1,
+                        )
+                    } else {
+                        expr.copy(expression = objRef, typeArguments = null, arguments = transformedArgs, questionDotToken = false)
+                    }
                     ConditionalExpression(condition = condition, whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1), whenFalse = call, pos = -1, end = -1)
                 } else {
                     // B23.1: when not downleveling, strip synthetic instantiation parens
@@ -7972,7 +7994,48 @@ class Transformer(
                 inAsyncBody = isAsync
                 val transformedBody: Node = when (val b = expr.body) {
                     is Block -> transformBlock(b, isFunctionScope = true)
-                    is Expression -> transformExpression(b)
+                    is Expression -> {
+                        // For non-async expression-body arrows, push a hoist scope so that
+                        // temp vars allocated during body transformation (e.g. `_a` for
+                        // `obj?.method()` optional chain) land INSIDE the arrow body rather
+                        // than at the outer scope. Convert expression body to a block body
+                        // with `var <temps>; return <expr>;` when any temps were allocated.
+                        // Async arrows have their own __awaiter wrapping; don't double-scope.
+                        if (isAsync) {
+                            transformExpression(b)
+                        } else {
+                            val arrowScope = mutableListOf<String>()
+                            hoistedVarScopes.add(arrowScope)
+                            try {
+                                val transformedExpr = transformExpression(b)
+                                if (arrowScope.isNotEmpty()) {
+                                    val tempVarStmt = VariableStatement(
+                                        declarationList = VariableDeclarationList(
+                                            declarations = arrowScope.map { name ->
+                                                VariableDeclaration(
+                                                    name = Identifier(text = name, pos = -1, end = -1),
+                                                    type = null, initializer = null, pos = -1, end = -1,
+                                                )
+                                            },
+                                            flags = VarKeyword, pos = -1, end = -1,
+                                        ),
+                                        modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                                    )
+                                    Block(
+                                        statements = listOf(
+                                            tempVarStmt,
+                                            ReturnStatement(expression = transformedExpr, pos = -1, end = -1),
+                                        ),
+                                        multiLine = false, pos = -1, end = -1,
+                                    )
+                                } else {
+                                    transformedExpr
+                                }
+                            } finally {
+                                hoistedVarScopes.removeLast()
+                            }
+                        }
+                    }
                     else -> b
                 }
                 inAsyncBody = prevInAsyncBody
