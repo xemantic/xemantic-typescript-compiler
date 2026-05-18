@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.3, +1, 8810 → 8811 — flips `reactReduxLikeDeferredInferenceAllowsAssignment_ts` JS-emit).** Async-arrow destructuring-parameter capture. Continuation /loop iteration after B47.2. The JS-emit for `async (dispatch, { foo }) => { return foo; }` was emitting `(dispatch, { foo }) => __awaiter(void 0, void 0, void 0, function* () { return foo; })` (no capture, no proxies), but TypeScript emits `(dispatch_1, _a) => __awaiter(void 0, [dispatch_1, _a], void 0, function* (dispatch, { foo }) { return foo; })` (outer params are renamed proxies; the destructuring `{ foo }` happens inside the generator).
+
+**Implementation.** Single-file change in `Transformer.kt` at the async-arrow path (`is ArrowFunction → isAsync` branch, line ~7990). Added detection: `hasBindingPattern = !hasRestParam && expr.parameters.any { p -> p.name is ObjectBindingPattern || p.name is ArrayBindingPattern }`. When true: outer arrow params = renamed proxies (Identifier → `${name}_${i+1}`; BindingPattern → fresh temp via `nextTempVarName()`), inner generator gets `transformParameters(expr.parameters)` (original shapes), and `__awaiter` is called with `secondArg = [proxy1, proxy2, ...]`. The existing `secondArg` parameter on `makeAwaiterCall` was already supported (mirroring the `hasDefaultParams` pattern at FunctionDeclaration line 7176).
+
+**Verification.** Full-suite 10078/1264/3 (was 10078/1265/3, +1 net). Zero regressions across the 10078-test suite. Target test `reactReduxLikeDeferredInferenceAllowsAssignment_ts compiles to JavaScript` flips clean. The errors-baseline variant of the test was already failing (unrelated TS2322 elaboration gap) and remains failing.
+
+**Why bounded.** The gate is `hasBindingPattern && !hasRestParam` — preserves the existing rest-param flatten path. Pure-Identifier async arrows (e.g. `async (x) => ...`) keep the existing simpler emit (no proxy renaming). This avoids the risk of breaking the many async-arrow tests that already pass with the simpler form. Only async arrows containing destructuring patterns get the new capture treatment, matching TypeScript's behavior.
+
+**CLAUDE.md gotcha update.** Document the async-arrow binding-pattern capture rule.
+
+---
+
 **Session 2026-05-18 (B47.2, +1, 8809 → 8810 — flips `experimentalDecoratorMetadataUnresolvedTypeObjectInEmit_ts` JS-emit).** Chained safety wrap for cross-file `declare namespace` qualified names in decorator `design:paramtypes` metadata. Continuation /loop iteration after B47.1 + skip-log doc. Per prior recon (post-B40.1) this had been classified as "distinct multi-temp-var sequence emission, deferred." Attempting it now.
 
 **Implementation.** Three pieces in `Transformer.kt`:
