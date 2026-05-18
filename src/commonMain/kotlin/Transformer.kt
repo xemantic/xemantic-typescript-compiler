@@ -2289,8 +2289,14 @@ class Transformer(
         // Rewrite dynamic import() calls to CJS Promise.resolve()... form.
         // This covers all statements including nested expressions in object literals, arrow
         // functions, async functions, etc. needsImportStar is set to true if any are found.
+        // For @module: none + target >= ES2020, preserve native `import()` syntax (no rewrite,
+        // no helpers): no module system means no module resolver, but native ES2020 `import()`
+        // is left as-is for runtime handling.
+        val preserveNativeDynImport = options.effectiveModule == ModuleKind.None &&
+            options.effectiveTarget >= ScriptTarget.ES2020
         val dynImportFlag = booleanArrayOf(false)
-        val rewritten = result.map { rewriteCjsDynStmt(it, dynImportFlag) }
+        val rewritten = if (preserveNativeDynImport) result
+            else result.map { rewriteCjsDynStmt(it, dynImportFlag) }
         if (dynImportFlag[0]) {
             needsImportStar = true
             result.clear()

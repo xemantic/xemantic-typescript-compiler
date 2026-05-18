@@ -118,6 +118,24 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.6, +2, 8812 → 8814 — flips `moduleNoneDynamicImport_ts__target_es2015/es2020` JS-emit).** Builds on B47.5's `./` strip. Two more pieces complete the `@module: none` + `@outFile` story.
+
+**Implementation.**
+- (a) Skip auxiliary `.js` files from outFile bundle when `@module: none`. New gate in Phase 3 of `TypeScriptCompiler.kt` (after the existing TS6131-style exports-skip): when `options.outFile != null && options.effectiveModule == ModuleKind.None` and the file is `.js`/`.mjs`/`.cjs` with module statements (export/import), skip emission via `continue`. TypeScript treats `.js` files under `module:none` as pulled in only for type info / allowJs checking, not runtime bundling.
+- (b) Preserve native `import()` when `@module: none` + target>=ES2020. In `Transformer.kt`'s `transformToCommonJS`, the `rewriteCjsDynStmt` pass is now gated on `!preserveNativeDynImport`, where `preserveNativeDynImport = options.effectiveModule == ModuleKind.None && options.effectiveTarget >= ScriptTarget.ES2020`. For es2015, the rewrite still applies (B47.5's `./` strip lands the correct require path). For es2020, the native `import("./b")` syntax is preserved verbatim (no helpers, no rewrite).
+
+**Verification.** Full-suite 10078/1261/3 (was 10078/1263/3, +2 net). Zero regressions across the 10078-test suite. Both variants of `moduleNoneDynamicImport_ts` flip clean: es2015 emits the CJS Promise.resolve()+__importStar form with `require("b")` (no `./`); es2020 preserves native `import("./b")` with no helpers.
+
+**Why bounded.** Both new gates are scoped to `@module: none`. (a) only skips `.js` files; `.ts` files still emit normally. (b) only fires when target supports native `import()`. The combined narrow gate avoids regression risk on other module modes.
+
+**CLAUDE.md gotcha update.** Document the module:none + outFile behavior alongside other module-detection rules.
+
+---
+
+**Session 2026-05-18 (B47.5, foundation — `./` strip from module:none dyn-import path).** See STATUS.md B47.5 entry.
+
+---
+
 **Session 2026-05-18 (B47.4, +1, 8811 → 8812 — flips `mappedTypeGenericIndexedAccess_ts` JS-emit).** Two-piece fix for optional-call `obj?.(args)` downleveling under target<ES2020.
 
 **Implementation.**
