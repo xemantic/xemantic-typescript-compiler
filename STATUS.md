@@ -2,6 +2,8 @@
 
 **Phase 4 — Checker buildout.** 8,815 / 10,078 tests passing (~87.5%).
 
+**Session 2026-05-18 (B47.x series, 8808 → 8815, +7).** /loop session landing 7 substantive feature wins via narrow defensive-emit patterns. Each gated tightly to avoid cascading regressions. Summary of substantive landed: B47.1 (defensive class capture for static async-arrow init), B47.2 (chained safety wrap for cross-file `declare namespace` in `design:paramtypes`), B47.3 (async-arrow destructuring-param capture), B47.4 (optional-call `.call(receiver)` + arrow-body hoist scope), B47.5/B47.6 (`module:none` + `outFile` bundling rules — `./` strip + aux `.js` skip + native import preserve for target≥ES2020), B47.7 (JSX-vs-generic-arrow disambig in `.tsx`). Also chores: MAINT-2 (stale skip-log audit), skip-log documentation for several investigated-but-skipped candidates, surgical-pool status update, B47.x retrospective.
+
 **B47.7 (2026-05-18, +1 — flips `declarationEmitRecursiveConditionalAliasPreserved_ts` JS-emit)** —
 JSX-vs-generic-arrow disambiguation in `.tsx` files. In `parsePrimaryExpression`'s `LessThan`
 branch, when `isJsxFile && <Identifier extends <typeExpr>...>`, fall through to the generic-arrow
