@@ -1490,6 +1490,110 @@ class Transformer(
                             for (decl in stmt.declarationList.declarations) {
                                 for (name in collectBoundNames(decl.name)) if (name !in exportedVarNames) exportedVarNames.add(name)
                             }
+                            // Special case: `export const { x, y, ...rest } = expr` under CJS at target>=ES2018.
+                            // Emit comma-expression form:
+                            //   _a = expr, exports.x = _a.x, exports.y = _a.y, exports.rest = __rest(_a, ["x","y"])
+                            // Gate to simple identifier-named elements (no defaults, no nested patterns,
+                            // no computed property names) and target>=ES2018 so the existing
+                            // <ES2018 path via transformVariableDeclarationListWithRest is preserved.
+                            val cjsExportRestSingle = stmt.declarationList.declarations.size == 1 &&
+                                options.effectiveTarget >= ScriptTarget.ES2018 &&
+                                stmt.declarationList.declarations[0].initializer != null &&
+                                (stmt.declarationList.declarations[0].name as? ObjectBindingPattern)?.let { pat ->
+                                    pat.elements.any { it.dotDotDotToken } &&
+                                    pat.elements.all { elem ->
+                                        elem.initializer == null && elem.name is Identifier &&
+                                            (elem.propertyName == null ||
+                                                elem.propertyName is Identifier ||
+                                                elem.propertyName is StringLiteralNode)
+                                    }
+                                } == true
+                            if (cjsExportRestSingle) {
+                                val decl = stmt.declarationList.declarations[0]
+                                val pattern = decl.name as ObjectBindingPattern
+                                val initExpr = transformExpression(decl.initializer!!)
+                                val nonRest = pattern.elements.filter { !it.dotDotDotToken }
+                                val restElem = pattern.elements.first { it.dotDotDotToken }
+                                val tempName = nextTempVarName()
+                                sideEffectTempVars.add(tempName)
+                                requireHelper("__rest")
+
+                                val excludedKeys: List<Expression> = nonRest.map { elem ->
+                                    val keyName = when (val pn = elem.propertyName) {
+                                        is Identifier -> pn.text
+                                        is StringLiteralNode -> pn.text
+                                        else -> (elem.name as Identifier).text
+                                    }
+                                    StringLiteralNode(text = keyName, singleQuote = false, pos = -1, end = -1)
+                                }
+
+                                val parts = mutableListOf<Expression>()
+                                // _a = init
+                                parts.add(BinaryExpression(
+                                    left = syntheticId(tempName),
+                                    operator = Equals,
+                                    right = initExpr,
+                                    pos = -1, end = -1,
+                                ))
+                                // exports.x = _a.x for each non-rest
+                                for (elem in nonRest) {
+                                    val keyName = when (val pn = elem.propertyName) {
+                                        is Identifier -> pn.text
+                                        is StringLiteralNode -> pn.text
+                                        else -> (elem.name as Identifier).text
+                                    }
+                                    val localName = (elem.name as Identifier).text
+                                    directExportedVarNames.add(localName)
+                                    parts.add(BinaryExpression(
+                                        left = PropertyAccessExpression(
+                                            expression = syntheticId("exports"),
+                                            name = Identifier(text = localName, pos = -1, end = -1),
+                                            pos = -1, end = -1,
+                                        ),
+                                        operator = Equals,
+                                        right = PropertyAccessExpression(
+                                            expression = syntheticId(tempName),
+                                            name = Identifier(text = keyName, pos = -1, end = -1),
+                                            pos = -1, end = -1,
+                                        ),
+                                        pos = -1, end = -1,
+                                    ))
+                                }
+                                // exports.rest = __rest(_a, ["x", ...])
+                                val restName = (restElem.name as Identifier).text
+                                directExportedVarNames.add(restName)
+                                parts.add(BinaryExpression(
+                                    left = PropertyAccessExpression(
+                                        expression = syntheticId("exports"),
+                                        name = Identifier(text = restName, pos = -1, end = -1),
+                                        pos = -1, end = -1,
+                                    ),
+                                    operator = Equals,
+                                    right = CallExpression(
+                                        expression = helperExpr("__rest"),
+                                        arguments = listOf(
+                                            syntheticId(tempName),
+                                            ArrayLiteralExpression(
+                                                elements = excludedKeys,
+                                                pos = -1, end = -1,
+                                            ),
+                                        ),
+                                        pos = -1, end = -1,
+                                    ),
+                                    pos = -1, end = -1,
+                                ))
+
+                                val combined: Expression = parts.drop(1).fold(parts[0]) { acc, e ->
+                                    BinaryExpression(left = acc, operator = Comma, right = e, pos = -1, end = -1)
+                                }
+                                result.add(ExpressionStatement(
+                                    expression = combined,
+                                    leadingComments = stmt.leadingComments,
+                                    trailingComments = stmt.trailingComments,
+                                    pos = -1, end = -1,
+                                ))
+                                continue
+                            }
                             val hasComplexPattern = stmt.declarationList.declarations.any {
                                 extractIdentifierName(it.name) == null
                             }
