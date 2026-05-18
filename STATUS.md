@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,830 / 10,078 tests passing (~87.6%).
+**Phase 4 — Checker buildout.** 8,832 / 10,078 tests passing (~87.7%).
+
+**B48.13 (2026-05-18, +2 — flips `isDeclarationVisibleNodeKinds_ts__target_{es5,es2015}`)** —
+Function/constructor type display parens in arrays and unions. For source like
+`number | (new <T>(data: T) => T)` and `(new <T>(data: T) => T)[]`, our `formatTypeForDisplay`
+was dropping the necessary parens, producing ambiguous `number | new <T>(data: T) => T` and
+`new <T>(data: T) => T[]` (the latter parses as `new () => T[]`, not `(new () => T)[]`).
+Three changes in `Checker.kt`:
+- New helper `typeNodeRendersAsFunctionLike` detects FunctionType / ConstructorType /
+  TypeLiteral-with-single-call-or-construct-sig (unwraps `ParenthesizedType`).
+- `ArrayType` branch wraps with parens when element is function-like (skips if source already
+  has `ParenthesizedType` wrapping, to avoid double parens).
+- `TypeReference{Array<T> | ReadonlyArray<T>}` branch wraps the type arg the same way.
+- `UnionType` branch wraps function-like members.
+Full-suite 10078/1243/3 (was 10078/1245/3, +2 net). Zero regressions.
 
 **B48.12 (2026-05-18, +2 — flips `jsxFactoryNotIdentifierOrQualifiedName_ts` + `jsxFactoryNotIdentifierOrQualifiedName2_ts`)** —
 TS5067 emission + `jsxFactory` format validation. When `@jsxFactory` is set to a non-dotted-identifier

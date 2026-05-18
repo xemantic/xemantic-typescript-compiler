@@ -58404,6 +58404,28 @@ interface DataView {
         }
     }
 
+    /**
+     * Returns true if [typeNode] renders via formatTypeForDisplay as a function or constructor
+     * type shorthand (`(x: T) => U` or `new (x: T) => U`). Used to decide when parens are
+     * needed in array element or union member positions. Unwraps ParenthesizedType.
+     */
+    private fun typeNodeRendersAsFunctionLike(typeNode: TypeNode): Boolean {
+        var t: TypeNode = typeNode
+        while (t is ParenthesizedType) t = t.type
+        return when (t) {
+            is FunctionType, is ConstructorType -> true
+            is TypeLiteral -> {
+                // Single call/construct signature → renders as shorthand
+                if (t.members.size == 1) {
+                    val only = t.members[0]
+                    only is MethodDeclaration && (only.name is Identifier &&
+                        (only.name.text == "" || only.name.text == "new"))
+                } else false
+            }
+            else -> false
+        }
+    }
+
     private fun formatTypeForDisplay(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
@@ -58428,7 +58450,10 @@ interface DataView {
                     // TypeScript normalizes Array<T> → T[] in error messages
                     if ((baseName == "Array" || baseName == "ReadonlyArray") && typeArgs.size == 1) {
                         val elementDisplay = formatTypeForDisplay(typeArgs[0]) ?: return null
-                        return "${elementDisplay}[]"
+                        // Parens for function/constructor-like element types
+                        val needsParens = typeArgs[0] !is ParenthesizedType &&
+                            typeNodeRendersAsFunctionLike(typeArgs[0])
+                        return if (needsParens) "(${elementDisplay})[]" else "${elementDisplay}[]"
                     }
                     val argNames = typeArgs.map { formatTypeForDisplay(it) }
                     if (argNames.any { it == null }) return null
@@ -58447,13 +58472,22 @@ interface DataView {
                 }
             }
             is ArrayType -> {
+                // Function/constructor types must be parenthesized as Array elements:
+                // `(new () => T)[]` not `new () => T[]` (the latter parses as `new () => (T[])`).
+                // Don't add a second set of parens if the source already wraps in ParenthesizedType
+                // (formatTypeForDisplay for ParenthesizedType already emits `(...)`).
                 val elementType = formatTypeForDisplay(typeNode.elementType) ?: return null
-                "$elementType[]"
+                if (typeNode.elementType !is ParenthesizedType &&
+                    typeNodeRendersAsFunctionLike(typeNode.elementType)) "($elementType)[]"
+                else "$elementType[]"
             }
             is UnionType -> {
-                val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
-                if (memberTypes.any { it == null }) return null
-                memberTypes.joinToString(" | ")
+                // Function/constructor types in unions need parens: `number | (new () => T)`.
+                val memberStrs = typeNode.types.map { m ->
+                    val s = formatTypeForDisplay(m) ?: return null
+                    if (typeNodeRendersAsFunctionLike(m)) "($s)" else s
+                }
+                memberStrs.joinToString(" | ")
             }
             is IntersectionType -> {
                 val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
