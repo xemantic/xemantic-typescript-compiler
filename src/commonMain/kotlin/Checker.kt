@@ -559,6 +559,8 @@ class Checker(
         checkUnresolvedModules()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
         checkJsxImportResolutions()
+        // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
+        checkJsxFactoryValidity()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
@@ -11031,6 +11033,37 @@ class Checker(
     }
 
     /**
+     * Returns true if [s] is a valid `jsxFactory` value: a dotted identifier sequence
+     * (e.g. "React.createElement" or "h"). Each segment must be a valid identifier
+     * (alphanumeric + `_`/`$`, no leading digit) and the segments are separated only
+     * by `.`. Empty, whitespace-containing, or otherwise malformed values are invalid.
+     */
+    private fun isValidJsxFactoryString(s: String): Boolean {
+        if (s.isEmpty()) return false
+        return s.split('.').all { seg ->
+            seg.isNotEmpty() &&
+                seg[0].let { it.isLetter() || it == '_' || it == '$' } &&
+                seg.all { it.isLetterOrDigit() || it == '_' || it == '$' }
+        }
+    }
+
+    /** TS5067: Invalid value for 'jsxFactory'. */
+    private fun checkJsxFactoryValidity() {
+        val factory = options.jsxFactory ?: return
+        if (isValidJsxFactoryString(factory)) return
+        diagnostics.add(Diagnostic(
+            message = "Invalid value for 'jsxFactory'. '$factory' is not a valid identifier or qualified-name.",
+            category = DiagnosticCategory.Error,
+            code = 5067,
+            fileName = null,
+            line = null,
+            character = null,
+            start = -1,
+            length = 0,
+        ))
+    }
+
+    /**
      * Check that the JSX runtime factory identifier (`jsxFactory` first segment, or
      * `reactNamespace`, or default "React") is in scope at the JSX usage site. Fires
      * TS2552 with spelling suggestion when `jsxFactory` was explicitly set (TypeScript
@@ -11047,8 +11080,9 @@ class Checker(
         if (jsxMode == null) return
         if (jsxMode == "preserve" || jsxMode == "react-native") return
         if (jsxMode.startsWith("react-jsx")) return  // automatic runtime uses imports, not in-scope factory
-        // Determine factory identifier root.
-        val factoryExplicit = options.jsxFactory
+        // Determine factory identifier root. Invalid jsxFactory values (caught by
+        // checkJsxFactoryValidity) fall back to reactNamespace / "React" default.
+        val factoryExplicit = options.jsxFactory?.takeIf { isValidJsxFactoryString(it) }
         val factoryRoot: String = when {
             factoryExplicit != null -> factoryExplicit.substringBefore('.')
             options.reactNamespace != null -> options.reactNamespace!!

@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,828 / 10,078 tests passing (~87.6%).
+**Phase 4 — Checker buildout.** 8,830 / 10,078 tests passing (~87.6%).
+
+**B48.12 (2026-05-18, +2 — flips `jsxFactoryNotIdentifierOrQualifiedName_ts` + `jsxFactoryNotIdentifierOrQualifiedName2_ts`)** —
+TS5067 emission + `jsxFactory` format validation. When `@jsxFactory` is set to a non-dotted-identifier
+value (e.g. `Element.createElement=` with trailing `=`, or `id1 id2` with space), TypeScript emits
+TS5067 "Invalid value for 'jsxFactory'..." AND falls back to default `React` (or `reactNamespace`) as
+the factory root. Two changes in `Checker.kt`:
+- New `isValidJsxFactoryString` helper checks for dotted identifier sequence (each segment is a valid
+  JS identifier).
+- New `checkJsxFactoryValidity` (called at checker init) emits TS5067 once when invalid.
+- `checkJsxFactoryInScope` (B48.10) now uses `options.jsxFactory?.takeIf { isValidJsxFactoryString(it) }`
+  so invalid values fall through to the default React/reactNamespace branch, fixing the per-JSX-element
+  TS2874 emission to use the correct factory name.
+Full-suite 10078/1245/3 (was 10078/1247/3, +2 net). Zero regressions.
 
 **B48.11 (2026-05-18, +1 — flips `jsxFactoryQualifiedNameResolutionError_ts`)** —
 Add TS2728 "'X' is declared here" related info to the B48.10 TS2552 JSX factory suggestion case.
