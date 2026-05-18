@@ -19167,6 +19167,8 @@ class Checker(
             "Symbol",
             // JSX namespace (available when JSX is enabled)
             "JSX",
+            // Window-property globals (lib.dom.d.ts) — needed for TS2552 spelling suggestions.
+            "frameElement",
             // DOM interface maps (used in type positions for element tag name resolution)
             "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
             "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
