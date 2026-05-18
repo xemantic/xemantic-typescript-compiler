@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,820 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,821 / 10,078 tests passing (~87.5%).
+
+**B48.6 (2026-05-18, +1 — flips `emitClassExpressionInDeclarationFile2_ts` JS-emit)** —
+Emit `__setFunctionName(_a, "X")` for anonymous class expressions assigned to a named binding (`var/let/const X = class {...}`) when the class has trailing statements (static initializers etc.) that benefit from the temp-var capture pattern. Four-piece fix:
+(a) New `__setFunctionName` helper template + `requireHelper("__setFunctionName")` handling in `Transformer.kt`.
+(b) New field `pendingClassExprBindingName: String?` set transiently in `transformVariableDeclaration` when the initializer is an anonymous `ClassExpression`; consumed by `transformClassExpression` to emit the helper call as the second element of the comma-list capture.
+(c) Add the class-expression temp-var name to `computedPropHoistNames` at top-level scope so the `var _a;` declaration is moved to the top of CJS output (before the `__esModule` preamble) — mirroring the existing computed-property-name hoist path.
+(d) Adjust `functionExportStubs` insertion position to account for prepended var declarations: `insertPos = 1 + hoistCount + prependedCount` so function exports land AFTER void0 hoists when prepended vars push everything down.
+Full-suite 10078/1254/3 (was 10078/1255/3, +1 net). Zero regressions.
 
 **B48.5 (2026-05-18, +1 — flips `decoratorUsedBeforeDeclaration_ts` JS-emit)** —
 Synthetic-array same-line emit gate. `emitArrayLiteral` in `Emitter.kt` consults `sourceText.substring(element.end, nextElement.pos)` to decide whether to keep two elements on the same line. For SYNTHETIC arrays
