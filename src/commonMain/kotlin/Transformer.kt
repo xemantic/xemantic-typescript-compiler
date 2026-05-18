@@ -6563,9 +6563,13 @@ class Transformer(
         )
         return if (spec is StringLiteralNode) {
             // Promise.resolve().then(() => __importStar(require('./path')))
+            // For module=none, TypeScript strips the `./` prefix (no module resolver runtime).
+            val effectiveSpec = if (options.effectiveModule == ModuleKind.None && spec.text.startsWith("./")) {
+                spec.copy(text = spec.text.removePrefix("./"), rawText = spec.rawText?.removePrefix("./"))
+            } else spec
             val arrow = ArrowFunction(
                 parameters = emptyList(),
-                body = importStarCall(spec),
+                body = importStarCall(effectiveSpec),
                 pos = -1, end = -1,
             )
             CallExpression(
