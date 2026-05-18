@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,817 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,818 / 10,078 tests passing (~87.5%).
+
+**B48.3 (2026-05-18, +1 — flips `privacyLocalInternalReferenceImportWithExport_ts` JS-emit)** —
+Extend B38.1's type-only `export import` elision to namespace-scoped aliases. Inside a namespace body, the
+ImportEqualsDeclaration branch already had a partial type-only check that only handled (a) Identifier targets
+where the name was in `topLevelTypeOnlyNames` and (b) QualifiedName targets where the root was in
+`topLevelTypeOnlyNames`. This missed the common case from B38.1's territory: `export import X = Y.Z` where
+`Y` is a non-exported but runtime-instantiated namespace AND `Z` is a type-only sub-member (interface, type
+alias, or type-only sub-namespace). Added a call to `isQualifiedPathTypeOnly(ref, requireRuntimeOrExportedRoot
+= true)` matching the top-level `transformImportEqualsDeclaration` elision so qualified-path aliases to
+type-only sub-members are erased instead of emitted as `nsName.X = Y.Z` (which would TS2708/TS2694 at runtime).
+Full-suite 10078/1257/3 (was 10078/1258/3, +1 net). Zero regressions.
 
 **B48.2 (2026-05-18, +1 — flips `classMemberInitializerScoping2_ts__target_es2017_usedefineforclassfields_true` JS-emit)** —
 Class field downlevel under `useDefineForClassFields=true` AT target<ES2022. When `useDefineForClassFields=true`
