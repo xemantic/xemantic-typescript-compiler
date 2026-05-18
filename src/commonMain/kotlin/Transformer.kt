@@ -209,6 +209,16 @@ class Transformer(
     // Causes the __makeTemplateObject helper to be prepended to the output statements.
     private var needsMakeTemplateObjectHelper = false
 
+    // Set to true when an anonymous class expression assigned to a named binding is wrapped
+    // in the `(_a = class {}, __setFunctionName(_a, "X"), ..., _a)` capture pattern. The
+    // __setFunctionName helper assigns the binding name to the class's `.name` property.
+    private var needsSetFunctionNameHelper = false
+
+    // Transiently set in transformVariableDeclaration when the initializer is an anonymous
+    // ClassExpression. Consumed by transformClassExpression to emit `__setFunctionName(_a, "X")`
+    // in the comma-list capture pattern. Restored after the inner transform returns.
+    private var pendingClassExprBindingName: String? = null
+
     // Set to true when an `import X = require("mod")` is rewritten under
     // module:node*/nodenext + ESM file (per package.json `type: module`). Causes the
     // `import { createRequire as _createRequire } from "module"; const __require = _createRequire(import.meta.url);`
@@ -232,6 +242,7 @@ class Transformer(
             "__decorate" -> if (!needsDecorateHelper) { needsDecorateHelper = true; helperUsageOrder.add(name) }
             "__metadata" -> if (!needsMetadataHelper) { needsMetadataHelper = true; helperUsageOrder.add(name) }
             "__param" -> if (!needsParamHelper) { needsParamHelper = true; helperUsageOrder.add(name) }
+            "__setFunctionName" -> if (!needsSetFunctionNameHelper) { needsSetFunctionNameHelper = true; helperUsageOrder.add(name) }
         }
     }
 
@@ -302,6 +313,8 @@ class Transformer(
         maxDeepMetadataTempCount = 0
         needsMakeTemplateObjectHelper = false
         needsCreateRequireHelper = false
+        needsSetFunctionNameHelper = false
+        pendingClassExprBindingName = null
         helperUsageOrder.clear()
         topLevelNumericConstants.clear()
         allEnumStringValues.clear()
@@ -467,6 +480,7 @@ class Transformer(
                     "__decorate" -> helpers.add(RawStatement(code = DECORATE_HELPER))
                     "__metadata" -> helpers.add(RawStatement(code = METADATA_HELPER))
                     "__param" -> helpers.add(RawStatement(code = PARAM_HELPER))
+                    "__setFunctionName" -> helpers.add(RawStatement(code = SET_FUNCTION_NAME_HELPER))
                 }
             }
         }
@@ -2539,6 +2553,11 @@ class Transformer(
             }
         }
 
+        // Track how many `var _<temp>;` declarations get prepended to result at index 0 below
+        // (via sideEffectTempVars + computedPropHoistNames). The functionExportStubs insertion
+        // (which uses `1 + hoistCount` as its baseline) must add this offset so the stubs land
+        // AFTER the void0 hoists, not between the prepended vars and the preamble.
+        var prependedCount = 0
         // Insert side-effect temp var declarations (from empty destructuring: `export const {} = expr`)
         // BEFORE Object.defineProperty: `var _a;` at position 0.
         // Combine all temp var names into a single VariableStatement with multiple declarators
@@ -2557,6 +2576,7 @@ class Transformer(
                 modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
             )
             result.add(0, combinedDecl)
+            prependedCount++
         }
 
         // Move computed property temp vars (var _a;) from their position in the body to before
@@ -2574,6 +2594,7 @@ class Transformer(
             if (toRemove.isNotEmpty()) {
                 result.removeAll(toRemove.toSet())
                 result.addAll(0, toRemove)
+                prependedCount += toRemove.size
             }
         }
 
@@ -2584,7 +2605,7 @@ class Transformer(
             val hoistCount = if (exportedVarNames.isEmpty()) 0 else ((exportedVarNames.size + 49) / 50)
             val insertPos = when {
                 hasExportEquals -> 0
-                else -> 1 + hoistCount // after Object.defineProperty + all void0 hoists
+                else -> 1 + hoistCount + prependedCount // after prepended vars + Object.defineProperty + all void0 hoists
             }
             result.addAll(insertPos, functionExportStubs)
         }
@@ -7631,7 +7652,20 @@ class Transformer(
         return decl.copy(
             name = transformBindingName(decl.name),
             type = null,
-            initializer = decl.initializer?.let { transformExpression(it) },
+            initializer = decl.initializer?.let { init ->
+                // Anonymous class expression assigned to a named binding: set pending binding
+                // name so transformClassExpression can emit `__setFunctionName(_a, "X")` in the
+                // capture comma-list. Pure-Identifier bindings only — destructuring/array patterns
+                // are skipped (binding name isn't well-defined).
+                if (init is ClassExpression && init.name == null) {
+                    val bindingName = extractIdentifierName(decl.name)
+                    if (bindingName != null) {
+                        val saved = pendingClassExprBindingName
+                        pendingClassExprBindingName = bindingName
+                        try { transformExpression(init) } finally { pendingClassExprBindingName = saved }
+                    } else transformExpression(init)
+                } else transformExpression(init)
+            },
             exclamationToken = false,
         )
     }
@@ -10464,6 +10498,10 @@ class Transformer(
         // static initializers and trailing statements.
         val tempName = nextTempVarName()
         hoistedVarScopes.lastOrNull()?.add(tempName)
+        // CJS hoist: the `var _a;` declaration needs to appear BEFORE the `__esModule`
+        // preamble for class-expression-allocated temps. Track via `computedPropHoistNames`
+        // which has an existing move-to-top mechanism in `transformToCommonJS`.
+        if (functionScopeDepth == 0) computedPropHoistNames.add(tempName)
         val className = expr.name?.text
 
         val result = transformClassBody(
@@ -10487,6 +10525,13 @@ class Transformer(
             modifiers = stripTypeScriptModifiers(expr.modifiers) - ModifierFlag.Abstract,
         )
 
+        // Consume pending binding name (set by transformVariableDeclaration when this anonymous
+        // class is the initializer of `var/let/const X = class {...}`). Only emit __setFunctionName
+        // when there are trailing statements (the capture pattern is meaningful) — for trivial
+        // `var X = class { tags() {} }` with no statics, TypeScript doesn't emit the helper.
+        val funcNameForSetFunctionName = if (expr.name == null) pendingClassExprBindingName else null
+        pendingClassExprBindingName = null // consume so nested transforms don't see it
+
         // Build comma list: (_a = class C {...}, _a.x = 1, ..., _a)
         // The trailing statements already use tempName for the LHS (via trailingVarName).
         // Still need to replace class name references in the RHS (e.g. `C.x → _a.x`).
@@ -10497,6 +10542,18 @@ class Transformer(
             right = transformedExpr,
             pos = -1, end = -1,
         ))
+        // __setFunctionName(_a, "X") after the capture, before trailing statements.
+        if (funcNameForSetFunctionName != null && result.trailingStatements.isNotEmpty()) {
+            requireHelper("__setFunctionName")
+            elements.add(CallExpression(
+                expression = helperExpr("__setFunctionName"),
+                arguments = listOf(
+                    syntheticId(tempName),
+                    StringLiteralNode(text = funcNameForSetFunctionName, pos = -1, end = -1),
+                ),
+                pos = -1, end = -1,
+            ))
+        }
         for (stmt in result.trailingStatements) {
             val exprStmt = stmt as? ExpressionStatement ?: continue
             // The LHS is already tempName (from trailingVarName). Replace class name in RHS.
@@ -14924,6 +14981,13 @@ class Transformer(
         /** TypeScript `__param` helper — emitted for parameter decorators. */
         val PARAM_HELPER = """var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
+};
+"""
+
+        /** `__setFunctionName` helper — assigns a name to a class expression for ES2022+ class semantics. */
+        val SET_FUNCTION_NAME_HELPER = """var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
+    if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+    return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
 };
 """
 
