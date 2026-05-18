@@ -27709,9 +27709,9 @@ interface DataView {
                 else -> continue
             }
             if (ModifierFlag.Abstract !in memberModifiers) continue
-            // TS1253: abstract member in non-abstract, non-ambient class
+            // TS1244 (methods/accessors) / TS1253 (properties): abstract member in non-abstract, non-ambient class
             if (!classIsAbstract && !isAmbient) {
-                emitTS1253ForAbstractKeyword(memberPos, source, fileName)
+                emitAbstractMemberInNonAbstractClass(memberPos, isProperty, source, fileName)
             }
             // TS7008: abstract property without type annotation in non-ambient class — implicit any
             // Emits regardless of class abstractness; needs noImplicitAny/strict.
@@ -27742,7 +27742,7 @@ interface DataView {
         val name: Identifier?,
     )
 
-    private fun emitTS1253ForAbstractKeyword(memberPos: Int, source: String, fileName: String) {
+    private fun emitAbstractMemberInNonAbstractClass(memberPos: Int, isProperty: Boolean, source: String, fileName: String) {
         // Find the 'abstract' keyword position by searching forward from memberPos.
         // The parser's pos may include leading trivia, so search up to a reasonable bound.
         val searchStart = maxOf(0, memberPos)
@@ -27755,10 +27755,15 @@ interface DataView {
         if (before.isLetterOrDigit() || before == '_' || before == '$') return
         if (after.isLetterOrDigit() || after == '_' || after == '$') return
         val (line, character) = getLineAndCharacterOfPosition(source, idx)
+        // TS1244 for methods/accessors, TS1253 for properties.
+        val (msg, code) = if (isProperty)
+            "Abstract properties can only appear within an abstract class." to 1253
+        else
+            "Abstract methods can only appear within an abstract class." to 1244
         diagnostics.add(Diagnostic(
-            message = "Abstract properties can only appear within an abstract class.",
+            message = msg,
             category = DiagnosticCategory.Error,
-            code = 1253,
+            code = code,
             fileName = fileName,
             line = line,
             character = character,
