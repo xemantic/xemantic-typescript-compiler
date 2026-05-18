@@ -5387,7 +5387,15 @@ class Parser(
             // Capture inline comments before each argument (e.g. /*label*/ before string arg).
             // Comments on the same line as `(` or `,` are classified as trailingComments by the
             // scanner (no preceding line break), while comments on new lines are leadingComments.
-            val argComments = leadingComments() ?: scanner.getTrailingComments()
+            // Both sets must be combined for shapes like `f(  // c1\n  // c2\n  arg)` where
+            // `// c1` is a same-line trailing of `(` and `// c2` is a leading of the arg.
+            val inlineArgComments = scanner.getTrailingComments()
+            val ownLineArgComments = leadingComments()
+            val argComments = when {
+                inlineArgComments == null -> ownLineArgComments
+                ownLineArgComments == null -> inlineArgComments
+                else -> inlineArgComments + ownLineArgComments
+            }
             if (token == SyntaxKind.DotDotDot) {
                 val pos = getPos()
                 nextToken()
@@ -5414,6 +5422,16 @@ class Parser(
             val blockComments = leadingComments()
             val all = (inlineComments ?: emptyList()) + (blockComments ?: emptyList())
             lastCallInnerComments = all.ifEmpty { null }
+        } else {
+            // Non-empty arg list: capture own-line comments between the last arg and `)`
+            // (e.g. `f(arg\n  // comment 5\n)`). Append to the last arg's trailing comments
+            // so the call emitter can emit them on their own line before `)`.
+            val preCloseParenComments = leadingComments()
+            if (preCloseParenComments != null) {
+                val last = args.last()
+                val merged = (last.trailingComments ?: emptyList()) + preCloseParenComments
+                args[args.size - 1] = last.withTrailingComments(merged)
+            }
         }
         parseExpected(SyntaxKind.CloseParen)
         return args

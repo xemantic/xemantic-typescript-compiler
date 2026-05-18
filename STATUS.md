@@ -1,6 +1,24 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,807 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,808 / 10,078 tests passing (~87.4%).
+
+**B46.5 (2026-05-18, +1 — flips `arrowFunctionErrorSpan_ts` JS-emit)** —
+Two-piece comment-preservation fix for call argument lists:
+(a) `Parser.kt:parseArgumentList` — combine `scanner.getTrailingComments()` (same-line
+inline) and `leadingComments()` (own-line) for each argument's leading comments. Previously
+used `leadingComments() ?: getTrailingComments()` which DROPPED the same-line set when
+own-line existed. Catches shapes like `f(  // c1\n  // c2\n  arg)` where `// c1` is
+inline-after-`(` and `// c2` is own-line before `arg`.
+Also: after the arg loop terminates without a comma, capture `leadingComments()` (own-line
+comments between the last arg's end and `)`) and APPEND to the last arg's trailing comments
+via `withTrailingComments`. Catches `f(arg\n  // c5\n)` where `// c5` is leading-of-`)`.
+(b) `Emitter.kt:emitCallArguments` — when emitting the last arg's trailing comments, split
+into `sameLine` (no preceding newline) and `ownLine` (with preceding newline). Same-line ones
+emit ` // comment` adjacent to the arg (existing behavior). Own-line ones emit on their own
+indented line (`\n<indent>// comment`) so the source shape `}\n// c5\n)` is preserved.
+Full-suite 10078/1267/3 (was 10078/1268/3, +1 net). Zero regressions.
+
+
 
 **B46.4 (2026-05-17, +1 — flips `commentOnArrayElement12_ts` JS-emit)** —
 Refinement of B46.3's array-literal source-line layout: only **consecutive pairs of

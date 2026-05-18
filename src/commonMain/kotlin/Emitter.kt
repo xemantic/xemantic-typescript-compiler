@@ -2769,7 +2769,22 @@ class Emitter(
         // NumericLiteralNode and StringLiteralNode already emit their own trailing comments in emitExpression.
         if (!options.removeComments && lastArg != null
             && lastArg !is NumericLiteralNode && lastArg !is StringLiteralNode) {
-            emitTrailingComments(lastArg.trailingComments)
+            // Split into same-line (no preceding newline) and own-line (with preceding newline).
+            // Own-line line-comments (e.g. captured between `}` of arrow body and `)` of call)
+            // emit on their own indented line so `}\n// c\n)` shape is preserved.
+            val tc = lastArg.trailingComments
+            if (tc != null) {
+                val sameLine = tc.filter { !it.hasPrecedingNewLine }
+                val ownLine = tc.filter { it.hasPrecedingNewLine }
+                emitTrailingComments(sameLine.ifEmpty { null })
+                if (ownLine.isNotEmpty()) {
+                    for (comment in ownLine) {
+                        writeNewLine()
+                        writeIndent()
+                        write(comment.text)
+                    }
+                }
+            }
         }
         return lastArg
     }
