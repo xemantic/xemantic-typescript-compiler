@@ -10802,10 +10802,15 @@ class Transformer(
         if (!useDefineForClassFields && effectiveName != null) {
             // Check if any static property initializer contains `this` (lexically, across arrow fns).
             // If so, we must capture the class in a temp var before the initializers run.
+            // Also force capture for async-arrow initializers: TypeScript pre-emits the class
+            // capture defensively because the downleveled `__awaiter` template (target<ES2022)
+            // is conceptually `this`-binding even when the body doesn't reference `this`.
             val staticPropsWithThis = staticProperties.filter { prop ->
                 prop.initializer != null &&
                     options.effectiveTarget < ScriptTarget.ES2022 &&
-                    containsThisInExpr(prop.initializer)
+                    (containsThisInExpr(prop.initializer) ||
+                        (prop.initializer is ArrowFunction &&
+                            ModifierFlag.Async in (prop.initializer as ArrowFunction).modifiers))
             }
             val classTempVar: String? = if (staticPropsWithThis.isNotEmpty()) {
                 val tv = nextTempVarName()

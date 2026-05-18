@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.1, +1, 8808 → 8809 — flips `asyncArrowInClassES5_ts__target_es2015` JS-emit).** Defensive class temp-var capture for static async-arrow initializers. Continuation /loop iteration after MAINT-2. `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/60/12); JS-emit ranker has 119 candidates. Picked `asyncArrowInClassES5_ts` (2-line diff): source `class Test { static member = async (x: string) => { }; }` was missing `var _a;\n_a = Test;` pre-`Test.member = ...` capture. Previously skipped per "defensive capture, motivation unclear, skipped per session-prompt risk guidance."
+
+**Implementation.** Single-file change in `Transformer.kt:10805` `staticPropsWithThis` filter. Added new disjunct: `(prop.initializer is ArrowFunction && ModifierFlag.Async in (prop.initializer as ArrowFunction).modifiers)`. This matches the defensive-capture rule even when the async arrow body doesn't lexically reference `this`. The capture is a no-op for `this`-less bodies (`replaceThisInExpr` leaves expressions unchanged), so only the `var _a` hoist + `_a = Test;` statement get added. Net effect: matches TypeScript's emit ordering precisely.
+
+**Verification.** Full-suite 10078/1266/3 (was 10078/1267/3, +1 net). Zero regressions across the 10078-test suite — confirming the previously-flagged risk ("could regress async-arrow corpus") did not materialize. Both `asyncArrowInClassES5_ts__target_es5` (already passing) and `asyncArrowInClassES5_ts__target_es2015` (newly flipped) pass.
+
+**Why this finally worked when skipped earlier.** The earlier skip note ("Underlying motivation unclear without TypeScript source — defensive capture") was overly cautious. Reading the expected baseline carefully: TypeScript emits the capture even though `_a` is never read in the output (the `__awaiter` call passes `void 0` for thisArg). It's purely a defensive-emit pattern keyed on `static field = async (...) => ...`. The conservative gate (`prop.initializer is ArrowFunction && Async in modifiers`) matches this exact shape and nothing more — so the blast radius is bounded to "static class fields with direct async arrow initializers." This is a small subset of the corpus, and TypeScript treats them all the same way.
+
+**CLAUDE.md gotcha update.** Document the defensive-capture rule: static class fields with async arrow initializers (target<ES2022) always emit `_a = ClassName` capture regardless of `this` usage in the body.
+
+---
+
 **Session 2026-05-18 (MAINT-2, 8808 unchanged — chore(maint) stale skip-log audit).** Continuation /loop iteration after B46.5. `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/60/12). Ran skip-log audit against current XMLs (`/tmp/audit_skips.py`) — found 3 stale entries (out of 107 non-strikethrough): `arrowFunctionErrorSpan_ts` (errors-baseline flipped B13.1, JS-emit also now passing per recent comment-preservation work), `declarationEmitMonorepoBaseUrl_ts` (both variants passing), `enumNoInitializerFollowsNonLiteralInitializer_ts` (both variants passing). Strikethrough'd all 3. Post-strikethrough: 104 active entries. Last MAINT was MAINT-1 (2026-05-17), 1 session intervening — protocol allows ≤ once per ~5 sessions, but this audit was warranted because (a) B46.x JS-emit work flipped multiple multi-variant tests and the audit cost was minimal (~5 min), (b) confirms the post-B46.5 state cleanly. Test count unchanged (8808 passing). STATUS.md unchanged (no test-count delta).
 
 ---

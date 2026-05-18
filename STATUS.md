@@ -1,6 +1,19 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,808 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,809 / 10,078 tests passing (~87.4%).
+
+**B47.1 (2026-05-18, +1 — flips `asyncArrowInClassES5_ts__target_es2015` JS-emit)** —
+Defensive class temp-var capture for static async-arrow initializers. Extended the
+`staticPropsWithThis` filter in `Transformer.kt:emitClassDeclaration` to ALSO match
+properties whose initializer is `ArrowFunction` with `ModifierFlag.Async`, even when the
+arrow body doesn't reference `this`. TypeScript pre-emits the class capture
+(`var _a; _a = ClassName;`) defensively because the down-leveled `__awaiter` template
+(target<ES2022) is conceptually `this`-binding even when the actual `__awaiter` call passes
+`void 0` for `thisArg`. The `replaceThisInExpr` step is a no-op for `this`-less bodies so
+no other emission changes — only the `var _a;` hoist + `_a = Test;` capture statement get
+added. Source: `class Test { static member = async (x: string) => { }; }` now emits the
+defensive capture pre-`Test.member = ...`. Full-suite 10078/1266/3 (was 10078/1267/3,
++1 net). Zero regressions.
 
 **B46.5 (2026-05-18, +1 — flips `arrowFunctionErrorSpan_ts` JS-emit)** —
 Two-piece comment-preservation fix for call argument lists:
