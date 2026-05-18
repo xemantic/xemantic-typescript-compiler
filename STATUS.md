@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,812 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,814 / 10,078 tests passing (~87.5%).
+
+**B47.6 (2026-05-18, +2 — flips `moduleNoneDynamicImport_ts__target_es2015/es2020` JS-emit)** —
+Builds on B47.5's `./` strip. Two more pieces complete the `@module: none` + `@outFile` story:
+- (a) Skip auxiliary `.js` files with module statements from the outFile bundle. When
+  `options.outFile != null && options.effectiveModule == ModuleKind.None` and a `.js` file has
+  `import`/`export` statements, it's NOT bundled — TypeScript treats it as pulled in only for
+  type info / allowJs checking, not runtime. Added new gate at the per-file iteration in
+  Phase 3 of `TypeScriptCompiler.kt` (after the existing TS6131-style exports-skip).
+- (b) Preserve native `import()` syntax when `@module: none` + target>=ES2020. The CJS
+  dynamic-import rewrite in `Transformer.kt`'s `transformToCommonJS` now skips the
+  `rewriteCjsDynStmt` pass when `preserveNativeDynImport = options.effectiveModule == ModuleKind.None && options.effectiveTarget >= ScriptTarget.ES2020`. For es2015, the `./` strip + CJS rewrite
+  applies (B47.5 path); for es2020, the native syntax is preserved (no helpers, no rewrite).
+Full-suite 10078/1261/3 (was 10078/1263/3, +2 net). Zero regressions.
+
+**B47.5 (2026-05-18, foundation — `./` strip from module:none dyn-import path)** —
+For `@module: none`, TypeScript strips the `./` prefix from CJS-rewritten dynamic import paths.
+Net-zero alone; combined with B47.6 to flip both variants of `moduleNoneDynamicImport_ts`.
 
 **B47.4 (2026-05-18, +1 — flips `mappedTypeGenericIndexedAccess_ts` JS-emit)** —
 Two-piece fix for optional-call (`obj?.(args)`) downleveling:

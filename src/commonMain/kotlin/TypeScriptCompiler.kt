@@ -1282,6 +1282,25 @@ class TypeScriptCompiler {
                         if (hasExports) continue
                     }
                 }
+                // For @module: none + @outFile, auxiliary .js files with module statements
+                // (export/import) are NOT bundled into the outFile output. Only the entry
+                // .ts file is emitted. TypeScript treats `.js` files under module:none as
+                // pulled in only for type info / allowJs checking, not for runtime bundling.
+                val tsFileNameIsPureJs = tsFileName.endsWith(".js") || tsFileName.endsWith(".mjs") || tsFileName.endsWith(".cjs")
+                if (options.outFile != null && options.effectiveModule == ModuleKind.None && tsFileNameIsPureJs) {
+                    val hasModuleStatements = sourceFile.statements.any { stmt ->
+                        when (stmt) {
+                            is ExportDeclaration, is ExportAssignment, is ImportDeclaration -> true
+                            is ImportEqualsDeclaration -> stmt.moduleReference is ExternalModuleReference || ModifierFlag.Export in stmt.modifiers
+                            is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                            is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                            is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                            is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                            else -> false
+                        }
+                    }
+                    if (hasModuleStatements) continue
+                }
 
                 val transformer = Transformer(
                     options, checker, crossFileNamespaceExports, sharedModuleNameCounter,
