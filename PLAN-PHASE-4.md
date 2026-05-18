@@ -118,6 +118,20 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 retrospective — B47.x series (+7 tests, 8808 → 8815).** A /loop iteration session that landed 7 substantive feature wins via narrow defensive-emit patterns in the Transformer + Parser. The unifying theme: identify TypeScript's specific "defensive" or "transformation" emit shape, gate narrowly to avoid cascading regression risk.
+
+Wins by category:
+- **Defensive class capture for static async-arrow** (B47.1): `class C { static field = async (...) => ... }` under target<ES2022 → pre-emit `var _a; _a = ClassName;` regardless of `this` use.
+- **Chained safety wrap for cross-file `declare namespace` in metadata** (B47.2): `f(@deco arg: A.B.C.D.E)` → `typeof (_d = ... && _c.E) === "function" ? _d : Object` with N temp vars hoisted at file top.
+- **Async-arrow destructuring-param capture** (B47.3): `async (dispatch, { foo }) => ...` → `(dispatch_1, _a) => __awaiter(..., [dispatch_1, _a], ..., function* (dispatch, { foo }) { ... })`.
+- **Optional-call `.call(receiver, args)` + arrow-body hoist scope** (B47.4): `(p) => typeHandlers[p.t]?.(p)` → `(p) => { var _a; return ... _a.call(typeHandlers, p); }`.
+- **module:none + outFile bundling** (B47.5 foundation + B47.6 +2): strip `./` from CJS-rewritten dyn-import paths under module:none, skip aux `.js` files from outFile bundle, preserve native `import()` for target≥ES2020.
+- **JSX-vs-generic-arrow disambig** (B47.7): in `.tsx`, `<Identifier extends X>(...)` is a generic arrow when X is Identifier/type-keyword/open-delim/typeof; falls back to JSX otherwise (handles `<T extends/>` boolean attribute).
+
+Common pattern across all wins: a narrow lookahead check or condition gate that distinguishes the target case from cousins. Each win was verified with full-suite +1 (or +2 for B47.6) and zero regressions. Iterations 13–16 (chore commits) maintain queue/skip-log/plan accuracy. Remaining JS-emit candidates require feature-scale work (catalog under "Substantial JS-emit candidates surveyed" in skip-log section).
+
+---
+
 **Session 2026-05-18 (B47.7, +1, 8814 → 8815 — flips `declarationEmitRecursiveConditionalAliasPreserved_ts` JS-emit).** JSX-vs-generic-arrow disambiguation in `.tsx` files for the `<Identifier extends <Type>...>` pattern.
 
 **Implementation.** Single-file change in `Parser.kt` at `parsePrimaryExpression`'s `LessThan` branch (line ~3640). When `isJsxFile`, the previous logic unconditionally returned `parseJsxElementOrFragment()`. New logic peeks at the lookahead: after `<Identifier extends`, check what follows `extends`:
