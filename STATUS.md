@@ -1,6 +1,20 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,818 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,819 / 10,078 tests passing (~87.5%).
+
+**B48.4 (2026-05-18, +1 — flips `es6ExportClauseWithAssignmentInEs5_ts__target_{es5,es2015}` JS-emit)** —
+CJS late-export mutation tracking for compound and unary assignments. Previously the `namedExportLocalToExport`
+pre-scan tracked only ONE export per local and only rewrote simple `X = expr` assignments. Now tracks ALL
+exports of a local (`Map<String, List<String>>`) and rewrites four mutation shapes:
+- `X = expr` (multi-export: `exports.Y = exports.X = X = expr` chain in reverse-source order)
+- `X op= expr` (compound assignment) → `exports.X = X op= expr`
+- `++X` / `--X` (prefix unary) → `exports.X = ++X`
+- `X++` / `X--` (postfix unary) → `exports.X = (X++, X)` with ParenthesizedExpression wrap so the comma
+  expression's value (the post-increment result) reaches the exports assignment correctly.
+New helper `wrapStatementWithLateExports(stmt, names)` in `Transformer.kt`; detection added in the `else`
+branch of the CJS export-assignment dispatch alongside the existing `extractExportedAssignmentName` check.
+Flips both `es6ExportClauseWithAssignmentInEs5_ts` target variants. Full-suite 10078/1256/3
+(was 10078/1257/3, +1 net). Zero regressions.
 
 **B48.3 (2026-05-18, +1 — flips `privacyLocalInternalReferenceImportWithExport_ts` JS-emit)** —
 Extend B38.1's type-only `export import` elision to namespace-scoped aliases. Inside a namespace body, the
