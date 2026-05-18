@@ -192,6 +192,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 - Avoid partial `assert("x" in result)` — always assert the full expected output.
 - **Test ordering sensitivity**: Adding new checker code that increases diagnostics can cause deterministic failures in unrelated JS emit tests — tests pass individually but fail in the full suite. Always run the full suite to verify no regressions.
+- **Disambig pattern for `.tsx` parser surgery**: When extending an `isJsxFile` lookahead disambig (e.g. B47.7), check what follows the disambiguating keyword (e.g. `extends`) — not just that the keyword is present. The broader gate `<Identifier extends` regresses tests where `extends` is a JSX attribute (`<T extends/>` boolean shorthand or `<T extends={x}/>` attr=value). The tighter gate requires Identifier/type-keyword/open-delim/`typeof` AFTER `extends` to fire the generic-arrow path. `/`, `>`, `=` → JSX attribute, fall back.
 
 ### TS2304 unresolved name checking gotchas
 
