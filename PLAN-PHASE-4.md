@@ -118,6 +118,36 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 retrospective — B48.x series (+5 tests, 8815 → 8820).** /goal session targeting 20 iterations. Landed 5 surgical wins before the candidate pool again ran dry. All B48.x wins were narrow Transformer/Emitter changes gated tightly to avoid regression risk:
+
+- **B48.1** — CJS export destructuring-with-rest rewrite at target≥ES2018: `export const { x, ...rest } = expr` → `_a = expr, exports.x = _a.x, exports.rest = __rest(_a, ["x"])`. Flips `exportObjectRest_ts__module_commonjs_target_esnext`.
+- **B48.2** — `useDefineForClassFields=true` downlevel at target<ES2022: instance class fields lower to `Object.defineProperty(this, "p", { ..., value: <init> })` in constructor body. Flips `classMemberInitializerScoping2_ts__target_es2017_useDefineForClassFields_true`.
+- **B48.3** — extend B38.1's type-only `export import` elision to namespace-scoped aliases via `isQualifiedPathTypeOnly(ref, requireRuntimeOrExportedRoot=true)`. Flips `privacyLocalInternalReferenceImportWithExport_ts`.
+- **B48.4** — CJS late-export mutation rewrite for compound/unary assignments: `X += val`, `++X`, `X++`, and multi-export `export { X, X as Y }` chains. Switched `namedExportLocalToExport` to `Map<String, List<String>>`. Flips both `es6ExportClauseWithAssignmentInEs5_ts__target_{es5,es2015}`.
+- **B48.5** — gate synthetic-array same-line emit on `node.pos >= 0`: `__decorate([...])` arrays from `Transformer.kt` (pos=-1) now always emit each element on its own line. Flips `decoratorUsedBeforeDeclaration_ts`.
+
+**Session-end note (2026-05-18 post-B48.5).** After the B48.x landings, `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/60/12), all small-diff JS-emit candidates (≤7 line diff) are confirmed parser-recovery (bespoke per case) or architectural (Blocker #1 narrowing, multi-file ordering, `__setFunctionName` for named class expressions, ES2024 `__esDecorate`/`__runInitializers`, etc.). Investigated but skipped this session:
+- `asyncFunctionReturnExpressionErrorSpans_ts` — partial fix landed locally but reverted: deep-elaboration placement (TS2322 at offending leaf vs at `return` keyword) requires element-walking emission infrastructure not yet present.
+- `dontShowCompilerGeneratedMembers_ts`, `ClassDeclaration26_ts` — parser-recovery for malformed type literal / class body.
+- `nestedGlobalNamespaceInClass_ts`, `propertyWrappedInTry_ts`, `errorRecoveryInClassDeclaration_ts`, `staticsInAFunction_ts`, `overloadingStaticFunctionsInFunctions_ts`, `fatarrowfunctionsOptionalArgs_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`, `destructuringControlFlowNoCrash_ts`, `TransportStream_ts`, `unusedLocalsAndParameters_ts` — all parser-recovery for varied invalid-syntax shapes.
+- `ambiguousGenericAssertion1_ts`, `classMemberWithMissingIdentifier2_ts`, `parseJsxElementInUnaryExpressionNoCrash1_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts` — JSX/generic parser-recovery.
+- `importInsideModule_ts`, `importedAliasesInTypePositions_ts`, `emitMemberAccessExpression_ts`, `externalModuleAssignToVar_ts`, `visibilityOfCrossModuleTypeUsage_ts`, `isolatedModulesReExportType_ts`, `moduleResolutionWithSymlinks_notInNodeModules_ts` — multi-file emit/ordering; architectural.
+- `classPropertyInferenceFromBroaderTypeConst_ts` — requires default target ≥ ES2022 for native class field emit; our default is ES2015.
+- `elidedJSImport2_ts__module_{es2022,commonjs}` — `.js` file re-emit under `allowJs`+`module:es2022` not currently wired.
+- `modulePreserve4_ts` — `module:preserve` semantics for mixed `.mjs`/`.cjs`/`.ts`.
+- `systemModule17_ts` — System module body ordering.
+- `declarationEmitOptionalMethod_ts` — arrow function with optional-method-shorthand parameter type (`a?(): void`) not parsing as arrow.
+- `parameterDecoratorsEmitCrash_ts`, `staticFieldWithInterfaceContext_ts` — Stage 3 decorators / `__esDecorate` / `__setFunctionName` features.
+- `classDeclarationShouldBeOutOfScopeInComputedNames_ts` — multi-temp-var class-computed-property pattern requires separate `_a`/`_b` for static/instance computed names + comma-expr capture.
+- `isolatedModulesGlobalNamespacesAndEnums_ts` — cross-file enum value inlining under `@isolatedModules`.
+- `discriminatedUnionErrorMessage_ts`, `implicitConstParameters_ts`, `typePredicateInLoop_ts`, `controlFlowForFunctionLike1_ts` — control-flow narrowing (Blocker #1).
+- `assignmentCompatBug2_ts`, `typeParameterConstrainedToOuterTypeParameter_ts` — contextual typing for arrow function params + generic argument inference (Blocker #2).
+- `circularInlineMappedGenericTupleTypeNoCrash_ts` — tuple-vs-array structural relation.
+
+Recommend next session attack architectural Blocker #1 (control-flow narrowing — ~60-100 test yield) or commit to a single feature (e.g., `__esDecorate` helper for Stage 3 decorators which would flip ≥3 tests).
+
+---
+
 **Session 2026-05-18 retrospective — B47.x series (+7 tests, 8808 → 8815).** A /loop iteration session that landed 7 substantive feature wins via narrow defensive-emit patterns in the Transformer + Parser. The unifying theme: identify TypeScript's specific "defensive" or "transformation" emit shape, gate narrowly to avoid cascading regression risk.
 
 **Session-end note.** After the B47.x landings, `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/60/12) and the small-diff JS-emit candidates (≤ 3 lines) are all either parser-recovery (each bespoke) or architectural blockers. The 108 remaining JS-emit candidates with diff 4-20 lines are catalogued under "Substantial JS-emit candidates surveyed" in the skip-log section — all feature-scale work (private fields downleveling, `__setFunctionName` for named class expressions, super-in-static via `Reflect.get`, AMD shared-counter ordering, etc.). Next session should attack one architectural blocker (Blocker #1 control-flow narrowing is highest yield) or pick a single feature to implement holistically.
