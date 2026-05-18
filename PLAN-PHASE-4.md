@@ -120,6 +120,8 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 **Session 2026-05-18 retrospective — B47.x series (+7 tests, 8808 → 8815).** A /loop iteration session that landed 7 substantive feature wins via narrow defensive-emit patterns in the Transformer + Parser. The unifying theme: identify TypeScript's specific "defensive" or "transformation" emit shape, gate narrowly to avoid cascading regression risk.
 
+**Session-end note.** After the B47.x landings, `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/60/12) and the small-diff JS-emit candidates (≤ 3 lines) are all either parser-recovery (each bespoke) or architectural blockers. The 108 remaining JS-emit candidates with diff 4-20 lines are catalogued under "Substantial JS-emit candidates surveyed" in the skip-log section — all feature-scale work (private fields downleveling, `__setFunctionName` for named class expressions, super-in-static via `Reflect.get`, AMD shared-counter ordering, etc.). Next session should attack one architectural blocker (Blocker #1 control-flow narrowing is highest yield) or pick a single feature to implement holistically.
+
 Wins by category:
 - **Defensive class capture for static async-arrow** (B47.1): `class C { static field = async (...) => ... }` under target<ES2022 → pre-emit `var _a; _a = ClassName;` regardless of `this` use.
 - **Chained safety wrap for cross-file `declare namespace` in metadata** (B47.2): `f(@deco arg: A.B.C.D.E)` → `typeof (_d = ... && _c.E) === "function" ? _d : Object` with N temp vars hoisted at file top.
