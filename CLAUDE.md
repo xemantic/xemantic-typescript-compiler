@@ -47,6 +47,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Constructor prologue ordering**: When inserting parameter-property initializers into an existing constructor body (no `super()` call), insert AFTER prologue directives (`"use strict"`, `"ngInject"`), not at index 0.
 - **Type assertion parens**: `(<T>expr)` — the Transformer (not Emitter) must drop them. Fix belongs in Transformer because `TypeAssertionExpression` is already stripped before Emitter sees it.
 - **`new (<T>call())` semantics**: `new (A())` ≠ `new A()` — after stripping the type assertion, if the constructor expr becomes a `CallExpression`, it must be re-wrapped in `ParenthesizedExpression`.
+- **Static-class-field async arrow defensive capture**: For `class C { static field = async (...) => ... }` under target<ES2022, TypeScript pre-emits `var _a; _a = C;` even when the async arrow body has no `this` reference. The `__awaiter` template is conceptually `this`-binding for static-field-initialized async arrows even when the actual `__awaiter` call passes `void 0`. `staticPropsWithThis` filter in `Transformer.kt` matches this shape via `prop.initializer is ArrowFunction && ModifierFlag.Async in modifiers`. Skip the gate at your peril — removing it regresses `asyncArrowInClassES5_ts`.
 
 ### Module detection gotchas
 
