@@ -199,6 +199,11 @@ class Transformer(
     private var needsParamHelper = false
     // Set to true when decorator metadata (`emitDecoratorMetadata`) emits __metadata calls.
     private var needsMetadataHelper = false
+    // Tracks the maximum number of temp vars needed for cross-file `declare namespace`
+    // chained safety wraps in design:paramtypes. Each PropertyAccess chain of depth N
+    // needs N temp vars (_a, _b, ..., up to _<N>). The transform's tail hoists
+    // `var _a, _b, ..., _<max>` at file top.
+    private var maxDeepMetadataTempCount = 0
 
     // Set to true when a tagged template with invalid escape sequences is transformed.
     // Causes the __makeTemplateObject helper to be prepended to the output statements.
@@ -294,6 +299,7 @@ class Transformer(
         needsDecorateHelper = false
         needsParamHelper = false
         needsMetadataHelper = false
+        maxDeepMetadataTempCount = 0
         needsMakeTemplateObjectHelper = false
         needsCreateRequireHelper = false
         helperUsageOrder.clear()
@@ -474,7 +480,7 @@ class Transformer(
         // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
         // Only lift DETACHED comments (blank line ≥2 newlines between comment end and statement pos).
         // Adjacent comments (no blank line) stay with the statement, after helpers.
-        val withHelpers = if (helpers.isNotEmpty()) {
+        val helpersAndTransformed = if (helpers.isNotEmpty()) {
             val firstOrigStmt = sourceFile.statements.firstOrNull()
             val onlyAwaiter = needsAwaiterHelper && !needsRestHelper
             val firstStmt = transformed.firstOrNull()
@@ -509,6 +515,27 @@ class Transformer(
                 helpers + transformed
             }
         } else transformed
+
+        // If decorator-metadata generation wrapped deep qualified names with chained safety
+        // checks, hoist `var _a, _b, ..., _<max>;` between helpers and the rest of the file.
+        // (For ES module output. CJS uses a separate hoist in the post-process below.)
+        val withHelpers = if (maxDeepMetadataTempCount > 0) {
+            val tempNames = (0 until maxDeepMetadataTempCount).map { "_${'a' + it}" }
+            val tempVarStmt = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = tempNames.map { name ->
+                        VariableDeclaration(
+                            name = Identifier(text = name, pos = -1, end = -1),
+                            type = null, initializer = null, pos = -1, end = -1,
+                        )
+                    },
+                    flags = VarKeyword, pos = -1, end = -1,
+                ),
+                modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+            )
+            // Splice: after helpers (helpers.size entries) but before transformed
+            helpersAndTransformed.take(helpers.size) + tempVarStmt + helpersAndTransformed.drop(helpers.size)
+        } else helpersAndTransformed
 
         // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
         val effectiveModule = options.effectiveModule
@@ -2884,6 +2911,119 @@ class Transformer(
      *   `typeof (_a = typeof X_1.default !== "undefined" && X_1.default.Foo) === "function" ? _a : Object`
      * Returns null if no wrapping needed.
      */
+    /**
+     * Chained safety wrap for deep qualified names in decorator `design:paramtypes` metadata.
+     * For `A.B.C.D.E` where A is a cross-file `declare namespace` (type-only at runtime),
+     * TypeScript emits the defensive wrap:
+     *   typeof (_d = typeof A !== "undefined"
+     *               && (_a = A.B) !== void 0
+     *               && (_b = _a.C) !== void 0
+     *               && (_c = _b.D) !== void 0
+     *               && _c.E) === "function" ? _d : Object
+     * Walks the PropertyAccess chain, allocates N temp vars (_a..._<N-1> intermediates, _<N> final),
+     * and builds the combined `&&` chain. Tracks the depth via `maxDeepMetadataTempCount` so the
+     * transform tail can hoist `var _a, _b, ..., _<max>;` at file top.
+     */
+    private fun wrapDeepQualifiedNameForMetadata(expr: PropertyAccessExpression): Expression? {
+        // Walk down to root (innermost expression)
+        val chain = mutableListOf<PropertyAccessExpression>()
+        var cur: Expression = expr
+        while (cur is PropertyAccessExpression) {
+            chain.add(0, cur)
+            cur = cur.expression
+        }
+        val rootId = cur as? Identifier ?: return null
+        val depth = chain.size
+        if (depth < 1) return null
+
+        // Allocate temp names _a, _b, ..., up to _<depth>.
+        // Naming: 'a' + index. (For depth 4, names = _a, _b, _c, _d.)
+        val tempNames = (0 until depth).map { "_${'a' + it}" }
+        if (depth > maxDeepMetadataTempCount) maxDeepMetadataTempCount = depth
+
+        // Build: typeof rootId !== "undefined"
+        var combined: Expression = BinaryExpression(
+            left = TypeOfExpression(expression = rootId, pos = -1, end = -1),
+            operator = SyntaxKind.ExclamationEqualsEquals,
+            right = StringLiteralNode(text = "undefined", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+
+        // For each intermediate level i (0..depth-2): (_<i> = parent.prop_i) !== void 0
+        for (i in 0 until depth - 1) {
+            val tempName = tempNames[i]
+            val parentExpr: Expression = if (i == 0) rootId else syntheticId(tempNames[i - 1])
+            val propAccess = PropertyAccessExpression(
+                expression = parentExpr,
+                name = chain[i].name.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+                pos = -1, end = -1,
+            )
+            val tempAssign = ParenthesizedExpression(
+                expression = BinaryExpression(
+                    left = syntheticId(tempName),
+                    operator = SyntaxKind.Equals,
+                    right = propAccess,
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+            val notVoid = BinaryExpression(
+                left = tempAssign,
+                operator = SyntaxKind.ExclamationEqualsEquals,
+                right = VoidExpression(
+                    expression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+            combined = BinaryExpression(
+                left = combined,
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = notVoid,
+                pos = -1, end = -1,
+            )
+        }
+
+        // Final level: parent.lastProp (no temp assign, just the property access)
+        val lastParent: Expression = if (depth >= 2) syntheticId(tempNames[depth - 2]) else rootId
+        val finalAccess = PropertyAccessExpression(
+            expression = lastParent,
+            name = chain[depth - 1].name.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+            pos = -1, end = -1,
+        )
+        combined = BinaryExpression(
+            left = combined,
+            operator = SyntaxKind.AmpersandAmpersand,
+            right = finalAccess,
+            pos = -1, end = -1,
+        )
+
+        // Wrap: typeof (_<finalTemp> = combined) === "function" ? _<finalTemp> : Object
+        val finalTemp = tempNames.last()
+        val finalAssign = BinaryExpression(
+            left = syntheticId(finalTemp),
+            operator = SyntaxKind.Equals,
+            right = combined,
+            pos = -1, end = -1,
+        )
+        val typeofFinal = TypeOfExpression(
+            expression = ParenthesizedExpression(expression = finalAssign, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val isFunc = BinaryExpression(
+            left = typeofFinal,
+            operator = SyntaxKind.EqualsEqualsEquals,
+            right = StringLiteralNode(text = "function", pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return ConditionalExpression(
+            condition = isFunc,
+            whenTrue = syntheticId(finalTemp),
+            whenFalse = syntheticId("Object"),
+            pos = -1, end = -1,
+        )
+    }
+
     private fun wrapDefaultImportMemberAccess(expr: Expression, defaultModuleTempVars: Set<String>): Expression? {
         // Pattern: PropertyAccessExpression(PropertyAccessExpression(Identifier(X_1), "default"), memberName)
         if (expr !is PropertyAccessExpression) return null
@@ -9819,8 +9959,16 @@ class Transformer(
                             // If the base is a runtime value (not type-only), emit the qualified name
                             // as a property access expression (e.g., `db.db` for CJS module member types)
                             // Under isolatedModules, can't verify cross-file types → Object
-                            baseName != null && baseName !in topLevelTypeOnlyNames && !options.isolatedModules ->
-                                qualifiedNameToPropertyAccess(typeNode.typeName as QualifiedName)
+                            baseName != null && baseName !in topLevelTypeOnlyNames && !options.isolatedModules -> {
+                                val rawExpr = qualifiedNameToPropertyAccess(typeNode.typeName as QualifiedName)
+                                // Cross-file `declare namespace` (type-only at runtime): wrap with
+                                // chained safety check so the final value is `Object` if any link
+                                // doesn't exist at runtime. Matches TypeScript's defensive emit.
+                                if (rawExpr is PropertyAccessExpression
+                                    && checker?.isTypeOnlyGlobalName(baseName) == true) {
+                                    wrapDeepQualifiedNameForMetadata(rawExpr) ?: rawExpr
+                                } else rawExpr
+                            }
                             else -> syntheticId("Object")
                         }
                     }

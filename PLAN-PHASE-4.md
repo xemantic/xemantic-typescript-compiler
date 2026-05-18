@@ -118,6 +118,21 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.2, +1, 8809 → 8810 — flips `experimentalDecoratorMetadataUnresolvedTypeObjectInEmit_ts` JS-emit).** Chained safety wrap for cross-file `declare namespace` qualified names in decorator `design:paramtypes` metadata. Continuation /loop iteration after B47.1 + skip-log doc. Per prior recon (post-B40.1) this had been classified as "distinct multi-temp-var sequence emission, deferred." Attempting it now.
+
+**Implementation.** Three pieces in `Transformer.kt`:
+- (a) New `wrapDeepQualifiedNameForMetadata(expr: PropertyAccessExpression): Expression?` — walks down to the root Identifier, builds the chained `&&` expression: `typeof root !== "undefined" && (_a = root.B) !== void 0 && ... && _c.E`, then wraps with `typeof (_<final> = ...) === "function" ? _<final> : Object`.
+- (b) New field `maxDeepMetadataTempCount: Int` tracks the max chain depth so the transform tail can hoist `var _a, _b, ..., _<max>;` once per file.
+- (c) Wire into `serializeTypeNode`'s `TypeReference` → QualifiedName branch (line ~9822): when `baseName !in topLevelTypeOnlyNames` AND `checker.isTypeOnlyGlobalName(baseName) == true`, route the raw `qualifiedNameToPropertyAccess` result through the wrapper. Hoist inserted between helpers and the rest in transform's tail.
+
+**Verification.** Full-suite 10078/1265/3 (was 10078/1266/3, +1 net). Zero regressions across 10078-test suite. Target test flips clean — both `_compiles to JavaScript` (the previously-failing variant) and `_has expected errors` (already passing) pass.
+
+**Why the gate is `isTypeOnlyGlobalName`.** TypeScript wraps defensively because for `declare namespace A { ... }` declared in another file (e.g. `types.d.ts`), the namespace `A` may not exist as a runtime value when the consuming file runs. The wrap returns `Object` if any link of the qualified chain doesn't resolve at runtime. The gate is bounded: when `A` IS a runtime value (e.g. has `export var foo`), `isTypeOnlyGlobalName` returns false and we fall through to raw `qualifiedNameToPropertyAccess` (existing behavior). When `A` is type-only in the SAME file (in `topLevelTypeOnlyNames`), we fall through to `Object` (existing behavior). Only the cross-file `declare namespace` case is newly handled.
+
+**CLAUDE.md gotcha update.** Document the chained-wrap rule alongside the existing single-temp default-import wrap.
+
+---
+
 **Session 2026-05-18 (B47.1, +1, 8808 → 8809 — flips `asyncArrowInClassES5_ts__target_es2015` JS-emit).** Defensive class temp-var capture for static async-arrow initializers. Continuation /loop iteration after MAINT-2. `find_candidates.py --fresh` returns 0/0/0 (filtered from 3/60/12); JS-emit ranker has 119 candidates. Picked `asyncArrowInClassES5_ts` (2-line diff): source `class Test { static member = async (x: string) => { }; }` was missing `var _a;\n_a = Test;` pre-`Test.member = ...` capture. Previously skipped per "defensive capture, motivation unclear, skipped per session-prompt risk guidance."
 
 **Implementation.** Single-file change in `Transformer.kt:10805` `staticPropsWithThis` filter. Added new disjunct: `(prop.initializer is ArrowFunction && ModifierFlag.Async in (prop.initializer as ArrowFunction).modifiers)`. This matches the defensive-capture rule even when the async arrow body doesn't lexically reference `this`. The capture is a no-op for `this`-less bodies (`replaceThisInExpr` leaves expressions unchanged), so only the `var _a` hoist + `_a = Test;` statement get added. Net effect: matches TypeScript's emit ordering precisely.
