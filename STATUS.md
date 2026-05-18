@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,832 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,833 / 10,078 tests passing (~87.7%).
+
+**B49.1 (2026-05-18, +1 — flips `jsxFactoryIdentifierWithAbsentParameter_ts`)** —
+Add `frameElement` to `KNOWN_GLOBALS` so it surfaces as a spelling suggestion for
+`createElement`. The name was previously only in `DOM_GLOBAL_NAMES` (the side list used
+by `checkUnresolvedNames` for lib-dom filtering) but missed from `KNOWN_GLOBALS` (the
+candidate pool that `getSpellingSuggestion` walks). Without `frameElement` in the pool,
+`@jsxFactory: createElement` with no in-scope binding emitted TS2304 instead of TS2552
+(distance 5 vs cutoff 6 — well within threshold). Single one-line addition. Full-suite
+10078/1242/3 (was 10078/1243/3, +1 net). Zero regressions.
 
 **B48.13 (2026-05-18, +2 — flips `isDeclarationVisibleNodeKinds_ts__target_{es5,es2015}`)** —
 Function/constructor type display parens in arrays and unions. For source like
