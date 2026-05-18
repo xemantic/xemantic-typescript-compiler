@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,809 / 10,078 tests passing (~87.4%).
+**Phase 4 — Checker buildout.** 8,810 / 10,078 tests passing (~87.4%).
+
+**B47.2 (2026-05-18, +1 — flips `experimentalDecoratorMetadataUnresolvedTypeObjectInEmit_ts` JS-emit)** —
+Chained safety wrap for cross-file `declare namespace` qualified names in
+`design:paramtypes` metadata. For `A.B.C.D.E` where `A` is a `declare namespace` in another
+file (type-only at runtime per `checker.isTypeOnlyGlobalName(A)`), the emit now matches
+TypeScript's defensive form:
+`typeof (_d = typeof A !== "undefined" && (_a = A.B) !== void 0 && (_b = _a.C) !== void 0 && (_c = _b.D) !== void 0 && _c.E) === "function" ? _d : Object`.
+New `wrapDeepQualifiedNameForMetadata(expr)` in `Transformer.kt` walks the
+`PropertyAccessExpression` chain, allocates N temp names (`_a`..`_<N>`) where N = chain depth,
+and builds the combined `&&` chain. The function-level field
+`maxDeepMetadataTempCount` tracks the max depth seen so the transform tail hoists
+`var _a, _b, ..., _<max>;` between helpers and the rest of the file. Wired into
+`serializeTypeNode`'s QualifiedName branch (line ~9822): when `baseName !in topLevelTypeOnlyNames`
+AND `checker.isTypeOnlyGlobalName(baseName)` is true, route the raw qualified PropertyAccess
+through the chain wrapper. Full-suite 10078/1265/3 (was 10078/1266/3, +1 net). Zero regressions.
 
 **B47.1 (2026-05-18, +1 — flips `asyncArrowInClassES5_ts__target_es2015` JS-emit)** —
 Defensive class temp-var capture for static async-arrow initializers. Extended the
