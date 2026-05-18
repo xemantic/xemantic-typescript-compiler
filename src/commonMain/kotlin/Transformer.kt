@@ -3409,9 +3409,17 @@ class Transformer(
      * E.g., "./Configurable" imported from "Class.ts" → "Configurable"
      */
     private fun resolveAmdModuleName(specifier: String, importingFile: String): String {
-        val dir = importingFile.substringBeforeLast('/', "").substringBeforeLast('\\', "")
+        // Find the LAST `/` or `\` separator (whichever is later), then take the substring
+        // before it as the directory. The previous chained `substringBeforeLast('/', "")
+        // .substringBeforeLast('\\', "")` was buggy: when only `/` was present (the common
+        // case), the second call would return "" (the missingDelimiterValue) because there
+        // was no backslash to find — effectively dropping the directory.
+        val lastSlash = importingFile.lastIndexOf('/')
+        val lastBackslash = importingFile.lastIndexOf('\\')
+        val sepIdx = maxOf(lastSlash, lastBackslash)
+        val dir = if (sepIdx >= 0) importingFile.substring(0, sepIdx) else ""
         val parts = mutableListOf<String>()
-        if (dir.isNotEmpty()) parts.addAll(dir.split('/'))
+        if (dir.isNotEmpty()) parts.addAll(dir.split('/', '\\'))
         for (segment in specifier.split('/')) {
             when (segment) {
                 "." -> {}

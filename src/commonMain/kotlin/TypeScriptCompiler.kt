@@ -1250,8 +1250,27 @@ class TypeScriptCompiler {
                 longestCommonPathPrefix(parentDirs).ifEmpty { null }
             } else null
 
+            // Compute file processing order via topological sort BEFORE the transform loop.
+            // This ensures the shared module-name counter (for AMD/System outFile bundles)
+            // increments in the same order as the final emit, so dependency-driven module
+            // numbering matches TypeScript's behavior. Without this, files would be transformed
+            // in @Filename input order but emitted in topological order, producing mismatched
+            // counter assignments (e.g. `foo_2` in baz where baz is emitted first but a/bar
+            // was transformed first).
+            val depsForTransformSort = when {
+                options.noResolve -> emptyMap()
+                hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
+                else -> importDeps
+            }
+            val transformOrder = if (options.outFile != null && !options.noResolve) {
+                topologicalSort(tsFileNames, depsForTransformSort)
+            } else tsFileNames
+            val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
+                parsedSourceFiles[name]?.let { name to it }
+            } + parsedSourceFiles.filter { it.key !in transformOrder.toSet() }.map { it.toPair() }
+
             // Phase 3: Transform and emit each file
-            for ((tsFileName, sourceFile) in parsedSourceFiles) {
+            for ((tsFileName, sourceFile) in orderedParsedSourceFiles) {
                 // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
                 // B11.2's `resolveJsxTsxCandidate` visibility. Without this, the Emitter
                 // would add a `"use strict";` prologue and produce a phantom

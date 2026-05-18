@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,822 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,823 / 10,078 tests passing (~87.5%).
+
+**B48.8 (2026-05-18, +1 — flips `commonSourceDir6_ts` JS-emit)** — Two-piece fix for AMD outFile module ordering:
+(a) `resolveAmdModuleName` had a buggy `substringBeforeLast('/', "").substringBeforeLast('\\', "")` chain that
+returned empty when only `/` was present (the second call's missingDelimiterValue `""` clobbered the result).
+For `("./foo", "a/bar.ts")` the function returned `"foo"` instead of `"a/foo"`. Replaced with `lastIndexOf` of
+either separator, then `substring(0, sepIdx)`. (b) Transform-loop iteration order: when `outFile != null` and
+multi-file, compute topological order BEFORE running transforms so the shared module-name counter increments
+in the same order as the final emit. Previously transforms ran in `@Filename` input order while emits used
+topological order, producing mismatched counter assignments (e.g. `foo_2` in `baz` where `baz` is emitted first
+but `a/bar` was transformed first, so `a/bar` claimed `foo_1` first). Full-suite 10078/1252/3 (was 10078/1253/3,
++1 net). Zero regressions.
 
 **B48.7 (2026-05-18, +1 — flips `blockScopedVariablesUseBeforeDef_ts__target_es2015` JS-emit)** —
 Helper-emit order fix: TypeScript emits `__setFunctionName` AFTER `__awaiter` but BEFORE `__asyncGenerator`
