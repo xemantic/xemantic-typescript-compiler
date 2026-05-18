@@ -118,6 +118,19 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-18 (B47.7, +1, 8814 → 8815 — flips `declarationEmitRecursiveConditionalAliasPreserved_ts` JS-emit).** JSX-vs-generic-arrow disambiguation in `.tsx` files for the `<Identifier extends <Type>...>` pattern.
+
+**Implementation.** Single-file change in `Parser.kt` at `parsePrimaryExpression`'s `LessThan` branch (line ~3640). When `isJsxFile`, the previous logic unconditionally returned `parseJsxElementOrFragment()`. New logic peeks at the lookahead: after `<Identifier extends`, check what follows `extends`:
+- Identifier OR type-keyword (`number`/`string`/`boolean`/`symbol`/`bigint`/`any`/`unknown`/`object`/`never`) OR open delimiter (`(`/`{`/`[`) OR `typeof` → generic arrow, fall through to the existing generic-arrow / type-assertion detection below.
+- `/`, `>`, `=` → JSX attribute (boolean shorthand `<T extends/>` or attr=value `<T extends={x}/>`); fall back to JSX parsing.
+- Anything else (e.g. another identifier interpreted as next JSX attribute) → JSX.
+
+**Verification.** Full-suite 10078/1260/3 (was 10078/1261/3, +1 net). Zero regressions. The earlier net-zero attempt (B47.7-pre, in skip-log) with the broader gate `<Identifier extends` regressed `parseJsxExtends2_ts` (source `<T extends/>` IS JSX); the tighter gate fixes both.
+
+**CLAUDE.md gotcha update.** Document the JSX-vs-generic-arrow disambiguation rule.
+
+---
+
 **Session 2026-05-18 (B47.6, +2, 8812 → 8814 — flips `moduleNoneDynamicImport_ts__target_es2015/es2020` JS-emit).** Builds on B47.5's `./` strip. Two more pieces complete the `@module: none` + `@outFile` story.
 
 **Implementation.**
