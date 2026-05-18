@@ -1,6 +1,17 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,823 / 10,078 tests passing (~87.5%).
+**Phase 4 — Checker buildout.** 8,826 / 10,078 tests passing (~87.6%).
+
+**B48.9 (2026-05-18, +3 — flips `jsxSpreadTag_ts__target_{es2015,esnext}` errors-baseline + 1 more)** —
+TS2304 emission for JSX tag names. Our `checkUnresolvedInExprCore` previously had no JSX branches, so
+references like `<Comp />` where `Comp` wasn't declared produced no diagnostic. Added new branches for
+`JsxElement` / `JsxSelfClosingElement` / `JsxFragment` that:
+- Call `checkJsxTagName` on the tag identifier. Intrinsic elements (lowercase first char like `div`,
+  `span`) are skipped since they compile to string literals and don't reference a binding.
+- Recurse into attributes via `checkUnresolvedInJsxAttribute` (regular `JsxAttribute` with expression
+  containers, `JsxSpreadAttribute` with expression). Nested JSX values are recursively checked.
+- Recurse into children via `checkUnresolvedInJsxChild` (expression containers, nested JSX elements).
+Full-suite 10078/1249/3 (was 10078/1252/3, +3 net). Zero regressions.
 
 **B48.8 (2026-05-18, +1 — flips `commonSourceDir6_ts` JS-emit)** — Two-piece fix for AMD outFile module ordering:
 (a) `resolveAmdModuleName` had a buggy `substringBeforeLast('/', "").substringBeforeLast('\\', "")` chain that
