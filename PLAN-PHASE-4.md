@@ -924,6 +924,17 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (B51.x — round 2 of /loop, +4 net: B50.x's +5 → +9 total)**:
+  - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (TS2689 FP gone).
+  - B51.2: TS6212 source-return-any/error gate (fn-vs-fn FP gone).
+  - B51.3: TS2371 for binding-pattern defaults in type positions.
+  - B51.4: gate Case-2 TS7030 emission on noImplicitReturns.
+  - **B51.5 (+1)**: TS17011 for `super(super.X())` pattern — flips `superPropertyAccessInSuperCall01_ts`.
+
+  Round 1 (B50.0–B50.11) landed +5 from alias/elaboration infrastructure + super static/instance discrimination. Round 2 (B51.1–B51.5) added correctness improvements + one new diagnostic emission. Current 8839 / 10078 = 87.7%.
+
+  
+
   **Session 2026-05-19 (B50.7, 8835 → 8835, net-zero) — Register alias name for Intersection bodies containing Union.** Continuation /loop iteration after B50.6. Extends B50.4's alias-name registration to handle the `errorMessageOnIntersectionsWithDiscriminants01_ts` pattern (`A = Common & {foo:1}` where `Common = X | Y` — TypeScript displays `A`, not the distributed structural form).
 
   **Implementation.** Single-file change in `Checker.kt`. Refined the alias-name registration gate in `getDeclaredTypeOfSymbolWorker`'s TypeAlias arm: in addition to `Type.Object`, ALSO register `Type.Intersection` IF at least one constituent is a `Type.Union`. Flat intersections (`Wrapper = Foo & Bar`) keep their existing unfolded display, preserving the `implementsIncorrectlyNoAssertion_ts` baseline.
