@@ -81,7 +81,9 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 10: 1/15 (B58.3) (7%) — lowest of all rounds
 - Avg: ~21% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
-**Lesson: late rounds emphasize quality over quantity.** Rounds 7-9 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
+**Lesson: late rounds emphasize quality over quantity.** Rounds 7-10 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
+
+**Diminishing-returns observation post round 10**: rounds 7-10 are 4 consecutive rounds averaging 0.5 flips/round (vs ~2.5 flips/round for rounds 1-7 combined). At this rate, further surgical work without architectural commitment is unlikely to be productive. Strong recommendation for next session: commit a full session to one of Blocker #1 (control flow narrowing, ~60-100 tests), Blocker #2 (generic argument inference extension, ~20-40 tests), or Blocker #3 (per-file scope, ~30 tests) per the PLAN's architectural-blockers section.
 
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
