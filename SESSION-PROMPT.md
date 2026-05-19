@@ -135,6 +135,13 @@ Your loop (per CLAUDE.md § Execution protocol):
 - `substitutionResultCache: Map<String, Type>` — intern map for generic-alias substitution results. Currently underutilized because resolved-args ids vary per call; could be made effective by interning TypeParam instances by symbol identity.
 - `typeParamInternCache: Map<Int, Type.TypeParam>` — intern Type.TypeParam instances by TypeParameter AST node position. Applied at 3 of 10 creation sites (B59.1+B59.2): function-signature path, FunctionExpression, and symbol type-param resolution. Other 7 sites pending — extending may unlock the alias-display puzzle from B58.3.
 
+**Remaining un-flipped near-flip targets (all gated on documented architectural work):**
+- `inferFromNestedSameShapeTuple_ts` — alias-display puzzle (B58.3, B59.x partial fixes documented).
+- `noStrictGenericChecks_ts` — function-type-vs-function-type with different generic TypeParam counts.
+- `arrayAssignmentTest4_ts` — lib-content target-versioning (Array has too many methods for ES2015 target).
+- `relationComplexityError_ts` — TS2859 needs relation-complexity tracking (new feature).
+- `awaitedType_ts`/`recursiveMappedTypes_ts`/etc — TS2589 in mapped-type / conditional-type recursion paths (B57.3 in queue).
+
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
 - **Blocker #2** (generic argument inference): ~20-40 tests. Foundation in `tryInferSingleTypeParamFromArgs`; extension B52.2 promoted in queue.
