@@ -30,6 +30,16 @@ Rounds 6-7 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 6's B55.x needed B54.4 chain + B54.5 setter-param + B54.8 hint to flip cleanly.
 - Round 7's B56.1 needed B54.x same-base ref mismatch to flip its target via downstream effect.
 
+**Session timeline (2026-05-19, 7 rounds):**
+- Rounds 1-2 (6h): +8 surgical wins via B50.x/B51.x — alias-display, function-mismatch chain, optional-default param, super-access, lib-allowlist, etc.
+- Rounds 3-4 (3h): +0 surgical wins, infrastructure: B53.x display piece, audit-script fix, stale-skip-log cleanups.
+- Rounds 5-7 (4.5h): +3 flips via B54-B56 stack — accessor-pair declaration merging (B54.6), write-context setter-param (B54.5), generic-ref same-base elaboration (B54.4/B54.8), strict-generic-checks for varTypes (B55.x), `new C()` unknown-default (B56.1).
+
+**Architecture observations from this session:**
+- The varTypes (string-based) path remains useful for narrow type-mismatch checks. The Type-engine path is more accurate but harder to extend without regression risk.
+- Conservative gates are load-bearing — B56.3/B56.4 demonstrated that broadening "new-C-unknown-default" beyond the minimum case regresses tests via lost structural-compatibility.
+- Infrastructure compounds: rounds 4-5's "wasted" net-zero changes (chain emission, hint, setter-param extraction) became load-bearing for rounds 6-7's flips. The lesson is that the metric "+1 per round" undervalues infrastructure rounds.
+
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
 - **B53.2** (feat, net-zero, Blocker #3-gated): Named Type.Object non-overlap detection in `checkEqualityComparisonNoOverlap`. Target test (`errorWithSameNameType_ts`) blocked by cross-file declaration merging — debug confirmed `interface F` in /a.ts and /b.ts get merged at `mergeSymbolTable` time so structural disjointness silently fails. Infrastructure committed for future tests with genuinely disjoint named objects.
