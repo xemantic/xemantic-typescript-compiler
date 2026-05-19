@@ -31952,8 +31952,13 @@ interface DataView {
     private fun emitTS2352IfNullCast(
         expr: TypeAssertionExpression, source: String, fileName: String,
     ) {
-        val inner = expr.expression
-        if (inner !is Identifier || inner.text != "null") return
+        // B51.6: also catch `<FuncType>(undefined)` casts (matching
+        // `defaultValueInFunctionTypes_ts`). Source must be a bare `null` or
+        // `undefined` Identifier; unwrap one level of ParenthesizedExpression.
+        var inner: Expression = expr.expression
+        if (inner is ParenthesizedExpression) inner = inner.expression
+        val sourceLit = (inner as? Identifier)?.text
+        if (sourceLit != "null" && sourceLit != "undefined") return
         val typeNode = expr.type
         // 17.109: Compute the display name and gate on type-shape.
         // Allowed shapes (`null` doesn't sufficiently overlap):
@@ -31985,11 +31990,13 @@ interface DataView {
         }
 
         val start = expr.pos
-        val endPos = expressionTrueEnd(inner)
+        // B51.6: use the OUTER expression's end (including `)` for paren-wrapped
+        // source like `<T>(undefined)`), not the unwrapped Identifier's end.
+        val endPos = expressionTrueEnd(expr.expression)
         val length = (endPos - start).coerceAtLeast(1)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
-            message = "Conversion of type 'null' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            message = "Conversion of type '$sourceLit' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
             category = DiagnosticCategory.Error,
             code = 2352,
             fileName = fileName,
@@ -58957,12 +58964,18 @@ interface DataView {
     private fun formatParameterDecl(p: Parameter): String {
         val pName = (p.name as? Identifier)?.text ?: "_"
         val pType = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+        // B51.6: TypeScript displays params with default values as optional
+        // (`a?: T`) in type positions — the default makes the param effectively
+        // optional from a caller's perspective. Mirrors the display in
+        // `defaultValueInFunctionTypes_ts`'s `(a?: string) => any` baseline.
+        val hasInitializer = p.initializer != null
         return when {
             p.dotDotDotToken -> "...$pName: $pType"
             p.questionToken -> {
                 val isFnType = p.type is FunctionType || p.type is ConstructorType
                 if (isFnType) "$pName?: $pType" else "$pName?: $pType | undefined"
             }
+            hasInitializer -> "$pName?: $pType"
             else -> "$pName: $pType"
         }
     }
