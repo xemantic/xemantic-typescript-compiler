@@ -192,6 +192,12 @@ class Checker(
      *  return type is `Promise<T>` — async functions implicitly wrap returns. */
     private var inAsyncFunctionBody = false
 
+    /** B55.2: TypeParam declarations currently in scope, keyed by name. Populated
+     *  at function-body / method-body / class-member entry; consumed by emitTS2322
+     *  to emit TS2208 "type parameter might need an `extends X` constraint" related
+     *  info when both args of a same-base ref mismatch are TypeParams in scope. */
+    private var currentTypeParamDecls: Map<String, TypeParameter> = emptyMap()
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -38884,6 +38890,15 @@ interface DataView {
                 is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 is ClassDeclaration -> {
                     val classTypeParams = collectTypeParamNames(stmt.typeParameters)
+                    // B55.2: push class TypeParam declarations into the scope map so
+                    // methods/getters/setters can reference them for TS2208 related info.
+                    val savedClassTypeParamDecls = currentTypeParamDecls
+                    if (!stmt.typeParameters.isNullOrEmpty()) {
+                        val merged = savedClassTypeParamDecls.toMutableMap()
+                        for (tp in stmt.typeParameters!!) merged[tp.name.text] = tp
+                        currentTypeParamDecls = merged
+                    }
+                    try {
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> {
@@ -38991,6 +39006,9 @@ interface DataView {
                             else -> {}
                         }
                     }
+                    } finally {
+                        currentTypeParamDecls = savedClassTypeParamDecls
+                    }
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
@@ -39060,6 +39078,14 @@ interface DataView {
             inNonArrowFunctionBody = true
             val savedAsync = inAsyncFunctionBody
             inAsyncFunctionBody = isAsync
+            // B55.2: populate TypeParam decls for the current scope so emitTS2322
+            // can emit TS2208 related info pointing back to the source TypeParam.
+            val savedTypeParamDecls = currentTypeParamDecls
+            if (!funcTypeParams.isNullOrEmpty()) {
+                val merged = savedTypeParamDecls.toMutableMap()
+                for (tp in funcTypeParams) merged[tp.name.text] = tp
+                currentTypeParamDecls = merged
+            }
             for (param in parameters) {
                 val paramType = param.type
                 val paramName = param.name
@@ -39092,6 +39118,7 @@ interface DataView {
             } finally {
                 inNonArrowFunctionBody = savedInFunc
                 inAsyncFunctionBody = savedAsync
+                currentTypeParamDecls = savedTypeParamDecls
             }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
@@ -59510,6 +59537,39 @@ interface DataView {
                 }
             }
         }
+        // B55.2: TS2208 related info "This type parameter might need an `extends X` constraint."
+        // Fires when same-base ref mismatch with both args as different TypeParams in scope.
+        // Points to the source TypeParam's declaration (the one that "needs the constraint").
+        val relatedInfo = mutableListOf<Diagnostic>()
+        if (sourceType.startsWith("@") && targetType.startsWith("@") &&
+            sourceType.contains('<') && targetType.contains('<')
+        ) {
+            val srcBase = sourceType.substringBefore('<')
+            val tgtBase = targetType.substringBefore('<')
+            if (srcBase == tgtBase) {
+                val srcArg = sourceType.substringAfter('<').removeSuffix(">").removePrefix("@")
+                val tgtArg = targetType.substringAfter('<').removeSuffix(">").removePrefix("@")
+                if (srcArg != tgtArg && srcArg in typeParams && tgtArg in typeParams) {
+                    // Source TypeParam needs `extends <Target>` constraint.
+                    val srcTpDecl = currentTypeParamDecls[srcArg]
+                    if (srcTpDecl != null) {
+                        val decPos = srcTpDecl.name.pos
+                        val decLen = srcTpDecl.name.text.length
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, decPos)
+                        relatedInfo.add(Diagnostic(
+                            message = "This type parameter might need an `extends $tgtArg` constraint.",
+                            category = DiagnosticCategory.Message,
+                            code = 2208,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = decPos,
+                            length = decLen,
+                        ))
+                    }
+                }
+            }
+        }
         diagnostics.add(Diagnostic(
             message = message,
             category = DiagnosticCategory.Error,
@@ -59520,6 +59580,7 @@ interface DataView {
             start = start,
             length = length,
             messageChain = chain,
+            relatedInformation = if (relatedInfo.isEmpty()) emptyList() else relatedInfo.toList(),
         ))
     }
 
