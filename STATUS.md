@@ -2,6 +2,8 @@
 
 **Phase 4 — Checker buildout.** 8,841 / 10,078 tests passing (~87.7%).
 
+**Round 6 (2026-05-19, started): regression-finder methodology, B54.7+B54.9 finalization.** Continuation /loop session after round 5. Pool genuinely empty (0/0/0). Started by methodically identifying which exact tests regressed when B54.7 was broadly enabled — captured failing-test set before/after diff, identified `generics3_ts` and `promisesWithConstraints_ts` as the 2 regressions (both have same-base named-type args like `C<X>` vs `C<Y>` where X,Y are structurally identical). Narrowed B54.3's gate to "at least one arg is primitive" via B54.9, making B54.7 (Identifier-RHS varTypes fallback) safe to re-enable. Net-zero on suite. Promoted B55.1 (strict-generic-checks for distinct TypeParam args) as the queue item that would flip `typeParameterAssignmentCompat1_ts`-style tests — HIGH RISK, defer to architectural session.
+
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
 - **B53.2** (feat, net-zero, Blocker #3-gated): Named Type.Object non-overlap detection in `checkEqualityComparisonNoOverlap`. Target test (`errorWithSameNameType_ts`) blocked by cross-file declaration merging — debug confirmed `interface F` in /a.ts and /b.ts get merged at `mergeSymbolTable` time so structural disjointness silently fails. Infrastructure committed for future tests with genuinely disjoint named objects.
