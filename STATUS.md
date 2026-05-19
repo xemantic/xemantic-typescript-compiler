@@ -18,14 +18,16 @@ Round 4 net-zero. Surgical pool genuinely exhausted at the +1 per-commit level �
 - Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
 - Grand total: 60 commits, +8 net tests (8833 → 8841 / 10078 = 87.7%).
 
-**Round 5 (2026-05-19): B54.x accessor-pair declaration merging + write-context setter-param-type extraction.** Continuation /loop session. Pool exploration revealed all `+1 MISS` candidates gated on multi-piece feature work. Implemented:
-- **B54.1** (net-zero): Visit SetAccessor bodies in the class-body walker (was falling into `else -> {}`). Populates `this.X` types and setter param for the inner-body walker to use, but `inferSimpleExprType` deliberately returns null for Identifier RHS, so the diagnostic doesn't fire alone.
-- **B54.2** (net-zero): In the `this.X = v` branch, fall back to direct varTypes lookup for Identifier RHS when inferSimpleExprType returns null. Narrow gate — only this specific branch.
-- **B54.3** (net-zero): isAssignableTo extended for same-base-name parameterized refs (`@A<string>` vs `@A<number>` now correctly returns false).
-- **B54.4** (net-zero): emitTS2322 chain elaboration for same-base same-name generic ref mismatch — adds leaf "  Type 'X' is not assignable to type 'Y'." chain entry.
-- **B54.5+B54.6** (net-zero): Binder/Checker change — accessor-pair merging at resolveInterfaceMembers (GetAccessor+SetAccessor for same property name now share one symbol with BOTH declarations); checkPropertyAccessAssignment prefers SetAccessor's parameter type for write-context.
+**Round 5 (2026-05-19, B54.x accessor-pair + write-context, 12+ commits, net-zero on suite).** Most substantive round 3-5. Built out a coherent accessor-pair / write-context infrastructure stack:
+- **B54.1** (feat): Visit SetAccessor bodies in class-body walker.
+- **B54.2** (feat): `this.X = v` branch falls back to varTypes for Identifier RHS.
+- **B54.3** (feat): isAssignableTo for same-base parameterized refs (`@A<string>` vs `@A<number>`).
+- **B54.4** (feat): emitTS2322 chain elaboration for same-base ref mismatch.
+- **B54.5+B54.6** (feat): Binder accessor-pair declaration merging at resolveInterfaceMembers; setter-param-type for write-context.
+- **B54.7** (attempted/reverted ×2): Identifier-RHS varTypes fallback in main Identifier branch. Both broad and tight gates regressed 2 tests. Multi-piece feature; needs Type-engine path disabling first.
+- **B54.8** (feat, narrow gate): "could be instantiated with arbitrary type" chain hint when target arg is TypeParam.
 
-`getAndSetNotIdenticalType3_ts` now passes individually (full diagnostic match). Suite count unchanged at 1234 failed (one test flipped, another shifted from EXTRA-too-many to MISS due to B54.3 narrowing — `typeParameterAssignmentCompat1_ts`). Real infrastructure improvements committed; remaining MISS at line 8 of typeParameterAssignmentCompat1 needs strict-generic-checks semantics (different unconstrained TypeParams must NOT be assignable to each other).
+`getAndSetNotIdenticalType3_ts` flips individually (full match). Suite stays at 1234 due to a balancing test shift exposed by B54.3's narrowing. Real infrastructure correctness improvements committed; future agents can build on B54.x for further write-context / accessor-pair / generic-ref work.
 
 The diminishing-returns curve is now sharp: rounds 1-2 produced all the test flips (+8); rounds 3-4 produced productive maintenance + infrastructure (B53.1/B53.2 + skip-log audit + audit-script fix + queue restructure + 4+ CLAUDE.md gotchas + session retrospectives) but no test flips because every remaining +1 surgical candidate is gated on at least one named architectural blocker.
 
