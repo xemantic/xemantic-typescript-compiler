@@ -37365,8 +37365,12 @@ interface DataView {
                 reportEmptyReturnsInBody(body.statements, source, fileName)
             }
             // Case 2: no explicit return type, but some paths return values and some do empty returns → TS7030 at empty returns
-            // (detectable without type inference: hasAnyReturn strict-mode = true means there's a non-void return)
-            if (retType == null) {
+            // B51.4: gate on noImplicitReturns. Without that compiler flag, an empty
+            // `return;` in an unannotated function implicitly returns `undefined`,
+            // which widens the inferred return to `fn-type | undefined` — a legal
+            // mixed-return shape. TypeScript only emits TS7030 in this case when
+            // noImplicitReturns is set (cf. controlFlowForFunctionLike1_ts).
+            if (retType == null && options.noImplicitReturns) {
                 val hasValueReturn = bodyHasReturnWithValue(body.statements, anyExpr = false)
                 if (hasValueReturn) {
                     reportEmptyReturnsInBody(body.statements, source, fileName)
