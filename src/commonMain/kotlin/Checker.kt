@@ -198,6 +198,13 @@ class Checker(
      *  info when both args of a same-base ref mismatch are TypeParams in scope. */
     private var currentTypeParamDecls: Map<String, TypeParameter> = emptyMap()
 
+    /** B57.1: set to `true` when the generic-alias substitution path hits its
+     *  recursion-depth limit. Consumers (e.g. var-decl annotation walker) save
+     *  the flag before resolving and check after; on bail they emit TS2589
+     *  "Type instantiation is excessively deep and possibly infinite." at the
+     *  annotation's position. */
+    private var deepInstantiationBailed: Boolean = false
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -2084,6 +2091,7 @@ class Checker(
     private fun buildFileLocalTypeMaps() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
             val typeMap = mutableMapOf<String, Type>()
             for ((name, symbol) in result.locals) {
                 // Only resolve types for symbols that are NOT simple variables
@@ -2102,15 +2110,24 @@ class Checker(
                 } else if (symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                     // For variables, only resolve if they have a type annotation (cheap)
                     val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-                    val hasAnnotation = when (decl) {
-                        is VariableDeclaration -> decl.type != null
-                        is Parameter -> decl.type != null
-                        is PropertyDeclaration -> decl.type != null
-                        else -> false
+                    val annotation: TypeNode? = when (decl) {
+                        is VariableDeclaration -> decl.type
+                        is Parameter -> decl.type
+                        is PropertyDeclaration -> decl.type
+                        else -> null
                     }
-                    if (hasAnnotation) {
+                    if (annotation != null) {
                         try {
+                            // B57.1: detect TS2589 depth bail at annotation resolution.
+                            // Save flag, reset, resolve. If bail fires, emit TS2589 at
+                            // annotation position.
+                            val savedBail = deepInstantiationBailed
+                            deepInstantiationBailed = false
                             val type = getTypeOfSymbol(symbol)
+                            if (deepInstantiationBailed) {
+                                emitTs2589AtTypeNode(annotation, source, fileName)
+                            }
+                            deepInstantiationBailed = savedBail
                             if (type !== anyType && type !== errorType) {
                                 typeMap[name] = type
                             }
@@ -41716,7 +41733,32 @@ interface DataView {
                     ) {
                         val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                         if (resolvedArgs.none { it === errorType }) {
-                            if (typeAliasResolutionDepth >= 10) return errorType
+                            // B57.1b: skip substitution when any arg fails its constraint.
+                            // Prevents FP TS2589 on `Foo<"false", {}>` where the constraint
+                            // `T extends "true"` is unsatisfied (TS2344 emitted elsewhere).
+                            // Without this, the recursive alias body still expands 10
+                            // levels deep and (wrongly) emits TS2589.
+                            var constraintFails = false
+                            for (i in declTPs.indices) {
+                                val tpConstraintNode = declTPs[i].constraint
+                                if (tpConstraintNode != null) {
+                                    val constraintType = try { getTypeFromTypeNode(tpConstraintNode) }
+                                        catch (_: Throwable) { errorType }
+                                    if (constraintType !== anyType && constraintType !== errorType) {
+                                        if (!checkTypeRelatedTo(resolvedArgs[i], constraintType, assignableRelation)) {
+                                            constraintFails = true
+                                            break
+                                        }
+                                    }
+                                }
+                            }
+                            if (constraintFails) return errorType
+                            if (typeAliasResolutionDepth >= 10) {
+                                // B57.1: signal depth-bail to outer callers so they can
+                                // emit TS2589 at the annotation position.
+                                deepInstantiationBailed = true
+                                return errorType
+                            }
                             val saved = currentTypeAliasArgs
                             try {
                                 val argMap = mutableMapOf<String, Type>()
@@ -59519,6 +59561,36 @@ interface DataView {
         if (sourceType == "string" && targetType == "object") return false
         // Otherwise, different primitive types are not assignable
         return false
+    }
+
+    /** B57.1: emit TS2589 "Type instantiation is excessively deep" at a TypeNode's span.
+     *  For a TypeReferenceNode like `Foo<"true", {}>`, spans from the name's position to
+     *  the position right after the closing `>`. node.end overshoots (includes the next
+     *  token's scan), so we trim trailing whitespace/punctuation back to find the real end. */
+    private fun emitTs2589AtTypeNode(node: TypeNode, source: String, fileName: String) {
+        val startPos = node.pos
+        if (startPos < 0 || startPos >= source.length) return
+        var endPos = node.end.coerceAtMost(source.length)
+        // Trim back past trailing whitespace / `;` / `,` / `)` etc. to land at `>`.
+        while (endPos > startPos) {
+            val ch = source[endPos - 1]
+            if (ch == '>' || ch == ']') break
+            if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' ||
+                ch == ';' || ch == ',' || ch == ')' || ch == '=') endPos--
+            else break
+        }
+        val length = (endPos - startPos).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+        diagnostics.add(Diagnostic(
+            message = "Type instantiation is excessively deep and possibly infinite.",
+            category = DiagnosticCategory.Error,
+            code = 2589,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = startPos,
+            length = length,
+        ))
     }
 
     private fun emitTS2322(start: Int, length: Int, sourceType: String, targetType: String, source: String, fileName: String, hasElaboration: Boolean = false, typeParams: Set<String> = emptySet()) {
