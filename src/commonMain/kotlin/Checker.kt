@@ -2100,7 +2100,17 @@ class Checker(
                         SymbolFlags.Interface or SymbolFlags.Enum or SymbolFlags.TypeAlias or
                         SymbolFlags.Alias)) {
                     try {
+                        // B57.2: also detect TS2589 depth bail for type-alias body resolution
+                        // (e.g. `type M = N<number, "M">` where N is a recursive alias).
+                        // Save/reset/check flag; emit TS2589 at alias body's TypeNode position.
+                        val savedBail = deepInstantiationBailed
+                        deepInstantiationBailed = false
                         val type = getTypeOfSymbol(symbol)
+                        if (deepInstantiationBailed && symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
+                            val aliasDecl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                            aliasDecl?.type?.let { emitTs2589AtTypeNode(it, source, fileName) }
+                        }
+                        deepInstantiationBailed = savedBail
                         if (type !== anyType && type !== errorType) {
                             typeMap[name] = type
                         }
