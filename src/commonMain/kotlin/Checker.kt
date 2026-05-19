@@ -59463,6 +59463,14 @@ interface DataView {
                 val tgtArg = targetType.substringAfter('<').removeSuffix(">").removePrefix("@")
                 if (srcArg != tgtArg && !srcArg.contains(',') && !tgtArg.contains(',')) {
                     chain.add("  Type '$srcArg' is not assignable to type '$tgtArg'.")
+                    // B54.8 (re-enable, narrower gate): when target type arg is a TypeParam
+                    // in scope, add "'X' could be instantiated with an arbitrary type which
+                    // could be unrelated to 'Y'." matching TypeScript's behavior for
+                    // generic-ref-assignment mismatches into a TypeParam-parameterized
+                    // target. Gate on tgtArg in typeParams (don't require srcArg to be one).
+                    if (tgtArg in typeParams) {
+                        chain.add("    '$tgtArg' could be instantiated with an arbitrary type which could be unrelated to '$srcArg'.")
+                    }
                 }
             }
         }
