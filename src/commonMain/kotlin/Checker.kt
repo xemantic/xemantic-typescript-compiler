@@ -53968,6 +53968,13 @@ interface DataView {
             val anyFnFnMismatch = callee != null && overloadErrors.any { (_, sig, _) ->
                 getFirstFailingFnTypeArgPair(args, sig) != null
             }
+            // B50.11: ANY overload that fails on a NON-function-vs-function shape
+            // (e.g. function arg vs string param) suggests heterogeneous overload
+            // shapes — TypeScript prefers callee squiggle in that case. Mirrors
+            // `overloadsWithProvisionalErrors_ts` baseline.
+            val hasNonFnFnFailing = callee != null && overloadErrors.any { (_, sig, _) ->
+                getFirstFailingFnTypeArgPair(args, sig) == null
+            }
             // Collect first-failing-arg position per overload. If all overloads
             // share the same failing position, use that — otherwise fall back to
             // callee for fn-vs-fn cases.
@@ -53975,7 +53982,7 @@ interface DataView {
                 getFirstFailingArgPosition(args, sig)
             }
             val allSamePos = perOverloadPos.isNotEmpty() && perOverloadPos.all { it == perOverloadPos.first() }
-            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null && !allSamePos) {
+            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null && (!allSamePos || hasNonFnFnFailing)) {
                 Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
             } else {
                 getFirstFailingArgPosition(args, signatures.last())
