@@ -2,6 +2,11 @@
 
 **Phase 4 — Checker buildout.** 8,838 / 10,078 tests passing (~87.7%).
 
+**B51.x series (2026-05-19, all net-zero correctness improvements):**
+- **B51.1**: allow `class extends Array/Object/etc` via `BUILTIN_LIB_VALUE_INTERFACES` allowlist (suppresses FP TS2689 since our embedded lib lacks `declare const Array: ArrayConstructor`).
+- **B51.2**: narrow TS6212 "Did you mean to call?" gate — require source return type to be non-any/error (FP elimination for fn-vs-fn cases like `typeParameterConstrainedToOuterTypeParameter_ts`).
+- **B51.3**: emit TS2371 for binding-pattern defaults `({first = 0}: T)` in type positions via new `reportTS2371ForBindingPattern` recursive walker.
+
 **B50.9 (2026-05-19, +3 — flips `superAccess2_ts`, `superPropertyAccess2_ts__target_{es5,es2015}`)** —
 super-access static-context vs instance-context discrimination. Three coordinated changes:
 - `checkSuperPropertyAccessES5` and `checkSuperFieldAccessES2015Plus` now both consult
