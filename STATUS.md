@@ -73,7 +73,8 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 8 (1.5h): +1 flip via B57.x — TS2589 excessive-depth diagnostic via deepInstantiationBailed flag + constraint-gate.
 - Round 9 (1.5h): 0 flips via B58.x display correctness — errorType→any, tuple-aware chain, B57.2 revert. The remaining near-flip (inferFromNestedSameShapeTuple) is gated on a recursive-alias outer-type aliasDisplayMap fresh-id puzzle documented in CLAUDE.md.
 - Round 10 (1.5h): 0 flips. B58.3 substitution-cache infrastructure committed; B58.4 structural-id-lookup attempt failed (element ids differ recursively). Three fix directions documented for future work.
-- Round 11 (1h): 0 flips. B59.1 TypeParam interning at one creation site (function-signature path). Doesn't fix the recursive-alias puzzle — fresh tuple Type.Objects come from another path. Tagged as net-zero infrastructure.
+- Round 11 (1h): 0 flips. B59.x TypeParam interning at 3 of 10 creation sites. Doesn't fix the recursive-alias puzzle — fresh tuple Type.Objects come from another path. Tagged as net-zero infrastructure.
+- Round 12 (0.5h): 0 flips. Acceptance + documentation. No code changes. Strong architectural-blocker recommendation propagated.
 
 **Architecture observations from this session:**
 - The varTypes (string-based) path remains useful for narrow type-mismatch checks. The Type-engine path is more accurate but harder to extend without regression risk.
@@ -93,7 +94,8 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 9: 3/15 (B58.1, B57.2 revert, B58.2) (20%)
 - Round 10: 1/15 (B58.3) (7%)
 - Round 11: 2/15 (B59.1, B59.2) (13%)
-- Avg: ~21% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
+- Round 12: 0/15 (0%) — pure docs
+- Avg: ~19% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
 **Lesson: late rounds emphasize quality over quantity.** Rounds 7-11 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra, TypeParam interning at 3 sites). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
 
