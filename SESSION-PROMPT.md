@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8845 passing — post 8-round /loop session, 115+ commits):** 8 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
+**Status (2026-05-19, 8845 passing — post 9-round /loop session, 135+ commits):** 9 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
 - Rounds 1-2: B50.x alias/elaboration (+5), B51.x FP gates / new diagnostics (+3).
 - Rounds 3-4: B53.x display infra net-zero.
 - Round 5: B54.x accessor-pair / write-context net-zero (1 flip + 1 shift).
