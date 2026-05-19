@@ -942,6 +942,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 12 of /loop, acceptance + final propagation — net-zero).** Continuation /loop session after round 11. **⚠ Surgical-productivity inflection point fully reached.** 6 consecutive rounds (7-12) at ~0.33 flips/round avg vs ~2.5 flips/round for rounds 1-7. Decision: stop the surgical-search loop on this session. No code changes; documentation + recommendation propagation only.
+
+  Round 12 totals: 15 commits, 0 net tests, 0 code changes. Pure doc consolidation.
+
+  ---
+
   **Session 2026-05-19 (round 11 of /loop, B59.x TypeParam interning — net-zero).** Continuation /loop session after round 10. Attempted B58.3's fix direction (a):
   - **B59.1** (feat, net-zero): Intern `Type.TypeParam` instances by TypeParameter AST node position. New `typeParamInternCache: Map<Int, Type.TypeParam>`. Applied at function-signature path (Checker.kt:~49321).
   - **B59.2** (feat, net-zero): Extended interning to getTypeOfFunctionExpression (Checker.kt:~43811) and symbol type-param resolution (Checker.kt:~49888). Coverage 3 of 10 creation sites.
