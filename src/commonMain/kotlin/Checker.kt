@@ -211,6 +211,11 @@ class Checker(
      *  fixing the recursive-alias outer-type fresh-id issue from round 9. */
     private val substitutionResultCache: MutableMap<String, Type> = mutableMapOf()
 
+    /** B59.1: intern Type.TypeParam instances by the TypeParameter AST node's position
+     *  so the same source-level `<U>` always returns the same instance across multiple
+     *  function-signature resolutions. Stabilizes downstream caches keyed by Type id. */
+    private val typeParamInternCache: MutableMap<Int, Type.TypeParam> = mutableMapOf()
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -49310,11 +49315,15 @@ interface DataView {
         val inferredReturn = if (returnTypeNode == null && bodyNode != null) inferReturnTypeFromBody(bodyNode) else null
         val returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: inferredReturn ?: defaultReturn
         val typeParameters = typeParams?.map { tp ->
-            val param = Type.TypeParam()
-            param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-            tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
-            tp.default?.let { param.default = getTypeFromTypeNode(it) }
-            param
+            // B59.1: intern by TypeParameter node position. Same source-level <U>
+            // returns the same Type.TypeParam instance across multiple sig resolutions.
+            typeParamInternCache.getOrPut(tp.pos) {
+                val param = Type.TypeParam()
+                param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                param
+            }
         }
         // Build parameter symbols with initializer type inference
         val paramSymbols = params.mapNotNull { param ->
