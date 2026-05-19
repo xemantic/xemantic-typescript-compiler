@@ -57468,6 +57468,25 @@ interface DataView {
             return null
         }
         if (source !is Type.Object || target !is Type.Object) return null
+        // B58.2: tuple-tuple elaboration uses "Type at position N in source is
+        // not compatible with type at position N in target." per TypeScript
+        // convention. When both sides have tupleElementTypes and the same arity,
+        // iterate positionally and emit per-mismatch chain.
+        val srcTuple = source.tupleElementTypes
+        val tgtTuple = target.tupleElementTypes
+        if (srcTuple != null && tgtTuple != null && srcTuple.size == tgtTuple.size) {
+            for (i in srcTuple.indices) {
+                val sElem = srcTuple[i]
+                val tElem = tgtTuple[i]
+                if (!checkTypeRelatedTo(sElem, tElem, assignableRelation)) {
+                    val chain = mutableListOf<String>()
+                    chain.add("  Type at position $i in source is not compatible with type at position $i in target.")
+                    chain.add("    Type '${typeToString(sElem)}' is not assignable to type '${typeToString(tElem)}'.")
+                    return chain
+                }
+            }
+            return null
+        }
         // Cycle detection: don't re-enter elaboration for the same type pair
         val pairKey = packRelationKey(source.id, target.id)
         if (pairKey in state.elaborationStack) return null
