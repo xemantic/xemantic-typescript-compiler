@@ -39,10 +39,11 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 7's B56.1 needed B54.x same-base ref mismatch to flip its target via downstream effect.
 - Round 8's B57.1 stood alone but introduced a reusable flag pattern + constraint-gate that future TS2589 work can build on.
 
-**Session timeline (2026-05-19, 7 rounds):**
+**Session timeline (2026-05-19, 8 rounds):**
 - Rounds 1-2 (6h): +8 surgical wins via B50.x/B51.x — alias-display, function-mismatch chain, optional-default param, super-access, lib-allowlist, etc.
 - Rounds 3-4 (3h): +0 surgical wins, infrastructure: B53.x display piece, audit-script fix, stale-skip-log cleanups.
 - Rounds 5-7 (4.5h): +3 flips via B54-B56 stack — accessor-pair declaration merging (B54.6), write-context setter-param (B54.5), generic-ref same-base elaboration (B54.4/B54.8), strict-generic-checks for varTypes (B55.x), `new C()` unknown-default (B56.1).
+- Round 8 (1.5h): +1 flip via B57.x — TS2589 excessive-depth diagnostic via deepInstantiationBailed flag + constraint-gate.
 
 **Architecture observations from this session:**
 - The varTypes (string-based) path remains useful for narrow type-mismatch checks. The Type-engine path is more accurate but harder to extend without regression risk.
