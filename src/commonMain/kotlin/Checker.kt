@@ -34612,6 +34612,35 @@ interface DataView {
             }
         }
 
+        // B51.5: TS17011 — `super(super.X())` pattern. Inside the args of the
+        // FIRST super(...) call in a constructor body, any `super.X` property
+        // access fires TS17011 (the property access on super happens BEFORE
+        // the super call completes). Squiggle on the `super.X` expression
+        // span (covers `super.blah` for `super.blah()`).
+        for (member in members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            for (stmt in body.statements) {
+                val superCall = findSuperCallInExpr(stmt) ?: continue
+                for (arg in superCall.arguments) {
+                    collectSuperPropertyAccessPositions(arg).forEach { (pos, len) ->
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+                            category = DiagnosticCategory.Error,
+                            code = 17011,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = len,
+                        ))
+                    }
+                }
+                break // only first super(...) per constructor
+            }
+        }
+
         // Find constructors with bodies that don't contain super()
         for (member in members) {
             if (member is Constructor && member.body != null) {
@@ -34881,6 +34910,53 @@ interface DataView {
      * within an expression tree (not just at the head of a property/call chain).
      * Used by the TS2336/TS17011 check on constructor parameter initializers.
      */
+    /** B51.5: Find the FIRST `super(...)` call expression in a statement (top-level
+     *  ExpressionStatement). Returns the CallExpression or null. */
+    private fun findSuperCallInExpr(stmt: Statement): CallExpression? {
+        if (stmt !is ExpressionStatement) return null
+        val expr = stmt.expression
+        if (expr !is CallExpression) return null
+        val callee = expr.expression
+        if (callee is Identifier && callee.text == "super") return expr
+        return null
+    }
+
+    /** B51.5: Collect `super.X` PropertyAccessExpression positions (start, length)
+     *  within an expression. Used for TS17011 emission in `super(super.X())` patterns. */
+    private fun collectSuperPropertyAccessPositions(expr: Expression?): List<Pair<Int, Int>> {
+        val out = mutableListOf<Pair<Int, Int>>()
+        fun walk(e: Expression?) {
+            e ?: return
+            when (e) {
+                is PropertyAccessExpression -> {
+                    val recv = e.expression
+                    if (recv is Identifier && recv.text == "super") {
+                        // Span: just `super` (5 chars), matching baseline convention.
+                        out.add(recv.pos to 5)
+                    } else walk(recv)
+                }
+                is ElementAccessExpression -> { walk(e.expression); walk(e.argumentExpression) }
+                is CallExpression -> { walk(e.expression); e.arguments.forEach { walk(it) } }
+                is NewExpression -> { walk(e.expression); e.arguments?.forEach { walk(it) } }
+                is BinaryExpression -> { walk(e.left); walk(e.right) }
+                is ConditionalExpression -> { walk(e.condition); walk(e.whenTrue); walk(e.whenFalse) }
+                is ParenthesizedExpression -> walk(e.expression)
+                is PrefixUnaryExpression -> walk(e.operand)
+                is PostfixUnaryExpression -> walk(e.operand)
+                is TypeAssertionExpression -> walk(e.expression)
+                is AsExpression -> walk(e.expression)
+                is NonNullExpression -> walk(e.expression)
+                is ArrayLiteralExpression -> e.elements.forEach { walk(it) }
+                is SpreadElement -> walk(e.expression)
+                is YieldExpression -> e.expression?.let { walk(it) }
+                is AwaitExpression -> walk(e.expression)
+                else -> {}
+            }
+        }
+        walk(expr)
+        return out
+    }
+
     private fun collectSuperKeywordPositions(expr: Expression): List<Int> {
         val out = mutableListOf<Int>()
         fun walk(e: Expression?) {
