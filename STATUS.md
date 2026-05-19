@@ -97,7 +97,16 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 12: 0/15 (0%) — pure docs
 - Avg: ~19% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
-**Lesson: late rounds emphasize quality over quantity.** Rounds 7-11 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra, TypeParam interning at 3 sites). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
+**Lesson: late rounds emphasize quality over quantity.** Rounds 7-11 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra, TypeParam interning at 3 sites). These build foundations for future agents; the "+12 net tests" headline understates the total productivity. Round 12 stopped the surgical-search loop and propagated architectural-blocker recommendations.
+
+**Key reusable infrastructure from this session (catalogued in SESSION-PROMPT.md):**
+- `currentTypeParamDecls: Map<String, TypeParameter>` (B55.2) — TypeParam declarations in current scope for TS2208/TS2344/TS2345 related-info.
+- `getSymbolImportName(sym)` (B53.1) — declaring-file basename for `import("X")` qualification.
+- `deepInstantiationBailed: Boolean` (B57.1) + `emitTs2589AtTypeNode` — TS2589 emission via bail flag.
+- `substitutionResultCache: Map<String, Type>` (B58.3) — generic-alias substitution result interning.
+- `typeParamInternCache: Map<Int, Type.TypeParam>` (B59.1+B59.2) — TypeParam instance interning by AST position (3 of 10 creation sites).
+- `isAssignableTo`'s `typeParams: Set<String>` param (B55.1) — strict-generic-checks for same-base ref args.
+- Accessor-pair merged declarations (B54.6) — `propSym.declarations` contains both Get and Set.
 
 **Diminishing-returns observation post round 12**: rounds 7-12 are 6 consecutive rounds averaging 0.33 flips/round (vs ~2.5 flips/round for rounds 1-7 combined). The session has converged on the limit of surgical productivity. Strong recommendation for next session: commit a full session to one of Blocker #1 (control flow narrowing, ~60-100 tests), Blocker #2 (generic argument inference extension, ~20-40 tests), or Blocker #3 (per-file scope, ~30 tests) per the PLAN's architectural-blockers section.
 
