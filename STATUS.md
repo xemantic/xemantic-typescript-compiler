@@ -1,8 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,841 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,843 / 10,078 tests passing (~87.8%).
 
-**Round 6 (2026-05-19, started): regression-finder methodology, B54.7+B54.9 finalization.** Continuation /loop session after round 5. Pool genuinely empty (0/0/0). Started by methodically identifying which exact tests regressed when B54.7 was broadly enabled — captured failing-test set before/after diff, identified `generics3_ts` and `promisesWithConstraints_ts` as the 2 regressions (both have same-base named-type args like `C<X>` vs `C<Y>` where X,Y are structurally identical). Narrowed B54.3's gate to "at least one arg is primitive" via B54.9, making B54.7 (Identifier-RHS varTypes fallback) safe to re-enable. Net-zero on suite. Promoted B55.1 (strict-generic-checks for distinct TypeParam args) as the queue item that would flip `typeParameterAssignmentCompat1_ts`-style tests — HIGH RISK, defer to architectural session.
+**Round 6 (2026-05-19, +2 test flips via B55.x stack): regression-finder + strict-generic-checks for varTypes path.** Continuation /loop session after round 5. Started by methodically identifying which tests regressed when B54.7 was broadly enabled — diff'd failing sets pre/post, identified `generics3_ts` and `promisesWithConstraints_ts` (both same-base named-type args). Narrowed B54.3's gate via B54.9 (primitive-arg only), making B54.7 safe.
+
+Then implemented strict-generic-checks for varTypes path:
+- **B55.1** (feat, net-zero): isAssignableTo's same-base gate also fires for distinct TypeParam args. Threaded `typeParams: Set<String>` through. Brings line 8/9/16/17 of `typeParameterAssignmentCompat1_ts` to full TS2322 + chain match.
+- **B55.2** (feat, **+2**): TS2208 "type parameter might need an `extends X` constraint" related info. New `currentTypeParamDecls: Map<String, TypeParameter>` field populated at function-body / class-body entry. emitTS2322 looks up source-arg's TypeParameter and emits TS2208 related info pointing to its name position. **Flips `typeParameterAssignmentCompat1_ts` and `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`** (the latter as a bonus from the same infrastructure).
+
+Suite: 8841 → 8843 / 10078 (+2). Zero regressions.
 
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
