@@ -127,7 +127,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 - Accessor-pair merged declarations (B54.6) — `propSym.declarations` now contains BOTH GetAccessor and SetAccessor for accessor-pair properties.
 - isAssignableTo's typeParams parameter — pass it from callers to enable strict-generic-checks for same-base ref args.
 - `substitutionResultCache: Map<String, Type>` — intern map for generic-alias substitution results. Currently underutilized because resolved-args ids vary per call; could be made effective by interning TypeParam instances by symbol identity.
-- `typeParamInternCache: Map<Int, Type.TypeParam>` — intern Type.TypeParam instances by TypeParameter AST node position. Currently applied only at function-signature path; other 9 creation sites in Checker.kt still mint fresh.
+- `typeParamInternCache: Map<Int, Type.TypeParam>` — intern Type.TypeParam instances by TypeParameter AST node position. Applied at 3 of 10 creation sites (B59.1+B59.2): function-signature path, FunctionExpression, and symbol type-param resolution. Other 7 sites pending — extending may unlock the alias-display puzzle from B58.3.
 
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
