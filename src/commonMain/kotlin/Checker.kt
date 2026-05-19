@@ -41495,9 +41495,14 @@ interface DataView {
                 // Union/Intersection bodies are excluded because TypeScript often
                 // unfolds those at display time (e.g. `Wrapper = Foo & Bar` → emit
                 // `'Foo & Bar'` not `'Wrapper'` in TS2416 baselines).
+                // B50.7: Intersection bodies ARE registered IF they contain a Union
+                // constituent (`Common = X | Y; A = Common & {foo:1}` → display `A`,
+                // not the distributed structural form). Flat intersections of named
+                // types stay unfolded.
+                val shouldRegister = resolved is Type.Object && resolved !is Type.Reference ||
+                    (resolved is Type.Intersection && resolved.types.any { it is Type.Union })
                 if (decl != null && decl.typeParameters.isNullOrEmpty() &&
-                    resolved is Type.Object && resolved !is Type.Reference &&
-                    !aliasDisplayMap.containsKey(resolved.id)
+                    shouldRegister && !aliasDisplayMap.containsKey(resolved.id)
                 ) {
                     aliasDisplayMap[resolved.id] = symbol.name to emptyList()
                 }
