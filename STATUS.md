@@ -2,11 +2,12 @@
 
 **Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
 
-**Round 9 (2026-05-19, net-zero, two small refinements).** Continuation /loop session after round 8. Pool empty (0/0/0 fresh). Two cleanup commits:
-- **B58.1** (feat, net-zero): Render `errorType` as `"any"` in typeToString. TypeScript doesn't expose 'error' in diagnostics — when type resolution fails, the slot is shown as `any`. Affects display of tests like `inferFromNestedSameShapeTuple_ts` which previously emitted `T1<{ x: error; }>` (now `T1<{ x: any; }>`).
-- **B57.2 revert** (fix, net-zero): The round-8 B57.2 type-alias-body TS2589 emission caused FP for recursive aliases that recurse safely (declaration-time recursion in tests like `inferFromNestedSameShapeTuple_ts`'s `type T1<T> = [number, T1<{x:T}>]`). Revert + save/reset `deepInstantiationBailed` around alias-body resolution to NOT propagate the flag upward. B57.1 variable-annotation TS2589 still works.
+**Round 9 (2026-05-19, net-zero, three small correctness fixes).** Continuation /loop session after round 8. Pool empty (0/0/0 fresh). Three cleanup commits + investigation:
+- **B58.1** (feat, net-zero): Render `errorType` as `"any"` in typeToString.
+- **B57.2 revert** (fix, net-zero): Stop FP TS2589 at type-alias body resolution.
+- **B58.2** (feat, net-zero): Tuple-aware elaboration chain — "Type at position N..." instead of "Types of property 'N'".
 
-Round 9 net-zero on the suite. Both are quality/correctness improvements.
+Round 9 net-zero on the suite. All correctness improvements. Investigation finding (documented in CLAUDE.md): the outer recursive-alias type isn't registered in `aliasDisplayMap` for `inferFromNestedSameShapeTuple_ts`, blocking its flip. Cause unclear despite tracing — pairs with future alias-display work.
 
 **Round 8 (2026-05-19, +1 via B57.1): TS2589 excessive-depth diagnostic.** Pool empty (0/0/0 fresh). Implemented a long-known gap:
 - **B57.1** (feat, **+1**): When `getTypeFromTypeReference`'s alias-substitution path hits `typeAliasResolutionDepth >= 10`, set a checker-instance flag `deepInstantiationBailed`. `buildFileLocalTypeMaps` saves/resets/checks the flag around each variable's annotation resolution and emits TS2589 at the annotation span if bail fires. New helper `emitTs2589AtTypeNode` trims trailing whitespace/punctuation to land at the closing `>`. **Flips `limitDeepInstantiations_ts`**.
