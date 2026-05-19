@@ -940,6 +940,15 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 11 of /loop, B59.1 TypeParam interning — net-zero).** Continuation /loop session after round 10. Attempted B58.3's fix direction (a):
+  - **B59.1** (feat, net-zero): Intern `Type.TypeParam` instances by TypeParameter AST node position. New `typeParamInternCache: Map<Int, Type.TypeParam>`. Applied at the function-signature path (Checker.kt:~49321). Same source-level `<U>` now returns the same instance across multiple sig resolutions.
+
+  Doesn't flip `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path (not the function-signature TypeParam creation). Other TypeParam creation sites (9 total) likely also contribute to fresh-id issue.
+
+  Round 11 totals: 15 commits, 0 net tests. Five consecutive rounds (7-11) averaging 0.4 flips/round.
+
+  ---
+
   **Session 2026-05-19 (round 10 of /loop, B58.3 substitution-cache + B58.4 dead-end — net-zero).** **⚠ Diminishing-returns inflection point reached.** Rounds 7-10 are 4 consecutive rounds at ~0.5 flips/round avg (vs ~2.5 flips/round for rounds 1-7 combined). Surgical work without architectural commitment is unlikely productive going forward. Continuation /loop session after round 9. Attempted the B58.3 puzzle:
   - **B58.3** (feat, net-zero): New `substitutionResultCache: Map<String, Type>` keyed by `(symbol.id, args-id-fingerprint)`. Interns substitution results. Doesn't help because resolved args (TypeParams) have different ids per invocation.
   - **B58.4** (attempt/revert): Structural-id lookup in typeToString — fails because tuple element ids differ recursively across re-resolutions. Reverted (uncommitted).
