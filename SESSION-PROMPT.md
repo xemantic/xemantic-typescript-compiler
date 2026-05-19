@@ -104,12 +104,13 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8844 passing — post 7-round /loop session, 100+ commits):** 7 rounds of 15-iteration /loop work landed +11 net tests (8833 → 8844 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
+**Status (2026-05-19, 8845 passing — post 8-round /loop session, 115+ commits):** 8 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
 - Rounds 1-2: B50.x alias/elaboration (+5), B51.x FP gates / new diagnostics (+3).
 - Rounds 3-4: B53.x display infra net-zero.
 - Round 5: B54.x accessor-pair / write-context net-zero (1 flip + 1 shift).
 - Round 6: B54.9 narrowing + B55.x strict-generic-checks for varTypes path (+2 — `typeParameterAssignmentCompat1_ts` + `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`).
-- **Round 7 (NEW)**: B56.1+B56.2 — `new C()` defaults TypeParams to `unknown` under strict mode (+1 — `getAndSetNotIdenticalType2_ts`). B56.3 and B56.4 broadening attempts reverted (1 regression each).
+- Round 7: B56.1+B56.2 — `new C()` defaults TypeParams to `unknown` under strict mode (+1 — `getAndSetNotIdenticalType2_ts`).
+- **Round 8 (NEW)**: B57.1+B57.2 — TS2589 excessive-depth emission via deepInstantiationBailed flag; B57.1b constraint gate prevents FP (+1 — `limitDeepInstantiations_ts`).
 
 `find_candidates.py --fresh` returns 0/0/0. Audit confirms 0 STALE skip-log entries. All 5 MIXED bucket tests have ≥2 failing sub-variants (not close to flipping).
 
