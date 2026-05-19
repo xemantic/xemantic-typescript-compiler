@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8845 passing — post 11-round /loop session, 165+ commits):** 11 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
+**Status (2026-05-19, 8845 passing — post 12-round /loop session, 180+ commits):** 12 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). The session has converged on the limit of surgical productivity. Recent rounds produced productive infrastructure with mixed flip outcomes:
 - Rounds 1-2: B50.x alias/elaboration (+5), B51.x FP gates / new diagnostics (+3).
 - Rounds 3-4: B53.x display infra net-zero.
 - Round 5: B54.x accessor-pair / write-context net-zero (1 flip + 1 shift).
@@ -113,11 +113,12 @@ Your loop (per CLAUDE.md § Execution protocol):
 - Round 8: B57.1+B57.2 — TS2589 excessive-depth emission via deepInstantiationBailed flag; B57.1b constraint gate prevents FP (+1 — `limitDeepInstantiations_ts`).
 - Round 9: B58.1 (errorType→any display), B57.2 revert (stop FP TS2589 at type-alias declarations), B58.2 (tuple-aware elaboration chain). 0 flips but correctness fixes.
 - Round 10: B58.3 (substitutionResultCache by symbol+args fingerprint), B58.4 dead-end (structural-id lookup). 0 flips; three fix directions documented for `inferFromNestedSameShapeTuple_ts`.
-- **Round 11 (NEW)**: B59.1 (intern Type.TypeParam by AST node position at function-signature path). 0 flips — fresh tuple Type.Objects come from a different path.
+- Round 11: B59.x (intern Type.TypeParam by AST node position, 3 of 10 creation sites). 0 flips — fresh tuple Type.Objects come from a different path.
+- **Round 12 (NEW)**: Pure documentation + acceptance. 0 flips, 0 code changes. Architectural-blocker recommendation propagated.
 
 `find_candidates.py --fresh` returns 0/0/0. Audit confirms 0 STALE skip-log entries. All 5 MIXED bucket tests have ≥2 failing sub-variants (not close to flipping).
 
-**⚠ STRONG recommendation for the next session**: commit a full session to one of the architectural blockers. Rounds 7-11 are 5 consecutive rounds at ~0.4 flips/round average. Surgical work without architectural commitment is unlikely productive going forward. See PLAN-PHASE-4.md's "Known architectural blockers" section.
+**⚠ STRONG recommendation for the next session**: commit a full session to one of the architectural blockers. Rounds 7-12 are 6 consecutive rounds at ~0.33 flips/round average. Surgical work without architectural commitment is unlikely productive going forward. See PLAN-PHASE-4.md's "Known architectural blockers" section.
 
 **Reusable infrastructure landed in B54-B57 worth knowing about:**
 - `currentTypeParamDecls: Map<String, TypeParameter>` field — populated at function-body / class-body entry, available for any diagnostic that needs to point to a TypeParam declaration's source position (TS2208 / TS2344 / TS2345).
