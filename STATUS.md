@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
+**Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%). _**Session converged**: 12 rounds, 180 commits, +12 net tests via 30+ feature commits. Surgical pool exhausted. Next session should commit to one of the named architectural blockers — see SESSION-PROMPT.md "Concrete starting points" section._
 
 **Round 12 (2026-05-19, accepting diminishing returns).** Continuation /loop session after round 11. Pool still empty (0/0/0 fresh). 6 consecutive rounds (7-12) at ~0.3 flips/round average. The B58.x / B59.x infrastructure investigation has produced infrastructure but no flips in rounds 9-11. Decision: stop the surgical-search loop on this session and commit final documentation. Strong recommendation propagated in SESSION-PROMPT.md, STATUS.md, and PLAN-PHASE-4.md for the next agent to commit to one of the three named architectural blockers.
 
