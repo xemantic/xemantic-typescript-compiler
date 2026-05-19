@@ -1,6 +1,18 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,835 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,838 / 10,078 tests passing (~87.7%).
+
+**B50.9 (2026-05-19, +3 — flips `superAccess2_ts`, `superPropertyAccess2_ts__target_{es5,es2015}`)** —
+super-access static-context vs instance-context discrimination. Three coordinated changes:
+- `checkSuperPropertyAccessES5` and `checkSuperFieldAccessES2015Plus` now both consult
+  `inStaticClassMethod`. In static context, skip non-static members (so they fall through
+  to TS2339). In instance context, when the matched base member is static, emit TS2576
+  ("Property X does not exist on type 'C'. Did you mean to access the static member 'C.X'?")
+  — this also applies to STATIC METHODS now, not just static properties.
+- `emitTs2339ForMissingSuperMember` uses `base.staticMembers` lookup when in static context,
+  and renders the display as `typeof <BaseName>` instead of `<BaseName>` for the TS2339 message.
+
+Full-suite 10078/1237/3 (was 10078/1240/3, +3 net). Zero regressions.
 
 **B50.6 (2026-05-19, +1 — flips `nestedCallbackErrorNotFlattened_ts`)** — Function return-type
 chain + pure-function unfolded display. Two pieces:
