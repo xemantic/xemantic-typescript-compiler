@@ -2,6 +2,23 @@
 
 **Phase 4 — Checker buildout.** 8,833 / 10,078 tests passing (~87.7%).
 
+**B50.1 (2026-05-19, net-zero infra — foundation)** — Generic type alias instantiation
+infrastructure. New `currentTypeAliasArgs: Map<String, Type>?` field + `typeAliasResolutionDepth`
+recursion guard. In `getTypeFromTypeReference`, when the symbol is a `TypeAlias` with concrete
+type args matching the alias's typeParameter arity, push the param-name → arg map and re-resolve
+`decl.type` fresh (cache-bypassed via the new condition in `getTypeFromTypeNode`'s `cacheable`
+gate). Body-internal `TypeReference(T)` lookups now consult `currentTypeAliasArgs?.get(name)`
+BEFORE symbol resolution, returning the concrete bound type. Gate: skips `FunctionType` /
+`ConstructorType` / `TypeLiteral`-with-only-call-sigs alias bodies (via new
+`isFunctionTypeAliasBody` helper) to avoid FP TS2322 against generic function-call results
+whose own TypeParams aren't yet inferred (Blocker #2 territory). Without this gate, `Mapper<T,U>
+= (x:T)=>U` instantiation regresses `inferFromGenericFunctionReturnTypes2_ts` with 3 spurious
+TS2322s. With the gate, exact-same failure set as baseline (verified via stash/run/pop diff).
+Foundation for future work: alias-name display preservation (`aliasSymbol`/`aliasTypeArguments`
+tracking) would let pairs like `Foo<string>` vs `Bar<number>` produce the expected chain
+elaboration in `typeAssignabilityErrorMessage_ts`. Full-suite 10078/1242/3 (was 10078/1242/3,
+0 net). Zero regressions, zero flips — pure infrastructure.
+
 **B49.1 (2026-05-18, +1 — flips `jsxFactoryIdentifierWithAbsentParameter_ts`)** —
 Add `frameElement` to `KNOWN_GLOBALS` so it surfaces as a spelling suggestion for
 `createElement`. The name was previously only in `DOM_GLOBAL_NAMES` (the side list used
