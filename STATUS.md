@@ -2,6 +2,11 @@
 
 **Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
 
+**Round 11 (2026-05-19, net-zero, B59.1 TypeParam interning).** Continuation /loop session after round 10. Pool empty. Attempted approach (a) from B58.3's three fix directions:
+- **B59.1** (feat, net-zero): Intern Type.TypeParam instances by TypeParameter AST node position. Same source-level `<U>` now returns the same Type.TypeParam instance across multiple sig resolutions. Doesn't help `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path. Infrastructure committed for future use.
+
+Round 11 net-zero on the suite. Five consecutive rounds at ~0.5 flips/round average.
+
 **Round 10 (2026-05-19, net-zero, B58.3 substitution-cache infra + B58.4 dead-end).** Continuation /loop session after round 9. Pool empty (0/0/0 fresh). Attempted the B58.3 puzzle from round 9:
 - **B58.3** (feat, net-zero): New `substitutionResultCache: Map<String, Type>` keyed by `(symbol.id, args-id-fingerprint)`. Intern substitution results so identical `(symbol, args)` calls return the same Type instance. Net-zero — the cache misses because resolved args have different TypeParam ids per invocation (TypeParam(U) has fresh id each time).
 - **B58.4** (attempt/revert): Tried structural-id lookup in typeToString for tuple types. Failed because element ids differ recursively. Reverted (uncommitted).
