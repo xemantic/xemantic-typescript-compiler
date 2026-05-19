@@ -40728,7 +40728,16 @@ interface DataView {
                 // Fallback to old string-based system
                 val declaredType = varTypes[target.text]
                 if (declaredType != null) {
+                    // B54.7 (probe re-enable for regression-identification): fallback to varTypes
+                    // lookup for Identifier RHS when same-base parameterized refs.
+                    val isParameterizedRefTarget = declaredType.startsWith("@") && declaredType.contains('<')
+                    val rhsAsIdent = expr.right as? Identifier
+                    val rhsVarType = rhsAsIdent?.let { varTypes[it.text] }
+                    val isSameBaseRhs = rhsVarType != null &&
+                        rhsVarType.startsWith("@") && rhsVarType.contains('<') &&
+                        rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
                     val exprType = inferSimpleExprType(expr.right, varTypes)
+                        ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType else null
                     if (exprType != null && !isAssignableTo(exprType, declaredType)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
@@ -59411,14 +59420,37 @@ interface DataView {
         if (targetType.startsWith("@")) {
             // B54.3: when source and target are both same-base-name parameterized types
             // (`@A<string>` vs `@A<number>`), compare type args directly. Different args
-            // for the same base interface are NOT assignable (covariance/contravariance
-            // ignored — this matches TypeScript's strict-equality behavior for same-name
-            // generic refs, which is correct for invariant containers like `class A<T>`).
+            // for the same base interface are NOT assignable. Narrowed by B54.9 to ONLY
+            // fire when at least one of the args is a primitive type name (string, number,
+            // boolean, etc.) — for named-type args (interfaces like X, Y, Foo, Bar), we
+            // can't determine structural compatibility from the varTypes strings, and
+            // `class C<T>` is structurally compatible for structurally-identical X/Y per
+            // generics3_ts. Excludes TypeParam-only cases (`A<T>` vs `A<U>`) too unless
+            // ONE side is a concrete primitive (per typeParameterAssignmentCompat1 vs
+            // generics3 distinction).
             if (sourceType.startsWith("@") && sourceType != targetType) {
                 val srcBase = sourceType.substringBefore('<')
                 val tgtBase = targetType.substringBefore('<')
                 if (srcBase == tgtBase && sourceType.contains('<') && targetType.contains('<')) {
-                    return false
+                    val srcArgRaw = sourceType.substringAfter('<').removeSuffix(">")
+                    val tgtArgRaw = targetType.substringAfter('<').removeSuffix(">")
+                    val srcArg = srcArgRaw.removePrefix("@")
+                    val tgtArg = tgtArgRaw.removePrefix("@")
+                    val primitives = setOf("string", "number", "boolean", "bigint", "symbol",
+                        "void", "null", "undefined", "any", "unknown", "never")
+                    val srcIsPrim = srcArg in primitives
+                    val tgtIsPrim = tgtArg in primitives
+                    // B54.9 gate (post-regression-narrowing): fire when at least one arg is
+                    // a primitive type (definitively different from any non-primitive). For
+                    // named-type-vs-named-type args (X, Y, Foo, Bar), we can't determine
+                    // structural compatibility from the string form, so we defer to the
+                    // safe default (return true at the bottom). Excludes:
+                    //   - generics3_ts `C<X>` vs `C<Y>` (both X, Y are named types — structurally identical)
+                    //   - promisesWithConstraints_ts `Promise<Foo>` vs `Promise<Bar>` (covariance)
+                    // Includes:
+                    //   - getAndSetNotIdenticalType3_ts `A<string>` vs `A<number>` (primitives)
+                    //   - getAndSetNotIdenticalType2_ts `A<string>` vs `A<T>` (TypeParam vs primitive)
+                    if (srcIsPrim || tgtIsPrim) return false
                 }
             }
             // null and undefined are never assignable to named types (with strict null checks)
