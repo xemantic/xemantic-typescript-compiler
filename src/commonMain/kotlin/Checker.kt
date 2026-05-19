@@ -54926,12 +54926,22 @@ interface DataView {
                 val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
                     refArgs.any { sourceContainsTypeParam(it, sigTps) }
                 if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                    val displayParam = if (hasSigTp) {
+                    val displayParamBase = if (hasSigTp) {
                         val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
                         typeToStringWithMapper(paramType, mapper)
                     } else {
                         typeToString(paramType)
                     }
+                    // B51.7: widen display to `T | undefined` when the parameter is
+                    // optional under strictNullChecks AND the param type is a
+                    // Type.Reference (e.g. `Array<T>`). Simple primitive params
+                    // (`a?:string`) do NOT get the `| undefined` widening in
+                    // TS2345 messages — matches TypeScript's display convention.
+                    val paramIsOptional = (params[i].valueDeclaration as? Parameter)?.questionToken == true
+                    val displayParam = if (paramIsOptional && strictNullChecks &&
+                        paramType is Type.Reference) {
+                        "$displayParamBase | undefined"
+                    } else displayParamBase
                     val argTypeStr = typeToString(argType)
                     val start = arg.pos
                     val length = expressionTrueEnd(arg) - start
