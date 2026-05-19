@@ -52,6 +52,7 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Rounds 3-4 (3h): +0 surgical wins, infrastructure: B53.x display piece, audit-script fix, stale-skip-log cleanups.
 - Rounds 5-7 (4.5h): +3 flips via B54-B56 stack — accessor-pair declaration merging (B54.6), write-context setter-param (B54.5), generic-ref same-base elaboration (B54.4/B54.8), strict-generic-checks for varTypes (B55.x), `new C()` unknown-default (B56.1).
 - Round 8 (1.5h): +1 flip via B57.x — TS2589 excessive-depth diagnostic via deepInstantiationBailed flag + constraint-gate.
+- Round 9 (1.5h): 0 flips via B58.x display correctness — errorType→any, tuple-aware chain, B57.2 revert. The remaining near-flip (inferFromNestedSameShapeTuple) is gated on a recursive-alias outer-type aliasDisplayMap fresh-id puzzle documented in CLAUDE.md.
 
 **Architecture observations from this session:**
 - The varTypes (string-based) path remains useful for narrow type-mismatch checks. The Type-engine path is more accurate but harder to extend without regression risk.
