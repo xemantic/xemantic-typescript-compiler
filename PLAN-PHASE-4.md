@@ -1197,13 +1197,13 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `elaboratedErrorsOnNullableTargets01_ts`: errors-baseline SWAP +3. Target type `null | { foo: ... } | undefined` should display as `{ foo: ... | undefined }` (outer null/undefined stripped) when SOURCE is non-nullable. When source IS nullable (e.g. `y = x` direction), keep null/undefined at end of source display. Rule: in TS2322 emission, when source is non-Union-with-null-or-undefined AND target is Union-with-null-or-undefined, strip outer null/undefined from target display via a new `typeToStringDropOuterNullish(targetType)` helper. Requires touching 20+ TS2322 emission sites OR introducing a single elaboration-display helper used in all paths. Out-of-scope for surgical fix.
 
 **Substantial JS-emit candidates surveyed 2026-05-18 (session B47.x, all skipped — feature-scale):**
-- `superAccess2_ts`: super-in-static via `Reflect.get(_b, "key", _a)` with class+base captures. Requires resolution of `super` in static-initializer/static-method context.
+- ~~`superAccess2_ts`~~: super-in-static via `Reflect.get(_b, "key", _a)` with class+base captures. Requires resolution of `super` in static-initializer/static-method context. **Stale (2026-05-19): passing (flipped by B50.9).**
 - ~~`commonSourceDir6_ts`~~: AMD outFile shared module-name counter ordering needs allocation deferred until emit-order instead of compile-order. **Stale (2026-05-18): passing.**
 - `staticInitializersAndLegacyClassDecorators_ts`: legacy decorator class-rename capture (`C1 = C1_1 = __decorate(...)`) for class self-reference inside static-initializer + decorated class.
-- `tslibReExportHelpers2_ts` / `importHelpersES6_ts` / `importHelpersNoHelpersForPrivateFields_ts` / `accessorInAmbientContextES5_ts__target_es2015`: class private fields (`#field`) downleveling via `__classPrivateFieldGet/Set/In` helpers (and inverse: emit `#field`/`#test()` natively under target=es2022+).
+- `tslibReExportHelpers2_ts` / ~~`importHelpersES6_ts`~~ / ~~`importHelpersNoHelpersForPrivateFields_ts`~~ / `accessorInAmbientContextES5_ts__target_es2015`: class private fields (`#field`) downleveling via `__classPrivateFieldGet/Set/In` helpers (and inverse: emit `#field`/`#test()` natively under target=es2022+). **Stale (2026-05-19): `importHelpersES6_ts` and `importHelpersNoHelpersForPrivateFields_ts` now passing.**
 - `emitClassExpressionInDeclarationFile2_ts` / `blockScopedVariablesUseBeforeDef_ts__target_es2015`: `__setFunctionName(_a, "name")` helper for named class expressions assigned to bindings.
 - `javascriptThisAssignmentInStaticBlock_ts`: `static { _a = ClassName }` capture + `Reflect.get(super_)` for `this`/`super` in static blocks.
-- `destructuringAssignmentWithExportedName_ts`: CJS destructuring-assignment rewrite for exported names with multiple temp vars.
+- ~~`destructuringAssignmentWithExportedName_ts`~~: CJS destructuring-assignment rewrite for exported names with multiple temp vars. **Stale (2026-05-19): passing.**
 - `nestedObjectRest_ts`: `__rest` helper for destructuring with object-rest pattern (vs Object.assign for spread).
 - `expressionTypeNodeShouldError_ts` / `parseInvalidNames_ts` / `errorRecoveryWithDotFollowedByNamespaceKeyword_ts` / `manyCompilerErrorsInTheTwoFiles_ts` / `bigintArbirtraryIdentifier_ts`: parser-recovery, each bespoke.
 - `importExportInternalComments_ts` / `elementAccessExpressionInternalComments_ts`: inline `/*N*/` block-comment preservation between tokens in import/export/element-access statements; requires AST extension to capture between-token comments + emit changes.
@@ -1645,7 +1645,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `moduleExports1_ts` → MISS 2× TS2591 for `module.exports`. Need to move `module` out of KNOWN_GLOBALS and emit TS2591; broad regression risk (see 16.4ci note).
 - `moduleAugmentationEnumClassMergeOfReexportIsError_ts` → MISS 2× TS2567 for class+enum merge via re-export. Binder-level class-vs-enum conflict detection + cross-file re-export tracking.
 - `typePredicateInherit_ts` → MISS 5× TS2416 with "Signature '...' must be a type predicate" elaboration. Type predicate inheritance check — not implemented.
-- `superAccess2_ts` → MISS TS2339 + TS2576 for `super.x`/`super.y` in static vs instance method context + JS emit mismatch (static bar method). Not surgical.
+- ~~`superAccess2_ts`~~ → MISS TS2339 + TS2576 for `super.x`/`super.y` in static vs instance method context + JS emit mismatch (static bar method). **Stale (2026-05-19): passing (flipped by B50.9).**
 
 **Session 2026-04-18 (16.4db) additional explored-but-skipped:**
 - ~~`isolatedDeclarationsAllowJs_ts`~~ → MISS TS9010 "Variable must have an explicit type annotation with --isolatedDeclarations" + related TS9027 + config-level TS5053 ("`allowJs` cannot be specified with `isolatedDeclarations`") + TS5055 (overwrite warning). Three new diagnostics + a new compiler option (`isolatedDeclarations`); not surgical for +1 test alone.
