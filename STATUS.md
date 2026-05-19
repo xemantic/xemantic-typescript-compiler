@@ -2,6 +2,12 @@
 
 **Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
 
+**Round 10 (2026-05-19, net-zero, B58.3 substitution-cache infra + B58.4 dead-end).** Continuation /loop session after round 9. Pool empty (0/0/0 fresh). Attempted the B58.3 puzzle from round 9:
+- **B58.3** (feat, net-zero): New `substitutionResultCache: Map<String, Type>` keyed by `(symbol.id, args-id-fingerprint)`. Intern substitution results so identical `(symbol, args)` calls return the same Type instance. Net-zero — the cache misses because resolved args have different TypeParam ids per invocation (TypeParam(U) has fresh id each time).
+- **B58.4** (attempt/revert): Tried structural-id lookup in typeToString for tuple types. Failed because element ids differ recursively. Reverted (uncommitted).
+
+Three fix directions remaining for the puzzle, documented in CLAUDE.md and the B58.3 queue item. Round 10 net-zero on the suite.
+
 **Round 9 (2026-05-19, net-zero, three small correctness fixes).** Continuation /loop session after round 8. Pool empty (0/0/0 fresh). Three cleanup commits + investigation:
 - **B58.1** (feat, net-zero): Render `errorType` as `"any"` in typeToString.
 - **B57.2 revert** (fix, net-zero): Stop FP TS2589 at type-alias body resolution.
