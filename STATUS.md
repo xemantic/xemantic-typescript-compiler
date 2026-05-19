@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,833 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,834 / 10,078 tests passing (~87.7%).
+
+**B50.4 (2026-05-19, +1 — flips `typeAssignabilityErrorMessage_ts`)** — TS2345 widening for
+B50.x-aliased Object-vs-Object args + Object→Union chain in `getPropertyElaborationChain`
++ non-generic alias name registration. Three coordinated pieces:
+- New `allowChainObjObj` branch in `checkArgumentsAgainstSignature`'s simple-type gate.
+  Fires only when BOTH `argType.id` and `paramType.id` are in `aliasDisplayMap` (i.e. both
+  came from a B50.x alias-substitution path), AND `getPropertyElaborationChain` returns a
+  non-null chain. Avoids FPs from inferred-from-object-literal types vs interface-shaped
+  params that have always been silently skipped.
+- New top-of-function `Object → Union` branch in `getPropertyElaborationChain`. Emits
+  per-level "Type X vs '<union>'" + drill-in "Type X vs '<best constituent>'" lines
+  plus the recursive chain (path reset for the constituent context). Pairs with B50.3's
+  var-decl path for consistent chain shape across var-decl/assignment/TS2345 sites.
+- New TS2345 emission branch: when argType + paramType are both anonymous Type.Object
+  and `getPropertyElaborationChain` returns a non-null result, attach the chain to the
+  TS2345 diagnostic. Mirrors the var-decl elaboration.
+- Non-generic-alias name registration in `getDeclaredTypeOfSymbolWorker`'s TypeAlias
+  arm. Only registers when body resolves to Type.Object (NOT Union/Intersection — those
+  are unfolded at display time by TypeScript, e.g. `Wrapper = Foo & Bar` renders as
+  `'Foo & Bar'` in TS2416 baselines, not `'Wrapper'`).
+- Leaf-detection in `getPropertyElaborationChain` updated to NOT treat Object→Union prop
+  pairs as leaves (they're recursable via the new Object→Union branch).
+
+Net +1 (10078/1241/3 was 10078/1242/3). Zero regressions. The B50.x infrastructure is
+now functionally complete for the alias-display + chain-elaboration pattern.
 
 **B50.3 (2026-05-19, net-zero infra — foundation)** — Source-vs-union elaboration chain.
 New `findBestUnionConstituent(source, target)` picks the Object constituent that shares

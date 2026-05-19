@@ -924,6 +924,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (B50.4, 8833 → 8834, +1 — flips ~~`typeAssignabilityErrorMessage_ts`~~) — TS2345 widening + Object→Union chain in getPropertyElaborationChain + non-generic alias display.** Continuation /loop iteration after B50.3. Lands the final pieces of the B50.x stack — Foo<string>/Bar<number>/OtherWrap/Wrap-style alias-with-chain emission for both TS2322 and TS2345 sites.
+
+  **Five-piece change in `Checker.kt`.** (a) Non-generic alias name registration in `getDeclaredTypeOfSymbolWorker`'s TypeAlias arm — when body resolves to a fresh `Type.Object` (NOT Union/Intersection — those are unfolded at display time by TypeScript per the `implementsIncorrectlyNoAssertion_ts` baseline `'Foo & Bar'` vs `'Wrapper'` distinction), register the alias name. (b) New top-of-function `Object → Union` branch in `getPropertyElaborationChain` — emits the per-level "Type X vs '<union>'" + drill-in "Type X vs '<best constituent>'" lines plus the recursive chain (path reset for the constituent context). (c) Leaf detection updated to NOT classify Object→Union prop pairs as leaves (they're recursable via the new branch). (d) `allowChainObjObj` gate in `checkArgumentsAgainstSignature`'s simple-type bypass — narrow gate: BOTH `argType.id` and `paramType.id` must be in `aliasDisplayMap`. (e) New chain attachment branch in TS2345 emission — when arg/param are anonymous Type.Object and `getPropertyElaborationChain` returns non-null, append the chain.
+
+  **The narrowing on `aliasDisplayMap` is load-bearing.** v1 without it caused -5 regressions on `assignmentCompatFunctionsWithOptionalArgs_ts`, `objectLitTargetTypeCallSite_ts`, etc. — generic Object-vs-Object comparisons that had always been silently passing now emit FP TS2345. The alias-map check restricts the new TS2345 emission to cases driven by the B50.x infrastructure.
+
+  **Verification.** Full-suite 10078/1241/3 (was 10078/1242/3, +1 net). Zero regressions. `typeAssignabilityErrorMessage_ts` errors-baseline flips clean — emits all 4 expected diagnostics (TS2739×2 at lines 14/17, TS2322 at line 40 with 4-line chain, TS2345 at line 42 with 6-line chain).
+
+  **Next session.** The B50.x stack is now functionally complete. Remaining adjacent candidates: (i) `errorMessageOnIntersectionsWithDiscriminants01_ts` SWAP — distributed intersection elaboration; needs alias-name preservation for `A`/`B` PLUS intersection distribution chain. (ii) `quickIntersectionCheckCorrectlyCachesErrors_ts` — variance inference (out of scope per skip log). The Object→Union elaboration is now generic and could apply to other tests as adjacent cases turn out tractable.
+
+  ---
+
   **Session 2026-05-19 (B50.3, 8833 → 8833, net-zero infra) — Source-vs-union elaboration chain.** Continuation /loop iteration after B50.2. Implements the source-vs-union chain piece flagged in B50.2's "Next session" note.
 
   **Implementation.** Two-piece change in `Checker.kt`. (a) New helper `findBestUnionConstituent(source: Type.Object, target: Type.Union)` walks target's constituents, scoring each Object constituent by `shared = source.properties.names ∩ constituent.properties.names`. Returns the Object constituent with the highest score; null if no constituent shares any property (e.g. union of primitives). (b) In `checkVarDeclAssignability`'s TS2322 chain emit (the `} else { ... }` block), add a new Object→Union sub-branch after the Object→Object check: emits `"  Type 'X' is not assignable to type '<best>'."` then appends `getPropertyElaborationChain(source, best)` lines (each indented +2 to nest under the outer line).
