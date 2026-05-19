@@ -41470,6 +41470,17 @@ interface DataView {
                 val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                 val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
                 declaredTypes[symbol.id] = resolved
+                // B50.4: register alias-name display for non-generic type aliases
+                // whose body resolved to a NEW Type.Object (NOT Union/Intersection).
+                // Union/Intersection bodies are excluded because TypeScript often
+                // unfolds those at display time (e.g. `Wrapper = Foo & Bar` → emit
+                // `'Foo & Bar'` not `'Wrapper'` in TS2416 baselines).
+                if (decl != null && decl.typeParameters.isNullOrEmpty() &&
+                    resolved is Type.Object && resolved !is Type.Reference &&
+                    !aliasDisplayMap.containsKey(resolved.id)
+                ) {
+                    aliasDisplayMap[resolved.id] = symbol.name to emptyList()
+                }
                 resolved
             }
             flags.hasAny(SymbolFlags.Enum) -> {
@@ -54944,7 +54955,22 @@ interface DataView {
                         paramReturn !== anyType && paramReturn !== errorType &&
                         isSimpleCheckableType(paramReturn)
                 }
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch) continue
+                // B50.4: Object→Object structural mismatch — narrow gate. Only fires
+                // when BOTH source and target are anonymous Type.Object with alias
+                // context registered (via B50.1's substitution or B50.4's non-generic
+                // alias registration). This isolates the new TS2345 emission to cases
+                // driven by the B50.x alias infrastructure, avoiding FPs in
+                // pre-existing Object-vs-Object comparisons (e.g. inferred-from-
+                // object-literal types vs interface-shaped params).
+                val allowChainObjObj = paramType is Type.Object && argType is Type.Object &&
+                    paramType !is Type.Interface && paramType !is Type.Reference &&
+                    argType !is Type.Interface && argType !is Type.Reference &&
+                    paramType.id in aliasDisplayMap && argType.id in aliasDisplayMap &&
+                    !paramType.properties.isNullOrEmpty() && argType.members != null && run {
+                        val chain = getPropertyElaborationChain(argType, paramType)
+                        chain != null && chain.isNotEmpty()
+                    }
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowChainObjObj) continue
             }
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
@@ -55059,6 +55085,17 @@ interface DataView {
                     !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
                 ) {
                     chain.addAll(getFunctionMismatchElaboration(argType, paramType))
+                }
+                // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
+                // above allowed the structural compare to fire AND a per-property
+                // mismatch exists, get the chain from `getPropertyElaborationChain`.
+                if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
+                    argType !is Type.Interface && argType !is Type.Reference &&
+                    paramType !is Type.Interface && paramType !is Type.Reference &&
+                    !paramType.properties.isNullOrEmpty()
+                ) {
+                    val propChain = getPropertyElaborationChain(argType, paramType)
+                    if (propChain != null) chain.addAll(propChain)
                 }
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
@@ -56816,6 +56853,25 @@ interface DataView {
         if (source is Type.Intersection && target is Type.Object) {
             return getIntersectionPropertyElaborationChain(source, target, path)
         }
+        // B50.4: Object → Union elaboration — emit the per-level "Type X vs '<union>'"
+        // line, then drill into the best-matching constituent with "Type X vs '<best>'"
+        // + nested chain. Resets `path` so the constituent's per-property chain
+        // doesn't carry the outer caller's path prefix. Matches TypeScript's chain
+        // shape for `typeAssignabilityErrorMessage_ts`-style cases.
+        if (source is Type.Object && target is Type.Union) {
+            val best = findBestUnionConstituent(source, target)
+            if (best is Type.Object) {
+                val perLevel = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(target)}'."
+                val drillIn = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(best)}'."
+                val deeper = getPropertyElaborationChain(source, best, "")
+                return if (deeper != null) {
+                    listOf(perLevel) + listOf("  $drillIn") + deeper.map { "    $it" }
+                } else {
+                    listOf(perLevel, "  $drillIn")
+                }
+            }
+            return null
+        }
         if (source !is Type.Object || target !is Type.Object) return null
         // Cycle detection: don't re-enter elaboration for the same type pair
         val pairKey = packRelationKey(source.id, target.id)
@@ -56950,8 +57006,12 @@ interface DataView {
             // Prefer leaf mismatches (non-Object types) over recursive ones
             // This avoids following circular property paths (A.p→D→C.q→B→A.p...)
             // when there's a direct primitive mismatch like A.s:string vs B.s:number
+            // B50.4: Object→Union prop pair is NOT a leaf — the top-of-function
+            // Object→Union branch can drill into the best constituent. Only treat
+            // truly-non-Object sources/targets as leaves.
             val leaf = incompatible.firstOrNull {
-                it.sourceType !is Type.Object || it.targetType !is Type.Object
+                (it.sourceType !is Type.Object && it.sourceType !is Type.Union) ||
+                (it.targetType !is Type.Object && it.targetType !is Type.Union)
             }
             val chosen = leaf ?: incompatible.first()
 
