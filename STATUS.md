@@ -2,6 +2,18 @@
 
 **Phase 4 — Checker buildout.** 8,833 / 10,078 tests passing (~87.7%).
 
+**B50.3 (2026-05-19, net-zero infra — foundation)** — Source-vs-union elaboration chain.
+New `findBestUnionConstituent(source, target)` picks the Object constituent that shares
+the most property names with `source` (ties → first). In `checkVarDeclAssignability`'s
+TS2322 chain block, after the existing Object→Object branch, add an Object→Union sub-branch
+that emits `"  Type 'X' is not assignable to type '<best>'."` plus the deeper
+`getPropertyElaborationChain(source, best)` lines (indented +2). For
+`typeAssignabilityErrorMessage_ts` line 40, this produces the full 4-line chain matching
+the baseline. Line 42 (TS2345 at `fun(otherWrap)`) still missing — requires enabling
+TS2345 for Object parameter types (currently gated to simple/primitive types per the
+"Conservative parameter type checking" CLAUDE.md gotcha). Net-zero on suite (1242 failures,
+same set as baseline). Pure foundation for the future TS2345 widening work.
+
 **B50.2 (2026-05-19, net-zero infra — foundation)** — Alias-name display preservation for
 B50.1-substituted types. New `aliasDisplayMap: MutableMap<Int, Pair<String, List<Type>>>`
 keyed on Type.id; registered in B50.1's substitution branch AFTER `getTypeFromTypeNode(decl.type)`

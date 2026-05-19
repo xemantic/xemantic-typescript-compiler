@@ -924,6 +924,18 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (B50.3, 8833 → 8833, net-zero infra) — Source-vs-union elaboration chain.** Continuation /loop iteration after B50.2. Implements the source-vs-union chain piece flagged in B50.2's "Next session" note.
+
+  **Implementation.** Two-piece change in `Checker.kt`. (a) New helper `findBestUnionConstituent(source: Type.Object, target: Type.Union)` walks target's constituents, scoring each Object constituent by `shared = source.properties.names ∩ constituent.properties.names`. Returns the Object constituent with the highest score; null if no constituent shares any property (e.g. union of primitives). (b) In `checkVarDeclAssignability`'s TS2322 chain emit (the `} else { ... }` block), add a new Object→Union sub-branch after the Object→Object check: emits `"  Type 'X' is not assignable to type '<best>'."` then appends `getPropertyElaborationChain(source, best)` lines (each indented +2 to nest under the outer line).
+
+  **Test impact.** Line 40 of `typeAssignabilityErrorMessage_ts` (`let a: Bar<number> = fooStr`) now emits the full 4-line chain matching baseline: outer `Type 'Foo<string>' is not assignable to type 'Bar<number>'.` + best constituent `{ foo: { what: number; }; }` + nested `foo.what` types-incompatible + leaf `string` vs `number`. Line 42 (`fun(otherWrap)`) still missing — requires enabling TS2345 for Object-typed parameters (currently gated to simple/primitive types).
+
+  **Verification.** Full-suite 10078/1242/3 (same 1242-test failure set as B50.1/B50.2 baseline; verified via diff-vs-with_gate_fails.txt). Zero regressions, zero flips — the new chain is emitted only when the diagnostic ALREADY fires, so it improves chain detail for already-failing tests without changing pass/fail counts.
+
+  **Next session.** TS2345 widening for Object-typed parameters — requires careful gating to avoid regressions from incomplete generic argument inference. Alternative: add the same Object→Union elaboration to the TS2345 path in `checkArgumentsAgainstSignature` (currently restricted to primitives via `isSimpleCheckableType`). The B50.x series infrastructure (B50.1 alias instantiation + B50.2 alias-name display + B50.3 source-vs-union elaboration) is now in place for any case where an alias-with-args resolves to an Object body and gets compared against a union.
+
+  ---
+
   **Session 2026-05-19 (B50.2, 8833 → 8833, net-zero infra) — Alias-name display preservation for B50.1-substituted types.** Continuation /loop iteration after B50.1. Implements the alias-display piece flagged in B50.1's "Next session" note: render `Foo<string>` instead of the structural `{ foo: { what: string; }; }`.
 
   **Implementation.** Two-piece change in `Checker.kt`. (a) New `aliasDisplayMap: MutableMap<Int, Pair<String, List<Type>>>` registered in B50.1's substitution branch AFTER `getTypeFromTypeNode(decl.type)` returns. The result must be non-`errorType` AND not a singleton intrinsic (`Type.Intrinsic` / `Type.StringLiteral` / `Type.NumberLiteral` / `Type.BigIntLiteral`) — those share ids across the corpus, registering one alias's name would corrupt every other anyType-displayed expression. (b) `typeToString` checks the map at the top: if `type.id in aliasDisplayMap`, render `aliasName<args>` (recursive typeToString on each arg) instead of falling through to structural display. New `typeToStringInProgress: MutableSet<Int>` guards against StackOverflow on recursive alias chains like `FindConditions<T[P]>`.
