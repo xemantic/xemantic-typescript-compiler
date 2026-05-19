@@ -56314,6 +56314,61 @@ interface DataView {
             // (not its constraint) so the message reads `... types 'T' and '"x"'
             // have no overlap.` matching TypeScript's display.
             checkTypeParamLiteralNoOverlap(expr, leftType, rightType, source, fileName)?.let { return }
+            // B53.2: Named Type.Object non-overlap detection. When both sides are
+            // distinct named (non-anonymous, non-Reference) object types with no shared
+            // required property names, emit TS2367. Gate: both Type.Object with a
+            // non-null symbol (rules out anonymous `{a:1}` literals), different symbols,
+            // neither assignable to the other, and ALL required props of one side absent
+            // from the other. Uses the same `import("X").T` cross-file qualification as
+            // B53.1 when display names collide.
+            val leftObjSym = (leftType as? Type.Object)?.symbol
+            val rightObjSym = (rightType as? Type.Object)?.symbol
+            if (leftType is Type.Object && rightType is Type.Object &&
+                leftType !is Type.Reference && rightType !is Type.Reference &&
+                leftObjSym != null && rightObjSym != null && leftObjSym !== rightObjSym) {
+                resolveStructuredTypeMembers(leftType)
+                resolveStructuredTypeMembers(rightType)
+                val leftProps = leftType.properties ?: emptyList()
+                val rightProps = rightType.properties ?: emptyList()
+                val leftRequired = leftProps.filter { !isOptionalProperty(it) && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
+                val rightRequired = rightProps.filter { !isOptionalProperty(it) && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
+                if (leftRequired.isNotEmpty() && rightRequired.isNotEmpty()) {
+                    val rightMembers = rightType.members
+                    val leftMembers = leftType.members
+                    val leftAbsentFromRight = leftRequired.all { rightMembers?.get(it.name) == null }
+                    val rightAbsentFromLeft = rightRequired.all { leftMembers?.get(it.name) == null }
+                    if (leftAbsentFromRight && rightAbsentFromLeft &&
+                        !checkTypeRelatedTo(leftType, rightType, assignableRelation) &&
+                        !checkTypeRelatedTo(rightType, leftType, assignableRelation)) {
+                        var leftDisp = typeToString(leftType)
+                        var rightDisp = typeToString(rightType)
+                        if (leftDisp == rightDisp) {
+                            val li = getSymbolImportName(leftObjSym)
+                            val ri = getSymbolImportName(rightObjSym)
+                            if (li != null && ri != null && li != ri) {
+                                leftDisp = "import(\"$li\").$leftDisp"
+                                rightDisp = "import(\"$ri\").$rightDisp"
+                            }
+                        }
+                        val start = expr.pos
+                        val length = expressionTrueEnd(expr.right) - start
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "This comparison appears to be unintentional because the types '$leftDisp' and '$rightDisp' have no overlap.",
+                                category = DiagnosticCategory.Error,
+                                code = 2367,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                        return
+                    }
+                }
+            }
             if (leftType !is Type.Reference || rightType !is Type.Reference) return
             if (leftType.target !== rightType.target) return
             val leftArgs = leftType.resolvedTypeArguments ?: return
