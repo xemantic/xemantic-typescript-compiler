@@ -116,6 +116,8 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 `find_candidates.py --fresh` returns 0/0/0. Audit confirms 0 STALE skip-log entries. All 5 MIXED bucket tests have ≥2 failing sub-variants (not close to flipping).
 
+**⚠ STRONG recommendation for the next session**: commit a full session to one of the architectural blockers. Rounds 7-10 are 4 consecutive rounds at ~0.5 flips/round average. Surgical work without architectural commitment is unlikely productive going forward. See PLAN-PHASE-4.md's "Known architectural blockers" section.
+
 **Reusable infrastructure landed in B54-B57 worth knowing about:**
 - `currentTypeParamDecls: Map<String, TypeParameter>` field — populated at function-body / class-body entry, available for any diagnostic that needs to point to a TypeParam declaration's source position (TS2208 / TS2344 / TS2345).
 - `getSymbolImportName(sym)` helper — finds declaring file's basename for `import("X")` qualification.
