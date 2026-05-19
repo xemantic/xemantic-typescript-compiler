@@ -11,7 +11,12 @@
 - **B51.6 (+1)**: TS2352 `<FuncType>(undefined)` + optional-default param display — flips `defaultValueInFunctionTypes_ts`.
 - **B51.7 (+1)**: optional Type.Reference param `| undefined` display in TS2345 — flips `genericFunctionsWithOptionalParameters1_ts`.
 
-Round 2 total: 10 commits, +3 tests (8838 → 8841 / 10078).
+Round 2 total: 13+ commits, +3 tests (8838 → 8841 / 10078).
+
+Combined session totals (round 1 + round 2):
+- Round 1 (B50.x): 15 commits, +5 tests (8833 → 8838).
+- Round 2 (B51.x + chores): 13+ commits, +3 tests (8838 → 8841).
+- Session: 28+ commits, +8 net tests (87.7% → 87.7%, count 8833 → 8841).
 
 **B50.9 (2026-05-19, +3 — flips `superAccess2_ts`, `superPropertyAccess2_ts__target_{es5,es2015}`)** —
 super-access static-context vs instance-context discrimination. Three coordinated changes:
