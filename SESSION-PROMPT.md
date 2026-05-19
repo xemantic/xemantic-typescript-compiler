@@ -104,15 +104,21 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8841 passing — post 5-round /loop session, 75 commits):** 5 rounds of 15-iteration /loop work landed +8 net tests (8833 → 8841 / 10078 = 87.7%). The flip-curve was concentrated in rounds 1-2 (B50.x +5, B51.x +3); rounds 3-5 produced productive infrastructure (B53.x display + B54.x accessor-pair / write-context, 10+ CLAUDE.md gotchas, audit-script fix, ~6 stale-skip-log strikethroughs) but net-zero suite impact because every remaining surgical candidate is gated on at least one named multi-piece feature work.
+**Status (2026-05-19, 8843 passing — post 6-round /loop session, 85+ commits):** 6 rounds of 15-iteration /loop work landed +10 net tests (8833 → 8843 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
+- Rounds 1-2: B50.x alias/elaboration (+5), B51.x FP gates / new diagnostics (+3).
+- Rounds 3-4: B53.x display infra net-zero.
+- Round 5: B54.x accessor-pair / write-context net-zero (1 flip + 1 shift).
+- **Round 6 (NEW)**: B54.9 narrowing + B55.x strict-generic-checks for varTypes path (+2 — `typeParameterAssignmentCompat1_ts` + `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`).
 
-`find_candidates.py --fresh` consistently returns 0/0/0 or 0/1/0 (with `typeParameterAssignmentCompat1_ts` as a new fresh after B54.3 narrowing). Next-session recommendation: pick a single architectural blocker.
-- **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy. Highest yield.
+`find_candidates.py --fresh` returns 0/0/0. Only 1 near-flip remains: `getAndSetNotIdenticalType2_ts` (gated on `new C() → C<unknown>` inference for the `x.x = r` line).
+
+Next-session recommendation: pick a single architectural blocker.
+- **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
 - **Blocker #2** (generic argument inference): ~20-40 tests. Foundation in `tryInferSingleTypeParamFromArgs`; extension B52.2 promoted in queue.
 - **Blocker #3** (per-file scope construction): ~30+ tests. Highest risk.
-- Lib-content target-versioning: ~5-10 tests. Lower risk, contained to lib subsetting.
+- Lib-content target-versioning: ~5-10 tests.
 
-Important dead-ends documented in CLAUDE.md: B54.7 (Identifier-RHS varTypes fallback regresses 2 tests), strict-generic-checks (different TypeParams nominally distinct), TS2300 lib-conflict (needs lib-file-related-info tracking).
+Important dead-ends documented in CLAUDE.md: TS2300 lib-conflict (needs lib-file-related-info tracking), strict-generic-checks for Type-engine path (still open, separate from B55.x which only handled varTypes path).
 
 **Earlier status (2026-04-26, 8409 passing):** Surgical pool is exhausted (16+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
