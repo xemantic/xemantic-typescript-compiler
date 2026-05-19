@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,834 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,835 / 10,078 tests passing (~87.7%).
+
+**B50.6 (2026-05-19, +1 — flips `nestedCallbackErrorNotFlattened_ts`)** — Function return-type
+chain + pure-function unfolded display. Two pieces:
+- `getFunctionMismatchElaboration`'s return-type-mismatch branch now recursively drills into
+  nested function types when BOTH source and target returns are pure function types (call
+  signatures only, no properties/members/construct sigs). Emits a "Call signature return
+  types '<src>' and '<tgt>' are incompatible." header followed by the recursive
+  elaboration (indented +2). For `Cb<Cb<Cb<Cb<number>>>>` vs `Cb<Cb<Cb<Cb<string>>>>` (where
+  Cb resolves to a function type via the "noAlias" indirection trick), this produces the
+  full 4-level chain matching baseline.
+- In `checkAssignmentExpression`'s outer TS2322 display, prefer `typeToString(resolvedType)`
+  over `formatTypeForDisplay(annotation)` when the resolved type is a pure function with
+  no alias-display registered. Without this, the target side would show `Cb<Cb<...>>>>`
+  (annotation text) even when the source side correctly unfolds to `() => () =>...`.
+Full-suite 10078/1240/3 (was 10078/1241/3, +1 net). Zero regressions.
 
 **B50.4 (2026-05-19, +1 — flips `typeAssignabilityErrorMessage_ts`)** — TS2345 widening for
 B50.x-aliased Object-vs-Object args + Object→Union chain in `getPropertyElaborationChain`

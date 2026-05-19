@@ -40345,7 +40345,19 @@ interface DataView {
                             val resolvedDisplay = typeToString(tt)
                             val isIntrinsicNumericLiteral = resolvedDisplay == "Infinity" ||
                                 resolvedDisplay == "-Infinity" || resolvedDisplay == "NaN"
+                            // B50.6: When the resolved type is a pure function type AND has
+                            // no alias-display registered (so B50.5 deliberately unfolded it),
+                            // prefer the unfolded `typeToString` form over the annotation text.
+                            // Matches `nestedCallbackErrorNotFlattened_ts`'s expected unfolded
+                            // display for the `Cb<Cb<...>>` chain.
+                            val isPureFuncNoAlias = tt is Type.Object &&
+                                !tt.callSignatures.isNullOrEmpty() &&
+                                tt.properties.isNullOrEmpty() &&
+                                tt.members.isNullOrEmpty() &&
+                                tt.constructSignatures.isNullOrEmpty() &&
+                                tt.id !in aliasDisplayMap
                             val displayTarget = if (isIntrinsicNumericLiteral) resolvedDisplay
+                                else if (isPureFuncNoAlias) resolvedDisplay
                                 else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: resolvedDisplay
                                 else resolvedDisplay
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -56714,6 +56726,27 @@ interface DataView {
                     "  Type '$srcDisplay' is not assignable to type '$tgtDisplay'.",
                     "    '$tgtDisplay' could be instantiated with an arbitrary type which could be unrelated to '$srcDisplay'.",
                 )
+            }
+            // B50.6: Function return-type chain. When BOTH returns are pure function
+            // types (call signatures only, no properties/members/construct sigs),
+            // recurse with a "Call signature return types '<src>' and '<tgt>' are
+            // incompatible." header so nested-callback patterns produce the full
+            // drilled chain (cf. `nestedCallbackErrorNotFlattened_ts`).
+            if (sourceReturn is Type.Object && targetReturn is Type.Object &&
+                !sourceReturn.callSignatures.isNullOrEmpty() &&
+                !targetReturn.callSignatures.isNullOrEmpty() &&
+                sourceReturn.properties.isNullOrEmpty() &&
+                targetReturn.properties.isNullOrEmpty() &&
+                sourceReturn.members.isNullOrEmpty() &&
+                targetReturn.members.isNullOrEmpty() &&
+                sourceReturn.constructSignatures.isNullOrEmpty() &&
+                targetReturn.constructSignatures.isNullOrEmpty()
+            ) {
+                val srcDisp = typeToString(sourceReturn)
+                val tgtDisp = typeToString(targetReturn)
+                val nested = getFunctionMismatchElaboration(sourceReturn, targetReturn)
+                val header = "  Call signature return types '$srcDisp' and '$tgtDisp' are incompatible."
+                return listOf(header) + nested.map { "  $it" }
             }
             return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
         }

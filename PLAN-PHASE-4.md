@@ -924,6 +924,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (B50.6, 8834 → 8835, +1 — flips ~~`nestedCallbackErrorNotFlattened_ts`~~) — Function return-type chain + pure-function unfolded display.** Continuation /loop iteration after B50.5. Lands the next adjacent fix for the deeply-nested-callback pattern.
+
+  **Two-piece change in `Checker.kt`.** (a) `getFunctionMismatchElaboration`'s return-type-mismatch branch now recursively drills into nested function types via "Call signature return types '<src>' and '<tgt>' are incompatible." header + nested elaboration (indented +2). Fires only when BOTH source and target returns are PURE function types (call signatures only, no properties/members/construct sigs). For `Cb<Cb<Cb<Cb<number>>>>` (where `Cb<T> = {x: () => T}["x"]` resolves to `() => T`), this produces the full 4-level baseline chain. (b) In `checkAssignmentExpression`'s outer TS2322 display, prefer `typeToString(resolvedType)` over `formatTypeForDisplay(annotation)` when the resolved type is a pure function with no alias-display registered (filtered out by B50.5).
+
+  **Verification.** Full-suite 10078/1240/3 (was 10078/1241/3, +1 net). Zero regressions. `nestedCallbackErrorNotFlattened_ts` flips with full chain matching baseline.
+
+  ---
+
+  **Session 2026-05-19 (B50.5, 8834 → 8834, net-zero) — Skip alias-name display for pure function alias bodies.** Continuation /loop iteration after B50.4. `find_candidates.py --fresh` surfaced `nestedCallbackErrorNotFlattened_ts` SWAP +2 — source/target now display with `Cb<...>` alias name (from B50.4 registration) instead of the unfolded function form TypeScript expects. The "noAlias" indirection trick in the test source (`type Cb<T> = {x: () => T}["x"]`) is TypeScript's pattern to prevent alias-symbol creation. Our B50.2 alias-display registration didn't differentiate, so B50.4's alias-name display fired for these cases too.
+
+  **Implementation.** Single-file change in `Checker.kt`. New filter in B50.2's substitution branch: skip alias-display registration when the resolved type is a PURE function type (call signatures only — no properties, members, or construct sigs). Pairs with the existing intrinsic-singleton filter. Net-zero on the suite (`nestedCallbackErrorNotFlattened_ts` still failing on the target-side display issue, addressed by B50.6 separately).
+
+  ---
+
   **Session 2026-05-19 (B50.4, 8833 → 8834, +1 — flips ~~`typeAssignabilityErrorMessage_ts`~~) — TS2345 widening + Object→Union chain in getPropertyElaborationChain + non-generic alias display.** Continuation /loop iteration after B50.3. Lands the final pieces of the B50.x stack — Foo<string>/Bar<number>/OtherWrap/Wrap-style alias-with-chain emission for both TS2322 and TS2345 sites.
 
   **Five-piece change in `Checker.kt`.** (a) Non-generic alias name registration in `getDeclaredTypeOfSymbolWorker`'s TypeAlias arm — when body resolves to a fresh `Type.Object` (NOT Union/Intersection — those are unfolded at display time by TypeScript per the `implementsIncorrectlyNoAssertion_ts` baseline `'Foo & Bar'` vs `'Wrapper'` distinction), register the alias name. (b) New top-of-function `Object → Union` branch in `getPropertyElaborationChain` — emits the per-level "Type X vs '<union>'" + drill-in "Type X vs '<best constituent>'" lines plus the recursive chain (path reset for the constituent context). (c) Leaf detection updated to NOT classify Object→Union prop pairs as leaves (they're recursable via the new branch). (d) `allowChainObjObj` gate in `checkArgumentsAgainstSignature`'s simple-type bypass — narrow gate: BOTH `argType.id` and `paramType.id` must be in `aliasDisplayMap`. (e) New chain attachment branch in TS2345 emission — when arg/param are anonymous Type.Object and `getPropertyElaborationChain` returns non-null, append the chain.
