@@ -33174,28 +33174,76 @@ interface DataView {
 
     private fun reportTS2371ForParams(params: List<Parameter>, source: String, fileName: String) {
         for (param in params) {
-            val init = param.initializer ?: continue
-            // Span starts at beginning of parameter (including access modifiers like 'public')
-            var spanStart = param.pos
-            while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-            // Span from spanStart to initializer end, trimming trailing trivia
-            var spanEnd = init.end
-            while (spanEnd > spanStart && spanEnd <= source.length &&
-                source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
-                spanEnd--
+            val init = param.initializer
+            if (init != null) {
+                // Param-level default: `(a = 1)` / `(a: T = 1)`.
+                // Span starts at beginning of parameter (including access modifiers like 'public')
+                var spanStart = param.pos
+                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+                // Span from spanStart to initializer end, trimming trailing trivia
+                var spanEnd = init.end
+                while (spanEnd > spanStart && spanEnd <= source.length &&
+                    source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
+                    spanEnd--
+                }
+                val length = (spanEnd - spanStart).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                diagnostics.add(Diagnostic(
+                    message = "A parameter initializer is only allowed in a function or constructor implementation.",
+                    category = DiagnosticCategory.Error,
+                    code = 2371,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = spanStart,
+                    length = length,
+                ))
             }
-            val length = (spanEnd - spanStart).coerceAtLeast(1)
-            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-            diagnostics.add(Diagnostic(
-                message = "A parameter initializer is only allowed in a function or constructor implementation.",
-                category = DiagnosticCategory.Error,
-                code = 2371,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = spanStart,
-                length = length,
-            ))
+            // B51.3: Binding-pattern defaults: `({first = 0}: T)` — TS2371 fires for
+            // each binding-element with a default initializer (recursive for nested
+            // patterns). Squiggle on the binding-element's name (not the whole
+            // param), matching TypeScript's baseline span.
+            reportTS2371ForBindingPattern(param.name, source, fileName)
+        }
+    }
+
+    private fun reportTS2371ForBindingPattern(name: Expression, source: String, fileName: String) {
+        val pattern = when (name) {
+            is ObjectBindingPattern -> name.elements
+            is ArrayBindingPattern -> name.elements
+            else -> return
+        }
+        for (el in pattern) {
+            if (el !is BindingElement) continue
+            if (el.initializer != null) {
+                val nameNode = el.name
+                val (start, len) = when (nameNode) {
+                    is Identifier -> nameNode.pos to nameNode.text.length
+                    is ObjectBindingPattern, is ArrayBindingPattern -> {
+                        // For nested patterns, span covers the pattern's name part.
+                        // Use the binding-element's position as approximate start.
+                        var s = el.pos
+                        while (s < source.length && source[s].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) s++
+                        s to 1
+                    }
+                    else -> continue
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "A parameter initializer is only allowed in a function or constructor implementation.",
+                    category = DiagnosticCategory.Error,
+                    code = 2371,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = len,
+                ))
+            }
+            // Recurse into nested patterns
+            if (el.name is ObjectBindingPattern || el.name is ArrayBindingPattern) {
+                reportTS2371ForBindingPattern(el.name, source, fileName)
+            }
         }
     }
 
