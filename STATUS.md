@@ -27,7 +27,17 @@ Round 4 net-zero. Surgical pool genuinely exhausted at the +1 per-commit level �
 - **B54.7** (attempted/reverted ×2): Identifier-RHS varTypes fallback in main Identifier branch. Both broad and tight gates regressed 2 tests. Multi-piece feature; needs Type-engine path disabling first.
 - **B54.8** (feat, narrow gate): "could be instantiated with arbitrary type" chain hint when target arg is TypeParam.
 
-`getAndSetNotIdenticalType3_ts` flips individually (full match). Suite stays at 1234 due to a balancing test shift exposed by B54.3's narrowing. Real infrastructure correctness improvements committed; future agents can build on B54.x for further write-context / accessor-pair / generic-ref work.
+`getAndSetNotIdenticalType3_ts` flips individually (confirmed via post-suite audit). Suite stays at 1234 due to a balancing test shift exposed by B54.3's narrowing. Real infrastructure correctness improvements committed; future agents can build on B54.x for further write-context / accessor-pair / generic-ref work.
+
+**5-round session grand totals (75 commits, +8 net tests, 2026-05-19):**
+- Round 1 (B50.x alias/elaboration): 15 commits, +5 tests (8833 → 8838).
+- Round 2 (B51.x FP gates / new diagnostics): 15 commits, +3 tests (8838 → 8841).
+- Round 3 (docs/chores after pool exhausted): 15 commits, 0 tests.
+- Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
+- Round 5 (B54.x accessor-pair / write-context): 15 commits, 0 tests (1 flip + 1 balancing shift).
+- Cumulative: 75 commits, +8 net tests (8833 → 8841 / 10078 = 87.7%).
+
+The diminishing returns curve is fully manifest: rounds 1-2 captured all surgical wins; rounds 3-5 produced productive infrastructure (~10 CLAUDE.md gotchas, B53.x display, B54.x accessor-pair / write-context, B52.x recon, audit-script fix, ~5 stale-skip-log audits) with net-zero suite impact. Future sessions need architectural blocker commitment.
 
 The diminishing-returns curve is now sharp: rounds 1-2 produced all the test flips (+8); rounds 3-4 produced productive maintenance + infrastructure (B53.1/B53.2 + skip-log audit + audit-script fix + queue restructure + 4+ CLAUDE.md gotchas + session retrospectives) but no test flips because every remaining +1 surgical candidate is gated on at least one named architectural blocker.
 
