@@ -104,7 +104,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8841 passing — post B50.x/B51.x):** Surgical pool genuinely exhausted at the per-commit +1 level after the B50.x and B51.x series (8841 / 10078 = 87.7%). Recent wins focused on alias/elaboration infrastructure (B50.x, +5 tests) and FP gates / new diagnostic emission shapes (B51.x, +3 tests). `find_candidates.py --fresh` consistently returns 0/0/0 — next wins require either architectural blocker work or carefully gated new-diagnostic emissions.
+**Status (2026-05-19, 8841 passing — post B50.x/B51.x/B53.x):** Surgical pool genuinely exhausted at the per-commit +1 level after the B50.x, B51.x, and B53.x series (8841 / 10078 = 87.7%). Recent wins focused on alias/elaboration infrastructure (B50.x, +5 tests), FP gates / new diagnostic emission shapes (B51.x, +3 tests), and display-infrastructure pieces (B53.1 TS2741 cross-file qualification, B53.2 named-Object non-overlap — both net-zero, both gated by Blocker #3 declaration-merging for the obvious target tests). `find_candidates.py --fresh` consistently returns 0/0/0 — next wins require either architectural blocker work (Blocker #1 control flow, Blocker #2 generic inference, Blocker #3 per-file scope) or new lib-content tracking (target-aware Array/RegExp property counts for `arrayAssignmentTest4_ts`/`assigningFromObjectToAnythingElse_ts`-class tests).
 
 **Earlier status (2026-04-26, 8409 passing):** Surgical pool is exhausted (16+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
