@@ -934,8 +934,10 @@ the live plan focused. Quick reference:
   - **B54.3**: `isAssignableTo` returns false for same-base different-args (`@A<string>` vs `@A<number>`).
   - **B54.4**: emitTS2322 chain leaf for same-base same-name ref mismatch.
   - **B54.5+B54.6**: accessor-pair declaration merging at `resolveInterfaceMembers`; `checkPropertyAccessAssignment` prefers SetAccessor param type for write-context.
+  - **B54.7 attempted/reverted twice**: Identifier-RHS varTypes fallback in the Identifier-target branch (`x = y` for same-base parameterized refs). Both broad and tight gates regressed 2 tests. Documented in CLAUDE.md as a multi-piece feature requiring careful disabling of upstream Type-engine path first.
+  - **B54.8**: "'T' could be instantiated with arbitrary type" chain when target arg is TypeParam in scope. Brings `getAndSetNotIdenticalType2_ts` line 9 and `typeParameterAssignmentCompat1_ts` lines 8/9/16/17 chains to full match (still gated by missing TS2208 related info / line-15 `x.x = r` patterns).
 
-  `getAndSetNotIdenticalType3_ts` passes individually. Suite count unchanged (a balancing test shifted from EXTRA to MISS exposure due to B54.3's narrowing). Infrastructure correct and aligned with TypeScript semantics. Round 5 total: 6 commits, net-zero on suite.
+  `getAndSetNotIdenticalType3_ts` passes individually. Suite count unchanged at 1234 (a balancing test shifted from EXTRA to MISS exposure due to B54.3's narrowing). Infrastructure correct and aligned with TypeScript semantics. Round 5 total: 9 commits + 2 reverts, net-zero on suite.
 
   ---
 
