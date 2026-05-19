@@ -40578,8 +40578,27 @@ interface DataView {
                                     val missingProp = allMissing[0]
                                     val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
                                     val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                    // B53.1: cross-file disambiguation. When source and target are
+                                    // different interfaces sharing the same display name but declared
+                                    // in different files, render `import("<basename>").<name>` so the
+                                    // diagnostic is unambiguous. Matches TypeScript's behavior for
+                                    // `import * as A from './a'` / `B from './b'` with same-named types.
+                                    var qualSource = displaySource
+                                    var qualDeclaring = declaringDisplay
+                                    if (qualSource == qualDeclaring) {
+                                        val srcSym = (sourceType as? Type.Interface)?.symbol
+                                        val tgtSym = (tt as? Type.Interface)?.symbol
+                                        if (srcSym != null && tgtSym != null && srcSym !== tgtSym) {
+                                            val srcImport = getSymbolImportName(srcSym)
+                                            val tgtImport = getSymbolImportName(tgtSym)
+                                            if (srcImport != null && tgtImport != null && srcImport != tgtImport) {
+                                                qualSource = "import(\"$srcImport\").$qualSource"
+                                                qualDeclaring = "import(\"$tgtImport\").$qualDeclaring"
+                                            }
+                                        }
+                                    }
                                     diagnostics.add(Diagnostic(
-                                        message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
+                                        message = "Property '$missingProp' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
                                         category = DiagnosticCategory.Error,
                                         code = 2741,
                                         fileName = fileName,
@@ -59412,6 +59431,24 @@ interface DataView {
     private fun isLibFileName(fileName: String): Boolean {
         val base = fileName.substringAfterLast('/').substringAfterLast('\\')
         return base.startsWith("lib.") && base.endsWith(".d.ts")
+    }
+
+    /**
+     * Find the declaring file for [sym] by searching each binderResult's top-level locals
+     * for identity-equality with the symbol. Returns the basename (no path, no extension)
+     * for `import("X")` qualification. Returns null if not found at file-level (e.g. lib
+     * symbols, nested namespace exports). Used by TS2741 cross-file disambiguation.
+     */
+    private fun getSymbolImportName(sym: Symbol?): String? {
+        if (sym == null) return null
+        for (br in binderResults) {
+            if (br.locals.values.any { it === sym }) {
+                val base = br.sourceFile.fileName
+                    .substringAfterLast('/').substringAfterLast('\\')
+                return base.substringBeforeLast('.')
+            }
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
