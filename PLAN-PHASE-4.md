@@ -940,6 +940,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 10 of /loop, B58.3 substitution-cache + B58.4 dead-end — net-zero).** Continuation /loop session after round 9. Attempted the B58.3 puzzle:
+  - **B58.3** (feat, net-zero): New `substitutionResultCache: Map<String, Type>` keyed by `(symbol.id, args-id-fingerprint)`. Interns substitution results. Doesn't help because resolved args (TypeParams) have different ids per invocation.
+  - **B58.4** (attempt/revert): Structural-id lookup in typeToString — fails because tuple element ids differ recursively across re-resolutions. Reverted (uncommitted).
+
+  Round 10 totals: 15 commits, 0 net tests. Continues round 9's "investigation rather than flip" pattern.
+
+  ---
+
   **Session 2026-05-19 (round 9 of /loop, B58.1 + B57.2 revert — net-zero quality).** Continuation /loop session after round 8. Two correctness fixes:
   - **B58.1** (feat, net-zero): errorType displays as 'any' (TypeScript convention).
   - **B57.2 revert** (fix, net-zero): Stop FP TS2589 at type-alias body resolution. The B57.2 round-8 attempt emitted TS2589 for declarations like `type T1<T> = [number, T1<{x:T}>]` even though the alias is used safely. Save/reset deepInstantiationBailed around type-alias resolutions to scope the flag to variable annotations only.
