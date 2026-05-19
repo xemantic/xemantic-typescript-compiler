@@ -18,6 +18,8 @@ Round 4 net-zero. Surgical pool genuinely exhausted at the +1 per-commit level â
 - Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
 - Grand total: 60 commits, +8 net tests (8833 â†’ 8841 / 10078 = 87.7%).
 
+**Round 5 (2026-05-19, started): pool exploration continued.** Surveyed remaining raw candidates (promise-class-conflicts TS2300 with lib, TS7023 circular-getter, TS2693 lib-loading-based, TS2322 for `this.X` assignment with generic args, namespace-import `typeof import("X")` display, TS2345 for intersection caching, TS2367 cross-file with declaration merging). All map to multi-piece feature work (lib-aware loading / lib-file-related-info tracking / Type.Reference-aware `this.X` assignment branch / typeof-import-display rendering / Blocker #3 declaration merging). Continuing with maintenance/documentation work in this round.
+
 The diminishing-returns curve is now sharp: rounds 1-2 produced all the test flips (+8); rounds 3-4 produced productive maintenance + infrastructure (B53.1/B53.2 + skip-log audit + audit-script fix + queue restructure + 4+ CLAUDE.md gotchas + session retrospectives) but no test flips because every remaining +1 surgical candidate is gated on at least one named architectural blocker.
 
 **B51.x series (2026-05-19, +3 test flips across 10 commits in round 2):**
