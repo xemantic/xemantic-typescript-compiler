@@ -44531,9 +44531,10 @@ interface DataView {
             }
             // B56.1: `new C()` with no type args and no inferrable args — default
             // TypeParams to `unknown` (or declared `default`) under strict mode.
-            // B56.3 (probed/reverted): broadening to also fire when newArgs is
-            // non-empty regressed 1 test — inference-failure-but-types-are-compat
-            // cases now treat un-instantiated C as C<unknown> and emit FP TS2322.
+            // B56.3/B56.4 (probed/reverted): broadening to also fire when newArgs
+            // is non-empty (or no-constructor) regressed 1 test in each case.
+            // The un-instantiated calleeType is structurally compatible with some
+            // targets in ways that C<unknown> isn't.
             if (typeParams != null && typeParams.isNotEmpty() && typeArgs.isNullOrEmpty() &&
                 newArgs.isNullOrEmpty() && strictNullChecks
             ) {
