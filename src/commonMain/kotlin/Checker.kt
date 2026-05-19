@@ -378,6 +378,21 @@ class Checker(
         "InstanceType", "ConstructorParameters", "Parameters", "ThisParameterType",
         "OmitThisParameter", "ThisType", "Awaited")
 
+    /** B51.1: Built-in lib types that are ALSO values (have a `declare const X:
+     *  XConstructor` declaration in TypeScript's full lib.d.ts). Our embedded lib
+     *  only includes the interface declarations, so the binder doesn't see the
+     *  Variable side. `class C extends Array<T>` is valid in TypeScript — without
+     *  this allowlist, our checker would emit FP TS2689 ("Cannot extend interface").
+     */
+    private val BUILTIN_LIB_VALUE_INTERFACES = setOf(
+        "Array", "Object", "Function", "String", "Number", "Boolean", "RegExp",
+        "Date", "Error", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Promise",
+        "ArrayBuffer", "DataView",
+        "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+        "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+        "BigInt", "BigInt64Array", "BigUint64Array",
+    )
+
     // -----------------------------------------------------------------------
     // Built-in type declarations (minimal lib.d.ts stubs)
     // Parsed and bound once at Checker init, merged into globals before user files.
@@ -22452,6 +22467,12 @@ interface DataView {
             }
         }
         if (leftmost == null || leftmost.text in valueNames) return null
+        // B51.1: skip built-in lib types that are ALSO values (e.g. `Array`,
+        // `Object`, `Function`) — TypeScript's full lib.d.ts has both
+        // `interface X { ... }` AND `declare const X: XConstructor`, making
+        // them valid `extends` targets. Our embedded lib only declares the
+        // interface, so the Variable flag is missing — skip via name allowlist.
+        if (names.size == 1 && leftmost.text in BUILTIN_LIB_VALUE_INTERFACES) return null
         // Walk the symbol chain: leftmost in scope, then each step via `exports`.
         var symbol: Symbol? = currentFileLocals?.get(names[0]) ?: globals[names[0]] ?: return null
         for (i in 1 until names.size) {
