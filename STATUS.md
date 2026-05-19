@@ -89,8 +89,8 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 8: 3/15 (B57.1, B57.1b, B57.2) (20%)
 - Round 9: 3/15 (B58.1, B57.2 revert, B58.2) (20%)
 - Round 10: 1/15 (B58.3) (7%)
-- Round 11: 1/15 (B59.1) (7%) — tied with round 10 for lowest
-- Avg: ~20% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
+- Round 11: 2/15 (B59.1, B59.2) (13%)
+- Avg: ~21% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
 **Lesson: late rounds emphasize quality over quantity.** Rounds 7-10 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
 
