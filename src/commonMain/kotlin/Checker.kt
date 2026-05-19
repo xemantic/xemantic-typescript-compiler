@@ -39382,7 +39382,22 @@ interface DataView {
                     lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
                 } else null
                 if (allMissing.isNotEmpty()) {
-                    if (allMissing.size >= 2) {
+                    // B50.10: TS2696 when source is the lib `Object` interface and target
+                    // is some specific named class/interface (with missing properties).
+                    if (shouldEmitTs2696ForObject(sourceType, targetType)) {
+                        val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
+                        diagnostics.add(Diagnostic(
+                            message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                            category = DiagnosticCategory.Error,
+                            code = 2696,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = name.pos,
+                            length = name.text.length,
+                            messageChain = listOf(chainLine),
+                        ))
+                    } else if (allMissing.size >= 2) {
                         // TS2739 for 2-4 missing, TS2740 for 5+
                         diagnostics.add(Diagnostic(
                             message = formatTs2740Message(displaySource, displayTarget, allMissing),
@@ -40373,7 +40388,20 @@ interface DataView {
                                     tt.properties?.find { it.name == allMissing[0] }
                                 } else null
                             if (allMissing.isNotEmpty()) {
-                                if (allMissing.size >= 2) {
+                                if (shouldEmitTs2696ForObject(sourceType, tt)) {
+                                    val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
+                                    diagnostics.add(Diagnostic(
+                                        message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2696,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = target.pos,
+                                        length = target.text.length,
+                                        messageChain = listOf(chainLine),
+                                    ))
+                                } else if (allMissing.size >= 2) {
                                     diagnostics.add(Diagnostic(
                                         message = formatTs2740Message(displaySource, displayTarget, allMissing),
                                         category = DiagnosticCategory.Error,
@@ -55926,6 +55954,22 @@ interface DataView {
      * Format a TS2740 message: "Type 'X' is missing the following properties from type 'Y': a, b, c, and N more."
      * Lists up to 4 property names; if >5 total, appends "and N more".
      */
+    /**
+     * B50.10: Detect the `Object`-source-to-named-target shape that warrants
+     * TS2696 "The 'Object' type is assignable to very few other types. Did you
+     * mean to use the 'any' type instead?" instead of plain TS2739/TS2740. The
+     * source must be the lib `Object` interface (named, no own type args), and
+     * the target a different named class/interface. Anonymous-object sources
+     * and `Object`-target cases fall through to the standard chain.
+     */
+    private fun shouldEmitTs2696ForObject(source: Type, target: Type): Boolean {
+        if (source !is Type.Interface) return false
+        if (source.symbol?.name != "Object") return false
+        if (target !is Type.Interface) return false
+        if (target.symbol == null || target.symbol?.name == "Object") return false
+        return true
+    }
+
     private fun formatTs2740Message(displaySource: String, displayTarget: String, missing: List<String>): String {
         val listed = if (missing.size > 5) missing.take(4) else missing
         val suffix = if (missing.size > 5) ", and ${missing.size - 4} more." else ""
