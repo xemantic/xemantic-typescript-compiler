@@ -1,6 +1,13 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,844 / 10,078 tests passing (~87.8%).
+**Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
+
+**Round 8 (2026-05-19, +1 via B57.1): TS2589 excessive-depth diagnostic.** Pool empty (0/0/0 fresh). Implemented a long-known gap:
+- **B57.1** (feat, **+1**): When `getTypeFromTypeReference`'s alias-substitution path hits `typeAliasResolutionDepth >= 10`, set a checker-instance flag `deepInstantiationBailed`. `buildFileLocalTypeMaps` saves/resets/checks the flag around each variable's annotation resolution and emits TS2589 at the annotation span if bail fires. New helper `emitTs2589AtTypeNode` trims trailing whitespace/punctuation to land at the closing `>`. **Flips `limitDeepInstantiations_ts`**.
+- **B57.1b** (gate): Constraint check before recursing — if any type arg fails its TypeParam's constraint, return errorType without recursing. Prevents FP TS2589 on `Foo<"false", {}>` where `T extends "true"` is unsatisfied.
+
+Suite: 8844 → 8845 / 10078 (+1). Zero regressions.
+
 
 **Round 6 (2026-05-19, +2 test flips via B55.x stack): regression-finder + strict-generic-checks for varTypes path.** Continuation /loop session after round 5. Started by methodically identifying which tests regressed when B54.7 was broadly enabled — diff'd failing sets pre/post, identified `generics3_ts` and `promisesWithConstraints_ts` (both same-base named-type args). Narrowed B54.3's gate via B54.9 (primitive-arg only), making B54.7 safe.
 
