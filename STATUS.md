@@ -16,16 +16,19 @@ Suite: 8841 → 8843 / 10078 (+2). Zero regressions.
 
 Suite: 8843 → 8844 / 10078 (+1). Zero regressions.
 
-**6-round session grand totals (90+ commits, +10 net tests, 2026-05-19):**
+**7-round session grand totals (105 commits, +11 net tests, 2026-05-19):**
 - Round 1 (B50.x alias/elaboration): 15 commits, +5 tests (8833 → 8838).
 - Round 2 (B51.x FP gates / new diagnostics): 15 commits, +3 tests (8838 → 8841).
 - Round 3 (chores/docs after pool exhausted): 15 commits, 0 tests.
 - Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
 - Round 5 (B54.x accessor-pair / write-context): 15 commits, 0 tests (1 flip + 1 shift).
-- **Round 6 (B54.9 narrow + B55.x strict-generic-checks varTypes)**: 15 commits, **+2 tests** (8841 → 8843).
-- Cumulative: 90 commits, +10 net tests (8833 → 8843 / 10078 = 87.8%).
+- Round 6 (B54.9 narrow + B55.x strict-generic-checks varTypes): 15 commits, +2 tests (8841 → 8843).
+- **Round 7 (B56.x new-C-unknown-default)**: 15 commits, **+1 test** (8843 → 8844).
+- Cumulative: 105 commits, +11 net tests (8833 → 8844 / 10078 = 87.8%).
 
-Round 6 broke the round-3-4-5 net-zero streak. B55.x demonstrates that committed infrastructure (B54.x earlier rounds) compounds into flips later — the strict-generic-checks for varTypes path required the chain emission (B54.4) + "could be instantiated" hint (B54.8) + setter param type extraction (B54.5) to all be in place for the +2 final piece to land cleanly.
+Rounds 6-7 broke the rounds 3-5 net-zero streak with compounding effects:
+- Round 6's B55.x needed B54.4 chain + B54.5 setter-param + B54.8 hint to flip cleanly.
+- Round 7's B56.1 needed B54.x same-base ref mismatch to flip its target via downstream effect.
 
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
