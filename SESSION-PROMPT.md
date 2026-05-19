@@ -111,7 +111,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 - Round 6: B54.9 narrowing + B55.x strict-generic-checks for varTypes path (+2 — `typeParameterAssignmentCompat1_ts` + `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`).
 - **Round 7 (NEW)**: B56.1+B56.2 — `new C()` defaults TypeParams to `unknown` under strict mode (+1 — `getAndSetNotIdenticalType2_ts`). B56.3 and B56.4 broadening attempts reverted (1 regression each).
 
-`find_candidates.py --fresh` returns 0/0/0. Only 1 near-flip remains: `getAndSetNotIdenticalType2_ts` (gated on `new C() → C<unknown>` inference for the `x.x = r` line).
+`find_candidates.py --fresh` returns 0/0/0. Audit confirms 0 STALE skip-log entries. All 5 MIXED bucket tests have ≥2 failing sub-variants (not close to flipping).
 
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
