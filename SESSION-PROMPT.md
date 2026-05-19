@@ -104,7 +104,9 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-04-26, 8409 passing):** Surgical pool is exhausted (16+
+**Status (2026-05-19, 8841 passing — post B50.x/B51.x):** Surgical pool genuinely exhausted at the per-commit +1 level after the B50.x and B51.x series (8841 / 10078 = 87.7%). Recent wins focused on alias/elaboration infrastructure (B50.x, +5 tests) and FP gates / new diagnostic emission shapes (B51.x, +3 tests). `find_candidates.py --fresh` consistently returns 0/0/0 — next wins require either architectural blocker work or carefully gated new-diagnostic emissions.
+
+**Earlier status (2026-04-26, 8409 passing):** Surgical pool is exhausted (16+
 consecutive sessions confirmed; `find_candidates.py --fresh` returns
 0/0/0, filtered from 8/93/22). Phase 17 / Blocker #1 (full control
 flow narrowing) infrastructure landed in 17.1–17.7; 17.9–17.27 series
