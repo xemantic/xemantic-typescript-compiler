@@ -40203,7 +40203,7 @@ interface DataView {
         } else {
             "undefined"
         }
-        if (!isAssignableTo(exprType, returnType)) {
+        if (!isAssignableTo(exprType, returnType, typeParams)) {
             val returnKeywordLength = 6
             val isLiteral = expr == null || isSimpleLiteral(expr)
             emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
@@ -40738,7 +40738,7 @@ interface DataView {
                         rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                         ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType else null
-                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
+                    if (exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
                 }
@@ -59396,7 +59396,7 @@ interface DataView {
     /** Check if sourceType is assignable to targetType.
      *  Named types (from TypeReference) are prefixed with "@".
      *  Union types are prefixed with "|". */
-    private fun isAssignableTo(sourceType: String, targetType: String): Boolean {
+    private fun isAssignableTo(sourceType: String, targetType: String, typeParams: Set<String> = emptySet()): Boolean {
         if (sourceType == targetType) return true
         if (targetType == "any" || targetType == "unknown") return true
         if (sourceType == "any") return true
@@ -59451,6 +59451,10 @@ interface DataView {
                     //   - getAndSetNotIdenticalType3_ts `A<string>` vs `A<number>` (primitives)
                     //   - getAndSetNotIdenticalType2_ts `A<string>` vs `A<T>` (TypeParam vs primitive)
                     if (srcIsPrim || tgtIsPrim) return false
+                    // B55.1 (probe): both args are different TypeParams in the current scope —
+                    // treat as nominally distinct per strict-generic-checks semantics.
+                    // typeParameterAssignmentCompat1_ts wants TS2322 for `Foo<T>` vs `Foo<U>`.
+                    if (srcArg != tgtArg && srcArg in typeParams && tgtArg in typeParams) return false
                 }
             }
             // null and undefined are never assignable to named types (with strict null checks)
