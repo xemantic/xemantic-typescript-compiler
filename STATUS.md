@@ -2,6 +2,12 @@
 
 **Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
 
+**Round 9 (2026-05-19, net-zero, two small refinements).** Continuation /loop session after round 8. Pool empty (0/0/0 fresh). Two cleanup commits:
+- **B58.1** (feat, net-zero): Render `errorType` as `"any"` in typeToString. TypeScript doesn't expose 'error' in diagnostics — when type resolution fails, the slot is shown as `any`. Affects display of tests like `inferFromNestedSameShapeTuple_ts` which previously emitted `T1<{ x: error; }>` (now `T1<{ x: any; }>`).
+- **B57.2 revert** (fix, net-zero): The round-8 B57.2 type-alias-body TS2589 emission caused FP for recursive aliases that recurse safely (declaration-time recursion in tests like `inferFromNestedSameShapeTuple_ts`'s `type T1<T> = [number, T1<{x:T}>]`). Revert + save/reset `deepInstantiationBailed` around alias-body resolution to NOT propagate the flag upward. B57.1 variable-annotation TS2589 still works.
+
+Round 9 net-zero on the suite. Both are quality/correctness improvements.
+
 **Round 8 (2026-05-19, +1 via B57.1): TS2589 excessive-depth diagnostic.** Pool empty (0/0/0 fresh). Implemented a long-known gap:
 - **B57.1** (feat, **+1**): When `getTypeFromTypeReference`'s alias-substitution path hits `typeAliasResolutionDepth >= 10`, set a checker-instance flag `deepInstantiationBailed`. `buildFileLocalTypeMaps` saves/resets/checks the flag around each variable's annotation resolution and emits TS2589 at the annotation span if bail fires. New helper `emitTs2589AtTypeNode` trims trailing whitespace/punctuation to land at the closing `>`. **Flips `limitDeepInstantiations_ts`**.
 - **B57.1b** (gate): Constraint check before recursing — if any type arg fails its TypeParam's constraint, return errorType without recursing. Prevents FP TS2589 on `Foo<"false", {}>` where `T extends "true"` is unsatisfied.
