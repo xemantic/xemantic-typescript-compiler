@@ -127,6 +127,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 - Accessor-pair merged declarations (B54.6) — `propSym.declarations` now contains BOTH GetAccessor and SetAccessor for accessor-pair properties.
 - isAssignableTo's typeParams parameter — pass it from callers to enable strict-generic-checks for same-base ref args.
 - `substitutionResultCache: Map<String, Type>` — intern map for generic-alias substitution results. Currently underutilized because resolved-args ids vary per call; could be made effective by interning TypeParam instances by symbol identity.
+- `typeParamInternCache: Map<Int, Type.TypeParam>` — intern Type.TypeParam instances by TypeParameter AST node position. Currently applied only at function-signature path; other 9 creation sites in Checker.kt still mint fresh.
 
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
