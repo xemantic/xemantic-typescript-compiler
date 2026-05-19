@@ -286,6 +286,17 @@ class Checker(
     private var currentTypeAliasArgs: Map<String, Type>? = null
     private var typeAliasResolutionDepth: Int = 0
 
+    /** B50.2: Alias-name display preservation for B50.1-substituted types. Maps a
+     *  freshly-allocated Type's id (from the substitution path's `getTypeFromTypeNode`
+     *  call) to the alias name + resolved type args, so [typeToString] can render
+     *  `Foo<string>` instead of the structural form `{ foo: { what: string; }; }`.
+     *  Only registers fresh allocations (Type.Object / Type.Union / Type.Intersection)
+     *  — never singletons like `anyType` whose id is shared across the corpus.
+     *  [typeToStringInProgress] guards against recursive alias chains (e.g.
+     *  `FindConditions<T[P]>` self-reference) when rendering args. */
+    private val aliasDisplayMap = mutableMapOf<Int, Pair<String, List<Type>>>()
+    private val typeToStringInProgress = mutableSetOf<Int>()
+
     /** 17.19: Base-class constructor signature for `super(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around each
      *  Constructor body when the class extends another class; instantiated with
@@ -41360,7 +41371,20 @@ interface DataView {
                                 }
                                 currentTypeAliasArgs = argMap
                                 typeAliasResolutionDepth++
-                                return getTypeFromTypeNode(decl.type)
+                                val result = getTypeFromTypeNode(decl.type)
+                                // B50.2: register alias-display info so typeToString
+                                // renders `Foo<string>` instead of the structural form.
+                                // CRITICAL: skip when result is a singleton intrinsic
+                                // (anyType / unknownType / etc.) — those are shared across
+                                // the corpus, so registering one alias's name would
+                                // corrupt every other anyType expression's display.
+                                if (result !== errorType && result !is Type.Intrinsic &&
+                                    result !is Type.StringLiteral && result !is Type.NumberLiteral &&
+                                    result !is Type.BigIntLiteral
+                                ) {
+                                    aliasDisplayMap[result.id] = symbol.name to resolvedArgs
+                                }
+                                return result
                             } finally {
                                 currentTypeAliasArgs = saved
                                 typeAliasResolutionDepth--
@@ -44545,6 +44569,21 @@ interface DataView {
     }
 
     private fun typeToString(type: Type): String {
+        // B50.2: alias-display preservation. When a Type was produced by the B50.1
+        // generic-alias-substitution path, render with the alias name + arg display
+        // instead of the structural form. Recursion guarded via [typeToStringInProgress].
+        if (type.id !in typeToStringInProgress) {
+            aliasDisplayMap[type.id]?.let { (aliasName, aliasArgs) ->
+                typeToStringInProgress.add(type.id)
+                try {
+                    return if (aliasArgs.isNotEmpty()) {
+                        "$aliasName<${aliasArgs.joinToString(", ") { typeToString(it) }}>"
+                    } else aliasName
+                } finally {
+                    typeToStringInProgress.remove(type.id)
+                }
+            }
+        }
         return when (type) {
             is Type.Intrinsic -> type.intrinsicName
             is Type.StringLiteral -> "\"${type.value}\""

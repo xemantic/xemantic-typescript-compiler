@@ -2,6 +2,21 @@
 
 **Phase 4 — Checker buildout.** 8,833 / 10,078 tests passing (~87.7%).
 
+**B50.2 (2026-05-19, net-zero infra — foundation)** — Alias-name display preservation for
+B50.1-substituted types. New `aliasDisplayMap: MutableMap<Int, Pair<String, List<Type>>>`
+keyed on Type.id; registered in B50.1's substitution branch AFTER `getTypeFromTypeNode(decl.type)`
+returns a non-intrinsic, non-errorType result. `typeToString` checks the map first and
+renders `aliasName<args>` if registered, falling back to structural display otherwise.
+Recursion guard via `typeToStringInProgress: MutableSet<Int>` prevents StackOverflow on
+recursive alias chains like `FindConditions<T[P]>`. CRITICAL gate: intrinsic singletons
+(`anyType`, `unknownType`, etc.) MUST NOT be registered — those share ids across the
+entire corpus, so registering one alias's name would corrupt every other anyType
+expression's display. Verified via stash/run/pop diff: exact same 1242 failure set as
+baseline. Foundation for tests like `typeAssignabilityErrorMessage_ts` and
+`errorMessageOnIntersectionsWithDiscriminants01_ts` once the source-vs-union elaboration
+chain is added (next step). Full-suite 10078/1242/3 (was 10078/1242/3, 0 net). Zero
+regressions, zero flips — pure infrastructure.
+
 **B50.1 (2026-05-19, net-zero infra — foundation)** — Generic type alias instantiation
 infrastructure. New `currentTypeAliasArgs: Map<String, Type>?` field + `typeAliasResolutionDepth`
 recursion guard. In `getTypeFromTypeReference`, when the symbol is a `TypeAlias` with concrete
