@@ -49,6 +49,18 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - The varTypes (string-based) path remains useful for narrow type-mismatch checks. The Type-engine path is more accurate but harder to extend without regression risk.
 - Conservative gates are load-bearing — B56.3/B56.4 demonstrated that broadening "new-C-unknown-default" beyond the minimum case regresses tests via lost structural-compatibility.
 - Infrastructure compounds: rounds 4-5's "wasted" net-zero changes (chain emission, hint, setter-param extraction) became load-bearing for rounds 6-7's flips. The lesson is that the metric "+1 per round" undervalues infrastructure rounds.
+- Side-channel flags (B57.1's `deepInstantiationBailed`) are cleaner than threading parameters through deep call chains. The flag-save/reset/check pattern lets the EMITTER decide where to surface the diagnostic. Reusable for any "bail-style" diagnostic.
+
+**Per-round productive-vs-recon ratio:**
+- Round 1: 5/15 productive feature commits (33%)
+- Round 2: 5/15 (33%)
+- Round 3: 0/15 (0% — all docs)
+- Round 4: 2/15 (B53.1, B53.2) (13%)
+- Round 5: 5/15 (B54.1-B54.8) (33%)
+- Round 6: 3/15 (B54.9, B55.1, B55.2) (20%)
+- Round 7: 2/15 (B56.1, B56.2) (13%)
+- Round 8: 3/15 (B57.1, B57.1b, B57.2) (20%)
+- Avg: ~22% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
