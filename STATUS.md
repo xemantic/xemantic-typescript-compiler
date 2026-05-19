@@ -2,6 +2,8 @@
 
 **Phase 4 — Checker buildout.** 8,841 / 10,078 tests passing (~87.7%).
 
+**Round 4 (2026-05-19, recon + queue maintenance, no test flips).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Five stale skip-log entries strikethrough'd via `/tmp/audit_skips.py` (post-B50.9 super-access flips + B47.x private-field flips). Promoted Blocker #2 substep B52.1 to live queue; on recon found infrastructure already in place (`tryInferSingleTypeParamFromArgs` already covers identity-T return-type case). Promoted B52.2 (nested-T-in-property) as the next narrow extension. No new test flips this round — round 4 is a queue/maintenance round to keep the next session set up cleanly.
+
 **B51.x series (2026-05-19, +3 test flips across 10 commits in round 2):**
 - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (FP TS2689 gone).
 - B51.2: TS6212 source-return-any/error gate (fn-vs-fn FP gone).
