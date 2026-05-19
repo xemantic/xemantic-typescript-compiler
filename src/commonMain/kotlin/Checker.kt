@@ -44530,11 +44530,10 @@ interface DataView {
                 } catch (_: StackOverflowError) { /* circular */ }
             }
             // B56.1: `new C()` with no type args and no inferrable args — default
-            // type params to `unknown` under strict mode. Matches TypeScript's
-            // behavior for `var x = new C()` where C: `class C<T> {...}`; produces
-            // `C<unknown>` so downstream `x.prop` resolves with T=unknown. Gated:
-            // skip when class has constructor params (we'd want inference there).
-            // B56.2: handle defaults — use the default type if present.
+            // TypeParams to `unknown` (or declared `default`) under strict mode.
+            // B56.3 (probed/reverted): broadening to also fire when newArgs is
+            // non-empty regressed 1 test — inference-failure-but-types-are-compat
+            // cases now treat un-instantiated C as C<unknown> and emit FP TS2322.
             if (typeParams != null && typeParams.isNotEmpty() && typeArgs.isNullOrEmpty() &&
                 newArgs.isNullOrEmpty() && strictNullChecks
             ) {
