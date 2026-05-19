@@ -43808,8 +43808,11 @@ interface DataView {
         // `Tstring` annotations to our TypeParam (instead of falling through to global
         // lookup → errorType → display `(a: error) => any`).
         val sigTypeParams = expr.typeParameters?.map { tpDecl ->
-            Type.TypeParam().also { tp ->
-                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            // B59.1 extension: intern by TypeParameter AST position.
+            typeParamInternCache.getOrPut(tpDecl.pos) {
+                Type.TypeParam().also { tp ->
+                    tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                }
             }
         }
         val savedScope = currentTypeParamScope
@@ -49883,9 +49886,12 @@ interface DataView {
         val typeParamNodes = getTypeParameterDeclarationsOfSymbol(symbol) ?: return
         if (typeParamNodes.isEmpty()) return
         val typeParams = typeParamNodes.map { tp ->
-            val p = Type.TypeParam()
-            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-            p
+            // B59.1 extension: intern by TypeParameter AST position.
+            typeParamInternCache.getOrPut(tp.pos) {
+                val p = Type.TypeParam()
+                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                p
+            }
         }
         val savedScope = currentTypeParamScope
         try {
