@@ -38934,6 +38934,50 @@ interface DataView {
                             is GetAccessor -> {
                                 checkFunctionBody(member.body, member.type, emptyList(), null, source, fileName, varTypes, classTypeParams)
                             }
+                            is SetAccessor -> {
+                                // B54.1: SetAccessor bodies were previously falling into the
+                                // `else -> {}` branch, so `this.X = v` assignments inside
+                                // setters were not checked at all. Mirror the Constructor
+                                // handler pattern: populate `this.X` types from class properties
+                                // and setter parameters, then walk body for assignability.
+                                member.body?.let { body ->
+                                    val setterTypes = varTypes.toMutableMap()
+                                    val savedLocalTypes = currentLocalTypes
+                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    for (m in stmt.members) {
+                                        if (m is PropertyDeclaration) {
+                                            val propType = m.type?.let { resolveSimpleTypeName(it) }
+                                            val propName = (m.name as? Identifier)?.text
+                                            if (propType != null && propName != null) {
+                                                setterTypes["this.$propName"] = propType
+                                            }
+                                            if (propName != null && m.type != null) {
+                                                try {
+                                                    val resolvedType = getTypeFromTypeNode(m.type!!)
+                                                    if (resolvedType !== anyType && resolvedType !== errorType) {
+                                                        currentLocalTypes["this.$propName"] = resolvedType
+                                                    }
+                                                } catch (_: StackOverflowError) {}
+                                            }
+                                        }
+                                    }
+                                    for (p in member.parameters) {
+                                        val pName = (p.name as? Identifier)?.text
+                                        val pType = p.type?.let { resolveSimpleTypeName(it) }
+                                        if (pName != null && pType != null) setterTypes[pName] = pType
+                                        if (pName != null && p.type != null) {
+                                            try {
+                                                val resolvedType = getTypeFromTypeNode(p.type!!)
+                                                if (resolvedType !== anyType && resolvedType !== errorType) {
+                                                    currentLocalTypes[pName] = resolvedType
+                                                }
+                                            } catch (_: StackOverflowError) {}
+                                        }
+                                    }
+                                    checkTypeAssignabilityInStatements(body.statements, source, fileName, setterTypes, returnType = null, classTypeParams)
+                                    currentLocalTypes = savedLocalTypes
+                                }
+                            }
                             is PropertyDeclaration -> {
                                 val init = member.initializer
                                 val typeAnnotation = member.type
