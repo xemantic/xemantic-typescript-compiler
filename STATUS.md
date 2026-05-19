@@ -11,6 +11,15 @@
 
 Round 4 net-zero. Surgical pool genuinely exhausted at the +1 per-commit level — remaining tests all map to known architectural blockers.
 
+**Combined session totals (rounds 1+2+3+4 / 4 sessions of 15-iteration /loop work, 2026-05-19):**
+- Round 1 (B50.x): 15 commits, +5 tests (8833 → 8838).
+- Round 2 (B51.x + chores): 15 commits, +3 tests (8838 → 8841).
+- Round 3 (chores/docs after pool exhausted): 15 commits, 0 tests.
+- Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
+- Grand total: 60 commits, +8 net tests (8833 → 8841 / 10078 = 87.7%).
+
+The diminishing-returns curve is now sharp: rounds 1-2 produced all the test flips (+8); rounds 3-4 produced productive maintenance + infrastructure (B53.1/B53.2 + skip-log audit + audit-script fix + queue restructure + 4+ CLAUDE.md gotchas + session retrospectives) but no test flips because every remaining +1 surgical candidate is gated on at least one named architectural blocker.
+
 **B51.x series (2026-05-19, +3 test flips across 10 commits in round 2):**
 - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (FP TS2689 gone).
 - B51.2: TS6212 source-return-any/error gate (fn-vs-fn FP gone).
