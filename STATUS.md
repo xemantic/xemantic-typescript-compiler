@@ -10,6 +10,17 @@ Then implemented strict-generic-checks for varTypes path:
 
 Suite: 8841 → 8843 / 10078 (+2). Zero regressions.
 
+**6-round session grand totals (90+ commits, +10 net tests, 2026-05-19):**
+- Round 1 (B50.x alias/elaboration): 15 commits, +5 tests (8833 → 8838).
+- Round 2 (B51.x FP gates / new diagnostics): 15 commits, +3 tests (8838 → 8841).
+- Round 3 (chores/docs after pool exhausted): 15 commits, 0 tests.
+- Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
+- Round 5 (B54.x accessor-pair / write-context): 15 commits, 0 tests (1 flip + 1 shift).
+- **Round 6 (B54.9 narrow + B55.x strict-generic-checks varTypes)**: 15 commits, **+2 tests** (8841 → 8843).
+- Cumulative: 90 commits, +10 net tests (8833 → 8843 / 10078 = 87.8%).
+
+Round 6 broke the round-3-4-5 net-zero streak. B55.x demonstrates that committed infrastructure (B54.x earlier rounds) compounds into flips later — the strict-generic-checks for varTypes path required the chain emission (B54.4) + "could be instantiated" hint (B54.8) + setter param type extraction (B54.5) to all be in place for the +2 final piece to land cleanly.
+
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
 - **B53.2** (feat, net-zero, Blocker #3-gated): Named Type.Object non-overlap detection in `checkEqualityComparisonNoOverlap`. Target test (`errorWithSameNameType_ts`) blocked by cross-file declaration merging — debug confirmed `interface F` in /a.ts and /b.ts get merged at `mergeSymbolTable` time so structural disjointness silently fails. Infrastructure committed for future tests with genuinely disjoint named objects.
