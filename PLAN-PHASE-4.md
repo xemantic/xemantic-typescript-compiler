@@ -942,10 +942,11 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-19 (round 11 of /loop, B59.1 TypeParam interning — net-zero).** Continuation /loop session after round 10. Attempted B58.3's fix direction (a):
-  - **B59.1** (feat, net-zero): Intern `Type.TypeParam` instances by TypeParameter AST node position. New `typeParamInternCache: Map<Int, Type.TypeParam>`. Applied at the function-signature path (Checker.kt:~49321). Same source-level `<U>` now returns the same instance across multiple sig resolutions.
+  **Session 2026-05-19 (round 11 of /loop, B59.x TypeParam interning — net-zero).** Continuation /loop session after round 10. Attempted B58.3's fix direction (a):
+  - **B59.1** (feat, net-zero): Intern `Type.TypeParam` instances by TypeParameter AST node position. New `typeParamInternCache: Map<Int, Type.TypeParam>`. Applied at function-signature path (Checker.kt:~49321).
+  - **B59.2** (feat, net-zero): Extended interning to getTypeOfFunctionExpression (Checker.kt:~43811) and symbol type-param resolution (Checker.kt:~49888). Coverage 3 of 10 creation sites.
 
-  Doesn't flip `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path (not the function-signature TypeParam creation). Other TypeParam creation sites (9 total) likely also contribute to fresh-id issue.
+  Neither flips `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path (the substitution in getTypeFromTypeReference may not even use TypeParam-typed args from the interned sites).
 
   Round 11 totals: 15 commits, 0 net tests. Five consecutive rounds (7-11) averaging 0.4 flips/round.
 
