@@ -123,6 +123,7 @@ Your loop (per CLAUDE.md § Execution protocol):
 - `emitTs2589AtTypeNode(node, source, fileName)` helper — emits TS2589 at a TypeNode's correctly-trimmed span.
 - Accessor-pair merged declarations (B54.6) — `propSym.declarations` now contains BOTH GetAccessor and SetAccessor for accessor-pair properties.
 - isAssignableTo's typeParams parameter — pass it from callers to enable strict-generic-checks for same-base ref args.
+- `substitutionResultCache: Map<String, Type>` — intern map for generic-alias substitution results. Currently underutilized because resolved-args ids vary per call; could be made effective by interning TypeParam instances by symbol identity.
 
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
