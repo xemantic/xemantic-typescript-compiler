@@ -34,9 +34,10 @@ Suite: 8843 → 8844 / 10078 (+1). Zero regressions.
 - **Round 8 (B57.x TS2589 excessive-depth)**: 15 commits, **+1 test** (8844 → 8845).
 - Cumulative: 120 commits, +12 net tests (8833 → 8845 / 10078 = 87.8%).
 
-Rounds 6-7 broke the rounds 3-5 net-zero streak with compounding effects:
+Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 6's B55.x needed B54.4 chain + B54.5 setter-param + B54.8 hint to flip cleanly.
 - Round 7's B56.1 needed B54.x same-base ref mismatch to flip its target via downstream effect.
+- Round 8's B57.1 stood alone but introduced a reusable flag pattern + constraint-gate that future TS2589 work can build on.
 
 **Session timeline (2026-05-19, 7 rounds):**
 - Rounds 1-2 (6h): +8 surgical wins via B50.x/B51.x — alias-display, function-mismatch chain, optional-default param, super-access, lib-allowlist, etc.
