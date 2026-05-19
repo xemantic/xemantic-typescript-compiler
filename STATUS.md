@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,839 / 10,078 tests passing (~87.7%).
+**Phase 4 — Checker buildout.** 8,840 / 10,078 tests passing (~87.7%).
 
 **B51.x series (2026-05-19, all net-zero correctness improvements):**
 - **B51.1**: allow `class extends Array/Object/etc` via `BUILTIN_LIB_VALUE_INTERFACES` allowlist (suppresses FP TS2689 since our embedded lib lacks `declare const Array: ArrayConstructor`).
