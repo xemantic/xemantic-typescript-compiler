@@ -277,6 +277,15 @@ class Checker(
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
 
+    /** B50.1: Generic type alias arg substitution. When `getTypeFromTypeReference` resolves
+     *  a `TypeAlias` symbol with concrete type arguments, the alias's type-parameter names
+     *  are pushed into this map, then the alias body is re-resolved fresh via
+     *  [getTypeFromTypeNode] (cache-bypassed). Body-internal `TypeReference(T)` lookups
+     *  consult this map BEFORE `currentTypeParamScope` so concrete types win over
+     *  TypeParams. Nested aliases nest via push/pop. Recursion guarded by [typeAliasResolutionDepth]. */
+    private var currentTypeAliasArgs: Map<String, Type>? = null
+    private var typeAliasResolutionDepth: Int = 0
+
     /** 17.19: Base-class constructor signature for `super(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around each
      *  Constructor body when the class extends another class; instantiated with
@@ -41189,7 +41198,8 @@ interface DataView {
      * have been cached.
      */
     private fun getTypeFromTypeNode(node: TypeNode): Type {
-        val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty()
+        val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty() &&
+            currentTypeAliasArgs == null
         if (cacheable) {
             nodeTypes[node]?.let { return it }
         }
@@ -41270,6 +41280,23 @@ interface DataView {
     }
 
     /** Resolve a TypeReference node (e.g., `Foo`, `Array<string>`, `A.B`) to a Type. */
+    /** B50.1: True for alias body types that are function-shaped: `FunctionType`,
+     *  `ConstructorType`, `ParenthesizedType` around one of those, or `TypeLiteral`
+     *  whose ONLY members are call signatures. The B50.1 substitution skips these
+     *  because the comparison engine compares them via callSignatures, where
+     *  un-inferred TypeParams (from generic function-call return-types) collide
+     *  with the now-concrete alias args — producing FP TS2322. */
+    private fun isFunctionTypeAliasBody(t: TypeNode): Boolean {
+        return when (t) {
+            is FunctionType, is ConstructorType -> true
+            is ParenthesizedType -> isFunctionTypeAliasBody(t.type)
+            is TypeLiteral -> t.members.isNotEmpty() && t.members.all { m ->
+                m is MethodDeclaration && (m.name as? Identifier)?.text == ""
+            }
+            else -> false
+        }
+    }
+
     private fun getTypeFromTypeReference(node: TypeReference): Type {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
@@ -41283,6 +41310,11 @@ interface DataView {
         }
         // 16.0: Check enclosing class/interface type parameter scope before globals
         currentTypeParamScope?.get(name)?.let { return it }
+        // B50.1: Check generic type alias arg-substitution map. Inside a type alias
+        // body resolution (when the outer `getTypeFromTypeReference` pushed the alias's
+        // type parameters → concrete arg types), a body-internal `TypeReference(T)`
+        // resolves directly to the concrete type bound for T.
+        currentTypeAliasArgs?.get(name)?.let { return it }
         // Look up the symbol — try qualified name resolution, then file-locals
         // (namespace-aware), then globals. Namespace-aware lookup walks the
         // [inferenceNamespaceStack]'s top entry's parent chain to resolve type
@@ -41293,6 +41325,50 @@ interface DataView {
             ?: (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
             ?: globals[name]
         if (symbol != null) {
+            // B50.1: Generic type alias instantiation. When the symbol is a TypeAlias
+            // and the reference supplies type args matching the alias's arity, re-resolve
+            // the alias body in a context that maps alias type-parameter names to the
+            // concrete arg types. This fixes the long-standing gap where `Foo<string>`
+            // and `Foo<number>` produced structurally identical types (T resolved to
+            // errorType because the body was resolved without a type-param scope push).
+            // Recursion guarded by depth limit; circular aliases bail to errorType.
+            //
+            // Gate: skip FunctionType / ConstructorType / TypeLiteral-with-only-call-sigs
+            // aliases (e.g. `Mapper<T,U> = (x:T)=>U`). Instantiating those into concrete
+            // function types lets the relation engine fire FP TS2322 when a generic
+            // function-call result (whose TypeParams are still un-inferred) is compared
+            // against them — generic argument inference (Blocker #2) is not yet
+            // implemented, so the inferred T/U would otherwise resolve to errorType
+            // and silently pass. Object/Union/Intersection alias bodies are safe.
+            if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
+                val typeArgs = node.typeArguments
+                if (!typeArgs.isNullOrEmpty()) {
+                    val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    val declTPs = decl?.typeParameters
+                    if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size &&
+                        !isFunctionTypeAliasBody(decl.type)
+                    ) {
+                        val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                        if (resolvedArgs.none { it === errorType }) {
+                            if (typeAliasResolutionDepth >= 10) return errorType
+                            val saved = currentTypeAliasArgs
+                            try {
+                                val argMap = mutableMapOf<String, Type>()
+                                saved?.let { argMap.putAll(it) }
+                                for (i in declTPs.indices) {
+                                    argMap[declTPs[i].name.text] = resolvedArgs[i]
+                                }
+                                currentTypeAliasArgs = argMap
+                                typeAliasResolutionDepth++
+                                return getTypeFromTypeNode(decl.type)
+                            } finally {
+                                currentTypeAliasArgs = saved
+                                typeAliasResolutionDepth--
+                            }
+                        }
+                    }
+                }
+            }
             val declaredType = getDeclaredTypeOfSymbol(symbol)
             // If the type has type parameters and the reference has type arguments,
             // create a generic instantiation (Type.Reference)
