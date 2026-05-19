@@ -268,6 +268,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **`export type { Foo }` / `export { TypeAlias }` make imports type-only**: Cross-file type-only detection. Check `checker.isTypeOnlyExportName` and `checker.isValueExport` during pre-scans.
 - **`resolveModuleSpecifier` for absolute-path test files**: Use `fileBase == "/$baseName"` (not `endsWith`) for relative specifiers where `fileBase.startsWith("/")`.
 - **`isValueExport` returns `true` (safe default)**: Only return `false` when definitively type-only (TypeAlias, Interface, non-instantiated namespace).
+- **TS2741 cross-file `import("X")` qualification**: When source and target are different `Type.Interface` instances sharing the same display name (e.g. `export interface F` in `/a.ts` and `/b.ts`, both accessed as `import * as A from './a'` / `B from './b'` then `let a: A.F`, `let b: B.F`), TypeScript renders TS2741 messages as `Property 'P' is missing in type 'import("src").T' but required in type 'import("tgt").T'`. Helper `getSymbolImportName` (Checker.kt) searches `binderResults.locals` by identity-equality to find the declaring file's basename (no path, no extension). Gate: only fires when displaySource == declaringDisplay AND both types are `Type.Interface` with different symbols AND both resolve to different declaring files. Does NOT fire for lib symbols (not in any binderResult's locals) or nested-namespace exports (need a deeper walk through `parent` chain).
 
 ### TS2454/TS2564 gotchas
 
