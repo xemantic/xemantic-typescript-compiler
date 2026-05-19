@@ -934,6 +934,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 7 of /loop, B56.x — `new C()` unknown-default — +1 flip).** Continuation /loop session after round 6. Single-piece work:
+  - **B56.1** (feat, **+1**): When `new C()` is called with no type args AND no constructor args, default each TypeParam to `unknownType` (strict mode only). Matches TypeScript's behavior. **Flips `getAndSetNotIdenticalType2_ts`** via downstream effect: `var r = x.x` typed as `A<unknown>` instead of `A<errorType>`, enabling B54.x's same-base ref mismatch check.
+  - **B56.2** (feat, net-zero): Use TypeParam.default when present, fall back to unknown.
+  - **B56.3** (probed/reverted): Broaden to fire when newArgs is non-empty (1 regression).
+  - **B56.4** (probed/reverted): Broaden when no Constructor declaration (1 regression).
+
+  Round 7 totals: 15 commits, +1 net test (8843 → 8844). Demonstrates that infrastructure committed earlier (B54.x same-base ref mismatch check) compounds with later piece (B56.1 unknown-default) for a focused flip.
+
+  ---
+
   **Session 2026-05-19 (round 6 of /loop, B54.9 narrow + B55.x strict-generic-checks varTypes — +2 flips).** Continuation /loop session after round 5. Two-piece work:
   - **B54.9** (feat, net-zero, gate-narrow): Narrowed B54.3's same-base-different-args isAssignableTo extension to fire ONLY when at least one type arg is a primitive (string, number, boolean, etc.). Was previously over-firing for `C<X>` vs `C<Y>` named-type pairs (`generics3_ts`, `promisesWithConstraints_ts`).
   - **B55.1** (feat, net-zero): isAssignableTo's same-base gate also fires for distinct TypeParam args (both srcArg and tgtArg in current `typeParams` scope). Threaded `typeParams: Set<String>` through the call sites that emit TS2322 from this path.
