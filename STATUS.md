@@ -69,7 +69,10 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 6: 3/15 (B54.9, B55.1, B55.2) (20%)
 - Round 7: 2/15 (B56.1, B56.2) (13%)
 - Round 8: 3/15 (B57.1, B57.1b, B57.2) (20%)
+- Round 9: 3/15 (B58.1, B57.2 revert, B58.2) (20%)
 - Avg: ~22% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
+
+**Lesson: late rounds emphasize quality over quantity.** Rounds 7-9 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission). These build foundations for future agents; the "+12 net tests" headline understates the total productivity.
 
 **Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
 - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
