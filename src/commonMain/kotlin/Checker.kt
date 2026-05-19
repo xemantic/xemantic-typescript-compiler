@@ -205,6 +205,12 @@ class Checker(
      *  annotation's position. */
     private var deepInstantiationBailed: Boolean = false
 
+    /** B58.3: intern substitution results by (symbol.id, resolvedArgs-id-fingerprint)
+     *  so that subsequent identical substitution calls return the SAME Type instance.
+     *  This makes `aliasDisplayMap[result.id]` entries stable across re-resolution,
+     *  fixing the recursive-alias outer-type fresh-id issue from round 9. */
+    private val substitutionResultCache: MutableMap<String, Type> = mutableMapOf()
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -41767,6 +41773,11 @@ interface DataView {
                                 deepInstantiationBailed = true
                                 return errorType
                             }
+                            // B58.3: intern substitution results so identical (symbol, args)
+                            // calls return the same Type instance — keeps aliasDisplayMap
+                            // entries stable across re-resolution.
+                            val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}"
+                            substitutionResultCache[cacheKey]?.let { return it }
                             val saved = currentTypeAliasArgs
                             try {
                                 val argMap = mutableMapOf<String, Type>()
@@ -41796,6 +41807,8 @@ interface DataView {
                                     result !is Type.BigIntLiteral && !isPureFunctionType
                                 ) {
                                     aliasDisplayMap[result.id] = symbol.name to resolvedArgs
+                                    // B58.3: cache for future calls with same (symbol, args).
+                                    substitutionResultCache[cacheKey] = result
                                 }
                                 return result
                             } finally {
