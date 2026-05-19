@@ -95,7 +95,7 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 10: 1/15 (B58.3) (7%)
 - Round 11: 2/15 (B59.1, B59.2) (13%)
 - Round 12: 0/15 (0%) — pure docs
-- Avg: ~19% feature commits per round. The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
+- Avg: ~19% feature commits per round. 11 distinct feature commits across 12 rounds (B50.x: 5+ shipped; B51.x: 5+ shipped; B53.x: 2; B54.x: 9; B55.x: 2; B56.x: 2; B57.x: 1; B58.x: 3; B59.x: 2 — counting net-zero infra commits). The other 78% is queue maintenance, docs, status updates, audit, and dead-end documentation. This ratio is broadly consistent with the protocol's "fix multiple items per session" guidance when surgical work is available.
 
 **Lesson: late rounds emphasize quality over quantity.** Rounds 7-11 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra, TypeParam interning at 3 sites). These build foundations for future agents; the "+12 net tests" headline understates the total productivity. Round 12 stopped the surgical-search loop and propagated architectural-blocker recommendations.
 
