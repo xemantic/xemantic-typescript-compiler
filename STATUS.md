@@ -23,15 +23,16 @@ Suite: 8841 → 8843 / 10078 (+2). Zero regressions.
 
 Suite: 8843 → 8844 / 10078 (+1). Zero regressions.
 
-**7-round session grand totals (105 commits, +11 net tests, 2026-05-19):**
+**8-round session grand totals (120 commits, +12 net tests, 2026-05-19):**
 - Round 1 (B50.x alias/elaboration): 15 commits, +5 tests (8833 → 8838).
 - Round 2 (B51.x FP gates / new diagnostics): 15 commits, +3 tests (8838 → 8841).
 - Round 3 (chores/docs after pool exhausted): 15 commits, 0 tests.
 - Round 4 (B53.x display infra net-zero + audit): 15 commits, 0 tests.
 - Round 5 (B54.x accessor-pair / write-context): 15 commits, 0 tests (1 flip + 1 shift).
 - Round 6 (B54.9 narrow + B55.x strict-generic-checks varTypes): 15 commits, +2 tests (8841 → 8843).
-- **Round 7 (B56.x new-C-unknown-default)**: 15 commits, **+1 test** (8843 → 8844).
-- Cumulative: 105 commits, +11 net tests (8833 → 8844 / 10078 = 87.8%).
+- Round 7 (B56.x new-C-unknown-default): 15 commits, +1 test (8843 → 8844).
+- **Round 8 (B57.x TS2589 excessive-depth)**: 15 commits, **+1 test** (8844 → 8845).
+- Cumulative: 120 commits, +12 net tests (8833 → 8845 / 10078 = 87.8%).
 
 Rounds 6-7 broke the rounds 3-5 net-zero streak with compounding effects:
 - Round 6's B55.x needed B54.4 chain + B54.5 setter-param + B54.8 hint to flip cleanly.
