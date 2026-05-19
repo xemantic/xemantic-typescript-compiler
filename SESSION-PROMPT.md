@@ -114,6 +114,14 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 `find_candidates.py --fresh` returns 0/0/0. Audit confirms 0 STALE skip-log entries. All 5 MIXED bucket tests have ≥2 failing sub-variants (not close to flipping).
 
+**Reusable infrastructure landed in B54-B57 worth knowing about:**
+- `currentTypeParamDecls: Map<String, TypeParameter>` field — populated at function-body / class-body entry, available for any diagnostic that needs to point to a TypeParam declaration's source position (TS2208 / TS2344 / TS2345).
+- `getSymbolImportName(sym)` helper — finds declaring file's basename for `import("X")` qualification.
+- `deepInstantiationBailed: Boolean` flag — set when alias-substitution depth limit fires. Check around any type-resolution call site to emit TS2589.
+- `emitTs2589AtTypeNode(node, source, fileName)` helper — emits TS2589 at a TypeNode's correctly-trimmed span.
+- Accessor-pair merged declarations (B54.6) — `propSym.declarations` now contains BOTH GetAccessor and SetAccessor for accessor-pair properties.
+- isAssignableTo's typeParams parameter — pass it from callers to enable strict-generic-checks for same-base ref args.
+
 Next-session recommendation: pick a single architectural blocker.
 - **Blocker #1** (control flow narrowing): ~60-100 tests, infrastructure-heavy.
 - **Blocker #2** (generic argument inference): ~20-40 tests. Foundation in `tryInferSingleTypeParamFromArgs`; extension B52.2 promoted in queue.
