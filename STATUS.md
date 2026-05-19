@@ -2,8 +2,11 @@
 
 **Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%).
 
-**Round 11 (2026-05-19, net-zero, B59.1 TypeParam interning).** Continuation /loop session after round 10. Pool empty. Attempted approach (a) from B58.3's three fix directions:
-- **B59.1** (feat, net-zero): Intern Type.TypeParam instances by TypeParameter AST node position. Same source-level `<U>` now returns the same Type.TypeParam instance across multiple sig resolutions. Doesn't help `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path. Infrastructure committed for future use.
+**Round 11 (2026-05-19, net-zero, B59.x TypeParam interning).** Continuation /loop session after round 10. Pool empty. Attempted approach (a) from B58.3's three fix directions:
+- **B59.1** (feat, net-zero): Intern Type.TypeParam instances by TypeParameter AST node position at the function-signature path (Checker.kt:~49321).
+- **B59.2** (feat, net-zero): Extend interning to getTypeOfFunctionExpression (Checker.kt:~43811) and the symbol type-param resolution path (Checker.kt:~49888). Coverage 3 of 10 creation sites.
+
+Neither helps `inferFromNestedSameShapeTuple_ts` — fresh tuple Type.Object instances still come from a different code path. Infrastructure committed for future use.
 
 Round 11 net-zero on the suite. Five consecutive rounds at ~0.5 flips/round average.
 
