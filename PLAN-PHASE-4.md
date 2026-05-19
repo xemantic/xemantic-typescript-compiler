@@ -932,6 +932,15 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 6 of /loop, B54.9 narrow + B55.x strict-generic-checks varTypes — +2 flips).** Continuation /loop session after round 5. Two-piece work:
+  - **B54.9** (feat, net-zero, gate-narrow): Narrowed B54.3's same-base-different-args isAssignableTo extension to fire ONLY when at least one type arg is a primitive (string, number, boolean, etc.). Was previously over-firing for `C<X>` vs `C<Y>` named-type pairs (`generics3_ts`, `promisesWithConstraints_ts`).
+  - **B55.1** (feat, net-zero): isAssignableTo's same-base gate also fires for distinct TypeParam args (both srcArg and tgtArg in current `typeParams` scope). Threaded `typeParams: Set<String>` through the call sites that emit TS2322 from this path.
+  - **B55.2** (feat, **+2**): TS2208 related info via new `currentTypeParamDecls: Map<String, TypeParameter>` field. Populated at function-body / class-body entry. **Flips `typeParameterAssignmentCompat1_ts` and `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`**.
+
+  Round 6 totals: 15 commits, +2 net tests (8841 → 8843). First flip in rounds 3-6. The B55.x stack builds on B54.4's chain emission + B54.8's "could be instantiated" hint + B54.5's setter-param-type extraction — infrastructure committed in rounds 4-5 compounded into flips in round 6.
+
+  ---
+
   **Session 2026-05-19 (round 5 of /loop, B54.x accessor-pair / setter-write-context).** Continuation /loop session after round 4. Built out the accessor-pair declaration merging path:
   - **B54.1**: SetAccessor body walker (was falling into `else -> {}`).
   - **B54.2**: `this.X = v` fallback to varTypes for Identifier RHS.
