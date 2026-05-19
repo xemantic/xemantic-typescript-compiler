@@ -936,6 +936,15 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 8 of /loop, B57.x — TS2589 excessive-depth — +1 flip).** Continuation /loop session after round 7. Two-piece work:
+  - **B57.1** (feat, **+1**): TS2589 emission via new `deepInstantiationBailed` flag. Substitution path sets flag when bailing at depth 10. `buildFileLocalTypeMaps` consumes flag around variable annotations and type-alias bodies, emits TS2589 at the relevant TypeNode position via new helper `emitTs2589AtTypeNode` (trims trailing whitespace/punctuation to land at the closing `>`).
+  - **B57.1b** (constraint gate): Before recursing into alias body, check each arg against TypeParam's constraint. Skip recursion if any fails (prevents FP TS2589 on `Foo<"false", {}>` where `T extends "true"` is unsatisfied).
+  - **B57.2** (feat, net-zero infra): Extended TS2589 detection to type-alias body resolution (not just variable annotations). Doesn't flip `recursivelyExpandingUnionNoStackoverflow_ts` because that uses a mapped-type recursion that doesn't trigger the substitution path.
+
+  Round 8 totals: 15 commits, +1 net test (8844 → 8845). Continues the pattern of small focused infrastructure pieces with bounded scope.
+
+  ---
+
   **Session 2026-05-19 (round 7 of /loop, B56.x — `new C()` unknown-default — +1 flip).** Continuation /loop session after round 6. Single-piece work:
   - **B56.1** (feat, **+1**): When `new C()` is called with no type args AND no constructor args, default each TypeParam to `unknownType` (strict mode only). Matches TypeScript's behavior. **Flips `getAndSetNotIdenticalType2_ts`** via downstream effect: `var r = x.x` typed as `A<unknown>` instead of `A<errorType>`, enabling B54.x's same-base ref mismatch check.
   - **B56.2** (feat, net-zero): Use TypeParam.default when present, fall back to unknown.
