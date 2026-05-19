@@ -924,14 +924,17 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-19 (B51.x — round 2 of /loop, +4 net: B50.x's +5 → +9 total)**:
+  **Session 2026-05-19 (B51.x — round 2 of /loop, +3 tests across 13 commits)**:
   - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (TS2689 FP gone).
   - B51.2: TS6212 source-return-any/error gate (fn-vs-fn FP gone).
   - B51.3: TS2371 for binding-pattern defaults in type positions.
   - B51.4: gate Case-2 TS7030 emission on noImplicitReturns.
   - **B51.5 (+1)**: TS17011 for `super(super.X())` pattern — flips `superPropertyAccessInSuperCall01_ts`.
+  - **B51.6 (+1)**: TS2352 widened to `<FuncType>(undefined)` + optional-default param display — flips `defaultValueInFunctionTypes_ts`.
+  - **B51.7 (+1)**: optional Type.Reference param `| undefined` display in TS2345 — flips `genericFunctionsWithOptionalParameters1_ts`.
+  - B51.8 attempted/reverted: void→undefined gate on !strictNullChecks (-2 regressed non-strict tests).
 
-  Round 1 (B50.0–B50.11) landed +5 from alias/elaboration infrastructure + super static/instance discrimination. Round 2 (B51.1–B51.5) added correctness improvements + one new diagnostic emission. Current 8839 / 10078 = 87.7%.
+  Round 1 (B50.0–B50.11) landed +5 from alias/elaboration infrastructure + super static/instance discrimination. Round 2 (B51.1–B51.7) added correctness improvements + 3 new test flips. Current 8841 / 10078 = 87.7%.
 
   
 
