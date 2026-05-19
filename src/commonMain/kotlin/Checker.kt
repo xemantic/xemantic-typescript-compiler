@@ -40738,7 +40738,14 @@ interface DataView {
                 val propName = target.name.text
                 val declaredType = varTypes["this.$propName"]
                 if (declaredType != null) {
+                    // B54.2: fall back to direct varTypes lookup for Identifier RHS when
+                    // inferSimpleExprType deliberately returns null (its standard gate skips
+                    // identifier lookup to avoid FPs with enum/union targets). For `this.X = v`
+                    // assignments inside setters/methods, the parameter type IS reliably stored
+                    // in varTypes by the class-body walker, and the RHS-narrower runs in a
+                    // fresh per-member scope so FP risk is bounded.
                     val exprType = inferSimpleExprType(expr.right, varTypes)
+                        ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
                     if (exprType != null && !isAssignableTo(exprType, declaredType)) {
                         // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
                         val squiggleStart = target.expression.pos
@@ -59376,6 +59383,18 @@ interface DataView {
         // that null/undefined are NOT assignable. Other source types might actually be
         // assignable via structural typing, type aliases, etc.
         if (targetType.startsWith("@")) {
+            // B54.3: when source and target are both same-base-name parameterized types
+            // (`@A<string>` vs `@A<number>`), compare type args directly. Different args
+            // for the same base interface are NOT assignable (covariance/contravariance
+            // ignored — this matches TypeScript's strict-equality behavior for same-name
+            // generic refs, which is correct for invariant containers like `class A<T>`).
+            if (sourceType.startsWith("@") && sourceType != targetType) {
+                val srcBase = sourceType.substringBefore('<')
+                val tgtBase = targetType.substringBefore('<')
+                if (srcBase == tgtBase && sourceType.contains('<') && targetType.contains('<')) {
+                    return false
+                }
+            }
             // null and undefined are never assignable to named types (with strict null checks)
             return sourceType != "null" && sourceType != "undefined"
         }
@@ -59404,6 +59423,21 @@ interface DataView {
             val targetBaseName = displayTarget.substringBefore('<')
             if (targetBaseName in typeParams) {
                 chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+            }
+        }
+        // B54.4: same-base same-name generic ref mismatch — add leaf chain entry comparing
+        // diverging type args. For `@A<string>` vs `@A<number>`, emit
+        // "  Type 'string' is not assignable to type 'number'." Pairs with B54.3's gate.
+        if (sourceType.startsWith("@") && targetType.startsWith("@") &&
+            sourceType.contains('<') && targetType.contains('<')) {
+            val srcBase = sourceType.substringBefore('<')
+            val tgtBase = targetType.substringBefore('<')
+            if (srcBase == tgtBase) {
+                val srcArg = sourceType.substringAfter('<').removeSuffix(">").removePrefix("@")
+                val tgtArg = targetType.substringAfter('<').removeSuffix(">").removePrefix("@")
+                if (srcArg != tgtArg && !srcArg.contains(',') && !tgtArg.contains(',')) {
+                    chain.add("  Type '$srcArg' is not assignable to type '$tgtArg'.")
+                }
             }
         }
         diagnostics.add(Diagnostic(
