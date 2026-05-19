@@ -917,6 +917,8 @@ the live plan focused. Quick reference:
 
 ---
 
+- [ ] **B52.1 (NEW 2026-05-19, promoted from Blocker #2): Generic argument inference — step 1 (single TypeParam, identity return type).** Smallest standalone substep of Blocker #2 (generic argument inference). Tackle the simplest shape first: a generic function `f<T>(x: T): T` called with a concrete argument. Infer T from the arg type, substitute into the return type so downstream type checks see the concrete type (not `T` or `errorType`). Gate conservatively: only when (a) a single type parameter, (b) no constraint on the type parameter, (c) parameter type is exactly `TypeParam(T)` (not a deeper structure containing T), (d) overload resolution selected exactly one signature. Target tests with `(x: T) => T` shapes — e.g. identity functions whose return type is used downstream for `.toUpperCase()` or similar TS2339 checks. Expected yield: 1–3 tests; if regresses, revert and try a different decomposition (e.g. only when caller has annotated context).
+
 - [ ] **16.4. Generic type instantiation and inference (MEDIUM — ~80 tests realistic) — IN PROGRESS**
 
   *Earlier session notes (16.4a through 16.4ar) archived to
