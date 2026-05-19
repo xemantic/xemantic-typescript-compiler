@@ -50371,6 +50371,11 @@ interface DataView {
         // Find the base class type
         val baseTypes = enclosingClassType.baseTypes
         if (baseTypes.isNullOrEmpty()) return
+        // B50.9: In static context, `super` refers to `typeof BaseClass` (constructor side).
+        // Only static members are accessible; non-static members should fall through to TS2339
+        // ("Property 'x' does not exist on type 'typeof C'.") instead of TS2340 (which is
+        // about instance-side method-vs-non-method discrimination).
+        val isStaticContext = inStaticClassMethod
         for (baseType in baseTypes) {
             if (baseType !is Type.Interface) continue
             resolveStructuredTypeMembers(baseType)
@@ -50387,6 +50392,35 @@ interface DataView {
                         else -> null
                     }
                     if (memberName != propName) continue
+                    val memberIsStatic = when (member) {
+                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                        is GetAccessor -> ModifierFlag.Static in member.modifiers
+                        is SetAccessor -> ModifierFlag.Static in member.modifiers
+                        else -> false
+                    }
+                    // B50.9: Static-context vs instance-context lookup.
+                    // - Static context + non-static member: skip (falls through to TS2339).
+                    // - Instance context + static member that's a method/property/accessor:
+                    //   emit TS2576 with "Did you mean to access the static member 'C.x'?".
+                    if (isStaticContext && !memberIsStatic) continue
+                    if (!isStaticContext && memberIsStatic) {
+                        val start = expr.name.pos
+                        val length = propName.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
+                            .let { (it as? ClassDeclaration)?.name?.text }
+                        val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${baseType.symbol?.name ?: "unknown"}'.$suggestion",
+                            category = DiagnosticCategory.Error,
+                            code = 2576,
+                            fileName = fileName,
+                            line = line, character = character,
+                            start = start, length = length,
+                        ))
+                        return
+                    }
                     // Methods are OK via super, properties/getters/setters are not
                     if (member is MethodDeclaration) return // found as method — no error
                     val start = expr.name.pos
@@ -50444,23 +50478,45 @@ interface DataView {
         if (enclosingClassType !is Type.Interface) return
         val baseTypes = enclosingClassType.baseTypes ?: return
         if (baseTypes.isEmpty()) return
+        // B50.9: track static context so static-vs-instance access mismatches emit
+        // the right diagnostic (TS2576 for instance-context-accesses-static, TS2339
+        // for static-context-accesses-instance via emitTs2339ForMissingSuperMember).
+        val isStaticContext = inStaticClassMethod
         for (baseType in baseTypes) {
             if (baseType !is Type.Interface) continue
             val baseSym = baseType.symbol ?: continue
             for (decl in baseSym.declarations) {
                 if (decl !is ClassDeclaration) continue
                 for (member in decl.members) {
-                    if (member !is PropertyDeclaration) continue
-                    val memberName = (member.name as? Identifier)?.text ?: continue
+                    // B50.9: Also consider MethodDeclaration for static-vs-instance mismatch.
+                    if (member !is PropertyDeclaration && member !is MethodDeclaration) continue
+                    val memberName = when (member) {
+                        is PropertyDeclaration -> (member.name as? Identifier)?.text ?: continue
+                        is MethodDeclaration -> (member.name as? Identifier)?.text ?: continue
+                        else -> continue
+                    }
                     if (memberName != propName) continue
                     // Ambient `declare` properties don't have class-field semantics → skip.
-                    if (ModifierFlag.Declare in member.modifiers) return
+                    if (member is PropertyDeclaration && ModifierFlag.Declare in member.modifiers) return
+                    val memberIsStatic = when (member) {
+                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        else -> false
+                    }
+                    // B50.9: skip same-side member (handled by emitTs2339ForMissingSuperMember
+                    // falling through to TS2339), keep only cross-side mismatch checks.
+                    if (memberIsStatic == isStaticContext) {
+                        // Same side — only PropertyDeclaration falls through to the
+                        // TS2855 branch below; static methods on static side are OK.
+                        if (member is MethodDeclaration) return
+                        // For PropertyDeclaration, proceed to TS2855/TS2576 below.
+                    }
                     val start = expr.name.pos
                     val length = propName.length
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     // Static members accessed via `super` → TS2576 with "did you mean static" hint,
                     // matching the existing ES5 branch. Non-static class fields → TS2855.
-                    if (ModifierFlag.Static in member.modifiers) {
+                    if (memberIsStatic && !isStaticContext) {
                         val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
                             .let { (it as? ClassDeclaration)?.name?.text }
                         val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
@@ -50474,7 +50530,7 @@ interface DataView {
                             start = start,
                             length = length,
                         ))
-                    } else {
+                    } else if (member is PropertyDeclaration && !memberIsStatic && !isStaticContext) {
                         diagnostics.add(Diagnostic(
                             message = "Class field '$propName' defined by the parent class is not accessible in the child class via super.",
                             category = DiagnosticCategory.Error,
@@ -50692,23 +50748,31 @@ interface DataView {
         if (enclosingClassType !is Type.Interface) return false
         val baseTypes = enclosingClassType.baseTypes ?: return false
         if (baseTypes.isEmpty()) return false
-        // Walk each base chain; if ANY base has the property (including inherited), bail.
+        // B50.9: In static context, super refers to `typeof BaseClass`; look up only
+        // static members. Display as `typeof <BaseName>` instead of `<BaseName>`.
+        val isStaticContext = inStaticClassMethod
         var baseDisplay: String? = null
         for (base in baseTypes) {
             if (base !is Type.Interface) return false // unknown base shape — be conservative
             if (baseDisplay == null) baseDisplay = base.symbol?.name
             try { resolveStructuredTypeMembers(base) } catch (_: StackOverflowError) { return false }
-            if (getPropertyOfType(base, propName) != null) return false
-            // Also walk base's base chain (resolveStructuredTypeMembers may not have
-            // merged inherited members — be thorough).
-            if (basePropertyInheritedChain(base, propName, mutableSetOf())) return false
+            if (isStaticContext) {
+                // Static lookup — check the static-side member table only.
+                if (base.staticMembers?.get(propName) != null) return false
+            } else {
+                if (getPropertyOfType(base, propName) != null) return false
+                // Also walk base's base chain (resolveStructuredTypeMembers may not have
+                // merged inherited members — be thorough).
+                if (basePropertyInheritedChain(base, propName, mutableSetOf())) return false
+            }
         }
         val display = baseDisplay ?: return false
+        val displayName = if (isStaticContext) "typeof $display" else display
         val start = expr.name.pos
         val length = propName.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
-            message = "Property '$propName' does not exist on type '$display'.",
+            message = "Property '$propName' does not exist on type '$displayName'.",
             category = DiagnosticCategory.Error,
             code = 2339,
             fileName = fileName,
