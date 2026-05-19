@@ -41121,11 +41121,21 @@ interface DataView {
                 if (objType !is Type.Object) return
                 resolveStructuredTypeMembers(objType)
                 val propSym = objType.members?.get(propName) ?: return
+                // B54.5: For accessor pairs (get + set), `x.x = v` uses the SETTER's
+                // parameter type for the write check (NOT the getter return type). Pairs
+                // with B54.6's accessor-pair-declarations merging — together they let
+                // checkPropertyAccessAssignment detect a write context against a setter.
+                val setAccessorDecl = propSym.declarations.firstOrNull { it is SetAccessor } as? SetAccessor
+                val setterParamTypeNode = setAccessorDecl?.parameters?.firstOrNull()?.type
+                val setterResolvedType = setterParamTypeNode?.let {
+                    try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                }
                 // 16.0: For generic class instance types (Type.Reference with type args),
                 // resolve the property's declared type with the class's type parameters in
                 // scope, then apply the type mapper. This produces the correctly instantiated
                 // prop type (e.g. `T → string` for `new Test1<string>()`).
-                val resolved = resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
+                val resolved = setterResolvedType?.takeIf { it !== anyType && it !== errorType }
+                    ?: resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
                 if (resolved === anyType || resolved === errorType) return
                 propType = resolved
             }
@@ -42371,11 +42381,21 @@ interface DataView {
                     }
                     is GetAccessor -> {
                         val name = getMemberName(member.name) ?: continue
-                        val sym = members.getOrPut(name) {
+                        val existing = members[name]
+                        val sym = if (existing != null) {
+                            // B54.6: accessor-pair declaration merging — if a SetAccessor was
+                            // bound first, append this GetAccessor's declaration to the same
+                            // symbol so checkPropertyAccessAssignment / typeOfAccessor can find
+                            // both. Without this, propSym.declarations carries only the first
+                            // accessor, breaking write-context setter-param type extraction.
+                            if (member !in existing.declarations) existing.declarations.add(member)
+                            existing
+                        } else {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
+                                members[name] = it
                             }
                         }
                         if (ModifierFlag.Static in member.modifiers) {
@@ -42384,11 +42404,17 @@ interface DataView {
                     }
                     is SetAccessor -> {
                         val name = getMemberName(member.name) ?: continue
-                        val sym = members.getOrPut(name) {
+                        val existing = members[name]
+                        val sym = if (existing != null) {
+                            // B54.6: see comment in GetAccessor branch.
+                            if (member !in existing.declarations) existing.declarations.add(member)
+                            existing
+                        } else {
                             Symbol(SymbolFlags.Property, name).also {
                                 it.declarations.add(member)
                                 it.valueDeclaration = member
                                 it.parent = symbol
+                                members[name] = it
                             }
                         }
                         if (ModifierFlag.Static in member.modifiers) {
