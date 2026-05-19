@@ -938,6 +938,14 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 9 of /loop, B58.1 + B57.2 revert — net-zero quality).** Continuation /loop session after round 8. Two correctness fixes:
+  - **B58.1** (feat, net-zero): errorType displays as 'any' (TypeScript convention).
+  - **B57.2 revert** (fix, net-zero): Stop FP TS2589 at type-alias body resolution. The B57.2 round-8 attempt emitted TS2589 for declarations like `type T1<T> = [number, T1<{x:T}>]` even though the alias is used safely. Save/reset deepInstantiationBailed around type-alias resolutions to scope the flag to variable annotations only.
+
+  Round 9 totals: 15 commits, 0 net tests. The single near-flip identified (`inferFromNestedSameShapeTuple_ts`) needs tuple-aware elaboration chain ("Type at position N in source is not compatible with type at position N in target.") + alias-name preservation for Type.Reference target — both multi-piece.
+
+  ---
+
   **Session 2026-05-19 (round 8 of /loop, B57.x — TS2589 excessive-depth — +1 flip).** Continuation /loop session after round 7. Two-piece work:
   - **B57.1** (feat, **+1**): TS2589 emission via new `deepInstantiationBailed` flag. Substitution path sets flag when bailing at depth 10. `buildFileLocalTypeMaps` consumes flag around variable annotations and type-alias bodies, emits TS2589 at the relevant TypeNode position via new helper `emitTs2589AtTypeNode` (trims trailing whitespace/punctuation to land at the closing `>`).
   - **B57.1b** (constraint gate): Before recursing into alias body, check each arg against TypeParam's constraint. Skip recursion if any fails (prevents FP TS2589 on `Foo<"false", {}>` where `T extends "true"` is unsatisfied).
