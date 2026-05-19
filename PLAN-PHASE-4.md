@@ -932,6 +932,20 @@ the live plan focused. Quick reference:
 
   **Verification.** Full-suite 10078/1240/3 (same 1240-test failure set as B50.6 baseline; 0 net). Zero regressions.
 
+  **Session 2026-05-19 expanded retrospective (B50.0–B50.11, +5 net tests, 14 commits).** The original B50.x stack (B50.0–B50.7, +2 tests) continued with surgical work on adjacent shapes:
+  - **B50.8** (fix, net-zero): Preserve `readonly` prefix for `ReadonlyArray<T>` display in `formatTypeForDisplay`.
+  - **B50.9** (feat, **+3**): Super-access static-context vs instance-context discrimination in `checkSuperPropertyAccessES5` / `checkSuperFieldAccessES2015Plus` / `emitTs2339ForMissingSuperMember`. Flips `superAccess2_ts`, `superPropertyAccess2_ts__target_{es5,es2015}`.
+  - **B50.10** (feat, net-zero): TS2696 emission for Object-source-to-named-target mismatch. New `shouldEmitTs2696ForObject` helper threaded through var-decl + assignment-expression TS2739/TS2740 emission sites.
+  - **B50.11** (fix, net-zero): Prefer callee squiggle in TS2769 emission when overloads have heterogeneous failure shapes (mix of fn-vs-fn and fn-vs-non-fn). Corrects squiggle position for `overloadsWithProvisionalErrors_ts`.
+  - chore: strikethrough stale `typeAssignabilityErrorMessage_ts` skip entry.
+
+  Session totals: 14 commits, +5 net tests (8833 → 8838 = 87.7%). Three productive iteration arcs:
+  1. B50.x alias/elaboration core (B50.0–B50.6): +2 tests, mostly net-zero infra commits with two flips.
+  2. B50.x display/correctness extensions (B50.7–B50.8): net-zero correctness improvements.
+  3. Super-access + diagnostic-code refinement (B50.9–B50.11): +3 tests.
+
+  ---
+
   **Session 2026-05-19 retrospective (B50.0–B50.7, +2 net tests).** Eight-commit /loop session built out a coordinated alias/elaboration infrastructure stack:
   - B50.0: chore(plan) logging 2 architectural candidates.
   - B50.1: generic type alias instantiation foundation (net-zero infra).
