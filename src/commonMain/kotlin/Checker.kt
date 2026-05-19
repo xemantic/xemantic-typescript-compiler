@@ -39359,8 +39359,14 @@ interface DataView {
                 // the target — i.e., one of the call signatures' return types is assignable.
                 // Without this guard, tests like `let b: [string] = () => void` get a bogus
                 // "Did you mean to call this expression?" (calling would give void, still incompatible).
+                // B51.2: skip when source's return type is `any`/`error` — those trivially
+                // match anything and would cause FP TS6212 for fn-vs-fn cases where the
+                // function-mismatch elaboration is the correct handler (e.g.
+                // typeParameterConstrainedToOuterTypeParameter_ts's
+                // `var b: B<string> = a` where A<string>'s call sig has inferred `any` return).
                 val callingHelps = srcIsFunc && (sourceType as Type.Object).callSignatures?.any { sig ->
                     val rt = sig.resolvedReturnType ?: return@any false
+                    if (rt === anyType || rt === errorType) return@any false
                     checkTypeRelatedTo(rt, targetType, assignableRelation)
                 } == true
                 if (srcIsFunc && !tgtIsNewable && callingHelps &&
