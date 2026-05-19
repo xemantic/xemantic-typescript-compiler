@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,843 / 10,078 tests passing (~87.8%).
+**Phase 4 — Checker buildout.** 8,844 / 10,078 tests passing (~87.8%).
 
 **Round 6 (2026-05-19, +2 test flips via B55.x stack): regression-finder + strict-generic-checks for varTypes path.** Continuation /loop session after round 5. Started by methodically identifying which tests regressed when B54.7 was broadly enabled — diff'd failing sets pre/post, identified `generics3_ts` and `promisesWithConstraints_ts` (both same-base named-type args). Narrowed B54.3's gate via B54.9 (primitive-arg only), making B54.7 safe.
 
@@ -9,6 +9,12 @@ Then implemented strict-generic-checks for varTypes path:
 - **B55.2** (feat, **+2**): TS2208 "type parameter might need an `extends X` constraint" related info. New `currentTypeParamDecls: Map<String, TypeParameter>` field populated at function-body / class-body entry. emitTS2322 looks up source-arg's TypeParameter and emits TS2208 related info pointing to its name position. **Flips `typeParameterAssignmentCompat1_ts` and `conditionalTypeVarianceBigArrayConstraintsPerformance_ts`** (the latter as a bonus from the same infrastructure).
 
 Suite: 8841 → 8843 / 10078 (+2). Zero regressions.
+
+**Round 7 (2026-05-19, +1 via B56.1): `new C()` unknown-default for un-instantiated TypeParams.** Continuation /loop session after round 6. `find_candidates.py --fresh` returns 0/0/0. Targeted the last MIXED-bucket near-flip (`getAndSetNotIdenticalType2_ts`) identified in round 6's audit.
+
+- **B56.1** (feat, **+1**): When `new C()` is called with no type args AND no constructor args, default each unconstrained TypeParam to `unknownType` (strict mode only). Matches TypeScript's behavior: `var x = new C()` where `class C<T>` produces `C<unknown>`. Conservative gate: strictNullChecks AND all TypeParams unconstrained (no extends, no default) AND no constructor args. **Flips `getAndSetNotIdenticalType2_ts`** via downstream effect on `x.x = r` (LHS resolves to setter param A<string>, RHS r resolves to A<unknown> via getter substitution).
+
+Suite: 8843 → 8844 / 10078 (+1). Zero regressions.
 
 **6-round session grand totals (90+ commits, +10 net tests, 2026-05-19):**
 - Round 1 (B50.x alias/elaboration): 15 commits, +5 tests (8833 → 8838).
