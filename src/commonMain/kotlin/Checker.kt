@@ -39470,11 +39470,25 @@ interface DataView {
                         val propElab = getPropertyElaborationChain(sourceType, targetType)
                         if (propElab != null) chain.addAll(propElab)
                     }
+                    // B50.3: Object → Union target — find best-matching constituent
+                    // (Object constituent that shares the most property names with source)
+                    // and emit a 2-level chain: outer line names source vs constituent,
+                    // deeper lines come from getPropertyElaborationChain.
+                    if (chain.isEmpty() && sourceType is Type.Object &&
+                        targetType is Type.Union) {
+                        val best = findBestUnionConstituent(sourceType, targetType)
+                        if (best != null && best is Type.Object) {
+                            val outerLine = "  Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(best)}'."
+                            chain.add(outerLine)
+                            val deeper = getPropertyElaborationChain(sourceType, best)
+                            if (deeper != null) chain.addAll(deeper.map { "  $it" })
+                        }
+                    }
                     // 17.74: Missing index signature elaboration (mirrors the
                     // assignment-expression path at ~34861 and the property-access
                     // path at ~35285). Fires for function-vs-ArrayLike-shape:
                     // `func: () => void` → `ArrayLike<any>` produces
-                    // "  Index signature for type 'number' is missing in type '() => void'."
+                    // "  Index signature for type '() => void' is missing in type '() => void'."
                     if (chain.isEmpty() && lastMissingIndexSigKind != null) {
                         chain.add("  Index signature for type '$lastMissingIndexSigKind' is missing in type '$displaySource'.")
                     }
@@ -41291,6 +41305,29 @@ interface DataView {
     }
 
     /** Resolve a TypeReference node (e.g., `Foo`, `Array<string>`, `A.B`) to a Type. */
+    /** B50.3: Pick the union constituent that shares the MOST property names with
+     *  `source` for source-vs-union elaboration. Returns null if no Object-shaped
+     *  constituent shares any properties (e.g. `string | number` target). For ties,
+     *  the first matching constituent wins. */
+    private fun findBestUnionConstituent(source: Type.Object, target: Type.Union): Type? {
+        resolveStructuredTypeMembers(source)
+        val sourcePropNames = source.properties?.map { it.name }?.toSet() ?: return null
+        if (sourcePropNames.isEmpty()) return null
+        var best: Type? = null
+        var bestScore = -1
+        for (c in target.types) {
+            if (c !is Type.Object) continue
+            resolveStructuredTypeMembers(c)
+            val constNames = c.properties?.map { it.name }?.toSet() ?: continue
+            val shared = sourcePropNames.intersect(constNames).size
+            if (shared > bestScore) {
+                bestScore = shared
+                best = c
+            }
+        }
+        return if (bestScore > 0) best else null
+    }
+
     /** B50.1: True for alias body types that are function-shaped: `FunctionType`,
      *  `ConstructorType`, `ParenthesizedType` around one of those, or `TypeLiteral`
      *  whose ONLY members are call signatures. The B50.1 substitution skips these
