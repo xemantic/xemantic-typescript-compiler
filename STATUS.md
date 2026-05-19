@@ -99,7 +99,14 @@ Rounds 6-8 broke the rounds 3-5 net-zero streak with compounding effects:
 
 **Lesson: late rounds emphasize quality over quantity.** Rounds 7-11 each delivered 0-1 flips but landed substantive correctness improvements (errorType→any display, tuple-aware chain, accessor-pair merging, write-context setter-param, TS2589 emission, substitution-result-cache infra, TypeParam interning at 3 sites). These build foundations for future agents; the "+12 net tests" headline understates the total productivity. Round 12 stopped the surgical-search loop and propagated architectural-blocker recommendations.
 
-**Key reusable infrastructure from this session (catalogued in SESSION-PROMPT.md):**
+**Remaining un-flipped near-flip targets (architectural-gated):
+- `inferFromNestedSameShapeTuple_ts` — alias-display puzzle (B58.3/B59.x partial).
+- `noStrictGenericChecks_ts` — function-type generic comparison.
+- `arrayAssignmentTest4_ts` — lib-content target-versioning.
+- `relationComplexityError_ts` — TS2859 complexity tracking.
+- `awaitedType_ts`/`recursiveMappedTypes_ts`/etc — TS2589 in mapped/conditional paths (B57.3).
+
+Key reusable infrastructure from this session (catalogued in SESSION-PROMPT.md):**
 - `currentTypeParamDecls: Map<String, TypeParameter>` (B55.2) — TypeParam declarations in current scope for TS2208/TS2344/TS2345 related-info.
 - `getSymbolImportName(sym)` (B53.1) — declaring-file basename for `import("X")` qualification.
 - `deepInstantiationBailed: Boolean` (B57.1) + `emitTs2589AtTypeNode` — TS2589 emission via bail flag.
