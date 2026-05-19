@@ -928,6 +928,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (round 4 of /loop, 0 test flips across 15 commits — recon + B53.x display infrastructure).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
+
+  - **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName` searches `binderResults.locals` by identity for the declaring file's basename. Gates narrowly to avoid regressions.
+  - **B53.2** (feat, net-zero, Blocker #3-gated): Named Type.Object non-overlap detection in `checkEqualityComparisonNoOverlap`. Implementation correct, but target test (`errorWithSameNameType_ts`) is blocked by declaration-merging-across-files (Blocker #3): debug trace confirmed `interface F` in /a.ts and /b.ts get merged into a single symbol with union members at `mergeSymbolTable` time, so structural disjointness silently fails. Infrastructure committed for future tests with genuinely disjoint named objects.
+  - 5 stale skip-log entries strikethrough'd via `/tmp/audit_skips.py` (post-B50.9 super-access + B47.x private-field flips); audit script regex fix (replace literal `~` with `around`) so the strikethrough recognition works correctly.
+  - Promoted B52.1 (Blocker #2 step 1) — on recon found infra already implemented (`tryInferSingleTypeParamFromArgs` already covers identity-T return-type case). Promoted B52.2 (nested-T-in-property) as the live successor.
+  - CLAUDE.md gotchas added for: TS2741 cross-file qualification; cross-file interface merging as Blocker #3 manifestation.
+
+  **Round 4 net-zero on the suite.** Two real code changes (B53.1, B53.2) landed as net-zero infrastructure — both useful for future tests, both committed with clear gates. Remaining "surgical" candidates all map to known architectural blockers (declaration merging, variance inference, conditional types, overload-aware diagnostics).
+
   **Session 2026-05-19 retrospective (combined rounds 1+2, 30 commits, +8 net tests, 8833 → 8841 / 10078).**
 
   **Session 2026-05-19 (B51.x — round 2 of /loop, +3 tests across 15 commits)**:
