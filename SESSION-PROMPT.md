@@ -120,6 +120,11 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 **⚠ STRONG recommendation for the next session**: commit a full session to one of the architectural blockers. Rounds 7-12 are 6 consecutive rounds at ~0.33 flips/round average. Surgical work without architectural commitment is unlikely productive going forward. See PLAN-PHASE-4.md's "Known architectural blockers" section.
 
+**Concrete starting points for the next architectural session:**
+- **Blocker #1 step 1 (control flow narrowing)**: Build flow-graph infra in binder. Most tests in TS2774, TS2454, TS2339 hit this. Start with `nullishCoalescing` / `optionalChain` propagation in `Flow.kt`. Yield ~60-100 tests.
+- **Blocker #2 nested-T inference**: Extend `tryInferSingleTypeParamFromArgs` to handle `f<T>(x: { v: T }): T` (B52.2 in queue). Smallest standalone substep. Yield ~3 tests.
+- **Blocker #3 per-file scope**: Split "true globals" from cross-file module locals. Highest yield (~30 tests) but highest risk. Recommended approach: add `perFileScope` flag-gated path, flip per file as scope construction proves correct.
+
 **Reusable infrastructure landed in B54-B57 worth knowing about:**
 - `currentTypeParamDecls: Map<String, TypeParameter>` field — populated at function-body / class-body entry, available for any diagnostic that needs to point to a TypeParam declaration's source position (TS2208 / TS2344 / TS2345).
 - `getSymbolImportName(sym)` helper — finds declaring file's basename for `import("X")` qualification.
