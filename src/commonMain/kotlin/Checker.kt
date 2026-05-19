@@ -44533,16 +44533,21 @@ interface DataView {
             // type params to `unknown` under strict mode. Matches TypeScript's
             // behavior for `var x = new C()` where C: `class C<T> {...}`; produces
             // `C<unknown>` so downstream `x.prop` resolves with T=unknown. Gated:
-            // skip when class has constructor params (we'd want inference there) and
-            // skip when typeParams have defaults.
+            // skip when class has constructor params (we'd want inference there).
+            // B56.2: handle defaults — use the default type if present.
             if (typeParams != null && typeParams.isNotEmpty() && typeArgs.isNullOrEmpty() &&
                 newArgs.isNullOrEmpty() && strictNullChecks
             ) {
                 try {
-                    val allUnconstrained = typeParams.all { it.constraint == null && it.default == null }
-                    if (allUnconstrained) {
-                        val unknownArgs = typeParams.map { unknownType }
-                        return getOrInternReference(calleeType, unknownArgs)
+                    val args: List<Type> = typeParams.map { tp ->
+                        val def = tp.default
+                        when {
+                            def != null && def !== errorType -> def
+                            else -> unknownType
+                        }
+                    }
+                    if (args.none { it === errorType }) {
+                        return getOrInternReference(calleeType, args)
                     }
                 } catch (_: StackOverflowError) { /* circular */ }
             }
