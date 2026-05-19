@@ -45054,7 +45054,10 @@ interface DataView {
             }
         }
         return when (type) {
-            is Type.Intrinsic -> type.intrinsicName
+            // B58.1: render errorType as "any" (matches TypeScript's display behavior;
+            // TypeScript doesn't expose an "error" type name in diagnostics — when type
+            // resolution fails, the slot is shown as `any`).
+            is Type.Intrinsic -> if (type === errorType) "any" else type.intrinsicName
             is Type.StringLiteral -> "\"${type.value}\""
             is Type.NumberLiteral -> type.toString()
             is Type.BigIntLiteral -> type.toString()
