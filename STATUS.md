@@ -2,7 +2,14 @@
 
 **Phase 4 — Checker buildout.** 8,841 / 10,078 tests passing (~87.7%).
 
-**Round 4 (2026-05-19, recon + queue maintenance, no test flips).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Five stale skip-log entries strikethrough'd via `/tmp/audit_skips.py` (post-B50.9 super-access flips + B47.x private-field flips). Promoted Blocker #2 substep B52.1 to live queue; on recon found infrastructure already in place (`tryInferSingleTypeParamFromArgs` already covers identity-T return-type case). Promoted B52.2 (nested-T-in-property) as the next narrow extension. No new test flips this round — round 4 is a queue/maintenance round to keep the next session set up cleanly.
+**Round 4 (2026-05-19, recon + B53.x display infrastructure, 0 test flips across 15 commits).** Continuation /loop session after round 3. `find_candidates.py --fresh` confirmed surgical pool empty (0/0/0 from 4/59/11 raw). Round contents:
+- **B53.1** (feat, net-zero): TS2741 cross-file `import("X")` qualification when source/target are different `Type.Interface` instances sharing the same display name. New helper `getSymbolImportName`.
+- **B53.2** (feat, net-zero, Blocker #3-gated): Named Type.Object non-overlap detection in `checkEqualityComparisonNoOverlap`. Target test (`errorWithSameNameType_ts`) blocked by cross-file declaration merging — debug confirmed `interface F` in /a.ts and /b.ts get merged at `mergeSymbolTable` time so structural disjointness silently fails. Infrastructure committed for future tests with genuinely disjoint named objects.
+- 5 stale skip-log strikethroughs (post-B50.9 super-access + B47.x private-field flips); audit script regex fix (literal `~` → `around`) so strikethrough recognition works.
+- Queue restructure: B52.1 closed on recon (existing `tryInferSingleTypeParamFromArgs` already covers identity-T), B52.2 promoted as next narrow extension.
+- CLAUDE.md gotchas: TS2741 cross-file qualification; cross-file interface merging as Blocker #3 manifestation.
+
+Round 4 net-zero. Surgical pool genuinely exhausted at the +1 per-commit level — remaining tests all map to known architectural blockers.
 
 **B51.x series (2026-05-19, +3 test flips across 10 commits in round 2):**
 - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (FP TS2689 gone).
