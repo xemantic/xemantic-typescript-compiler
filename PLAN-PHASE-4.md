@@ -924,7 +924,9 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-19 (B51.x — round 2 of /loop, +3 tests across 13 commits)**:
+  **Session 2026-05-19 retrospective (combined rounds 1+2, 30 commits, +8 net tests, 8833 → 8841 / 10078).**
+
+  **Session 2026-05-19 (B51.x — round 2 of /loop, +3 tests across 15 commits)**:
   - B51.1: BUILTIN_LIB_VALUE_INTERFACES allowlist (TS2689 FP gone).
   - B51.2: TS6212 source-return-any/error gate (fn-vs-fn FP gone).
   - B51.3: TS2371 for binding-pattern defaults in type positions.
