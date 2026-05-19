@@ -924,6 +924,28 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-19 (B50.7, 8835 → 8835, net-zero) — Register alias name for Intersection bodies containing Union.** Continuation /loop iteration after B50.6. Extends B50.4's alias-name registration to handle the `errorMessageOnIntersectionsWithDiscriminants01_ts` pattern (`A = Common & {foo:1}` where `Common = X | Y` — TypeScript displays `A`, not the distributed structural form).
+
+  **Implementation.** Single-file change in `Checker.kt`. Refined the alias-name registration gate in `getDeclaredTypeOfSymbolWorker`'s TypeAlias arm: in addition to `Type.Object`, ALSO register `Type.Intersection` IF at least one constituent is a `Type.Union`. Flat intersections (`Wrapper = Foo & Bar`) keep their existing unfolded display, preserving the `implementsIncorrectlyNoAssertion_ts` baseline.
+
+  **Test impact.** `errorMessageOnIntersectionsWithDiscriminants01_ts` outer TS2322 message now renders 'A' / 'B' (alias names) instead of the distributed structural form. Still fails on the missing 4-line chain elaboration (drill into distributed disjuncts) — a separate infrastructure piece.
+
+  **Verification.** Full-suite 10078/1240/3 (same 1240-test failure set as B50.6 baseline; 0 net). Zero regressions.
+
+  **Session 2026-05-19 retrospective (B50.0–B50.7, +2 net tests).** Eight-commit /loop session built out a coordinated alias/elaboration infrastructure stack:
+  - B50.0: chore(plan) logging 2 architectural candidates.
+  - B50.1: generic type alias instantiation foundation (net-zero infra).
+  - B50.2: alias-name display preservation for B50.1-substituted types (net-zero infra).
+  - B50.3: source-vs-union elaboration chain in `checkVarDeclAssignability` (net-zero infra).
+  - **B50.4: TS2345 widening + Object→Union chain + non-generic alias display (+1)** — flips `typeAssignabilityErrorMessage_ts`.
+  - B50.5: skip alias-name display for pure function type alias bodies (the "noAlias" indirection trick) (net-zero infra).
+  - **B50.6: function return-type chain + pure-function unfolded display (+1)** — flips `nestedCallbackErrorNotFlattened_ts`.
+  - B50.7: register alias name for Intersection bodies containing Union (net-zero infra).
+  
+  The B50.x stack provides infrastructure for: (a) generic type alias instantiation, (b) alias-name display preservation (Object, Intersection-with-Union, with filters for singleton intrinsics, pure functions), (c) source-vs-union "best constituent" elaboration in both var-decl and TS2345 emission sites, (d) function return-type chain drill-down for nested callback patterns. Several MIXED skip-log candidates may now be one piece away from flipping.
+
+  ---
+
   **Session 2026-05-19 (B50.6, 8834 → 8835, +1 — flips ~~`nestedCallbackErrorNotFlattened_ts`~~) — Function return-type chain + pure-function unfolded display.** Continuation /loop iteration after B50.5. Lands the next adjacent fix for the deeply-nested-callback pattern.
 
   **Two-piece change in `Checker.kt`.** (a) `getFunctionMismatchElaboration`'s return-type-mismatch branch now recursively drills into nested function types via "Call signature return types '<src>' and '<tgt>' are incompatible." header + nested elaboration (indented +2). Fires only when BOTH source and target returns are PURE function types (call signatures only, no properties/members/construct sigs). For `Cb<Cb<Cb<Cb<number>>>>` (where `Cb<T> = {x: () => T}["x"]` resolves to `() => T`), this produces the full 4-level baseline chain. (b) In `checkAssignmentExpression`'s outer TS2322 display, prefer `typeToString(resolvedType)` over `formatTypeForDisplay(annotation)` when the resolved type is a pure function with no alias-display registered (filtered out by B50.5).
