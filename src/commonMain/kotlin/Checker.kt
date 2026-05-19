@@ -41411,13 +41411,21 @@ interface DataView {
                                 val result = getTypeFromTypeNode(decl.type)
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
-                                // CRITICAL: skip when result is a singleton intrinsic
-                                // (anyType / unknownType / etc.) — those are shared across
-                                // the corpus, so registering one alias's name would
-                                // corrupt every other anyType expression's display.
+                                // CRITICAL filters:
+                                //  - skip singleton intrinsics (anyType etc) shared across corpus
+                                //  - B50.5: skip pure function-typed results (call signatures only,
+                                //    no properties/members) — TypeScript unfolds those at display
+                                //    time. The `noAlias` indirection trick (`type Cb<T> =
+                                //    {x: () => T}["x"]`) in `nestedCallbackErrorNotFlattened_ts`
+                                //    deliberately prevents alias-symbol creation; we mirror that.
+                                val isPureFunctionType = result is Type.Object &&
+                                    !result.callSignatures.isNullOrEmpty() &&
+                                    result.properties.isNullOrEmpty() &&
+                                    result.members.isNullOrEmpty() &&
+                                    result.constructSignatures.isNullOrEmpty()
                                 if (result !== errorType && result !is Type.Intrinsic &&
                                     result !is Type.StringLiteral && result !is Type.NumberLiteral &&
-                                    result !is Type.BigIntLiteral
+                                    result !is Type.BigIntLiteral && !isPureFunctionType
                                 ) {
                                     aliasDisplayMap[result.id] = symbol.name to resolvedArgs
                                 }
