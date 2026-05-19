@@ -58740,13 +58740,16 @@ interface DataView {
                 val baseName = getTypeReferenceLastName(typeNode.typeName) ?: return null
                 val typeArgs = typeNode.typeArguments
                 if (typeArgs != null && typeArgs.isNotEmpty()) {
-                    // TypeScript normalizes Array<T> → T[] in error messages
+                    // TypeScript normalizes Array<T> → T[] and ReadonlyArray<T> → readonly T[]
+                    // in error messages. B50.8: preserve the `readonly` prefix for
+                    // ReadonlyArray to match TypeScript's display convention.
                     if ((baseName == "Array" || baseName == "ReadonlyArray") && typeArgs.size == 1) {
                         val elementDisplay = formatTypeForDisplay(typeArgs[0]) ?: return null
                         // Parens for function/constructor-like element types
                         val needsParens = typeArgs[0] !is ParenthesizedType &&
                             typeNodeRendersAsFunctionLike(typeArgs[0])
-                        return if (needsParens) "(${elementDisplay})[]" else "${elementDisplay}[]"
+                        val arr = if (needsParens) "(${elementDisplay})[]" else "${elementDisplay}[]"
+                        return if (baseName == "ReadonlyArray") "readonly $arr" else arr
                     }
                     val argNames = typeArgs.map { formatTypeForDisplay(it) }
                     if (argNames.any { it == null }) return null
