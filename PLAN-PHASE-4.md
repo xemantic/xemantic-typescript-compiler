@@ -946,6 +946,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-20 (round 13 of /loop, B60.x stack — +11 net tests via TypeParam-scope cascade).** Continuation /loop session after round 12 (which accepted diminishing returns). **The "diminishing returns" plateau was illusory** — a single foundational gap (checkFunctionBody not pushing function's TypeParam scope before resolving parameter annotations) cascaded through chain elaboration, TS2352 emission, and constraint-aware diagnostics, flipping 11+ tests across 10 commits.
+
+  Commits landed this round:
+  - **B60.1** (+1): Push function's TypeParams onto currentTypeParamScope in checkFunctionBody before resolving parameter type annotations. Without this, `T1<U>` resolved with U=errorType — substitution gate at `getTypeFromTypeReference` (`if (resolvedArgs.none { it === errorType })`) skipped, falling to un-substituted alias body and losing aliasDisplayMap registration. Flips `inferFromNestedSameShapeTuple_ts`.
+  - **B60.2** (net-zero): `'X' is assignable to the constraint of type 'T', but...` chain form when target TypeParam has constraint and source satisfies it. Applied at both var-decl and assignment-expr emission sites.
+  - **B60.1b** (net-zero): Two-pass TypeParam intern — (1) put TPs in scope, (2) resolve constraints with scope active.
+  - **B60.3** (+5): New per-file walker `walkStmtsForTypeParamCasts` + TS2352 emission for `<TypeParam>concrete-subtype` casts. Strict-subtype gate: src assignable to constraint but constraint NOT assignable to src. Flips genericTypeAssertions4/5_ts + 3 adjacents.
+  - **B60.5** (net-zero): Apparent-type chain when source is TypeParam — bypasses aliasDisplayMap via typeToStringInProgress.
+  - **B60.6** (+1): Bare TypeParam-vs-TypeParam emit, fallback in checkAssignmentExpression, constraint-assignable chain in varTypes path, Object hint, src-extends-tgt subtype skip. Flips typeParametersShouldNotBeEqual3_ts.
+  - **B60.7** (+2): Bare TypeParam → Object/Function emit + TS2208 related info for bare-TypeParam-source mismatch. Flips typeParametersShouldNotBeEqual_ts, typeParametersShouldNotBeEqual2_ts.
+  - **B60.8 + B60.9** (+1): Constrained TypeParam source → primitive target via canUseTypeEngine; Type.Interface display uses TypeParam defaults (`TableClass<S=any>` displays as `TableClass<any>`). Flips typeVariableConstraintedToAliasNotAssignableToUnion_ts.
+  - **B60.10** (+1): TS2313 circular constraint diagnostic + extend TS2208 to primitive targets + treat self-circular constraint as effectively unconstrained. Flips typeParameterHasSelfAsConstraint_ts.
+
+  Round 13 totals: 11 commits, +11 net tests (8845 → 8856). Demonstrates that "diminishing returns" plateaus from prior rounds can mask a single foundational gap whose fix cascades.
+
+  ---
+
   **Session 2026-05-19 (round 12 of /loop, acceptance + final propagation — net-zero).** Continuation /loop session after round 11. **⚠ Surgical-productivity inflection point fully reached.** 6 consecutive rounds (7-12) at ~0.33 flips/round avg vs ~2.5 flips/round for rounds 1-7. Decision: stop the surgical-search loop on this session. No code changes; documentation + recommendation propagation only.
 
   Round 12 totals: 15 commits, 0 net tests, 0 code changes. Pure doc consolidation.
