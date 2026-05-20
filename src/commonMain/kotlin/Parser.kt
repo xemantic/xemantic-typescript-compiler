@@ -6723,6 +6723,21 @@ class Parser(
                 overrideLength = text.length
             )
         }
+        // B61.2: TS1351 — an identifier or keyword cannot immediately follow a
+        // numeric literal that ends with `.` (e.g., `1.toString`). The literal `1.`
+        // is scanned as NumericLiteral; the next token starts at pos+text.length with
+        // no whitespace. Squiggle spans the entire identifier.
+        if (text.endsWith(".") &&
+            token == SyntaxKind.Identifier &&
+            scanner.getTokenPos() == pos + text.length) {
+            val idText = scanner.getTokenText()
+            reportError(
+                "An identifier or keyword cannot immediately follow a numeric literal.",
+                code = 1351,
+                overrideStart = scanner.getTokenPos(),
+                overrideLength = idText.length
+            )
+        }
         // Capture trailing comments only when the next token is a dot (property access).
         // This preserves `0 /* comment */.toString()` but avoids stealing comments that
         // belong to the enclosing statement (e.g. `await 3 /*comment*/` → comment trails stmt).
