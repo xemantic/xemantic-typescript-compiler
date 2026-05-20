@@ -740,8 +740,18 @@ class Parser(
                     // an initializer (e.g. `var x = /re/ i` — regex literal followed by identifier).
                     // Emit TS1005 ',' expected. Don't recover across line breaks or without initializer,
                     // to avoid misinterpreting `for (let x of ...)` or multi-line code.
-                    parseExpected(SyntaxKind.Comma)
-                    decls.add(parseVariableDeclaration())
+                    val lastInit = decls.last().initializer
+                    val isNumericLitWithTrailingDot = lastInit is NumericLiteralNode && lastInit.text.endsWith(".")
+                    if (isNumericLitWithTrailingDot) {
+                        // B61.3: After TS1351 (numeric-literal-followed-by-identifier),
+                        // defer TS1005 to land on the next token after the identifier
+                        // (typically `(` in `var x = 2.toString();`).
+                        decls.add(parseVariableDeclaration())
+                        reportError("',' expected.", code = 1005)
+                    } else {
+                        parseExpected(SyntaxKind.Comma)
+                        decls.add(parseVariableDeclaration())
+                    }
                 } else if (token == SyntaxKind.Unknown && !scanner.hasPrecedingLineBreak() &&
                     lookAhead { nextToken(); isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket }) {
                     // Error recovery: invalid character (like `\` from an incomplete unicode escape)
