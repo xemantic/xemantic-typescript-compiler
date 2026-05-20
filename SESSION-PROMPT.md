@@ -104,7 +104,16 @@ Your loop (per CLAUDE.md § Execution protocol):
 
 ---
 
-**Status (2026-05-19, 8845 passing — post 12-round /loop session, 180+ commits):** 12 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). The session has converged on the limit of surgical productivity. Recent rounds produced productive infrastructure with mixed flip outcomes:
+**Status (2026-05-20, 8856 passing — post round-13 /loop session):** Round 13 broke the rounds-7-12 "diminishing returns" plateau with **+11 net tests in 11 commits via the B60.x stack**. Key insight: `checkFunctionBody` was silently skipping the function's TypeParam scope before resolving parameter annotations, which cascaded through chain elaboration / TS2352 / TS2208 / TS2313 diagnostics once fixed. Pre-round-13 total: 12 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%); round 13 added +11 (8845 → 8856 = 87.9%).
+
+**Next-session opportunities** (post-B60.x):
+- B60.x stack created an opening for related TypeParam-source diagnostics. Tests in the same area that still need work: `typeParameterWithInvalidConstraintType_ts` (needs TS2349 callable + TS2351 constructable + TS2339 on TypeParam-typed expressions), `noStrictGenericChecks_ts` (function-vs-function with multi-TypeParam).
+- The B60.6f TS2208 emission path could be mirrored to checkVarDeclAssignability's Type-engine path (already done for return path in B60.10) — may unlock further tests.
+- B60.7's "Object/Function only" gate could be broadened to ALL named-non-TypeParam targets — needs careful regression-budget.
+
+**Earlier (2026-05-19, 8845 ceiling):**
+
+12 rounds of 15-iteration /loop work landed +12 net tests (8833 → 8845 / 10078 = 87.8%). Recent rounds produced productive infrastructure with mixed flip outcomes:
 - Rounds 1-2: B50.x alias/elaboration (+5), B51.x FP gates / new diagnostics (+3).
 - Rounds 3-4: B53.x display infra net-zero.
 - Round 5: B54.x accessor-pair / write-context net-zero (1 flip + 1 shift).
