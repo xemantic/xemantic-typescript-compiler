@@ -10545,26 +10545,48 @@ class Checker(
                         }
                         else -> null
                     }
-                    // B61.5b: For `import a = x.c` where x is a single-level namespace
-                    // reference with the rightmost identifier referring to an existing but
-                    // non-exported member, emit TS2694. Uses isNameExportedFromNamespace
-                    // which correctly handles VariableStatement export modifiers (vs. the
-                    // broader checkQualifiedNameExports which doesn't and would regress).
-                    // Limit to ref = QualifiedName(Identifier, Identifier) — single dot —
-                    // to avoid cross-file/multi-segment regression risk.
-                    if (ref is QualifiedName && ref.left is Identifier) {
-                        val rootIdent = ref.left as Identifier
-                        val rightIdent = ref.right
+                    // B61.5b/c: For `import a = x.c[.d.e...]` where x is a top-level
+                    // non-declare namespace and the rightmost identifier refers to an
+                    // existing but non-exported member, emit TS2694 at the rightmost
+                    // identifier. Walks nested QualifiedName segments — intermediate
+                    // segments must be sub-namespaces (Module flag, implicitly exported).
+                    if (ref is QualifiedName) {
+                        // Walk left-most identifier
+                        var leftN: Node = ref
+                        val segments = mutableListOf<Identifier>()
+                        segments.add(ref.right)
+                        while (leftN is QualifiedName) {
+                            leftN = leftN.left
+                            if (leftN is QualifiedName) {
+                                segments.add(0, leftN.right)
+                            }
+                        }
+                        val rootIdent = leftN as? Identifier
+                        val rightIdent = segments.last()
+                        val intermediateIdents = segments.dropLast(1)  // segments BETWEEN root and rightIdent
                         val fileLocals = fileResults[fileName]?.locals
-                        val rootSym = fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
+                        val rootSym = if (rootIdent != null)
+                            fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
+                        else null
+                        // Walk intermediate segments — must all be sub-namespaces
+                        var currentNs: Symbol? = rootSym
+                        var walkOk = currentNs != null
+                        for (seg in intermediateIdents) {
+                            val nextSym = currentNs?.exports?.get(seg.text)
+                            if (nextSym == null || !nextSym.flags.hasAny(SymbolFlags.Module)) {
+                                walkOk = false
+                                break
+                            }
+                            currentNs = nextSym
+                        }
+                        val finalNs = currentNs
                         // Skip declare-namespace (its members are implicitly exported).
-                        // Only fire for non-declare namespace declarations.
-                        val isNonDeclareNamespace = rootSym != null &&
-                            rootSym.declarations.any { d ->
+                        val isNonDeclareNamespace = walkOk && finalNs != null &&
+                            finalNs.declarations.any { d ->
                                 d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
                             }
-                        if (isNonDeclareNamespace) {
-                            val memberSym = rootSym!!.exports?.get(rightIdent.text)
+                        if (rootIdent != null && isNonDeclareNamespace) {
+                            val memberSym = finalNs!!.exports?.get(rightIdent.text)
                             if (memberSym != null) {
                                 // Sub-namespaces (Module flag) are implicitly exported when
                                 // declared via the dotted form `namespace A.B { ... }`. Skip the
@@ -10583,7 +10605,7 @@ class Checker(
                                     }
                                 } || run {
                                     // Variable declarations: scan namespace body for export VarStatement.
-                                    rootSym.declarations.any { nsDecl ->
+                                    finalNs.declarations.any { nsDecl ->
                                         val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
                                             ?: return@any false
                                         body.statements.any { s ->
@@ -10597,8 +10619,10 @@ class Checker(
                                 if (!isExported) {
                                     val rightStart = rightIdent.pos
                                     val (line, character) = getLineAndCharacterOfPosition(source, rightStart)
+                                    // Build qualified namespace path: root.intermediate1.intermediate2...
+                                    val nsPath = (listOf(rootIdent.text) + intermediateIdents.map { it.text }).joinToString(".")
                                     diagnostics.add(Diagnostic(
-                                        message = "Namespace '${rootIdent.text}' has no exported member '${rightIdent.text}'.",
+                                        message = "Namespace '$nsPath' has no exported member '${rightIdent.text}'.",
                                         category = DiagnosticCategory.Error,
                                         code = 2694,
                                         fileName = fileName,
