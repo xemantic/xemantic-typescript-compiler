@@ -32391,9 +32391,9 @@ interface DataView {
                     val typeRef = decl.type as? TypeReference ?: continue
                     val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
                     val tp = currentTypeParamScope?.get(typeName) ?: continue
-                    if (!isTypeParamEffectivelyUnconstrained(tp)) continue
-                    val varName = (decl.name as? Identifier)?.text ?: continue
                     val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                    if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                    val varName = (decl.name as? Identifier)?.text ?: continue
                     tpVars[varName] = tpAst
                 }
                 for (decl in stmt.declarationList.declarations) {
@@ -32475,15 +32475,15 @@ interface DataView {
         }
         try {
             val bodyVars = mutableMapOf<String, TypeParameter>()
-            // Track parameters typed as effectively-unconstrained TypeParams.
+            // Track parameters typed as effectively-unconstrained (or `extends any`) TypeParams.
             if (parameters != null) {
                 for (p in parameters) {
                     val typeRef = p.type as? TypeReference ?: continue
                     val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
                     val tp = currentTypeParamScope?.get(typeName) ?: continue
-                    if (!isTypeParamEffectivelyUnconstrained(tp)) continue
-                    val paramName = (p.name as? Identifier)?.text ?: continue
                     val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                    if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                    val paramName = (p.name as? Identifier)?.text ?: continue
                     bodyVars[paramName] = tpAst
                 }
             }
@@ -32498,6 +32498,18 @@ interface DataView {
         val c = tp.constraint ?: return true
         // Self-circular: constraint resolves to the same Type.TypeParam.
         return c === tp
+    }
+
+    /** Like [isTypeParamEffectivelyUnconstrained] but ALSO accepts EXPLICIT `extends any`
+     *  (constraint AST is `KeywordTypeNode(AnyKeyword)`). Used by the property-access
+     *  walker — we must distinguish syntactic `any` from anyType-via-error-recovery
+     *  (e.g. `T extends typeof undeclared` resolves the constraint to anyType but
+     *  TypeScript doesn't treat T as having a property-access apparent type of `{}`). */
+    private fun isTypeParamUnconstrainedOrExplicitAny(tp: Type.TypeParam, tpDecl: TypeParameter?): Boolean {
+        if (isTypeParamEffectivelyUnconstrained(tp)) return true
+        if (tp.constraint !== anyType) return false
+        val c = tpDecl?.constraint ?: return false
+        return c is KeywordTypeNode && c.kind == SyntaxKind.AnyKeyword
     }
 
     private fun emitTypeParamTypedOps(
