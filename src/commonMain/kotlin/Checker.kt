@@ -39122,30 +39122,58 @@ interface DataView {
                 for (tp in funcTypeParams) merged[tp.name.text] = tp
                 currentTypeParamDecls = merged
             }
-            for (param in parameters) {
-                val paramType = param.type
-                val paramName = param.name
-                // 16.4ei: `function fst({ s } = t) {}` where t has nullable-union type —
-                // destructuring pattern as parameter name with a default initializer.
-                if (paramName is ObjectBindingPattern && param.initializer != null) {
-                    checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)
+            // B60.1: push function's TypeParams onto currentTypeParamScope before
+            // resolving parameter type annotations. Without this, names like `U` in
+            // `T1<U>` resolve to errorType, which makes the generic-alias substitution
+            // gate (Checker.kt:~41755 `if (resolvedArgs.none { it === errorType })`)
+            // skip substitution — falling back to the un-substituted alias body and
+            // losing the alias-display registration. Fixes the OUTER-tuple alias
+            // display for tests like `inferFromNestedSameShapeTuple_ts` where
+            // `function qq<U>(x: T1<U>)` should display `x`'s type as `T1<U>` not
+            // `[number, T1<{ x: any; }>]`. TypeParam instances interned via
+            // typeParamInternCache by AST position so they match what getTypeOfFunction
+            // produces.
+            val savedTypeParamScope = currentTypeParamScope
+            if (!funcTypeParams.isNullOrEmpty()) {
+                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                for (tp in funcTypeParams) {
+                    val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                        val p = Type.TypeParam()
+                        p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                        p
+                    }
+                    scope[tp.name.text] = typeParam
                 }
-                if (paramType != null && paramName is Identifier) {
-                    // Rest parameter with clearly-non-array type annotation: TS2370 fires
-                    // but the parameter's runtime type is effectively any[] — skip local
-                    // type so downstream checks (TS2339 element access, TS2345 argument)
-                    // treat it as any[].
-                    if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
-                    val t = resolveSimpleTypeName(paramType)
-                    if (t != null) innerTypes[paramName.text] = t
-                    // Also populate Type engine local type map
-                    try {
-                        val resolvedType = getTypeFromTypeNode(paramType)
-                        if (resolvedType !== anyType && resolvedType !== errorType) {
-                            currentLocalTypes[paramName.text] = resolvedType
-                        }
-                    } catch (_: StackOverflowError) { /* circular type */ }
+                currentTypeParamScope = scope
+            }
+            try {
+                for (param in parameters) {
+                    val paramType = param.type
+                    val paramName = param.name
+                    // 16.4ei: `function fst({ s } = t) {}` where t has nullable-union type —
+                    // destructuring pattern as parameter name with a default initializer.
+                    if (paramName is ObjectBindingPattern && param.initializer != null) {
+                        checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)
+                    }
+                    if (paramType != null && paramName is Identifier) {
+                        // Rest parameter with clearly-non-array type annotation: TS2370 fires
+                        // but the parameter's runtime type is effectively any[] — skip local
+                        // type so downstream checks (TS2339 element access, TS2345 argument)
+                        // treat it as any[].
+                        if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
+                        val t = resolveSimpleTypeName(paramType)
+                        if (t != null) innerTypes[paramName.text] = t
+                        // Also populate Type engine local type map
+                        try {
+                            val resolvedType = getTypeFromTypeNode(paramType)
+                            if (resolvedType !== anyType && resolvedType !== errorType) {
+                                currentLocalTypes[paramName.text] = resolvedType
+                            }
+                        } catch (_: StackOverflowError) { /* circular type */ }
+                    }
                 }
+            } finally {
+                currentTypeParamScope = savedTypeParamScope
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
