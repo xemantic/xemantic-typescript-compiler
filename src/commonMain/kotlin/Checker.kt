@@ -10570,16 +10570,47 @@ class Checker(
                         val rootSym = if (rootIdent != null)
                             fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
                         else null
-                        // Walk intermediate segments — must all be sub-namespaces
+                        // Walk intermediate segments — must all be sub-namespaces.
+                        // B61.5i: if an intermediate segment doesn't exist in the parent
+                        // namespace's exports at all (e.g. `globals.toString.X` where
+                        // `toString` isn't in globals), emit TS2694 at that segment.
                         var currentNs: Symbol? = rootSym
                         var walkOk = currentNs != null
+                        // Track running qualified path for error message
+                        val pathSoFar = mutableListOf<String>()
+                        if (rootIdent != null) pathSoFar.add(rootIdent.text)
                         for (seg in intermediateIdents) {
                             val nextSym = currentNs?.exports?.get(seg.text)
-                            if (nextSym == null || !nextSym.flags.hasAny(SymbolFlags.Module)) {
+                            if (nextSym == null) {
+                                // Intermediate segment doesn't exist — emit TS2694 here
+                                // (only when root is a non-declare namespace).
+                                val isRootNonDeclare = rootSym?.declarations?.any { d ->
+                                    d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
+                                } == true
+                                if (isRootNonDeclare) {
+                                    val segStart = seg.pos
+                                    val (line, character) = getLineAndCharacterOfPosition(source, segStart)
+                                    val nsPath = pathSoFar.joinToString(".")
+                                    diagnostics.add(Diagnostic(
+                                        message = "Namespace '$nsPath' has no exported member '${seg.text}'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2694,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = segStart,
+                                        length = seg.text.length,
+                                    ))
+                                }
+                                walkOk = false
+                                break
+                            }
+                            if (!nextSym.flags.hasAny(SymbolFlags.Module)) {
                                 walkOk = false
                                 break
                             }
                             currentNs = nextSym
+                            pathSoFar.add(seg.text)
                         }
                         val finalNs = currentNs
                         // Skip declare-namespace (its members are implicitly exported).
