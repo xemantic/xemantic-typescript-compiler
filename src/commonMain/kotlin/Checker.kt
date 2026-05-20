@@ -54261,6 +54261,81 @@ interface DataView {
             }
         }
         if (calleeType === anyType || calleeType === errorType) return
+        // B60.14: union callee — three cases:
+        //   (a) all constituents non-callable → "No constituent ... is callable."
+        //   (b) some constituents non-callable → "Not all constituents ... are callable." + missing display
+        //   (c) all constituents callable but sigs differ structurally → "Each member ... has signatures, but none ... compatible..."
+        if (calleeType is Type.Union) {
+            val constituents = calleeType.types
+            val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
+            val unionDisplay = typeToString(calleeType)
+            val computeSpan = {
+                if (calleeExpr is PropertyAccessExpression) {
+                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                } else {
+                    val s = calleeExpr.pos
+                    Pair(s, expressionTrueEnd(calleeExpr) - s)
+                }
+            }
+            if (nonCallable.isNotEmpty() && nonCallable.size != constituents.size) {
+                // Case (b): mixed callable / non-callable.
+                val firstMissing = nonCallable[0]
+                val missingDisplay = typeToString(firstMissing)
+                val (start, length) = computeSpan()
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf(
+                            "  Not all constituents of type '$unionDisplay' are callable.",
+                            "    Type '$missingDisplay' has no call signatures.",
+                        ),
+                    ))
+                }
+                return
+            }
+            if (nonCallable.isEmpty() && constituents.size >= 2) {
+                // Case (c): all callable; check if sigs differ structurally (different
+                // TypeParam counts, different first-param types).
+                val sigsList = constituents.map { getCallSignaturesOfType(it).firstOrNull() }
+                val hasNullSig = sigsList.any { it == null }
+                if (!hasNullSig) {
+                    val sigs = sigsList.map { it!! }
+                    val differ = run {
+                        for (i in sigs.indices) for (j in i + 1 until sigs.size) {
+                            val s1 = sigs[i]; val s2 = sigs[j]
+                            if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
+                            if (s1.parameters.size != s2.parameters.size) return@run true
+                            for (k in s1.parameters.indices) {
+                                val t1 = try { getTypeOfSymbol(s1.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                val t2 = try { getTypeOfSymbol(s2.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                if (t1 !== t2) return@run true
+                            }
+                        }
+                        false
+                    }
+                    if (differ) {
+                        val (start, length) = computeSpan()
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "This expression is not callable.",
+                                category = DiagnosticCategory.Error, code = 2349,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                messageChain = listOf(
+                                    "  Each member of the union type '$unionDisplay' has signatures, but none of those signatures are compatible with each other.",
+                                ),
+                            ))
+                        }
+                        return
+                    }
+                }
+            }
+        }
         // Get call signatures
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.isEmpty()) {
@@ -54322,6 +54397,58 @@ interface DataView {
             // uses the wrapper interface name (e.g. 'Number' for number).
             // Skip when TS6234 already fired (get-accessor calls share the same
             // primitive return-type pattern).
+            // B60.14: union callee — "No constituent ... is callable" or
+            // "Not all constituents ... are callable" depending on whether any
+            // constituent has call sigs.
+            if (!firedTs6234 && calleeType is Type.Union) {
+                val unionDisplay = typeToString(calleeType)
+                val constituents = calleeType.types
+                val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
+                if (nonCallable.isNotEmpty() && nonCallable.size == constituents.size) {
+                    // All constituents lack call sigs.
+                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                    } else {
+                        val s = calleeExpr.pos
+                        Pair(s, expressionTrueEnd(calleeExpr) - s)
+                    }
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "This expression is not callable.",
+                            category = DiagnosticCategory.Error, code = 2349,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                            messageChain = listOf("  No constituent of type '$unionDisplay' is callable."),
+                        ))
+                        return
+                    }
+                } else if (nonCallable.isNotEmpty()) {
+                    // Some constituents lack call sigs.
+                    val firstMissing = nonCallable[0]
+                    val missingDisplay = typeToString(firstMissing)
+                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                    } else {
+                        val s = calleeExpr.pos
+                        Pair(s, expressionTrueEnd(calleeExpr) - s)
+                    }
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "This expression is not callable.",
+                            category = DiagnosticCategory.Error, code = 2349,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                            messageChain = listOf(
+                                "  Not all constituents of type '$unionDisplay' are callable.",
+                                "    Type '$missingDisplay' has no call signatures.",
+                            ),
+                        ))
+                        return
+                    }
+                }
+            }
             if (!firedTs6234 && calleeType is Type.Intrinsic && calleeType !== voidType &&
                 calleeType !== nullType && calleeType !== undefinedType &&
                 calleeType !== neverType && calleeType !== unknownType) {
