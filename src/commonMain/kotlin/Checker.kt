@@ -636,6 +636,8 @@ class Checker(
         // 14''e. Check `<TypeParam>concrete` casts where concrete is a strict
         // subtype of TypeParam's constraint — TS2352 (B60.3)
         checkTypeParamStrictSubtypeCast()
+        // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
+        checkTypeParamCircularConstraint()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -32199,6 +32201,91 @@ interface DataView {
         ))
     }
 
+    // -----------------------------------------------------------------------
+    // B60.10: TS2313 "Type parameter 'T' has a circular constraint"
+    // -----------------------------------------------------------------------
+    /**
+     * Walks all functions/classes/interfaces/type-aliases and reports TS2313
+     * when a TypeParam's constraint chain cycles back to itself.
+     * Direct self-reference: `<T extends T>`. Indirect cycle:
+     * `<T extends U, U extends T>` (not yet handled — direct only for now).
+     */
+    private fun checkTypeParamCircularConstraint() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkStmtsForCircularConstraint(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkStmtsForCircularConstraint(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    checkTypeParamsCircular(stmt.typeParameters, source, fileName)
+                    stmt.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
+                }
+                is ClassDeclaration -> {
+                    checkTypeParamsCircular(stmt.typeParameters, source, fileName)
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> {
+                                checkTypeParamsCircular(m.typeParameters, source, fileName)
+                                m.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                is InterfaceDeclaration -> {
+                    checkTypeParamsCircular(stmt.typeParameters, source, fileName)
+                }
+                is TypeAliasDeclaration -> {
+                    checkTypeParamsCircular(stmt.typeParameters, source, fileName)
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                    walkStmtsForCircularConstraint(it, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkTypeParamsCircular(tps: List<TypeParameter>?, source: String, fileName: String) {
+        if (tps.isNullOrEmpty()) return
+        val byName = tps.associateBy { it.name.text }
+        for (tp in tps) {
+            // Walk constraint chain up to 8 levels looking for back-reference.
+            val visited = mutableSetOf(tp.name.text)
+            var cur: TypeParameter? = tp
+            var depth = 0
+            while (cur != null && depth++ < 8) {
+                val cnstr = cur.constraint as? TypeReference ?: break
+                val cnstrName = (cnstr.typeName as? Identifier)?.text ?: break
+                if (cnstrName in visited) {
+                    // Circular: emit TS2313 at the constraint TypeReference's position.
+                    val cnstrPos = cnstr.pos
+                    val cnstrLen = cnstrName.length
+                    val (line, char) = getLineAndCharacterOfPosition(source, cnstrPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter '${tp.name.text}' has a circular constraint.",
+                        category = DiagnosticCategory.Error,
+                        code = 2313,
+                        fileName = fileName,
+                        line = line,
+                        character = char,
+                        start = cnstrPos,
+                        length = cnstrLen,
+                    ))
+                    break
+                }
+                visited.add(cnstrName)
+                cur = byName[cnstrName]
+            }
+        }
+    }
+
     /**
      * Emits TS2352 for `<Foo<X>>foo` casts where `foo` already has type `Foo<Y>`
      * (same generic target) and the type-arg pair X/Y is non-comparable in both
@@ -40453,6 +40540,34 @@ interface DataView {
                             chain.add("  Type '${typeToString(lastFailingConstituent)}' is not assignable to type '$displayTarget'.")
                         }
                     }
+                    // B60.6f (mirror): TS2208 related info for TypeParam source mismatch.
+                    val relatedInfo = mutableListOf<Diagnostic>()
+                    if (sourceType is Type.TypeParam) {
+                        val srcName = sourceType.symbol?.name
+                        val srcTpDecl = srcName?.let { currentTypeParamDecls[it] }
+                        if (srcTpDecl != null) {
+                            // Treat self-circular constraint as effectively unconstrained.
+                            val isCircular = (srcTpDecl.constraint as? TypeReference)?.let {
+                                (it.typeName as? Identifier)?.text == srcName
+                            } == true
+                            val effectivelyUnconstrained = srcTpDecl.constraint == null || isCircular
+                            if (effectivelyUnconstrained) {
+                                val decPos = srcTpDecl.name.pos
+                                val decLen = srcTpDecl.name.text.length
+                                val (relLine, relChar) = getLineAndCharacterOfPosition(source, decPos)
+                                relatedInfo.add(Diagnostic(
+                                    message = "This type parameter might need an `extends $displayTarget` constraint.",
+                                    category = DiagnosticCategory.Message,
+                                    code = 2208,
+                                    fileName = fileName,
+                                    line = relLine,
+                                    character = relChar,
+                                    start = decPos,
+                                    length = decLen,
+                                ))
+                            }
+                        }
+                    }
                     diagnostics.add(Diagnostic(
                         message = message,
                         category = DiagnosticCategory.Error,
@@ -40463,6 +40578,7 @@ interface DataView {
                         start = stmt.pos,
                         length = returnKeywordLength,
                         messageChain = chain,
+                        relatedInformation = if (relatedInfo.isEmpty()) emptyList() else relatedInfo.toList(),
                     ))
                     return
                 }
@@ -60061,18 +60177,30 @@ interface DataView {
             }
         }
         // B60.6f: TS2208 for bare TypeParam mismatch — either both bare TypeParams
-        // (`U → T`), or bare TypeParam source → named target (`T → Object`). Points
-        // to source's declaration with the suggested `extends <target>` constraint.
-        // Gate: source TypeParam must be UNCONSTRAINED (no existing extends clause)
-        // — TypeScript doesn't suggest a NEW constraint when one already exists.
-        if (sourceType.startsWith("@") && targetType.startsWith("@") &&
-            !sourceType.contains('<') && !targetType.contains('<')
+        // (`U → T`), or bare TypeParam source → named target (`T → Object`), or
+        // bare TypeParam source → primitive target (`T → number`). Points to
+        // source's declaration with the suggested `extends <target>` constraint.
+        // Gate: source TypeParam must be UNCONSTRAINED (no existing extends clause,
+        // OR has a self-circular constraint which is effectively unconstrained).
+        val tgtIsPrimitiveName = targetType in setOf("number", "string", "boolean", "bigint", "symbol", "object", "void")
+        val tgtAcceptable = (targetType.startsWith("@") && !targetType.contains('<')) || tgtIsPrimitiveName
+        if (sourceType.startsWith("@") && !sourceType.contains('<') && tgtAcceptable
         ) {
             val srcName = sourceType.removePrefix("@")
             val tgtName = targetType.removePrefix("@")
             if (srcName != tgtName && srcName in typeParams) {
                 val srcTpDecl = currentTypeParamDecls[srcName]
-                if (srcTpDecl != null && srcTpDecl.constraint == null) {
+                // B60.10b: treat self-circular constraint (e.g. `T extends T`) as
+                // effectively unconstrained — TypeScript also suggests a constraint
+                // here despite the syntactic constraint existing.
+                fun isEffectivelyUnconstrained(tp: TypeParameter?): Boolean {
+                    if (tp == null) return false
+                    if (tp.constraint == null) return true
+                    val cnstr = tp.constraint as? TypeReference ?: return false
+                    val cnstrName = (cnstr.typeName as? Identifier)?.text ?: return false
+                    return cnstrName == tp.name.text
+                }
+                if (srcTpDecl != null && isEffectivelyUnconstrained(srcTpDecl)) {
                     val decPos = srcTpDecl.name.pos
                     val decLen = srcTpDecl.name.text.length
                     val (relLine, relChar) = getLineAndCharacterOfPosition(source, decPos)
