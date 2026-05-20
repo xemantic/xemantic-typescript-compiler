@@ -216,6 +216,10 @@ class Checker(
      *  function-signature resolutions. Stabilizes downstream caches keyed by Type id. */
     private val typeParamInternCache: MutableMap<Int, Type.TypeParam> = mutableMapOf()
 
+    /** B60.12: AST TypeParameter nodes by name, used by `checkTypeParamTypedOps` walker
+     *  to emit TS2208 related info pointing at the correct source position. */
+    private var currentTypeParamAstForOps: Map<String, TypeParameter>? = null
+
     // -----------------------------------------------------------------------
     // LinkStore helpers — checker-local side map for symbol targets.
     // Keeps binder output immutable; each parallel checker resolves independently.
@@ -32318,20 +32322,22 @@ interface DataView {
     }
 
     private fun walkStmtsForTypeParamOps(stmts: List<Statement>, source: String, fileName: String) {
-        val emptyVars = mutableMapOf<String, String>()
+        val emptyVars = mutableMapOf<String, TypeParameter>()
         for (stmt in stmts) walkStmtForTypeParamOps(stmt, source, fileName, emptyVars)
     }
 
     private fun walkStmtForTypeParamOps(
         stmt: Statement, source: String, fileName: String,
-        tpVars: MutableMap<String, String>,
+        tpVars: MutableMap<String, TypeParameter>,
     ) {
         when (stmt) {
             is ClassDeclaration -> {
                 val savedScope = currentTypeParamScope
+                val savedAst = currentTypeParamAstForOps
                 val tps = stmt.typeParameters
                 if (!tps.isNullOrEmpty()) {
                     val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+                    val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                     val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                     for (tp in tps) {
                         val typeParam = typeParamInternCache.getOrPut(tp.pos) {
@@ -32340,9 +32346,11 @@ interface DataView {
                             p
                         }
                         scope[tp.name.text] = typeParam
+                        astScope[tp.name.text] = tp
                         newOnes.add(tp to typeParam)
                     }
                     currentTypeParamScope = scope
+                    currentTypeParamAstForOps = astScope
                     for ((tp, typeParam) in newOnes) {
                         if (typeParam.constraint == null) {
                             tp.constraint?.let {
@@ -32372,6 +32380,7 @@ interface DataView {
                     }
                 } finally {
                     currentTypeParamScope = savedScope
+                    currentTypeParamAstForOps = savedAst
                 }
             }
             is FunctionDeclaration -> walkFnLikeBodyForTypeParamOps(
@@ -32384,7 +32393,8 @@ interface DataView {
                     val tp = currentTypeParamScope?.get(typeName) ?: continue
                     if (!isTypeParamEffectivelyUnconstrained(tp)) continue
                     val varName = (decl.name as? Identifier)?.text ?: continue
-                    tpVars[varName] = typeName
+                    val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                    tpVars[varName] = tpAst
                 }
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
@@ -32437,8 +32447,10 @@ interface DataView {
     ) {
         if (bodyStmts == null) return
         val savedScope = currentTypeParamScope
+        val savedAst = currentTypeParamAstForOps
         if (!ownTps.isNullOrEmpty()) {
             val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+            val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
             val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
             for (tp in ownTps) {
                 val typeParam = typeParamInternCache.getOrPut(tp.pos) {
@@ -32447,9 +32459,11 @@ interface DataView {
                     p
                 }
                 scope[tp.name.text] = typeParam
+                astScope[tp.name.text] = tp
                 newOnes.add(tp to typeParam)
             }
             currentTypeParamScope = scope
+            currentTypeParamAstForOps = astScope
             for ((tp, typeParam) in newOnes) {
                 if (typeParam.constraint == null) {
                     tp.constraint?.let {
@@ -32460,7 +32474,7 @@ interface DataView {
             }
         }
         try {
-            val bodyVars = mutableMapOf<String, String>()
+            val bodyVars = mutableMapOf<String, TypeParameter>()
             // Track parameters typed as effectively-unconstrained TypeParams.
             if (parameters != null) {
                 for (p in parameters) {
@@ -32469,12 +32483,14 @@ interface DataView {
                     val tp = currentTypeParamScope?.get(typeName) ?: continue
                     if (!isTypeParamEffectivelyUnconstrained(tp)) continue
                     val paramName = (p.name as? Identifier)?.text ?: continue
-                    bodyVars[paramName] = typeName
+                    val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                    bodyVars[paramName] = tpAst
                 }
             }
             for (s in bodyStmts) walkStmtForTypeParamOps(s, source, fileName, bodyVars)
         } finally {
             currentTypeParamScope = savedScope
+            currentTypeParamAstForOps = savedAst
         }
     }
 
@@ -32485,13 +32501,14 @@ interface DataView {
     }
 
     private fun emitTypeParamTypedOps(
-        expr: Expression, tpVars: Map<String, String>, source: String, fileName: String,
+        expr: Expression, tpVars: Map<String, TypeParameter>, source: String, fileName: String,
     ) {
         when (expr) {
             is PropertyAccessExpression -> {
                 val recv = expr.expression
-                if (recv is Identifier && tpVars[recv.text] != null) {
-                    val tpName = tpVars[recv.text]!!
+                val recvTp = (recv as? Identifier)?.let { tpVars[it.text] }
+                if (recvTp != null) {
+                    val tpName = recvTp.name.text
                     val propName = expr.name.text
                     // No RUNTIME_PROPERTIES filter — unconstrained TypeParam has NO
                     // apparent type members at all (apparent = `{}`), so every
@@ -32511,29 +32528,34 @@ interface DataView {
             }
             is CallExpression -> {
                 val callee = expr.expression
-                if (callee is Identifier && tpVars[callee.text] != null) {
+                val calleeTp = (callee as? Identifier)?.let { tpVars[it.text] }
+                if (calleeTp != null) {
                     val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
                     diagnostics.add(Diagnostic(
                         message = "This expression is not callable.",
                         category = DiagnosticCategory.Error, code = 2349,
                         fileName = fileName, line = line, character = character,
-                        start = callee.pos, length = callee.text.length,
+                        start = callee.pos, length = (callee as Identifier).text.length,
                         messageChain = listOf("  Type '{}' has no call signatures."),
                     ))
                 } else {
+                    // B60.12c: detect `f(t)` where t is bare effectively-unconstrained TP arg
+                    // and f's param is a constrained TP. Emit TS2345 + TS2208 related info.
+                    emitTs2345ForBareTpArgToConstrainedTpParam(expr, tpVars, source, fileName)
                     emitTypeParamTypedOps(callee, tpVars, source, fileName)
                 }
                 for (arg in expr.arguments) emitTypeParamTypedOps(arg, tpVars, source, fileName)
             }
             is NewExpression -> {
                 val callee = expr.expression
-                if (callee is Identifier && tpVars[callee.text] != null) {
+                val calleeTp = (callee as? Identifier)?.let { tpVars[it.text] }
+                if (calleeTp != null) {
                     val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
                     diagnostics.add(Diagnostic(
                         message = "This expression is not constructable.",
                         category = DiagnosticCategory.Error, code = 2351,
                         fileName = fileName, line = line, character = character,
-                        start = callee.pos, length = callee.text.length,
+                        start = callee.pos, length = (callee as Identifier).text.length,
                         messageChain = listOf("  Type '{}' has no construct signatures."),
                     ))
                 } else {
@@ -32560,6 +32582,67 @@ interface DataView {
                 emitTypeParamTypedOps(expr.whenFalse, tpVars, source, fileName)
             }
             else -> {}
+        }
+    }
+
+    /**
+     * B60.12c: For `f(t)` where `t` is a bare effectively-unconstrained TypeParam
+     * variable (in tpVars) and `f` is a top-level FunctionDeclaration with a TP
+     * parameter that has a non-trivial constraint, emit TS2345 with the param
+     * displayed as its constraint, plus TS2208 related info pointing to `t`'s
+     * TypeParam declaration suggesting `extends <constraint>`.
+     */
+    private fun emitTs2345ForBareTpArgToConstrainedTpParam(
+        expr: CallExpression, tpVars: Map<String, TypeParameter>,
+        source: String, fileName: String,
+    ) {
+        val callee = expr.expression as? Identifier ?: return
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
+        val fnDecl = sym.declarations.firstOrNull() as? FunctionDeclaration ?: return
+        val fnTps = fnDecl.typeParameters ?: return
+        if (fnTps.isEmpty()) return
+        val fnTpsByName = fnTps.associateBy { it.name.text }
+        for ((argIdx, arg) in expr.arguments.withIndex()) {
+            if (arg !is Identifier) continue
+            val argTp = tpVars[arg.text] ?: continue
+            if (argIdx >= fnDecl.parameters.size) continue
+            val param = fnDecl.parameters[argIdx]
+            val paramType = param.type as? TypeReference ?: continue
+            val paramTpName = (paramType.typeName as? Identifier)?.text ?: continue
+            val paramTp = fnTpsByName[paramTpName] ?: continue
+            val constraintNode = paramTp.constraint ?: continue
+            // Skip self-circular constraint
+            val constraintIsSelfRef = (constraintNode as? TypeReference)?.let {
+                (it.typeName as? Identifier)?.text == paramTpName
+            } == true
+            if (constraintIsSelfRef) continue
+            // Prefer AST-based display so type aliases like `Record<string, any>` render
+            // without requiring full generic alias instantiation infrastructure.
+            val astDisplay = formatTypeForDisplay(constraintNode)
+            val constraintDisplay = if (astDisplay != null && astDisplay != "{ ; }") astDisplay
+            else {
+                val constraintType = try { getTypeFromTypeNode(constraintNode) }
+                catch (_: StackOverflowError) { continue }
+                if (constraintType === errorType) continue
+                typeToString(constraintType)
+            }
+            val argTpName = argTp.name.text
+            val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+            val related = mutableListOf<Diagnostic>()
+            val (decLine, decChar) = getLineAndCharacterOfPosition(source, argTp.name.pos)
+            related.add(Diagnostic(
+                message = "This type parameter might need an `extends $constraintDisplay` constraint.",
+                category = DiagnosticCategory.Message, code = 2208,
+                fileName = fileName, line = decLine, character = decChar,
+                start = argTp.name.pos, length = argTp.name.text.length,
+            ))
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argTpName' is not assignable to parameter of type '$constraintDisplay'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = character,
+                start = arg.pos, length = arg.text.length,
+                relatedInformation = related,
+            ))
         }
     }
 
