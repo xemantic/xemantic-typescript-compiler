@@ -40102,6 +40102,35 @@ interface DataView {
                     }
                 }
                 val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                // B60.11: TS2208 related info for TypeParam source mismatch — mirrors
+                // B60.10's checkReturnAssignability extension into the var-decl path.
+                val tpRelatedInfo = mutableListOf<Diagnostic>()
+                if (sourceType is Type.TypeParam) {
+                    val srcName = sourceType.symbol?.name
+                    val srcTpDecl = srcName?.let { currentTypeParamDecls[it] }
+                    if (srcTpDecl != null) {
+                        val isCircular = (srcTpDecl.constraint as? TypeReference)?.let {
+                            (it.typeName as? Identifier)?.text == srcName
+                        } == true
+                        val effectivelyUnconstrained = srcTpDecl.constraint == null || isCircular
+                        if (effectivelyUnconstrained) {
+                            val decPos = srcTpDecl.name.pos
+                            val decLen = srcTpDecl.name.text.length
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, decPos)
+                            tpRelatedInfo.add(Diagnostic(
+                                message = "This type parameter might need an `extends $displayTarget` constraint.",
+                                category = DiagnosticCategory.Message,
+                                code = 2208,
+                                fileName = fileName,
+                                line = relLine,
+                                character = relChar,
+                                start = decPos,
+                                length = decLen,
+                            ))
+                        }
+                    }
+                }
+                val allRelated = listOfNotNull(chainRelatedInfo) + tpRelatedInfo
                 diagnostics.add(Diagnostic(
                     message = message,
                     category = DiagnosticCategory.Error,
@@ -40112,7 +40141,7 @@ interface DataView {
                     start = name.pos,
                     length = name.text.length,
                     messageChain = chain,
-                    relatedInformation = listOfNotNull(chainRelatedInfo),
+                    relatedInformation = allRelated,
                 ))
                 } // end else (not missing property)
                 return // Type engine handled it — skip old system
