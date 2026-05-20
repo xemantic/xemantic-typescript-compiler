@@ -1371,7 +1371,7 @@ All remain in the JS-emit candidate pool but are feature-scale work, not surgica
 - ~~`genericSpecializations3_ts`~~: passing since 16.4gr (heritage-clause type-arg instantiation in TS2416 + parameter-mismatch chain in `addSignatureElaboration`).
 - ~~`arrayAssignmentTest5_ts`~~ / ~~`typeMatch2_ts`~~: `IToken[]` vs `IStateToken[]` (array element variance). **arrayAssignmentTest5 flipped 17.11e (push namespace symbol onto `inferenceNamespaceStack` for ModuleDeclaration body).**
 - `noStrictGenericChecks_ts`: `<T,U>(…) => [T,U]` vs `<S>(…) => [S,S]` signature-param generic variance.
-- `inferFromNestedSameShapeTuple_ts`: display `[number, error]` instead of `T1<U>` (type-param leakage into ref display).
+- ~~`inferFromNestedSameShapeTuple_ts`~~: flipped B60.1 (2026-05-20) via checkFunctionBody TypeParam-scope push.
 - ~~`invalidConstraint1_ts`~~: constraint `{ a: T }` needs inter-type-arg substitution for display `{ a: string }`. Attempted `instantiateType(Type.Object, mapper)` — net-zero without the squiggle-length + property-elaboration companion fixes.
 
 **Blocker #3 — TS7006 over-suppression (contextual typing, see below):**
