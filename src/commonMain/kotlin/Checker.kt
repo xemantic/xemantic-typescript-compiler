@@ -10585,6 +10585,35 @@ class Checker(
                             finalNs.declarations.any { d ->
                                 d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
                             }
+                        // B61.5d: TS2708 — "Cannot use namespace 'X' as a value." When the
+                        // import-equals has `export` (and not `declare`) and the root namespace
+                        // is purely type-side AND not itself exported, emit TS2708 at the root
+                        // identifier's position. The not-exported gate prevents FP when the
+                        // root namespace is a module-level export (which gives it a value
+                        // binding even if its members are type-only).
+                        val isTopLevel = fileResults[fileName]?.sourceFile?.statements?.contains(stmt) == true
+                        val rootNamespaceExported = rootSym?.declarations?.any { d ->
+                            d is ModuleDeclaration && ModifierFlag.Export in d.modifiers
+                        } == true
+                        if (isTopLevel && rootIdent != null && walkOk && rootSym != null &&
+                            ModifierFlag.Export in stmt.modifiers &&
+                            ModifierFlag.Declare !in stmt.modifiers &&
+                            !rootNamespaceExported &&
+                            rootSym.flags.hasAny(SymbolFlags.NamespaceModule) &&
+                            !rootSym.flags.hasAny(SymbolFlags.ValueModule)) {
+                            val rootStart = rootIdent.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, rootStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot use namespace '${rootIdent.text}' as a value.",
+                                category = DiagnosticCategory.Error,
+                                code = 2708,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = rootStart,
+                                length = rootIdent.text.length,
+                            ))
+                        }
                         if (rootIdent != null && isNonDeclareNamespace) {
                             val memberSym = finalNs!!.exports?.get(rightIdent.text)
                             if (memberSym != null) {
