@@ -30674,7 +30674,7 @@ interface DataView {
         is CallExpression -> {
             // end of closing ) after arguments
             if (expr.arguments.isNotEmpty()) expressionTrueEnd(expr.arguments.last()) + 1
-            else expr.end // fallback for empty arg lists
+            else expressionTrueEnd(expr.expression) + 2 // +2 for empty `()`
         }
         is NewExpression -> {
             // new Foo() — end of closing ) after arguments
@@ -54338,6 +54338,28 @@ interface DataView {
                 }
                 if (length > 0) {
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    // B60.13: When the callee is a CallExpression whose end is on a
+                    // different (earlier) line than the outer call's first argument,
+                    // emit TS2734 "Are you missing a semicolon?" related info pointing
+                    // to the inner call's start. Covers the `foo()\n(1 as number)`
+                    // accidental-call pattern from `betterErrorForAccidentalCall_ts`.
+                    val related = mutableListOf<Diagnostic>()
+                    if (calleeExpr is CallExpression && expr.arguments.isNotEmpty()) {
+                        val innerEnd = expressionTrueEnd(calleeExpr)
+                        val firstArgPos = expr.arguments.first().pos
+                        val (innerEndLine, _) = getLineAndCharacterOfPosition(source, innerEnd)
+                        val (argLine, _) = getLineAndCharacterOfPosition(source, firstArgPos)
+                        if (innerEndLine < argLine) {
+                            val innerStart = calleeExpr.pos
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, innerStart)
+                            related.add(Diagnostic(
+                                message = "Are you missing a semicolon?",
+                                category = DiagnosticCategory.Message, code = 2734,
+                                fileName = fileName, line = relLine, character = relChar,
+                                start = innerStart, length = length,
+                            ))
+                        }
+                    }
                     diagnostics.add(Diagnostic(
                         message = "This expression is not callable.",
                         category = DiagnosticCategory.Error,
@@ -54348,6 +54370,7 @@ interface DataView {
                         start = start,
                         length = length,
                         messageChain = listOf("  Type '$displayType' has no call signatures."),
+                        relatedInformation = if (related.isEmpty()) emptyList() else related.toList(),
                     ))
                 }
             }
@@ -55552,6 +55575,7 @@ interface DataView {
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
             is ParenthesizedExpression -> getCalleeType(expr.expression)
+            is CallExpression -> try { getReturnTypeOfCallExpression(expr) } catch (_: StackOverflowError) { anyType }
             else -> anyType
         }
     }
