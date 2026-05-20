@@ -1,8 +1,22 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,845 / 10,078 tests passing (~87.8%). _**Session converged**: 12 rounds, 180 commits, +12 net tests via 30+ feature commits. Surgical pool exhausted. Next session should commit to one of the named architectural blockers — see SESSION-PROMPT.md "Concrete starting points" section._
+**Phase 4 — Checker buildout.** 8,855 / 10,078 tests passing (~87.9%). _Round 13 in progress (2026-05-20): committed to B60.x "control flow on TypeParam scope" architectural piece. Net +10 in 8 commits so far._
 
-**Round 12 (2026-05-19, accepting diminishing returns).** Continuation /loop session after round 11. Pool still empty (0/0/0 fresh). 6 consecutive rounds (7-12) at ~0.3 flips/round average. The B58.x / B59.x infrastructure investigation has produced infrastructure but no flips in rounds 9-11. Decision: stop the surgical-search loop on this session and commit final documentation. Strong recommendation propagated in SESSION-PROMPT.md, STATUS.md, and PLAN-PHASE-4.md for the next agent to commit to one of the three named architectural blockers.
+**Round 13 (2026-05-20, IN PROGRESS — B60.x stack: TypeParam scope in checkFunctionBody + cascade).** Continuation /loop session after round 12 (which accepted diminishing returns). The dominant insight: **checkFunctionBody wasn't pushing the function's TypeParam scope before resolving parameter annotations**. That single fix (B60.1) unlocked 5+ tests via cascade through chain elaboration, TS2352 emission, and constraint-aware diagnostics.
+
+Commits landed this round:
+- **B60.1 (+1)**: Push function TypeParams onto currentTypeParamScope in checkFunctionBody before resolving param annotations. Without this, `T1<U>` annotations had U resolving to errorType — substitution gate at Checker.kt:~41755 skipped (`if (resolvedArgs.none { it === errorType })`), falling back to un-substituted alias body. Flips `inferFromNestedSameShapeTuple_ts`.
+- **B60.2 (net-zero)**: Emit `'X' is assignable to the constraint of type 'T', but...` chain form when target TypeParam has constraint and source satisfies it. Otherwise keep `'T' could be instantiated with arbitrary type` form. Applied at both var-decl and assignment-expr sites.
+- **B60.1b (net-zero)**: Two-pass TypeParam intern in checkFunctionBody — (1) put TypeParams in scope, (2) resolve constraint/default with scope active. Without this, B60.2's constraint check finds null constraints.
+- **B60.3 (+5)**: TS2352 emission for `<TypeParam>concrete-subtype` casts. New per-file walker `walkStmtsForTypeParamCasts` tracks enclosing function/method TypeParam scope. Strict-subtype gate: src assignable to constraint BUT constraint NOT assignable to src. Flips genericTypeAssertions4/5_ts and adjacents.
+- **B60.5 (net-zero)**: Apparent-type chain `Type '<constraint>' is not assignable to type '<target>'` when source is constrained TypeParam. Bypass aliasDisplayMap via typeToStringInProgress so `T extends Table` expands to `TableClass<...>` not `Table`.
+- **B60.6 (+1)**: Bare TypeParam-vs-TypeParam emit (B60.6 isAssignableTo gate), fallback in checkAssignmentExpression (B60.6b), constraint-assignable chain in varTypes-path emitTS2322 (B60.6c), Object hint (B60.6d), src-extends-tgt subtype skip (B60.6e). Flips typeParametersShouldNotBeEqual3_ts.
+- **B60.7 (+2)**: Bare TypeParam → Object/Function emit (B60.7), assignment fallback (B60.7b), TS2208 related info for bare-TypeParam-source mismatch (B60.6f) gated on unconstrained source. Flips typeParametersShouldNotBeEqual_ts, typeParametersShouldNotBeEqual2_ts.
+- **B60.8 + B60.9 (+1)**: Constrained TypeParam source → primitive target via canUseTypeEngine extension (B60.8); Type.Interface display uses TypeParam defaults (B60.9: `TableClass<S=any>` displays as `TableClass<any>`). Flips typeVariableConstraintedToAliasNotAssignableToUnion_ts.
+
+Round 13 totals so far: 8 commits, +10 net tests (8845 → 8855). Demonstrates that the "diminishing returns" plateau wasn't a hard limit — a single foundational fix (B60.1 scope-push) cascaded through the chain/elaboration infrastructure. Future rounds should look for similar foundational gaps.
+
+**Earlier rounds (1-12, 2026-05-19, 8845 ceiling reached):**
 
 **Round 11 (2026-05-19, net-zero, B59.x TypeParam interning).** Continuation /loop session after round 10. Pool empty. Attempted approach (a) from B58.3's three fix directions:
 - **B59.1** (feat, net-zero): Intern Type.TypeParam instances by TypeParameter AST node position at the function-signature path (Checker.kt:~49321).
