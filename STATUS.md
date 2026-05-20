@@ -1,6 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,862 / 10,078 tests passing (~87.9%). _Round 14 (2026-05-20): 17 commits, +6 net via B60.12 through B60.19 TypeParam-typed-expression diagnostics + TS2352 TypeParam→TypeParam casts + accidental-call + union-callee patterns. Session reached 20+ iteration cycles (each pick/test/decide cycle counts) — pool exhausted, remaining work is architectural blockers._
+**Phase 4 — Checker buildout.** 8,864 / 10,078 tests passing (~87.95%). _Round 15 (2026-05-20): 2 feature commits, +2 net via B61.1 (TS2300 for class shadowing lib Promise/Symbol) + B61.2 (TS1351 partial, net-zero infra). Session reached ~9 iteration cycles before exhausting tractable candidates._
+
+**Round 15 (2026-05-20, +2 net — B61.1 lib-shadowing TS2300).** /goal session after round 14. Pool empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, surveyed broader candidate space:
+
+- **B52.2 attempt (reverted)**: Extended `isAnonymousObjectWithTypeParamMembers` to allow concrete-typed members alongside TypeParam-typed ones. Net-zero on suite — no test currently has this exact shape gated. Reverted to avoid dead infrastructure.
+- **B61.1 (+2)**: TS2300 for top-level non-declare class shadowing built-in lib type (Promise, Symbol). New `checkClassShadowsLibType` walker + hardcoded `LIB_SHADOWED_CLASS_LIB_FILES` map. Emits TS2300 + TS6203/TS6204 related infos pointing to lib files (Promise→4 lib files, Symbol→3). Gated on `!isModuleFile(statements)` — first attempt without gate regressed 4 module-file tests (memberAccessMustUseModuleInstances, moduleInTypePosition1, staticInstanceResolution3/5 all have `export class Promise` in module files). Flips `promiseDefinitionTest_ts__target_es5__` + `__target_es2015__`. Brings `recursiveComplicatedClasses_ts` closer (now emits TS2300 for `class Symbol` but still missing other diagnostics).
+- **B61.2 (net-zero infra)**: TS1351 emission for identifier immediately following numeric literal ending in `.` (e.g. `1.toString`). Detection in `parseNumericLiteral` checks (a) text ends with ".", (b) next token is Identifier, (c) no whitespace between. Target tests `numericLiteralsWithTrailingDecimalPoints01/02_ts` still fail on missing TS1005 ',' expected at the following `(` (context-dependent emission requires parser surgery).
+
+Round 15 totals: 2 feature commits, +2 net tests (8862 → 8864). Surgical pool exhaustion is confirmed at the fresh-candidate level. Next-session work should target architectural blockers per recommendation in round 14 notes.
+
+**Round 15 exploration (no commits — tests examined and classified):**
+- JS-emit small-diff candidates (5 fresh): ALL parser-recovery → Blocker #7 (LOW yield, HIGH risk). Tests: `parseJsxElementInUnaryExpressionNoCrash1_ts`, `fatarrowfunctionsOptionalArgs_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `TransportStream_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`.
+- Errors-baseline candidates (5-10 diff lines): mostly contextual typing (Blocker #6), JSDoc (Blocker #5), lib-subsetting (`numericLiteralsWithTrailingDecimalPoints01/02` partial B61.2), or feature work (`asyncFunctionReturnExpressionErrorSpans`, `implicitConstParameters`, `jsFileClassPropertyType_ts`/`2`/`3`, `signatureCombiningRestParameters1_ts`, `typePredicateInLoop_ts`, `circularInlineMappedGenericTupleTypeNoCrash_ts`, `discriminateWithOptionalProperty4_ts`).
+- TS2583/TS2550 lib-version diagnostics: ~95+95 missing across few tests — all lib-subsetting feature.
+- Single-missing-TS2304 fresh tests: 0.
+- Stale skip-log audit: 12 candidates surfaced, but only 3 are actually passing AND already documented as flipped in round-14 notes (`genericTypeAssertions6_ts`, `parameterNamesInTypeParameterList_ts`, `typeParameterExplicitlyExtendsAny_ts`). Other 9 candidates are JS-emit tests where the basename-extraction regex doesn't catch the failing-test variant.
+
+
 
 **Round 14 continued (B60.16-B60.19):** After initial commits B60.12-B60.15, identified parameterNamesInTypeParameterList_ts as the specific regression that prevented broadening the `T extends any` gate. Added `isTypeParamUnconstrainedOrExplicitAny(tp, tpDecl)` helper that distinguishes EXPLICIT AnyKeyword constraint from anyType-via-error-recovery. B60.18 added TypeParam→TypeParam TS2352 emission (unconstrained-vs-unconstrained AND constrained-with-overlap-constraint). B60.19 added detection of self-recursive type alias constraints (e.g. `T extends Tree<any>` where `type Tree<T> = T & {...}`). Net +2 flips beyond B60.15.
 
