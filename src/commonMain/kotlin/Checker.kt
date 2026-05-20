@@ -30088,8 +30088,77 @@ interface DataView {
             is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             // B61.4: also walk ImportEqualsDeclaration for modifier ordering checks
             // (e.g. `declare export import a = x.c;` should emit TS1029).
-            is ImportEqualsDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            is ImportEqualsDeclaration -> {
+                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                // B61.5e: TS1044 for class-only modifiers (public/private/protected/static)
+                // on module/namespace elements like import-equals.
+                checkInvalidImportEqualsModifiers(stmt, source, fileName)
+            }
             else -> {}
+        }
+    }
+
+    /**
+     * B61.5e: Emit TS1044 for class-only modifiers (public/private/protected/static) on
+     * an ImportEqualsDeclaration. These modifiers are not allowed on module/namespace
+     * elements. Scans backwards from stmt.pos through the modifier keywords.
+     */
+    private fun checkInvalidImportEqualsModifiers(
+        stmt: ImportEqualsDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        val classOnlyMods = setOf("public", "private", "protected", "static")
+        val allowedMods = setOf("export", "declare", "public", "private", "protected", "static",
+            "abstract", "async", "readonly", "override", "const", "accessor")
+        // Find leftmost modifier position by scanning backwards from stmt.pos
+        var pos = stmt.pos
+        while (pos > 0) {
+            var p = pos - 1
+            while (p >= 0 && source[p].isWhitespace()) p--
+            if (p < 0) break
+            var found = false
+            for (kw in allowedMods) {
+                val kwStart = p + 1 - kw.length
+                if (kwStart >= 0 &&
+                    source.substring(kwStart, kwStart + kw.length) == kw &&
+                    (kwStart == 0 || !source[kwStart - 1].isLetterOrDigit())) {
+                    pos = kwStart
+                    found = true
+                    break
+                }
+            }
+            if (!found) break
+        }
+        // Now scan forward from pos and emit TS1044 for class-only modifiers
+        val end = (stmt.pos + 200).coerceAtMost(source.length)
+        while (pos < end) {
+            while (pos < end && source[pos].isWhitespace()) pos++
+            if (pos >= end) break
+            var matched = false
+            for (kw in allowedMods) {
+                if (pos + kw.length <= source.length &&
+                    source.substring(pos, pos + kw.length) == kw &&
+                    (pos + kw.length >= source.length || !source[pos + kw.length].isLetterOrDigit())) {
+                    if (kw in classOnlyMods) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'$kw' modifier cannot appear on a module or namespace element.",
+                            category = DiagnosticCategory.Error,
+                            code = 1044,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = kw.length,
+                        ))
+                    }
+                    pos += kw.length
+                    matched = true
+                    break
+                }
+            }
+            if (!matched) break
         }
     }
 
