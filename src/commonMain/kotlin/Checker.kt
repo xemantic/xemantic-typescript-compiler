@@ -28762,10 +28762,14 @@ interface DataView {
                         length = 6, // "export"
                     ))
                 }
-                // TS1079: 'declare' modifier cannot be used with import declarations
+                // TS1079: 'declare' modifier cannot be used with import declarations.
+                // For ImportEqualsDeclaration, suppress when TS1029 (export-before-declare order)
+                // is also firing — the baseline merges to TS1029 only.
                 val importMods = when (stmt) {
                     is ImportDeclaration -> stmt.modifiers
-                    is ImportEqualsDeclaration -> stmt.modifiers
+                    is ImportEqualsDeclaration -> {
+                        if (ModifierFlag.Export in stmt.modifiers) null else stmt.modifiers
+                    }
                     else -> null
                 }
                 if (importMods != null && ModifierFlag.Declare in importMods) {
@@ -29963,6 +29967,9 @@ interface DataView {
             }
             is ExportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+            // B61.4: also walk ImportEqualsDeclaration for modifier ordering checks
+            // (e.g. `declare export import a = x.c;` should emit TS1029).
+            is ImportEqualsDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             else -> {}
         }
     }
