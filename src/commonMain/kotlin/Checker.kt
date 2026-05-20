@@ -40973,6 +40973,24 @@ interface DataView {
                                     } else {
                                         chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
                                     }
+                                } else if (sourceType is Type.TypeParam) {
+                                    // B60.5: source is TypeParam — emit apparent-type chain.
+                                    // "Type '<constraint>' is not assignable to type '<target>'."
+                                    // Gate: constraint non-null, non-error, non-any. Skip if
+                                    // constraint IS the target (trivially equal). Bypass alias
+                                    // display so `T extends Table` (where Table = TableClass)
+                                    // expands to `TableClass<any>` not `Table`.
+                                    val srcConstraint = sourceType.constraint
+                                    if (srcConstraint != null && srcConstraint !== errorType && srcConstraint !== anyType && srcConstraint !== tt) {
+                                        // Temporarily mark the constraint as in-progress so
+                                        // typeToString skips aliasDisplayMap lookup.
+                                        typeToStringInProgress.add(srcConstraint.id)
+                                        val apparentDisplay = try { typeToString(srcConstraint) }
+                                            finally { typeToStringInProgress.remove(srcConstraint.id) }
+                                        if (apparentDisplay != displaySource) {
+                                            chain.add("  Type '$apparentDisplay' is not assignable to type '$displayTarget'.")
+                                        }
+                                    }
                                 } else if (typeParams.isNotEmpty()) {
                                     val targetBaseName = displayTarget.substringBefore('<')
                                     if (targetBaseName in typeParams) {
