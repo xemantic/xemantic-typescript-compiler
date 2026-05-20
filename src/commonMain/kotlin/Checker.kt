@@ -32510,10 +32510,14 @@ interface DataView {
                 if (recvTp != null) {
                     val tpName = recvTp.name.text
                     val propName = expr.name.text
-                    // No RUNTIME_PROPERTIES filter — unconstrained TypeParam has NO
-                    // apparent type members at all (apparent = `{}`), so every
-                    // property access including toString/constructor/etc. fires TS2339.
-                    if (propName.isNotEmpty()) {
+                    // Under strictNullChecks, TypeParam apparent = unknown → every property
+                    // access fires TS2339. Under non-strict, apparent = `{}` which inherits
+                    // Object.prototype methods — skip those property names so we don't FP on
+                    // `t.toString` / `t.valueOf` / etc. for unconstrained T.
+                    val isObjectProtoMember = propName in OBJECT_PROTOTYPE_IMPLICIT
+                    val shouldEmit = propName.isNotEmpty() &&
+                        (strictNullChecks || !isObjectProtoMember)
+                    if (shouldEmit) {
                         val (line, character) = getLineAndCharacterOfPosition(source, expr.name.pos)
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$tpName'.",
