@@ -41048,9 +41048,16 @@ interface DataView {
                     val isBareTypeParamMismatch = tgtBareName != null && rhsBareName != null &&
                         tgtBareName != rhsBareName &&
                         tgtBareName in typeParams && rhsBareName in typeParams
+                    // B60.7b: also fall back for bare TypeParam RHS → named non-TypeParam target.
+                    // E.g. `z: Object = x: T` where T is bare TypeParam (in scope, unconstrained).
+                    // Needs the gate from B60.7 to fire — keep targets to Object/Function.
+                    val isTypeParamToNamed = tgtBareName != null && rhsBareName != null &&
+                        rhsBareName in typeParams && tgtBareName !in typeParams &&
+                        (tgtBareName == "Object" || tgtBareName == "Function")
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                         ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType
                             else if (isBareTypeParamMismatch) rhsVarType
+                            else if (isTypeParamToNamed) rhsVarType
                             else null
                     if (exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
@@ -59856,6 +59863,22 @@ interface DataView {
                         }
                         if (!foundSubtype) return false
                     }
+                    // B60.7: bare TypeParam source → named non-TypeParam target.
+                    // Source must be UNCONSTRAINED (no `extends`). With unconstrained T,
+                    // the apparent type is {} — not assignable to a named interface like
+                    // Object. With `T extends Object`, source IS assignable (apparent type
+                    // is Object). Narrow gate: src in typeParams, tgt NOT in typeParams,
+                    // src has no constraint.
+                    if (srcName != tgtName && srcName in typeParams && tgtName !in typeParams) {
+                        val srcDecl = currentTypeParamDecls[srcName]
+                        if (srcDecl?.constraint == null) {
+                            // Only emit for "common" wrapper-type targets that TypeScript
+                            // commonly flags — keep conservative to avoid widespread FPs.
+                            // Object/Function are the main lib wrappers TypeScript treats
+                            // as "few-overlap" for unconstrained T.
+                            if (tgtName == "Object" || tgtName == "Function") return false
+                        }
+                    }
                 }
                 val srcBase = sourceType.substringBefore('<')
                 val tgtBase = targetType.substringBefore('<')
@@ -60022,6 +60045,35 @@ interface DataView {
                             length = decLen,
                         ))
                     }
+                }
+            }
+        }
+        // B60.6f: TS2208 for bare TypeParam mismatch — either both bare TypeParams
+        // (`U → T`), or bare TypeParam source → named target (`T → Object`). Points
+        // to source's declaration with the suggested `extends <target>` constraint.
+        // Gate: source TypeParam must be UNCONSTRAINED (no existing extends clause)
+        // — TypeScript doesn't suggest a NEW constraint when one already exists.
+        if (sourceType.startsWith("@") && targetType.startsWith("@") &&
+            !sourceType.contains('<') && !targetType.contains('<')
+        ) {
+            val srcName = sourceType.removePrefix("@")
+            val tgtName = targetType.removePrefix("@")
+            if (srcName != tgtName && srcName in typeParams) {
+                val srcTpDecl = currentTypeParamDecls[srcName]
+                if (srcTpDecl != null && srcTpDecl.constraint == null) {
+                    val decPos = srcTpDecl.name.pos
+                    val decLen = srcTpDecl.name.text.length
+                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, decPos)
+                    relatedInfo.add(Diagnostic(
+                        message = "This type parameter might need an `extends $tgtName` constraint.",
+                        category = DiagnosticCategory.Message,
+                        code = 2208,
+                        fileName = fileName,
+                        line = relLine,
+                        character = relChar,
+                        start = decPos,
+                        length = decLen,
+                    ))
                 }
             }
         }
