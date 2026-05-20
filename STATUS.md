@@ -1,6 +1,8 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,860 / 10,078 tests passing (~87.9%). _Round 14 (2026-05-20): +4 net via B60.12/.13/.14 TypeParam-typed-expression diagnostics + accidental-call + union-callee patterns._
+**Phase 4 — Checker buildout.** 8,862 / 10,078 tests passing (~87.9%). _Round 14 (2026-05-20): +6 net via B60.12 through B60.19 TypeParam-typed-expression diagnostics + TS2352 TypeParam→TypeParam casts + accidental-call + union-callee patterns._
+
+**Round 14 continued (B60.16-B60.19):** After initial commits B60.12-B60.15, identified parameterNamesInTypeParameterList_ts as the specific regression that prevented broadening the `T extends any` gate. Added `isTypeParamUnconstrainedOrExplicitAny(tp, tpDecl)` helper that distinguishes EXPLICIT AnyKeyword constraint from anyType-via-error-recovery. B60.18 added TypeParam→TypeParam TS2352 emission (unconstrained-vs-unconstrained AND constrained-with-overlap-constraint). B60.19 added detection of self-recursive type alias constraints (e.g. `T extends Tree<any>` where `type Tree<T> = T & {...}`). Net +2 flips beyond B60.15.
 
 **Round 14 (2026-05-20, +4 net — B60.12 through B60.14 surgical wins).** /goal session after round 13. Pool was empty at session start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items one at a time:
 
