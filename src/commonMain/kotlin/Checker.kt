@@ -54884,6 +54884,32 @@ interface DataView {
                 ))
             }
         }
+        // B62.2 (early): bare null/undefined literal callees. getCalleeType returns
+        // anyType for these (no symbol resolution path), so we must catch them BEFORE
+        // the anyType bail. Detect via AST shape: parser produces
+        // `Identifier(text="null"/"undefined")` for these keywords.
+        if (strictNullChecks && calleeExpr is Identifier) {
+            val isNullIdent = calleeExpr.text == "null"
+            val isUndefIdent = calleeExpr.text == "undefined"
+            if (isNullIdent || isUndefIdent) {
+                val start = calleeExpr.pos
+                val length = expressionTrueEnd(calleeExpr) - start
+                if (length > 0) {
+                    val (msg, code) = if (isNullIdent)
+                        "Cannot invoke an object which is possibly 'null'." to 2721
+                    else
+                        "Cannot invoke an object which is possibly 'undefined'." to 2722
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = msg,
+                        category = DiagnosticCategory.Error, code = code,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                    return
+                }
+            }
+        }
         if (calleeType === anyType || calleeType === errorType) return
         // B60.14: union callee — three cases:
         //   (a) all constituents non-callable → "No constituent ... is callable."
@@ -55021,6 +55047,43 @@ interface DataView {
             // uses the wrapper interface name (e.g. 'Number' for number).
             // Skip when TS6234 already fired (get-accessor calls share the same
             // primitive return-type pattern).
+            // B62.2: TS2721/TS2722/TS2723 for nullable callees under strictNullChecks.
+            //   null()      → TS2721 "Cannot invoke an object which is possibly 'null'."
+            //   undefined() → TS2722 "Cannot invoke an object which is possibly 'undefined'."
+            //   f() where f: null | undefined → TS2723 "Cannot invoke ... 'null' or 'undefined'."
+            // Span: full callee expression text.
+            if (!firedTs6234 && strictNullChecks) {
+                val isNullCallee = calleeType === nullType
+                val isUndefCallee = calleeType === undefinedType
+                val isUnionNullUndef = calleeType is Type.Union &&
+                    calleeType.types.size == 2 &&
+                    calleeType.types.all { it === nullType || it === undefinedType } &&
+                    calleeType.types.any { it === nullType } &&
+                    calleeType.types.any { it === undefinedType }
+                if (isNullCallee || isUndefCallee || isUnionNullUndef) {
+                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                    } else {
+                        val s = calleeExpr.pos
+                        Pair(s, expressionTrueEnd(calleeExpr) - s)
+                    }
+                    if (length > 0) {
+                        val (msg, code) = when {
+                            isNullCallee -> "Cannot invoke an object which is possibly 'null'." to 2721
+                            isUndefCallee -> "Cannot invoke an object which is possibly 'undefined'." to 2722
+                            else -> "Cannot invoke an object which is possibly 'null' or 'undefined'." to 2723
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = msg,
+                            category = DiagnosticCategory.Error, code = code,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                        return
+                    }
+                }
+            }
             // B60.14: union callee — "No constituent ... is callable" or
             // "Not all constituents ... are callable" depending on whether any
             // constituent has call sigs.
