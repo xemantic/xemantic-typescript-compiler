@@ -421,6 +421,14 @@ class Checker(
         "BigInt", "BigInt64Array", "BigUint64Array",
     )
 
+    /** B60.17: Well-known lib global value names for TS2558 PropertyAccess gate.
+     *  Limits TS2558 to safe targets — user types may have incomplete sig resolution. */
+    private val BUILTIN_LIB_GLOBAL_VALUE_NAMES = setOf(
+        "Object", "Array", "String", "Number", "Boolean", "Math", "Symbol",
+        "JSON", "Reflect", "Promise", "Map", "Set", "WeakMap", "WeakSet",
+        "Date", "RegExp", "Error", "Function",
+    )
+
     // -----------------------------------------------------------------------
     // Built-in type declarations (minimal lib.d.ts stubs)
     // Parsed and bound once at Checker init, merged into globals before user files.
@@ -63270,6 +63278,42 @@ interface DataView {
             }
         }
 
+        // B60.17: PropertyAccess on well-known lib globals — narrow gate to avoid
+        // FPs from incomplete sig resolution for user types. Targets `Object.create<X>`,
+        // `Array.from<X>`, etc. where the static side's method has a known type-param
+        // count and the call passes a different count.
+        if (callee is PropertyAccessExpression) {
+            val recv = callee.expression
+            if (recv is Identifier && recv.text in BUILTIN_LIB_GLOBAL_VALUE_NAMES) {
+                val calleeType = try { getTypeOfPropertyAccess(callee) } catch (_: StackOverflowError) { return }
+                if (calleeType === anyType || calleeType === errorType) return
+                val sigs = getCallSignaturesOfType(calleeType)
+                if (sigs.isEmpty()) return
+                val tpCounts = sigs.map { it.typeParameters?.size ?: 0 }.distinct()
+                if (tpCounts.size != 1) return
+                val expectedCount = tpCounts[0]
+                val providedCount = typeArguments.size
+                if (providedCount == expectedCount) return
+                val firstArg = typeArguments.first()
+                val lastArg = typeArguments.last()
+                val start = firstArg.pos
+                var endPos = lastArg.end
+                while (endPos > start && endPos < source.length) {
+                    val ch = source[endPos - 1]
+                    if (ch == '>' || ch == ')' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') endPos--
+                    else break
+                }
+                val length = (endPos - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Expected $expectedCount type arguments, but got $providedCount.",
+                    category = DiagnosticCategory.Error, code = 2558,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+                return
+            }
+        }
         // Resolve the callee to a symbol
         val name = when (callee) {
             is Identifier -> callee.text
