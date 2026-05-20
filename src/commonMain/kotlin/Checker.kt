@@ -32131,13 +32131,46 @@ interface DataView {
                     }
                 }
                 is ClassDeclaration -> {
+                    // B60.18: push class's TypeParams onto scope so member bodies can see them.
+                    val savedClassScope = currentTypeParamScope
+                    val savedClassAst = currentTypeParamAstForOps
+                    val classTps = stmt.typeParameters
+                    if (!classTps.isNullOrEmpty()) {
+                        val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+                        val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
+                        val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                        for (tp in classTps) {
+                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                val p = Type.TypeParam()
+                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                                p
+                            }
+                            scope[tp.name.text] = typeParam
+                            astScope[tp.name.text] = tp
+                            newOnes.add(tp to typeParam)
+                        }
+                        currentTypeParamScope = scope
+                        currentTypeParamAstForOps = astScope
+                        for ((tp, typeParam) in newOnes) {
+                            if (typeParam.constraint == null) {
+                                tp.constraint?.let {
+                                    try { typeParam.constraint = getTypeFromTypeNode(it) }
+                                    catch (_: StackOverflowError) { /* circular */ }
+                                }
+                            }
+                        }
+                    }
+                    try {
                     for (m in stmt.members) {
                         when (m) {
                             is MethodDeclaration -> m.body?.let { body ->
                                 val savedScope = currentTypeParamScope
+                                val savedAst = currentTypeParamAstForOps
+                                val savedLocalTypes = currentLocalTypes
                                 val tps = m.typeParameters
                                 if (!tps.isNullOrEmpty()) {
                                     val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                                    val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                                     val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                                     for (tp in tps) {
                                         val typeParam = typeParamInternCache.getOrPut(tp.pos) {
@@ -32146,24 +32179,45 @@ interface DataView {
                                             p
                                         }
                                         scope[tp.name.text] = typeParam
+                                        astScope[tp.name.text] = tp
                                         newOnes.add(tp to typeParam)
                                     }
                                     currentTypeParamScope = scope
+                                    currentTypeParamAstForOps = astScope
                                     for ((tp, typeParam) in newOnes) {
                                         if (typeParam.constraint == null) {
                                             tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
                                         }
                                     }
                                 }
+                                // Populate currentLocalTypes with parameter types so
+                                // assertion-walker can resolve `<T>param` source.
+                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                for (param in m.parameters) {
+                                    val paramName = param.name as? Identifier ?: continue
+                                    val paramType = param.type ?: continue
+                                    try {
+                                        val resolved = getTypeFromTypeNode(paramType)
+                                        if (resolved !== errorType && resolved !== anyType) {
+                                            currentLocalTypes[paramName.text] = resolved
+                                        }
+                                    } catch (_: StackOverflowError) { /* circular */ }
+                                }
                                 try {
                                     walkStmtsForTypeParamCasts(body.statements, source, fileName)
                                 } finally {
                                     currentTypeParamScope = savedScope
+                                    currentTypeParamAstForOps = savedAst
+                                    currentLocalTypes = savedLocalTypes
                                 }
                             }
                             is Constructor -> m.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
                             else -> {}
                         }
+                    }
+                    } finally {
+                        currentTypeParamScope = savedClassScope
+                        currentTypeParamAstForOps = savedClassAst
                     }
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
@@ -32181,12 +32235,83 @@ interface DataView {
         val typeName = typeNode.typeName as? Identifier ?: return
         // Target must be a TypeParam in scope.
         val tp = currentTypeParamScope?.get(typeName.text) ?: return
+        // B60.18: TypeParam→TypeParam cast where both are unconstrained and differ.
+        // Emit TS2352 with "'T' could be instantiated with an arbitrary type..." chain
+        // and TS2208 "This type parameter might need an `extends T` constraint." on src.
+        if (tp.constraint == null) {
+            val srcType = try { getTypeOfExpression(expr.expression) } catch (_: Throwable) { return }
+            if (srcType !is Type.TypeParam) return
+            if (srcType === tp) return
+            if (srcType.constraint != null) return  // src is constrained; different shape
+            val srcName = srcType.symbol?.name ?: return
+            val tgtName = typeName.text
+            if (srcName == tgtName) return
+            val srcTpDecl = currentTypeParamAstForOps?.get(srcName)
+            val start = expr.pos
+            val endPos = expressionTrueEnd(expr.expression)
+            val length = (endPos - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            val related = mutableListOf<Diagnostic>()
+            if (srcTpDecl != null) {
+                val (relLine, relChar) = getLineAndCharacterOfPosition(source, srcTpDecl.name.pos)
+                related.add(Diagnostic(
+                    message = "This type parameter might need an `extends $tgtName` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = relLine, character = relChar,
+                    start = srcTpDecl.name.pos, length = srcTpDecl.name.text.length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Conversion of type '$srcName' to type '$tgtName' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                category = DiagnosticCategory.Error, code = 2352,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+                messageChain = listOf(
+                    "  '$tgtName' could be instantiated with an arbitrary type which could be unrelated to '$srcName'.",
+                ),
+                relatedInformation = if (related.isEmpty()) emptyList() else related.toList(),
+            ))
+            return
+        }
         val constraint = tp.constraint ?: return
         if (constraint === anyType || constraint === errorType) return
         // Get source expression's type.
         val srcType = try { getTypeOfExpression(expr.expression) } catch (_: Throwable) { return }
         if (srcType === anyType || srcType === errorType) return
         if (srcType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+        // B60.18b: src is also a constrained TypeParam different from tgt — emit
+        // TS2352 with "X is assignable to the constraint of type T, but T could be
+        // instantiated with a different subtype of constraint Y". Both sides relate
+        // via apparent type (per CLAUDE.md gotcha) so the strict-subtype check below
+        // wouldn't fire — handle this case explicitly.
+        if (srcType is Type.TypeParam && srcType !== tp) {
+            val srcConstraint = srcType.constraint
+            if (srcConstraint != null && srcConstraint !== anyType && srcConstraint !== errorType) {
+                val srcAssignableToTgtConstraint = try { checkTypeRelatedTo(srcConstraint, constraint, assignableRelation) }
+                    catch (_: Throwable) { false }
+                if (srcAssignableToTgtConstraint) {
+                    val srcName = srcType.symbol?.name ?: return
+                    val tgtName = typeName.text
+                    if (srcName != tgtName) {
+                        val start = expr.pos
+                        val endPos = expressionTrueEnd(expr.expression)
+                        val length = (endPos - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        val constraintDisplay = typeToString(constraint)
+                        diagnostics.add(Diagnostic(
+                            message = "Conversion of type '$srcName' to type '$tgtName' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                            category = DiagnosticCategory.Error, code = 2352,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                            messageChain = listOf(
+                                "  '$srcName' is assignable to the constraint of type '$tgtName', but '$tgtName' could be instantiated with a different subtype of constraint '$constraintDisplay'.",
+                            ),
+                        ))
+                        return
+                    }
+                }
+            }
+        }
         // Strict subtype: src ≤ constraint AND constraint NOT ≤ src.
         val srcToConstraint = try { checkTypeRelatedTo(srcType, constraint, assignableRelation) }
             catch (_: Throwable) { return }
