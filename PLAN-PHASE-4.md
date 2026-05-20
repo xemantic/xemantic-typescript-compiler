@@ -952,7 +952,7 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-20 (round 14 of /goal, B60.12-B60.15 — +4 net tests via TypeParam-typed-expression diagnostics + accidental-call + union-callee/ctor).** Continuation /goal session after round 13. Pool was empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items directly:
+  **Session 2026-05-20 (round 14 of /goal, B60.12-B60.19 — +6 net tests via TypeParam-typed-expression diagnostics + accidental-call + union-callee/ctor + TypeParam-cast + recursive-alias detection).** Continuation /goal session after round 13. Pool was empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items directly:
 
   - **B60.12 (+1)**: TS2339/2349/2351 for effectively-unconstrained TypeParam-typed expressions. New walker `checkTypeParamTypedOps` tracks `var x: T` where T is unconstrained or self-circular; emits at `x.foo` / `x()` / `new x(...)`. Flips `typeParameterWithInvalidConstraintType_ts`.
   - **B60.12b (net-zero)**: Walker tracks function parameters too. Stepping stone for B60.12c.
@@ -960,13 +960,18 @@ the live plan focused. Quick reference:
   - **B60.12d (net-zero)**: Object.prototype filter for non-strict mode — `t.toString` on unconstrained T is OK when @strict:false.
   - **B60.13 (+1)**: TS2349 + TS2734 for `foo()(args)` accidental-call. Three coordinated changes: (a) `getCalleeType` resolves CallExpression callees via `getReturnTypeOfCallExpression`, (b) `expressionTrueEnd` for empty-args CallExpression uses `expressionTrueEnd(expr.expression) + 2`, (c) TS2734 related info when inner-call ends on earlier line than outer first-arg. Flips `betterErrorForAccidentalCall_ts`.
   - **B60.14 (+1)**: TS2349 for union-callee with 3 cases — (a) all non-callable, (b) some non-callable, (c) all callable but sigs structurally incompatible. Pairwise sig comparison gate for case (c). Flips `betterErrorForUnionCall_ts`.
-  - **B60.15 (net-zero)**: Mirror of B60.14 for NewExpression union-callee → TS2351. `newOperator_ts` 3 union diagnostics now emit but test still fails on unrelated non-union missing diagnostics.
+  - **B60.15 (net-zero)**: Mirror of B60.14 for NewExpression union-callee → TS2351.
+  - **B60.16 (net-zero)**: `isTypeParamUnconstrainedOrExplicitAny(tp, tpDecl)` helper distinguishes EXPLICIT `extends any` AST from anyType-via-error-recovery. Narrow extension without regressing `parameterNamesInTypeParameterList_ts`.
+  - **B60.17 (net-zero)**: Narrowed TS2558 PropertyAccess to lib globals (Object/Array/Math/JSON/etc.) via `BUILTIN_LIB_GLOBAL_VALUE_NAMES`. Earlier broader version regressed -2.
+  - **B60.18 (+1)**: TS2352 for TypeParam→TypeParam casts. Three coordinated changes: (a) walkStmtsForTypeParamCasts pushes CLASS TypeParams (was only method TPs), (b) populate `currentLocalTypes` with parameter types so source-type resolution works, (c) emit new branches for unconstrained-TypeParam→unconstrained-TypeParam (with TS2208 hint) AND constrained-TypeParam→constrained-TypeParam-with-overlap. Flips `genericTypeAssertions6_ts`.
+  - **B60.19 (+1)**: `T extends RecursiveAlias<...>` detection. New helper `aliasBodyReferencesName` walks TypeNode looking for self-references. Treats `T extends Tree<any>` (for self-recursive `type Tree<T> = T & {...}`) as effectively unconstrained. Flips `typeParameterExplicitlyExtendsAny_ts`.
 
-  Round 14 totals: 8 feature commits + 1 doc commit, +4 net tests (8856 → 8860). Demonstrates that "pool empty" via candidate-finder doesn't preclude surgical progress — adjacent diagnostic shapes (TS2339/2349/2351/2734) are tractable once one is identified.
+  Round 14 totals: 11 feature commits + 3 chore commits, +6 net tests (8856 → 8862). Demonstrates that "pool empty" via candidate-finder doesn't preclude surgical progress — adjacent diagnostic shapes (TS2339/2349/2351/2352/2734/2208/2558) are tractable once one is identified.
 
   Reverted attempts (rationale documented):
-  - `isTypeParamEffectivelyUnconstrained` broadening to `c === anyType` for `T extends any` — caused -1 regression in unidentified test. The 5 missing diagnostics in `typeParameterExplicitlyExtendsAny_ts` (T extends any cases) remain unflipped.
-  - TS2558 PropertyAccess callee extension — caused -2 regressions when added.
+  - First attempt at B60.16 (broad `c === anyType` gate) — caused -1 regression in `parameterNamesInTypeParameterList_ts` (`T extends typeof undeclared` resolves to anyType via error recovery; doesn't want property-access diagnostics).
+  - First attempt at B60.17 (broad TS2558 PropertyAccess) — caused -2 regressions. Narrowed to lib globals only.
+  - B60.18b Intersection/errorType broader gate — didn't fire on the target test, reverted in favor of B60.19's explicit recursive-alias detection.
 
   ---
 
