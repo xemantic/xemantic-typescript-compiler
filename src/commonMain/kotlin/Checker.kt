@@ -63866,6 +63866,36 @@ interface DataView {
         return hasTypeOnly && !hasValue
     }
 
+    /**
+     * B61.5f helper: returns true when the source text leading up to an
+     * ImportEqualsDeclaration's pos contains a class-only modifier keyword
+     * (public/private/protected/static). Used to suppress TS2440 FP when
+     * TS1044 already fires for the invalid modifier.
+     */
+    private fun sourceHasClassOnlyModifierBeforeImportEquals(
+        stmt: ImportEqualsDeclaration,
+        source: String,
+    ): Boolean {
+        val classOnlyKws = listOf("public", "private", "protected", "static")
+        // Find start of line containing stmt.pos
+        var lineStart = stmt.pos
+        while (lineStart > 0 && source[lineStart - 1] != '\n') lineStart--
+        val prefix = source.substring(lineStart, stmt.pos)
+        for (kw in classOnlyKws) {
+            // Word-boundary match: must be surrounded by non-letter-digit chars
+            var idx = 0
+            while (true) {
+                val found = prefix.indexOf(kw, idx)
+                if (found < 0) break
+                val before = if (found == 0) ' ' else prefix[found - 1]
+                val after = if (found + kw.length >= prefix.length) ' ' else prefix[found + kw.length]
+                if (!before.isLetterOrDigit() && !after.isLetterOrDigit()) return true
+                idx = found + 1
+            }
+        }
+        return false
+    }
+
     private fun checkImportConflictsWithLocal() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -63910,6 +63940,10 @@ interface DataView {
                 when (stmt) {
                     is ImportEqualsDeclaration -> {
                         if (stmt.isTypeOnly) continue
+                        // B61.5f: Skip TS2440 when import-equals has class-only modifier keywords
+                        // in source text (parser drops them from stmt.modifiers, so source-scan).
+                        // TS1044 fires for these and the binding shouldn't also conflict.
+                        if (sourceHasClassOnlyModifierBeforeImportEquals(stmt, source)) continue
                         // Internal namespace aliases (import foo = m1) can merge with class/function/interface
                         // but NOT with variable declarations
                         if (stmt.moduleReference !is ExternalModuleReference) {
