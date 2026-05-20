@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,868 / 10,078 tests passing (~87.99%). _Round 15 (2026-05-20): 6 feature commits, +6 net via B61.1 (TS2300 lib-shadowing) + B61.2 (TS1351 numeric-id) + B61.3 (TS1005 deferred var-decl emit) + B61.4 (TS1029 ImportEqualsDeclaration modifier order, net-zero) + B61.5b (TS2694 narrow single-dot import-equals member) + B61.5c (TS2694 multi-segment QualifiedName). Session reached 20+ iteration cycles, including reverted B52.2/B61.5 attempts and a stale-skip-log audit._
+**Phase 4 — Checker buildout.** 8,871 / 10,078 tests passing (~88.02%). _Round 15 (2026-05-20): 9 feature commits, +9 net via B61.1 (TS2300 lib-shadowing, +2) + B61.2 (TS1351 numeric-id, net-zero) + B61.3 (TS1005 deferred var-decl emit, +2) + B61.4 (TS1029 ImportEqualsDeclaration modifier order, net-zero) + B61.5b (TS2694 narrow single-dot import-equals member, +1) + B61.5c (TS2694 multi-segment QualifiedName, +1) + B61.5d (TS2708 export import-equals namespace-as-value, +2) + B61.5e (TS1044 class-only modifiers on import-equals, net-zero) + B61.5f (TS2440 FP suppression, +1). Session reached 30+ iteration cycles, including reverted B52.2/B61.5 attempts and a stale-skip-log audit._
 
 **Round 15 (2026-05-20, +6 net — B61.x parser/checker stack).** /goal session after round 14. Pool empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, surveyed broader candidate space:
 
@@ -12,8 +12,11 @@
 - **B61.5 attempt (reverted -16)**: Broad checkQualifiedNameExports for ImportEqualsDeclaration QualifiedName refs. Reverted — helper was designed for type positions and over-fires for value-position lookups + variable exports.
 - **B61.5b (+1)**: Narrow TS2694 for non-exported namespace member in import-equals (single-dot). AST-level export check (Function/Class/Interface/TypeAlias/Enum/Module modifier scan + VariableStatement body scan). Sub-namespace Module-flag gate prevents FP on dotted-namespace form. Flips `importDeclWithDeclareModifier_ts`.
 - **B61.5c (+1)**: Extends B61.5b to multi-segment QualifiedNames like `c.a.b.ma`. Walks intermediate segments requiring sub-namespace Module flag (auto-exported), final segment gets the export check. Builds qualified namespace path in the TS2694 message. Flips `importAnImport_ts`.
+- **B61.5d (+2)**: TS2708 "Cannot use namespace 'X' as a value." for top-level `export import` where the root namespace is purely type-side AND not itself exported. Flips `importDeclWithExportModifier_ts` and `importDeclWithExportModifierAndExportAssignment_ts`. The not-exported gate prevents FPs on nested-namespace patterns.
+- **B61.5e (net-zero)**: TS1044 emission for class-only modifiers (public/private/protected/static) on ImportEqualsDeclaration via source-text scan. Net-zero alone because TS2440 FP remained — fixed in B61.5f.
+- **B61.5f (+1)**: Suppress TS2440 in `checkImportConflictsWithLocal` when source text leading up to import-equals contains a class-only modifier (parser drops them from stmt.modifiers, so source-text scan via new helper). Flips `importDeclWithClassModifiers_ts` (paired with B61.5e).
 
-Round 15 totals: 6 feature commits + status/plan doc commits, +6 net tests (8862 → 8868). Surgical wins from adjacent diagnostic-pattern work (lib-shadowing TS2300 + scanner TS1351 + parser TS1005 + ImportEqualsDeclaration TS1029/TS2694 single+multi-segment).
+Round 15 totals: 9 feature commits + status/plan doc commits, +9 net tests (8862 → 8871 / 10078 = 88.02%). Surgical wins from adjacent diagnostic-pattern work (lib-shadowing TS2300 + scanner TS1351 + parser TS1005 + ImportEqualsDeclaration TS1029/TS2694/TS2708/TS1044/TS2440-suppression).
 
 **Round 15 exploration (no commits — tests examined and classified):**
 - JS-emit small-diff candidates (5 fresh): ALL parser-recovery → Blocker #7 (LOW yield, HIGH risk). Tests: `parseJsxElementInUnaryExpressionNoCrash1_ts`, `fatarrowfunctionsOptionalArgs_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `TransportStream_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`.
