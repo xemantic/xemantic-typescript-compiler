@@ -30026,15 +30026,15 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            checkDupModInStatements(result.sourceFile.statements, source, fileName)
+            checkDupModInStatements(result.sourceFile.statements, source, fileName, inAmbientContext = false)
         }
     }
 
-    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName)
+    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbientContext: Boolean = false) {
+        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName, inAmbientContext)
     }
 
-    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String) {
+    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String, inAmbientContext: Boolean = false) {
         when (stmt) {
             is ClassDeclaration -> {
                 checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
@@ -30077,19 +30077,24 @@ interface DataView {
             is TypeAliasDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             is ModuleDeclaration -> {
                 checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                (stmt.body as? ModuleBlock)?.let { checkDupModInStatements(it.statements, source, fileName) }
+                val nowAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
+                (stmt.body as? ModuleBlock)?.let { checkDupModInStatements(it.statements, source, fileName, nowAmbient) }
             }
-            is Block -> checkDupModInStatements(stmt.statements, source, fileName)
+            is Block -> checkDupModInStatements(stmt.statements, source, fileName, inAmbientContext)
             is IfStatement -> {
-                checkDupModInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName) }
+                checkDupModInStatement(stmt.thenStatement, source, fileName, inAmbientContext)
+                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName, inAmbientContext) }
             }
             is ExportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             // B61.4: also walk ImportEqualsDeclaration for modifier ordering checks
             // (e.g. `declare export import a = x.c;` should emit TS1029).
             is ImportEqualsDeclaration -> {
-                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                // B61.5g: Skip TS1029 (modifier ordering) for declare+export import-equals
+                // when inside ambient context — TS1038 fires instead.
+                if (!inAmbientContext) {
+                    checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                }
                 // B61.5e: TS1044 for class-only modifiers (public/private/protected/static)
                 // on module/namespace elements like import-equals.
                 checkInvalidImportEqualsModifiers(stmt, source, fileName)
@@ -34120,6 +34125,8 @@ interface DataView {
         is TypeAliasDeclaration -> ModifierFlag.Declare in stmt.modifiers
         is EnumDeclaration -> ModifierFlag.Declare in stmt.modifiers
         is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
+        // B61.5g: ImportEqualsDeclaration with declare in ambient context → TS1038.
+        is ImportEqualsDeclaration -> ModifierFlag.Declare in stmt.modifiers
         else -> false
     }
 
