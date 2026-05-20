@@ -39818,7 +39818,20 @@ interface DataView {
                     }
                     if (targetType is Type.TypeParam) {
                         val targetName = targetType.symbol?.name ?: "T"
-                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                        // B60.2: when target TypeParam has a constraint AND source is
+                        // assignable to that constraint, use the "constraint-assignable"
+                        // chain form ("X is assignable to the constraint of type T, but
+                        // T could be instantiated with a different subtype of constraint C").
+                        // Otherwise fall back to the "arbitrary type unrelated" form.
+                        val constraint = targetType.constraint
+                        val constraintOk = constraint != null && try {
+                            checkTypeRelatedTo(sourceType, constraint, assignableRelation)
+                        } catch (_: Throwable) { false }
+                        if (constraintOk) {
+                            chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
+                        } else {
+                            chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                        }
                     } else if (typeParams.isNotEmpty()) {
                         val targetBaseName = displayTarget.substringBefore('<')
                         if (targetBaseName in typeParams) {
@@ -40787,7 +40800,16 @@ interface DataView {
                                 if (chain.isEmpty()) {
                                 if (tt is Type.TypeParam) {
                                     val targetName = tt.symbol?.name ?: "T"
-                                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                    // B60.2: same logic as the var-decl path at ~39819.
+                                    val constraint = tt.constraint
+                                    val constraintOk = constraint != null && try {
+                                        checkTypeRelatedTo(sourceType, constraint, assignableRelation)
+                                    } catch (_: Throwable) { false }
+                                    if (constraintOk) {
+                                        chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
+                                    } else {
+                                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                                    }
                                 } else if (typeParams.isNotEmpty()) {
                                     val targetBaseName = displayTarget.substringBefore('<')
                                     if (targetBaseName in typeParams) {
