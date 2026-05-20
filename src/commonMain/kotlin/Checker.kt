@@ -633,6 +633,9 @@ class Checker(
         checkArrayToClassCastOverlap()
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
         checkJSDocVoidCastNonOverlap()
+        // 14''e. Check `<TypeParam>concrete` casts where concrete is a strict
+        // subtype of TypeParam's constraint — TS2352 (B60.3)
+        checkTypeParamStrictSubtypeCast()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -32046,6 +32049,153 @@ interface DataView {
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // B60.3: TS2352 for `<TypeParam>concrete-subtype` casts
+    // -----------------------------------------------------------------------
+    /**
+     * Emits TS2352 "Conversion of type 'X' to type 'T' may be a mistake..."
+     * for `<T>expr` casts where:
+     *   - T is a TypeParam (in the enclosing function/method's scope)
+     *   - T has a constraint C
+     *   - expr's type S is a STRICT subtype of C — i.e. assignable to C
+     *     but C NOT assignable to S
+     * The "strict subtype" gate prevents firing for `<T>a` where a's type IS
+     * the constraint (no overlap mismatch). The chain matches B60.2's
+     * "constraint-assignable" form.
+     *
+     * Walks per-function so TypeParams from the enclosing function are visible.
+     */
+    private fun checkTypeParamStrictSubtypeCast() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkStmtsForTypeParamCasts(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
+        }
+    }
+
+    private fun walkStmtsForTypeParamCasts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    val savedScope = currentTypeParamScope
+                    val tps = stmt.typeParameters
+                    if (!tps.isNullOrEmpty()) {
+                        val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                        val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                        for (tp in tps) {
+                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                val p = Type.TypeParam()
+                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                                p
+                            }
+                            scope[tp.name.text] = typeParam
+                            newOnes.add(tp to typeParam)
+                        }
+                        currentTypeParamScope = scope
+                        for ((tp, typeParam) in newOnes) {
+                            if (typeParam.constraint == null) {
+                                tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                            }
+                        }
+                    }
+                    try {
+                        stmt.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
+                    } finally {
+                        currentTypeParamScope = savedScope
+                    }
+                }
+                is ClassDeclaration -> {
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { body ->
+                                val savedScope = currentTypeParamScope
+                                val tps = m.typeParameters
+                                if (!tps.isNullOrEmpty()) {
+                                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                                    val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                                    for (tp in tps) {
+                                        val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                            val p = Type.TypeParam()
+                                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                                            p
+                                        }
+                                        scope[tp.name.text] = typeParam
+                                        newOnes.add(tp to typeParam)
+                                    }
+                                    currentTypeParamScope = scope
+                                    for ((tp, typeParam) in newOnes) {
+                                        if (typeParam.constraint == null) {
+                                            tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                                        }
+                                    }
+                                }
+                                try {
+                                    walkStmtsForTypeParamCasts(body.statements, source, fileName)
+                                } finally {
+                                    currentTypeParamScope = savedScope
+                                }
+                            }
+                            is Constructor -> m.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                    walkStmtsForTypeParamCasts(it, source, fileName)
+                }
+                else -> walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfTypeParamStrictSubtypeCast)
+            }
+        }
+    }
+
+    private fun emitTS2352IfTypeParamStrictSubtypeCast(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        val typeNode = expr.type as? TypeReference ?: return
+        val typeName = typeNode.typeName as? Identifier ?: return
+        // Target must be a TypeParam in scope.
+        val tp = currentTypeParamScope?.get(typeName.text) ?: return
+        val constraint = tp.constraint ?: return
+        if (constraint === anyType || constraint === errorType) return
+        // Get source expression's type.
+        val srcType = try { getTypeOfExpression(expr.expression) } catch (_: Throwable) { return }
+        if (srcType === anyType || srcType === errorType) return
+        if (srcType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+        // Strict subtype: src ≤ constraint AND constraint NOT ≤ src.
+        val srcToConstraint = try { checkTypeRelatedTo(srcType, constraint, assignableRelation) }
+            catch (_: Throwable) { return }
+        if (!srcToConstraint) return
+        val constraintToSrc = try { checkTypeRelatedTo(constraint, srcType, assignableRelation) }
+            catch (_: Throwable) { return }
+        if (constraintToSrc) return  // bidirectional → sufficient overlap
+        // Emit TS2352 at the assertion span.
+        val start = expr.pos
+        val endPos = expressionTrueEnd(expr.expression)
+        val length = (endPos - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val srcDisplay = typeToString(srcType)
+        val tpName = typeName.text
+        val constraintDisplay = typeToString(constraint)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '$srcDisplay' to type '$tpName' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = listOf("  '$srcDisplay' is assignable to the constraint of type '$tpName', but '$tpName' could be instantiated with a different subtype of constraint '$constraintDisplay'."),
         ))
     }
 
