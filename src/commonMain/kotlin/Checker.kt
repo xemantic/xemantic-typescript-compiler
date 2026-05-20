@@ -32356,16 +32356,16 @@ interface DataView {
                     for (m in stmt.members) {
                         when (m) {
                             is MethodDeclaration -> walkFnLikeBodyForTypeParamOps(
-                                m.typeParameters, m.body?.statements, source, fileName,
+                                m.typeParameters, m.parameters, m.body?.statements, source, fileName,
                             )
                             is Constructor -> walkFnLikeBodyForTypeParamOps(
-                                null, m.body?.statements, source, fileName,
+                                null, m.parameters, m.body?.statements, source, fileName,
                             )
                             is GetAccessor -> walkFnLikeBodyForTypeParamOps(
-                                null, m.body?.statements, source, fileName,
+                                null, null, m.body?.statements, source, fileName,
                             )
                             is SetAccessor -> walkFnLikeBodyForTypeParamOps(
-                                null, m.body?.statements, source, fileName,
+                                null, m.parameters, m.body?.statements, source, fileName,
                             )
                             else -> {}
                         }
@@ -32375,7 +32375,7 @@ interface DataView {
                 }
             }
             is FunctionDeclaration -> walkFnLikeBodyForTypeParamOps(
-                stmt.typeParameters, stmt.body?.statements, source, fileName,
+                stmt.typeParameters, stmt.parameters, stmt.body?.statements, source, fileName,
             )
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
@@ -32431,7 +32431,8 @@ interface DataView {
     }
 
     private fun walkFnLikeBodyForTypeParamOps(
-        ownTps: List<TypeParameter>?, bodyStmts: List<Statement>?,
+        ownTps: List<TypeParameter>?, parameters: List<Parameter>?,
+        bodyStmts: List<Statement>?,
         source: String, fileName: String,
     ) {
         if (bodyStmts == null) return
@@ -32460,6 +32461,17 @@ interface DataView {
         }
         try {
             val bodyVars = mutableMapOf<String, String>()
+            // Track parameters typed as effectively-unconstrained TypeParams.
+            if (parameters != null) {
+                for (p in parameters) {
+                    val typeRef = p.type as? TypeReference ?: continue
+                    val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
+                    val tp = currentTypeParamScope?.get(typeName) ?: continue
+                    if (!isTypeParamEffectivelyUnconstrained(tp)) continue
+                    val paramName = (p.name as? Identifier)?.text ?: continue
+                    bodyVars[paramName] = typeName
+                }
+            }
             for (s in bodyStmts) walkStmtForTypeParamOps(s, source, fileName, bodyVars)
         } finally {
             currentTypeParamScope = savedScope
@@ -32481,7 +32493,10 @@ interface DataView {
                 if (recv is Identifier && tpVars[recv.text] != null) {
                     val tpName = tpVars[recv.text]!!
                     val propName = expr.name.text
-                    if (propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
+                    // No RUNTIME_PROPERTIES filter — unconstrained TypeParam has NO
+                    // apparent type members at all (apparent = `{}`), so every
+                    // property access including toString/constructor/etc. fires TS2339.
+                    if (propName.isNotEmpty()) {
                         val (line, character) = getLineAndCharacterOfPosition(source, expr.name.pos)
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$tpName'.",
