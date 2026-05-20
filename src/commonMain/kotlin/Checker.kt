@@ -14199,6 +14199,108 @@ class Checker(
             checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
             // B61.1: top-level non-declare class shadowing a built-in lib class
             checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
+            // B61.6: cross-interface-declaration TS2717 for method-vs-property merge conflict
+            checkCrossInterfacePropertyConflict(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B61.6: For interfaces split across multiple declarations in the same file, detect
+     * when one declaration's property name (e.g. `bold: string`) conflicts with another
+     * declaration's method signature (e.g. `bold(): string`). Emit TS2717 + TS6203 at
+     * the later-declared property name pointing back to the method.
+     *
+     * Limited to a narrow case: one method declaration + one property declaration with
+     * the same name across two interface declarations of the same name. More complex
+     * merges (multiple methods, mixed accessor forms) defer.
+     */
+    private fun checkCrossInterfacePropertyConflict(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // Group interface declarations by name
+        val byName = statements.filterIsInstance<InterfaceDeclaration>()
+            .groupBy { it.name.text }
+        for ((_, decls) in byName) {
+            if (decls.size < 2) continue
+            // Collect members from each declaration; map name → list of (decl_idx, ClassElement)
+            val membersByName = mutableMapOf<String, MutableList<Pair<Int, ClassElement>>>()
+            for ((idx, decl) in decls.withIndex()) {
+                for (m in decl.members) {
+                    val nm = getMemberNameText(when (m) {
+                        is PropertyDeclaration -> m.name
+                        is MethodDeclaration -> m.name
+                        else -> continue
+                    }) ?: continue
+                    membersByName.getOrPut(nm) { mutableListOf() }.add(idx to m)
+                }
+            }
+            // For each name with members from multiple declarations, check for method-vs-property conflict
+            for ((memberName, items) in membersByName) {
+                if (items.size < 2) continue
+                // Find first method and first property
+                val firstMethod = items.firstOrNull { it.second is MethodDeclaration }
+                val firstProperty = items.firstOrNull { it.second is PropertyDeclaration }
+                if (firstMethod == null || firstProperty == null) continue
+                // Skip if call signatures (special "" name) — those are handled differently
+                if (memberName.isEmpty() || memberName == "new") continue
+                // Only emit when method comes first (in source order) and property is later
+                val methodIdx = firstMethod.first
+                val propIdx = firstProperty.first
+                if (methodIdx >= propIdx) continue
+                val methodDecl = firstMethod.second as MethodDeclaration
+                val propDecl = firstProperty.second as PropertyDeclaration
+                // Build type strings
+                val methodReturnType = methodDecl.type?.let { typeNodeToSimpleString(it) } ?: "any"
+                val methodParams = methodDecl.parameters.joinToString(", ") { p ->
+                    val pname = (p.name as? Identifier)?.text ?: "_"
+                    val ptype = p.type?.let { typeNodeToSimpleString(it) } ?: "any"
+                    "$pname: $ptype"
+                }
+                val methodTypeStr = "($methodParams) => $methodReturnType"
+                val propTypeStr = propDecl.type?.let { typeNodeToSimpleString(it) } ?: "any"
+                if (methodTypeStr == propTypeStr) continue
+                // Emit TS2717 at the property name with TS6203 pointing to the method name
+                val propName = propDecl.name
+                val propStart = propName.pos
+                val propLength = when (propName) {
+                    is Identifier -> propName.text.length
+                    is StringLiteralNode -> propName.text.length + 2
+                    is NumericLiteralNode -> propName.text.length
+                    else -> memberName.length
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, propStart)
+                val methodName = methodDecl.name
+                val methodStart = methodName.pos
+                val methodLength = when (methodName) {
+                    is Identifier -> methodName.text.length
+                    is StringLiteralNode -> methodName.text.length + 2
+                    is NumericLiteralNode -> methodName.text.length
+                    else -> memberName.length
+                }
+                val (methodLine, methodChar) = getLineAndCharacterOfPosition(source, methodStart)
+                diagnostics.add(Diagnostic(
+                    message = "Subsequent property declarations must have the same type.  Property '$memberName' must be of type '$methodTypeStr', but here has type '$propTypeStr'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2717,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = propStart,
+                    length = propLength,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "'$memberName' was also declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 6203,
+                        fileName = fileName,
+                        line = methodLine,
+                        character = methodChar,
+                        start = methodStart,
+                        length = methodLength,
+                    )),
+                ))
+            }
         }
     }
 
