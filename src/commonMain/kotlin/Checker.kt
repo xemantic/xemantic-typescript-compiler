@@ -429,6 +429,26 @@ class Checker(
         "Date", "RegExp", "Error", "Function",
     )
 
+    /**
+     * B61.1: Maps a lib-shadowed class name to the list of lib files (in baseline order)
+     * that declare its interface/var form. Used to emit TS6203 (first) + TS6204
+     * (subsequent) related infos on the user's TS2300 diagnostic. Declared BEFORE
+     * init {} so it's accessible during the check pipeline (Kotlin property init order).
+     */
+    private val LIB_SHADOWED_CLASS_LIB_FILES: Map<String, List<String>> = mapOf(
+        "Promise" to listOf(
+            "lib.es5.d.ts",
+            "lib.es2015.iterable.d.ts",
+            "lib.es2015.promise.d.ts",
+            "lib.es2015.symbol.wellknown.d.ts",
+        ),
+        "Symbol" to listOf(
+            "lib.es5.d.ts",
+            "lib.es2015.symbol.d.ts",
+            "lib.es2015.symbol.wellknown.d.ts",
+        ),
+    )
+
     // -----------------------------------------------------------------------
     // Built-in type declarations (minimal lib.d.ts stubs)
     // Parsed and bound once at Checker init, merged into globals before user files.
@@ -14025,6 +14045,54 @@ class Checker(
             checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
             // Check file-level duplicate declarations
             checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
+            // B61.1: top-level non-declare class shadowing a built-in lib class
+            checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B61.1: Emit TS2300 + TS6203/TS6204 related infos for a top-level NON-declare
+     * class declaration whose name shadows a built-in lib type (Promise/Symbol/etc.).
+     * The user class collides with the lib's `interface X` + `declare var X: ...`
+     * declarations. Matches TypeScript's behavior — see promiseDefinitionTest /
+     * recursiveComplicatedClasses baselines.
+     */
+    private fun checkClassShadowsLibType(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        // B61.1: Only fire for script files. In module files, the class is
+        // module-local and doesn't pollute globals — no conflict with lib.
+        if (isModuleFile(statements)) return
+        for (stmt in statements) {
+            if (stmt !is ClassDeclaration) continue
+            if (ModifierFlag.Declare in stmt.modifiers) continue
+            val name = stmt.name ?: continue
+            val libFiles = LIB_SHADOWED_CLASS_LIB_FILES[name.text] ?: continue
+            val nameStart = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+            val relatedInfos = libFiles.mapIndexed { idx, libFile ->
+                Diagnostic(
+                    message = if (idx == 0) "'${name.text}' was also declared here." else "and here.",
+                    category = DiagnosticCategory.Message,
+                    code = if (idx == 0) 6203 else 6204,
+                    fileName = libFile,
+                    line = null,
+                    character = null,
+                )
+            }
+            diagnostics.add(Diagnostic(
+                message = "Duplicate identifier '${name.text}'.",
+                category = DiagnosticCategory.Error,
+                code = 2300,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = nameStart,
+                length = name.text.length,
+                relatedInformation = relatedInfos,
+            ))
         }
     }
 
