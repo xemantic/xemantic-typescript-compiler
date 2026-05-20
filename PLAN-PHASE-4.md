@@ -1340,6 +1340,29 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Round 14 session 2026-05-20 surveyed (architectural / complex multi-piece):**
+- `typeParameterExplicitlyExtendsAny_ts` — flipped B60.19 (was 1/6, now 6/6).
+- `typeParameterConstrainedToOuterTypeParameter_ts` — chain substitution gap (`Type 'U' is not assignable to type 'U[]'` should display as `string[]` after T=string substitution). Needs full function-type chain substitution infrastructure.
+- `conditionalAnyCheckTypePicksBothBranches_ts` — `[any] extends [number] ? 1 : 0` conditional type evaluation; needs conditional type infra.
+- `noStrictGenericChecks_ts` — function-vs-function comparison with different generic TypeParam counts; Blocker #2.
+- `assignmentStricterConstraints_ts` — function-vs-function with different TP constraint shapes; Blocker #2.
+- `errorElaborationDivesIntoApparentlyPresentPropsOnly_ts` — B60.2 chain should fire "constraint subtype" form but emits "arbitrary" — checkTypeRelatedTo seems to return false for `{a:string,b:number,c:number}` → `{a:string}` constraint. Likely strict object-literal excess-property check. Out of scope without rework of relation flag.
+- `derivedGenericClassWithAny_ts` — TS2564 + TS2322 multi-element; needs strictNullChecks property-init infra.
+- `arrayOfSubtypeIsAssignableToReadonlyArray_ts` — variance check; over-emits 1 TS2322 + wrong chain.
+- `complexRecursiveCollections_ts` — large generic chain (immutable.ts).
+- `moduleAugmentationsImports3_ts` / `moduleAugmentationsImports4_ts` — module augmentation across files (Blocker #3 / #5).
+- `castOfAwait_ts` — `<number>void X` cast where X returns undefined; needs void-undefined cast detection.
+- `assigningFromObjectToAnythingElse_ts` — TS2558 PropertyAccess flips via B60.17 but test still fails on lib-version "and N more" count.
+- `chainedCallsWithTypeParameterConstrainedToOtherTypeParameter2_ts` — chained `then<S extends T>` calls; needs generic argument inference.
+- `genericTypeAssertions6_ts` — flipped B60.18 (3/3 emissions now).
+- `bigintWithLib_ts` / `intTypeCheck_ts` / `newOperator_ts` / `constructorOverloads4_ts` — large multi-diagnostic tests, partial improvements via B60.14/B60.15.
+- `parameterNamesInTypeParameterList_ts` — was a regression risk for `T extends typeof undeclared` broadening; narrow `isTypeParamUnconstrainedOrExplicitAny` gate preserved correctness.
+- `anonymousModules_ts` — TS1437 "Namespace must be given a name." + TS2591 — new diagnostics needed.
+- `arrayconcat_ts` — TS18048 missing for strictNullChecks undefined check.
+- `genericDefaultsErrors_ts` — many missing TS2344 / TS2558 / TS2706 / TS2707.
+- `aliasInstantiationExpressionGenericIntersectionNoCrash1_ts` — complex generic intersection cast.
+- `recursivelyExpandingUnionNoStackoverflow_ts` — needs TS2589 + TS2615 in mapped-type recursion path.
+
 **Generic type alias instantiation — surveyed 2026-05-19 (feature-scale):**
 - ~~`typeAssignabilityErrorMessage_ts`: MISS +2 TS2322 @ (40,5) + TS2345 @ (42,5).~~ **Flipped B50.4 (2026-05-19)** — the B50.x infrastructure (B50.1 generic type alias instantiation + B50.2 alias-name display preservation + B50.3 source-vs-union elaboration chain + B50.4 TS2345 widening + non-generic alias display + Object→Union elaboration in `getPropertyElaborationChain`) implements the full chain. Source/target both use generic type aliases `Foo<T>` / `Bar<T>` (a union). The skip-reason rationale below documented the architectural pieces needed; all of them landed across B50.1–B50.4.
 - `quickIntersectionCheckCorrectlyCachesErrors_ts`: MISS +1 TS2345 @ (9,15). Same `F<CP>` vs `F<unknown>` (same target, different args). The CLAUDE.md gotcha "Generic type-reference element comparison" picks COVARIANT arg-by-arg comparison. But F's call sig `(props: P & {...}) => void` uses P CONTRAVARIANTLY — `F<CP> → F<unknown>` requires `unknown & {...} → CP & {...}` (contravariant), which fails. Need either (a) variance inference / declared variance markers, or (b) drop the same-target shortcut and fall back to full structural — risks regressing 39+ cycle-cases per past sessions. Out-of-scope.
