@@ -10545,6 +10545,72 @@ class Checker(
                         }
                         else -> null
                     }
+                    // B61.5b: For `import a = x.c` where x is a single-level namespace
+                    // reference with the rightmost identifier referring to an existing but
+                    // non-exported member, emit TS2694. Uses isNameExportedFromNamespace
+                    // which correctly handles VariableStatement export modifiers (vs. the
+                    // broader checkQualifiedNameExports which doesn't and would regress).
+                    // Limit to ref = QualifiedName(Identifier, Identifier) — single dot —
+                    // to avoid cross-file/multi-segment regression risk.
+                    if (ref is QualifiedName && ref.left is Identifier) {
+                        val rootIdent = ref.left as Identifier
+                        val rightIdent = ref.right
+                        val fileLocals = fileResults[fileName]?.locals
+                        val rootSym = fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
+                        // Skip declare-namespace (its members are implicitly exported).
+                        // Only fire for non-declare namespace declarations.
+                        val isNonDeclareNamespace = rootSym != null &&
+                            rootSym.declarations.any { d ->
+                                d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
+                            }
+                        if (isNonDeclareNamespace) {
+                            val memberSym = rootSym!!.exports?.get(rightIdent.text)
+                            if (memberSym != null) {
+                                // Sub-namespaces (Module flag) are implicitly exported when
+                                // declared via the dotted form `namespace A.B { ... }`. Skip the
+                                // export check for them.
+                                val isSubNamespace = memberSym.flags.hasAny(SymbolFlags.Module)
+                                // Check if member is actually exported via AST scan.
+                                val isExported = isSubNamespace || memberSym.declarations.any { d ->
+                                    when (d) {
+                                        is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
+                                        is ClassDeclaration -> ModifierFlag.Export in d.modifiers
+                                        is InterfaceDeclaration -> ModifierFlag.Export in d.modifiers
+                                        is TypeAliasDeclaration -> ModifierFlag.Export in d.modifiers
+                                        is EnumDeclaration -> ModifierFlag.Export in d.modifiers
+                                        is ModuleDeclaration -> ModifierFlag.Export in d.modifiers
+                                        else -> false
+                                    }
+                                } || run {
+                                    // Variable declarations: scan namespace body for export VarStatement.
+                                    rootSym.declarations.any { nsDecl ->
+                                        val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
+                                            ?: return@any false
+                                        body.statements.any { s ->
+                                            s is VariableStatement && ModifierFlag.Export in s.modifiers &&
+                                                s.declarationList.declarations.any { vd ->
+                                                    (vd.name as? Identifier)?.text == rightIdent.text
+                                                }
+                                        }
+                                    }
+                                }
+                                if (!isExported) {
+                                    val rightStart = rightIdent.pos
+                                    val (line, character) = getLineAndCharacterOfPosition(source, rightStart)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Namespace '${rootIdent.text}' has no exported member '${rightIdent.text}'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2694,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = rightStart,
+                                        length = rightIdent.text.length,
+                                    ))
+                                }
+                            }
+                        }
+                    }
                     if (leftmost != null) {
                         val name = leftmost.text
                         // Skip invalid identifier starts (numbers, strings) — parser already emits TS1003
