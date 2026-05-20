@@ -39992,6 +39992,10 @@ interface DataView {
                         } catch (_: Throwable) { false }
                         if (constraintOk) {
                             chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
+                            // B60.6d: lib `Object` source hint
+                            if (displaySource == "Object") {
+                                chain.add("    The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?")
+                            }
                         } else {
                             chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
                         }
@@ -40970,6 +40974,10 @@ interface DataView {
                                     } catch (_: Throwable) { false }
                                     if (constraintOk) {
                                         chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
+                                        // B60.6d: lib `Object` source hint
+                                        if (displaySource == "Object") {
+                                            chain.add("    The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?")
+                                        }
                                     } else {
                                         chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
                                     }
@@ -41030,8 +41038,20 @@ interface DataView {
                     val isSameBaseRhs = rhsVarType != null &&
                         rhsVarType.startsWith("@") && rhsVarType.contains('<') &&
                         rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
+                    // B60.6b: also fall back for bare TypeParam target with bare TypeParam RHS
+                    // (`x: T = y: U`) — both must be in the typeParams scope. Mirrors the
+                    // same-base-ref fallback for the bare case.
+                    val tgtBareName = if (declaredType.startsWith("@") && !declaredType.contains('<'))
+                        declaredType.removePrefix("@") else null
+                    val rhsBareName = if (rhsVarType != null && rhsVarType.startsWith("@") && !rhsVarType.contains('<'))
+                        rhsVarType.removePrefix("@") else null
+                    val isBareTypeParamMismatch = tgtBareName != null && rhsBareName != null &&
+                        tgtBareName != rhsBareName &&
+                        tgtBareName in typeParams && rhsBareName in typeParams
                     val exprType = inferSimpleExprType(expr.right, varTypes)
-                        ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType else null
+                        ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType
+                            else if (isBareTypeParamMismatch) rhsVarType
+                            else null
                     if (exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
@@ -59809,6 +59829,34 @@ interface DataView {
             // ONE side is a concrete primitive (per typeParameterAssignmentCompat1 vs
             // generics3 distinction).
             if (sourceType.startsWith("@") && sourceType != targetType) {
+                // B60.6: bare TypeParam vs bare TypeParam (distinct names, no type
+                // args on either side). Treat as nominally distinct per strict-
+                // generic-checks semantics — `function ff<T, U>(x: T, y: U) { x = y; }`
+                // fires TS2322 for `x = y` because T and U could be instantiated
+                // with unrelated types. Mirrors B55.1's same-base-with-different-
+                // TypeParam-args logic for the bare case.
+                if (!sourceType.contains('<') && !targetType.contains('<')) {
+                    val srcName = sourceType.removePrefix("@")
+                    val tgtName = targetType.removePrefix("@")
+                    if (srcName != tgtName && srcName in typeParams && tgtName in typeParams) {
+                        // B60.6e: SKIP when src directly extends tgt (e.g. `B extends A`,
+                        // then B is assignable to A). Walk source's constraint chain looking
+                        // for tgt.
+                        val srcDecl = currentTypeParamDecls[srcName]
+                        var cur: TypeParameter? = srcDecl
+                        var foundSubtype = false
+                        var depth = 0
+                        while (cur != null && depth++ < 8) {
+                            val cnstr = cur.constraint
+                            if (cnstr is TypeReference) {
+                                val cnstrName = (cnstr.typeName as? Identifier)?.text
+                                if (cnstrName == tgtName) { foundSubtype = true; break }
+                                cur = if (cnstrName != null) currentTypeParamDecls[cnstrName] else null
+                            } else break
+                        }
+                        if (!foundSubtype) return false
+                    }
+                }
                 val srcBase = sourceType.substringBefore('<')
                 val tgtBase = targetType.substringBefore('<')
                 if (srcBase == tgtBase && sourceType.contains('<') && targetType.contains('<')) {
@@ -59894,7 +59942,31 @@ interface DataView {
         if (targetType.startsWith("@")) {
             val targetBaseName = displayTarget.substringBefore('<')
             if (targetBaseName in typeParams) {
-                chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                // B60.6c: when target is a bare TypeParam with a constraint AND source
+                // is bare TypeParam with the SAME constraint (display-equal), use the
+                // "constraint-assignable" chain form. Matches B60.2's logic for the
+                // Type-engine path. Pure-string heuristic: pull each TypeParam's
+                // constraint text from currentTypeParamDecls and compare displays.
+                val tgtDecl = currentTypeParamDecls[targetBaseName]
+                val srcBareName = if (sourceType.startsWith("@") && !sourceType.contains('<'))
+                    sourceType.removePrefix("@") else null
+                val srcDecl = srcBareName?.let { currentTypeParamDecls[it] }
+                val tgtCnstr = tgtDecl?.constraint
+                val srcCnstr = srcDecl?.constraint
+                val constraintMatch = tgtCnstr != null && srcCnstr != null &&
+                    formatTypeForDisplay(tgtCnstr) == formatTypeForDisplay(srcCnstr)
+                if (constraintMatch) {
+                    val constraintDisplay = formatTypeForDisplay(tgtCnstr!!) ?: "any"
+                    chain.add("  '$displaySource' is assignable to the constraint of type '$targetBaseName', but '$targetBaseName' could be instantiated with a different subtype of constraint '$constraintDisplay'.")
+                    // B60.6d: source is the lib `Object` type → add the special hint
+                    // "The 'Object' type is assignable to very few other types. Did you
+                    // mean to use the 'any' type instead?"
+                    if (displaySource == "Object") {
+                        chain.add("    The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?")
+                    }
+                } else {
+                    chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                }
             }
         }
         // B54.4: same-base same-name generic ref mismatch — add leaf chain entry comparing
