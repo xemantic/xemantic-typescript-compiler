@@ -38930,6 +38930,14 @@ interface DataView {
         // TypeParam ↔ Object (for generic constraint checking)
         if (sourceIsPrimitive && targetType is Type.TypeParam) return true
         if (sourceType is Type.Object && targetType is Type.TypeParam) return true
+        // B60.8: constrained TypeParam source → primitive target. Apparent type
+        // (the constraint) is compared via structuredTypeRelatedTo. Narrow: only
+        // when constraint exists AND is non-error/any — without that, apparent
+        // type is {} and comparison would be unsound for primitive targets.
+        if (sourceType is Type.TypeParam && targetIsPrimitive) {
+            val cnstr = sourceType.constraint
+            if (cnstr != null && cnstr !== errorType && cnstr !== anyType) return true
+        }
         return false
     }
 
@@ -45343,7 +45351,11 @@ interface DataView {
                 val name = type.symbol?.name ?: "Interface"
                 val tps = type.typeParameters
                 if (tps != null && tps.isNotEmpty()) {
-                    "$name<${tps.joinToString(", ") { it.symbol?.name ?: "T" }}>"
+                    // B60.9: when each TypeParam has a default, render the defaults
+                    // instead of the TypeParam names. Matches TypeScript's display
+                    // of `Table = TableClass` (where `class TableClass<S = any>`)
+                    // as `TableClass<any>` not `TableClass<S>`.
+                    "$name<${tps.joinToString(", ") { tp -> tp.default?.let { typeToString(it) } ?: tp.symbol?.name ?: "T" }}>"
                 } else name
             }
             is Type.Reference -> {
