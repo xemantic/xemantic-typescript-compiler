@@ -1,8 +1,23 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,855 / 10,078 tests passing (~87.9%). _Round 13 in progress (2026-05-20): committed to B60.x "control flow on TypeParam scope" architectural piece. Net +10 in 8 commits so far._
+**Phase 4 — Checker buildout.** 8,860 / 10,078 tests passing (~87.9%). _Round 14 (2026-05-20): +4 net via B60.12/.13/.14 TypeParam-typed-expression diagnostics + accidental-call + union-callee patterns._
 
-**Round 13 (2026-05-20, IN PROGRESS — B60.x stack: TypeParam scope in checkFunctionBody + cascade).** Continuation /loop session after round 12 (which accepted diminishing returns). The dominant insight: **checkFunctionBody wasn't pushing the function's TypeParam scope before resolving parameter annotations**. That single fix (B60.1) unlocked 5+ tests via cascade through chain elaboration, TS2352 emission, and constraint-aware diagnostics.
+**Round 14 (2026-05-20, +4 net — B60.12 through B60.14 surgical wins).** /goal session after round 13. Pool was empty at session start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items one at a time:
+
+- **B60.12 (+1)**: TS2339/TS2349/TS2351 for effectively-unconstrained TypeParam-typed expressions. New `checkTypeParamTypedOps` walker tracks `var x: T` declarations where T is unconstrained or self-circular. Emits TS2339 for `x.foo`, TS2349 for `x()` with chain "Type '{}' has no call signatures.", TS2351 for `new x(...)` with chain "Type '{}' has no construct signatures.". Flips `typeParameterWithInvalidConstraintType_ts`.
+- **B60.12b (net-zero)**: Extended B60.12 walker to track function parameters (in addition to var-decls). Threaded through `walkFnLikeBodyForTypeParamOps`. No test flips alone but infrastructure for B60.12c.
+- **B60.12c (+1)**: TS2345 + TS2208 for bare TypeParam arg → constrained TypeParam param. Detects `f(t)` where `t` is bare unconstrained T and `f`'s param is constrained T, emits TS2345 with constraint as displayed param + TS2208 related info pointing to t's TP decl. Uses `formatTypeForDisplay` (AST-based) so `Record<string, any>` renders without full generic-alias-instantiation infrastructure. Flips `genericUnboundedTypeParamAssignability_ts`.
+- **B60.12d (net-zero)**: Object.prototype filter for non-strict mode. Under @strict:false, TypeParam apparent = `{}` which inherits Object.prototype methods (toString, valueOf, etc.) — skip those property names. Under strict, apparent = `unknown` and every property fires TS2339.
+- **B60.13 (+1)**: TS2349 + TS2734 for accidental-call pattern `foo()(args)` where `foo()` returns a primitive. Extended `getCalleeType` to resolve CallExpression callees via `getReturnTypeOfCallExpression`. Fixed `expressionTrueEnd` for empty-args CallExpression (was using `expr.end` which overshoots). Added TS2734 "Are you missing a semicolon?" related info when inner-call end is on earlier line than outer-call first arg. Flips `betterErrorForAccidentalCall_ts`.
+- **B60.14 (+1)**: TS2349 for union-callee patterns with three cases — (a) all constituents non-callable, (b) some constituents non-callable, (c) all callable but sigs structurally incompatible. Pairwise signature comparison gate for case (c). Flips `betterErrorForUnionCall_ts`.
+
+Round 14 totals: 6 feature commits + 1 doc commit, +4 net tests (8856 → 8860). The "pool empty" gate didn't actually block progress — the queue had unchecked B60.12 + adjacent surgical wins that hadn't been attempted yet.
+
+Reverted attempts (each -1 regression on full suite):
+- B60.12-`T extends any` gate broadening (caused 1 regression in one of the existing tests; reverted).
+- TS2558 PropertyAccess callee extension (caused -2 regressions; reverted).
+
+**Round 13 (2026-05-20, +11 — B60.x stack: TypeParam scope in checkFunctionBody + cascade).** Continuation /loop session after round 12 (which accepted diminishing returns). The dominant insight: **checkFunctionBody wasn't pushing the function's TypeParam scope before resolving parameter annotations**. That single fix (B60.1) unlocked 5+ tests via cascade through chain elaboration, TS2352 emission, and constraint-aware diagnostics.
 
 Commits landed this round:
 - **B60.1 (+1)**: Push function TypeParams onto currentTypeParamScope in checkFunctionBody before resolving param annotations. Without this, `T1<U>` annotations had U resolving to errorType — substitution gate at Checker.kt:~41755 skipped (`if (resolvedArgs.none { it === errorType })`), falling back to un-substituted alias body. Flips `inferFromNestedSameShapeTuple_ts`.
