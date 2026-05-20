@@ -952,6 +952,24 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-20 (round 14 of /goal, B60.12-B60.15 — +4 net tests via TypeParam-typed-expression diagnostics + accidental-call + union-callee/ctor).** Continuation /goal session after round 13. Pool was empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items directly:
+
+  - **B60.12 (+1)**: TS2339/2349/2351 for effectively-unconstrained TypeParam-typed expressions. New walker `checkTypeParamTypedOps` tracks `var x: T` where T is unconstrained or self-circular; emits at `x.foo` / `x()` / `new x(...)`. Flips `typeParameterWithInvalidConstraintType_ts`.
+  - **B60.12b (net-zero)**: Walker tracks function parameters too. Stepping stone for B60.12c.
+  - **B60.12c (+1)**: TS2345 + TS2208 for bare-TP-arg → constrained-TP-param. Uses `formatTypeForDisplay` (AST) so `Record<string, any>` renders without full alias-instantiation infrastructure. Flips `genericUnboundedTypeParamAssignability_ts`.
+  - **B60.12d (net-zero)**: Object.prototype filter for non-strict mode — `t.toString` on unconstrained T is OK when @strict:false.
+  - **B60.13 (+1)**: TS2349 + TS2734 for `foo()(args)` accidental-call. Three coordinated changes: (a) `getCalleeType` resolves CallExpression callees via `getReturnTypeOfCallExpression`, (b) `expressionTrueEnd` for empty-args CallExpression uses `expressionTrueEnd(expr.expression) + 2`, (c) TS2734 related info when inner-call ends on earlier line than outer first-arg. Flips `betterErrorForAccidentalCall_ts`.
+  - **B60.14 (+1)**: TS2349 for union-callee with 3 cases — (a) all non-callable, (b) some non-callable, (c) all callable but sigs structurally incompatible. Pairwise sig comparison gate for case (c). Flips `betterErrorForUnionCall_ts`.
+  - **B60.15 (net-zero)**: Mirror of B60.14 for NewExpression union-callee → TS2351. `newOperator_ts` 3 union diagnostics now emit but test still fails on unrelated non-union missing diagnostics.
+
+  Round 14 totals: 8 feature commits + 1 doc commit, +4 net tests (8856 → 8860). Demonstrates that "pool empty" via candidate-finder doesn't preclude surgical progress — adjacent diagnostic shapes (TS2339/2349/2351/2734) are tractable once one is identified.
+
+  Reverted attempts (rationale documented):
+  - `isTypeParamEffectivelyUnconstrained` broadening to `c === anyType` for `T extends any` — caused -1 regression in unidentified test. The 5 missing diagnostics in `typeParameterExplicitlyExtendsAny_ts` (T extends any cases) remain unflipped.
+  - TS2558 PropertyAccess callee extension — caused -2 regressions when added.
+
+  ---
+
   **Session 2026-05-20 (round 13 of /loop, B60.x stack — +11 net tests via TypeParam-scope cascade).** Continuation /loop session after round 12 (which accepted diminishing returns). **The "diminishing returns" plateau was illusory** — a single foundational gap (checkFunctionBody not pushing function's TypeParam scope before resolving parameter annotations) cascaded through chain elaboration, TS2352 emission, and constraint-aware diagnostics, flipping 11+ tests across 10 commits.
 
   Commits landed this round:
