@@ -39136,6 +39136,10 @@ interface DataView {
             val savedTypeParamScope = currentTypeParamScope
             if (!funcTypeParams.isNullOrEmpty()) {
                 val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                // Two-pass: (1) intern all TypeParams and put in scope BEFORE resolving
+                // constraints (constraints may reference other TypeParams of the same sig).
+                // (2) resolve constraint/default with scope active.
+                val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                 for (tp in funcTypeParams) {
                     val typeParam = typeParamInternCache.getOrPut(tp.pos) {
                         val p = Type.TypeParam()
@@ -39143,8 +39147,17 @@ interface DataView {
                         p
                     }
                     scope[tp.name.text] = typeParam
+                    newTps.add(tp to typeParam)
                 }
                 currentTypeParamScope = scope
+                for ((tp, typeParam) in newTps) {
+                    if (typeParam.constraint == null) {
+                        tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                    }
+                    if (typeParam.default == null) {
+                        tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
+                    }
+                }
             }
             try {
                 for (param in parameters) {
