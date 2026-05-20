@@ -55116,6 +55116,80 @@ interface DataView {
         val args = expr.arguments ?: return
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
+        // B60.15: union callee for `new` — mirror of B60.14 for TS2349 with three cases:
+        //   (a) all constituents non-constructable → "No constituent ... is constructable."
+        //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
+        //   (c) all constructable but sigs differ structurally → "Each member ... has construct signatures, but none ... compatible..."
+        if (calleeType is Type.Union) {
+            val constituents = calleeType.types
+            val nonCtor = constituents.filter { getConstructSignaturesOfType(it).isEmpty() }
+            val unionDisplay = typeToString(calleeType)
+            val ce = expr.expression
+            val (start, length) = run {
+                val s = ce.pos
+                Pair(s, expressionTrueEnd(ce) - s)
+            }
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                if (nonCtor.isNotEmpty() && nonCtor.size == constituents.size) {
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf("  No constituent of type '$unionDisplay' is constructable."),
+                    ))
+                    return
+                }
+                if (nonCtor.isNotEmpty() && nonCtor.size != constituents.size) {
+                    val missingDisplay = typeToString(nonCtor[0])
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf(
+                            "  Not all constituents of type '$unionDisplay' are constructable.",
+                            "    Type '$missingDisplay' has no construct signatures.",
+                        ),
+                    ))
+                    return
+                }
+                if (nonCtor.isEmpty() && constituents.size >= 2) {
+                    // All constructable; check pairwise sig compat heuristic
+                    val sigsList = constituents.map { getConstructSignaturesOfType(it).firstOrNull() }
+                    val hasNullSig = sigsList.any { it == null }
+                    if (!hasNullSig) {
+                        val sigs = sigsList.map { it!! }
+                        val differ = run {
+                            for (i in sigs.indices) for (j in i + 1 until sigs.size) {
+                                val s1 = sigs[i]; val s2 = sigs[j]
+                                if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
+                                if (s1.parameters.size != s2.parameters.size) return@run true
+                                for (k in s1.parameters.indices) {
+                                    val t1 = try { getTypeOfSymbol(s1.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                    val t2 = try { getTypeOfSymbol(s2.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                    if (t1 !== t2) return@run true
+                                }
+                            }
+                            false
+                        }
+                        if (differ) {
+                            diagnostics.add(Diagnostic(
+                                message = "This expression is not constructable.",
+                                category = DiagnosticCategory.Error, code = 2351,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                messageChain = listOf(
+                                    "  Each member of the union type '$unionDisplay' has construct signatures, but none of those signatures are compatible with each other.",
+                                ),
+                            ))
+                            return
+                        }
+                    }
+                }
+            }
+        }
         // Get construct signatures
         val signatures = getConstructSignaturesOfType(calleeType)
         if (signatures.isEmpty()) {
