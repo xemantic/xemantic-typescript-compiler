@@ -638,6 +638,8 @@ class Checker(
         checkTypeParamStrictSubtypeCast()
         // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
         checkTypeParamCircularConstraint()
+        // 14''g. TS2339/TS2349/TS2351 for ops on effectively-unconstrained TypeParam vars (B60.12)
+        checkTypeParamTypedOps()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         checkRelativeImportsInAmbientModules()
         // 14a. Check invalid module augmentations (TS2664)
@@ -32283,6 +32285,266 @@ interface DataView {
                 visited.add(cnstrName)
                 cur = byName[cnstrName]
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // B60.12: TS2349 / TS2351 / TS2339 for operations on effectively-unconstrained
+    // TypeParam-typed expressions.
+    // -----------------------------------------------------------------------
+    /**
+     * For `var x: T` where T is an effectively-unconstrained TypeParam (no
+     * constraint, or self-circular `T extends T`):
+     *   x.foo  → TS2339 "Property 'foo' does not exist on type 'T'."
+     *   x()    → TS2349 + chain "Type '{}' has no call signatures."
+     *   new x()→ TS2351 + chain "Type '{}' has no construct signatures."
+     *
+     * TypeScript's apparent type for such a TypeParam is `{}`, which has no
+     * call/construct signatures and no own properties.
+     */
+    private fun checkTypeParamTypedOps() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkStmtsForTypeParamOps(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
+        }
+    }
+
+    private fun walkStmtsForTypeParamOps(stmts: List<Statement>, source: String, fileName: String) {
+        val emptyVars = mutableMapOf<String, String>()
+        for (stmt in stmts) walkStmtForTypeParamOps(stmt, source, fileName, emptyVars)
+    }
+
+    private fun walkStmtForTypeParamOps(
+        stmt: Statement, source: String, fileName: String,
+        tpVars: MutableMap<String, String>,
+    ) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                val savedScope = currentTypeParamScope
+                val tps = stmt.typeParameters
+                if (!tps.isNullOrEmpty()) {
+                    val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+                    val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                    for (tp in tps) {
+                        val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                            val p = Type.TypeParam()
+                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                            p
+                        }
+                        scope[tp.name.text] = typeParam
+                        newOnes.add(tp to typeParam)
+                    }
+                    currentTypeParamScope = scope
+                    for ((tp, typeParam) in newOnes) {
+                        if (typeParam.constraint == null) {
+                            tp.constraint?.let {
+                                try { typeParam.constraint = getTypeFromTypeNode(it) }
+                                catch (_: StackOverflowError) { /* circular */ }
+                            }
+                        }
+                    }
+                }
+                try {
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> walkFnLikeBodyForTypeParamOps(
+                                m.typeParameters, m.body?.statements, source, fileName,
+                            )
+                            is Constructor -> walkFnLikeBodyForTypeParamOps(
+                                null, m.body?.statements, source, fileName,
+                            )
+                            is GetAccessor -> walkFnLikeBodyForTypeParamOps(
+                                null, m.body?.statements, source, fileName,
+                            )
+                            is SetAccessor -> walkFnLikeBodyForTypeParamOps(
+                                null, m.body?.statements, source, fileName,
+                            )
+                            else -> {}
+                        }
+                    }
+                } finally {
+                    currentTypeParamScope = savedScope
+                }
+            }
+            is FunctionDeclaration -> walkFnLikeBodyForTypeParamOps(
+                stmt.typeParameters, stmt.body?.statements, source, fileName,
+            )
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    val typeRef = decl.type as? TypeReference ?: continue
+                    val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
+                    val tp = currentTypeParamScope?.get(typeName) ?: continue
+                    if (!isTypeParamEffectivelyUnconstrained(tp)) continue
+                    val varName = (decl.name as? Identifier)?.text ?: continue
+                    tpVars[varName] = typeName
+                }
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
+            is IfStatement -> {
+                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
+                walkStmtForTypeParamOps(stmt.thenStatement, source, fileName, tpVars)
+                stmt.elseStatement?.let { walkStmtForTypeParamOps(it, source, fileName, tpVars) }
+            }
+            is Block -> {
+                for (s in stmt.statements) walkStmtForTypeParamOps(s, source, fileName, tpVars)
+            }
+            is ForStatement -> {
+                stmt.condition?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
+                stmt.incrementor?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
+                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
+            }
+            is WhileStatement -> {
+                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
+                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
+            }
+            is DoStatement -> {
+                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
+                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) walkStmtForTypeParamOps(s, source, fileName, tpVars)
+                stmt.catchClause?.block?.statements?.forEach {
+                    walkStmtForTypeParamOps(it, source, fileName, tpVars)
+                }
+                stmt.finallyBlock?.statements?.forEach {
+                    walkStmtForTypeParamOps(it, source, fileName, tpVars)
+                }
+            }
+            is ThrowStatement -> stmt.expression?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                for (s in it) walkStmtForTypeParamOps(s, source, fileName, tpVars)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkFnLikeBodyForTypeParamOps(
+        ownTps: List<TypeParameter>?, bodyStmts: List<Statement>?,
+        source: String, fileName: String,
+    ) {
+        if (bodyStmts == null) return
+        val savedScope = currentTypeParamScope
+        if (!ownTps.isNullOrEmpty()) {
+            val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+            val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+            for (tp in ownTps) {
+                val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                    val p = Type.TypeParam()
+                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    p
+                }
+                scope[tp.name.text] = typeParam
+                newOnes.add(tp to typeParam)
+            }
+            currentTypeParamScope = scope
+            for ((tp, typeParam) in newOnes) {
+                if (typeParam.constraint == null) {
+                    tp.constraint?.let {
+                        try { typeParam.constraint = getTypeFromTypeNode(it) }
+                        catch (_: StackOverflowError) { /* circular */ }
+                    }
+                }
+            }
+        }
+        try {
+            val bodyVars = mutableMapOf<String, String>()
+            for (s in bodyStmts) walkStmtForTypeParamOps(s, source, fileName, bodyVars)
+        } finally {
+            currentTypeParamScope = savedScope
+        }
+    }
+
+    private fun isTypeParamEffectivelyUnconstrained(tp: Type.TypeParam): Boolean {
+        val c = tp.constraint ?: return true
+        // Self-circular: constraint resolves to the same Type.TypeParam.
+        return c === tp
+    }
+
+    private fun emitTypeParamTypedOps(
+        expr: Expression, tpVars: Map<String, String>, source: String, fileName: String,
+    ) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val recv = expr.expression
+                if (recv is Identifier && tpVars[recv.text] != null) {
+                    val tpName = tpVars[recv.text]!!
+                    val propName = expr.name.text
+                    if (propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, expr.name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '$tpName'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = expr.name.pos, length = propName.length,
+                        ))
+                    }
+                } else {
+                    emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
+                }
+            }
+            is CallExpression -> {
+                val callee = expr.expression
+                if (callee is Identifier && tpVars[callee.text] != null) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = callee.pos, length = callee.text.length,
+                        messageChain = listOf("  Type '{}' has no call signatures."),
+                    ))
+                } else {
+                    emitTypeParamTypedOps(callee, tpVars, source, fileName)
+                }
+                for (arg in expr.arguments) emitTypeParamTypedOps(arg, tpVars, source, fileName)
+            }
+            is NewExpression -> {
+                val callee = expr.expression
+                if (callee is Identifier && tpVars[callee.text] != null) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = callee.pos, length = callee.text.length,
+                        messageChain = listOf("  Type '{}' has no construct signatures."),
+                    ))
+                } else {
+                    emitTypeParamTypedOps(callee, tpVars, source, fileName)
+                }
+                expr.arguments?.let { for (arg in it) emitTypeParamTypedOps(arg, tpVars, source, fileName) }
+            }
+            is BinaryExpression -> {
+                emitTypeParamTypedOps(expr.left, tpVars, source, fileName)
+                emitTypeParamTypedOps(expr.right, tpVars, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                // Note: `x[1]` on a TypeParam is NOT diagnosed by TypeScript here —
+                // TypeParam apparent type `{}` permits indexing through fallback rules.
+                emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
+                emitTypeParamTypedOps(expr.argumentExpression, tpVars, source, fileName)
+            }
+            is ParenthesizedExpression -> emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
+            is PrefixUnaryExpression -> emitTypeParamTypedOps(expr.operand, tpVars, source, fileName)
+            is PostfixUnaryExpression -> emitTypeParamTypedOps(expr.operand, tpVars, source, fileName)
+            is ConditionalExpression -> {
+                emitTypeParamTypedOps(expr.condition, tpVars, source, fileName)
+                emitTypeParamTypedOps(expr.whenTrue, tpVars, source, fileName)
+                emitTypeParamTypedOps(expr.whenFalse, tpVars, source, fileName)
+            }
+            else -> {}
         }
     }
 
