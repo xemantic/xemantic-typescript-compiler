@@ -32634,15 +32634,52 @@ interface DataView {
     }
 
     /** Like [isTypeParamEffectivelyUnconstrained] but ALSO accepts EXPLICIT `extends any`
-     *  (constraint AST is `KeywordTypeNode(AnyKeyword)`). Used by the property-access
-     *  walker — we must distinguish syntactic `any` from anyType-via-error-recovery
-     *  (e.g. `T extends typeof undeclared` resolves the constraint to anyType but
-     *  TypeScript doesn't treat T as having a property-access apparent type of `{}`). */
+     *  (constraint AST is `KeywordTypeNode(AnyKeyword)`) and `T extends SelfRecursiveAlias<...>`
+     *  (alias body references its own name — the instantiation produces no useful
+     *  apparent type). Used by the property-access walker — we must distinguish these
+     *  cases from anyType-via-error-recovery (`T extends typeof undeclared`) where
+     *  TypeScript doesn't emit property-access errors. */
     private fun isTypeParamUnconstrainedOrExplicitAny(tp: Type.TypeParam, tpDecl: TypeParameter?): Boolean {
         if (isTypeParamEffectivelyUnconstrained(tp)) return true
-        if (tp.constraint !== anyType) return false
         val c = tpDecl?.constraint ?: return false
-        return c is KeywordTypeNode && c.kind == SyntaxKind.AnyKeyword
+        if (tp.constraint === anyType && c is KeywordTypeNode && c.kind == SyntaxKind.AnyKeyword) return true
+        // `T extends RecursiveAlias<...>` — detect by walking the alias body for self-reference.
+        if (c is TypeReference) {
+            val name = (c.typeName as? Identifier)?.text ?: return false
+            val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+            if (!sym.flags.hasAny(SymbolFlags.TypeAlias)) return false
+            val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+            return aliasBodyReferencesName(decl.type, name)
+        }
+        return false
+    }
+
+    /** Walks a TypeNode looking for a TypeReference to [name]. Used by
+     *  [isTypeParamUnconstrainedOrExplicitAny] to detect direct self-recursive type aliases. */
+    private fun aliasBodyReferencesName(node: TypeNode?, name: String): Boolean {
+        if (node == null) return false
+        return when (node) {
+            is TypeReference -> {
+                val ident = node.typeName as? Identifier
+                if (ident?.text == name) return true
+                node.typeArguments?.any { aliasBodyReferencesName(it, name) } == true
+            }
+            is ArrayType -> aliasBodyReferencesName(node.elementType, name)
+            is UnionType -> node.types.any { aliasBodyReferencesName(it, name) }
+            is IntersectionType -> node.types.any { aliasBodyReferencesName(it, name) }
+            is ParenthesizedType -> aliasBodyReferencesName(node.type, name)
+            is TupleType -> node.elements.any { aliasBodyReferencesName(it, name) }
+            is TypeLiteral -> node.members.any { m ->
+                when (m) {
+                    is PropertyDeclaration -> aliasBodyReferencesName(m.type, name)
+                    is IndexSignature -> aliasBodyReferencesName(m.type, name)
+                    is MethodDeclaration -> aliasBodyReferencesName(m.type, name) ||
+                        m.parameters.any { aliasBodyReferencesName(it.type, name) }
+                    else -> false
+                }
+            }
+            else -> false
+        }
     }
 
     private fun emitTypeParamTypedOps(
