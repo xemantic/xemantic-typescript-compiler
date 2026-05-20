@@ -937,7 +937,13 @@ the live plan focused. Quick reference:
 
 - [ ] **B60.11+ (NEXT, ~3-5 tests potential): Extend B60.x's TS2208 emission to checkVarDeclAssignability's Type-engine path.** B60.10 mirrored TS2208 into checkReturnAssignability's Type-engine path. The var-decl path (Checker.kt:~39820 area) still emits via emitTS2322 (varTypes path) which has B60.6f, but for cases where canUseTypeEngine fires the Type-engine path runs and emits its own diagnostic without TS2208 related info. Mirror the same `effectivelyUnconstrained` check + TS2208 related info into the var-decl Type-engine path. May unlock several tests where source is TypeParam → primitive var-decl.
 
-- [ ] **B60.12+ (FUTURE, unknown yield): TS2349/2351/2339 for TypeParam-typed expressions.** `typeParameterWithInvalidConstraintType_ts` expects: `x.foo` on `x: T` (unconstrained T has no methods) → TS2339; `new x(123)` → TS2351 not constructable; `x()` → TS2349 not callable. Apparent type of unconstrained T is `{}` — no methods, no construct/call signatures. Add per-emit-site checks for these operations against TypeParam-typed receivers. Pairs naturally with B60.10's "self-circular = effectively unconstrained" treatment.
+- [x] **B60.12+ (CLOSED 2026-05-20, round 14): TS2349/2351/2339 for TypeParam-typed expressions.** Implemented in round 14 via `checkTypeParamTypedOps` walker. Flipped `typeParameterWithInvalidConstraintType_ts` and `genericUnboundedTypeParamAssignability_ts`.
+
+- [x] **B61.1 (CLOSED 2026-05-20, round 15, +2 flips): TS2300 for top-level class shadowing lib Promise/Symbol.** Walker `checkClassShadowsLibType` + hardcoded LIB_SHADOWED_CLASS_LIB_FILES map. Gated on `!isModuleFile`. Flipped `promiseDefinitionTest_ts__target_es5__` + `__target_es2015__`. Brings `recursiveComplicatedClasses_ts` closer.
+
+- [x] **B61.2 (CLOSED 2026-05-20, round 15, net-zero): TS1351 for identifier following numeric literal.** Detection in `parseNumericLiteral`. Net-zero — target tests need additional TS1005 ',' expected emission (context-dependent, would require parser surgery).
+
+- [ ] **B61.3 (FUTURE, ~2 tests potential): TS1005 ',' expected after numeric-literal-identifier sequence in var-decl context.** `numericLiteralsWithTrailingDecimalPoints01/02_ts` expect TS1005 at the `(` after `2.toString` when inside `var test2 = 2.toString();`. Requires the parser to detect "var-decl-init context expecting `,` or `;` after a primary expression that ended with the TS1351 trigger". Multi-piece change in parser state — defer.
 
 - [ ] **B58.3+ (FUTURE, ~1-2 tests potential): recursive-alias outer-type aliasDisplayMap fresh-id puzzle.** Originally documented in round-10 session notes. **CLOSED via B60.1 (2026-05-20)** — see entry above.
 
@@ -951,6 +957,24 @@ the live plan focused. Quick reference:
   `PLAN-PHASE-4-HISTORY.md`. The ~10 most recent sessions are kept below for
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
+
+  **Session 2026-05-20 (round 15 of /goal, B61.x — +2 net via lib-shadowing TS2300 + TS1351 numeric-literal partial).** /goal session after round 14. Pool empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, surveyed broader candidate space:
+
+  - **B52.2 attempt** (reverted): Extended `isAnonymousObjectWithTypeParamMembers` to allow concrete-typed members alongside TypeParam-typed ones (gate (e) of `tryInferSingleTypeParamFromArgs`). Net-zero on suite — no test exercises this shape today. Reverted to avoid dead infrastructure.
+  - **B61.1 (+2)**: TS2300 for top-level non-declare class shadowing built-in lib type (Promise, Symbol). Walker `checkClassShadowsLibType` + hardcoded `LIB_SHADOWED_CLASS_LIB_FILES` map (Promise → 4 lib files in baseline order: es5+es2015.iterable+es2015.promise+es2015.symbol.wellknown; Symbol → 3 files: es5+es2015.symbol+es2015.symbol.wellknown). Map declared BEFORE init {} to avoid Kotlin property init order NPE during checking. Gated on `!isModuleFile(statements)` (first attempt without gate regressed `memberAccessMustUseModuleInstances`, `moduleInTypePosition1`, `staticInstanceResolution3`, `staticInstanceResolution5` — all have `export class Promise` in module files). Flips `promiseDefinitionTest_ts__target_es5__` + `__target_es2015__`. Brings `recursiveComplicatedClasses_ts` closer (emits expected TS2300 for `class Symbol`) but it still fails on missing TS2345 + TS2507.
+  - **B61.2 (net-zero)**: TS1351 emission in `parseNumericLiteral` for `1.toString` pattern. Detects: literal text endsWith ".", current token is Identifier, `scanner.getTokenPos() == pos + text.length` (no whitespace). Emits at identifier position with identifier length. Target tests `numericLiteralsWithTrailingDecimalPoints01/02_ts` now match expected TS1351 but still fail on missing TS1005 ',' expected at the next `(` token (context-dependent emission — `var test2 = 2.toString();` — would need parser surgery to detect we're in var-decl-list context).
+
+  Round 15 totals: 2 feature commits + status/plan doc commit, +2 net tests (8862 → 8864). Demonstrates surgical progress is still possible via cross-cutting diagnostics not in the candidate finder's diff-size sweet spot.
+
+  **Round 15 exploration (no commits — tests examined and classified, no new entries needed below):**
+  - JS-emit small-diff candidates (5 fresh, all 2-6 diff lines): ALL parser-recovery / JSX edge cases → Blocker #7. Tests: `parseJsxElementInUnaryExpressionNoCrash1_ts`, `fatarrowfunctionsOptionalArgs_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `TransportStream_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`.
+  - Errors-baseline 5-10 diff fresh tests: `asyncFunctionReturnExpressionErrorSpans_ts` (contextual object-literal property elaboration), `implicitConstParameters_ts` (TS18048 narrowing — Blocker #1), `jsdocPropertyTagInvalid_ts`/`jsdocResolveNameFailureInTypedef_ts` (JSDoc parsing — Blocker #5), `jsFileClassPropertyType_ts`/`2_ts`/`3_ts` (JS-file class property type inference), `signatureCombiningRestParameters1_ts` (Blocker #6 / contextual typing), `typePredicateInLoop_ts` (TS1345 truthiness — Blocker #1), `circularInlineMappedGenericTupleTypeNoCrash_ts` (B57.3 mapped-type TS2589), `discriminateWithOptionalProperty4_ts` (discriminated union narrowing — Blocker #1).
+  - TS2583/TS2550 lib-version diagnostics: ~95+95 missing across few tests — all lib-subsetting feature (architectural).
+  - Single-missing-TS2304 fresh tests: 0.
+  - Single-missing-anything fresh tests at ≤4 diff lines: 0.
+  - Stale skip-log audit: 12 candidates surfaced, 3 are actually passing AND already documented as flipped in round-14 notes (`genericTypeAssertions6_ts`, `parameterNamesInTypeParameterList_ts`, `typeParameterExplicitlyExtendsAny_ts`). Other 9 are JS-emit failures where the regex doesn't capture the failing-test variant — still failing, correctly in skip list.
+
+  ---
 
   **Session 2026-05-20 (round 14 of /goal, B60.12-B60.19 — +6 net tests via TypeParam-typed-expression diagnostics + accidental-call + union-callee/ctor + TypeParam-cast + recursive-alias detection).** Continuation /goal session after round 13. Pool was empty at start (`find_candidates.py --fresh` returned 0/0/0). Per anti-loop rule, attacked the queue items directly:
 
