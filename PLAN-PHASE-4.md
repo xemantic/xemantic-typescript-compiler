@@ -957,6 +957,10 @@ the live plan focused. Quick reference:
 
 - [x] **B61.5f (CLOSED 2026-05-20, round 15, +1 flip): TS2440 FP suppression for invalid-modifier import-equals.** When source text before ImportEqualsDeclaration contains a class-only modifier, skip the TS2440 emission in `checkImportConflictsWithLocal`. New helper `sourceHasClassOnlyModifierBeforeImportEquals`. Flips `importDeclWithClassModifiers_ts`.
 
+- [x] **B61.5g (CLOSED 2026-05-20, round 15, +1 flip): TS1038 for declare import-equals in ambient context.** Adds ImportEqualsDeclaration to statementHasDeclareModifier; threads inAmbientContext through checkDupModInStatement to skip TS1029 in ambient context. Flips `importDeclWithDeclareModifierInAmbientContext_ts`.
+
+- [x] **B61.5h (CLOSED 2026-05-20, round 15, +1 flip): TS1473 nested import declaration.** New walker `checkImportNotAtTopLevel` emits TS1473 for ImportDeclaration nested in function/block/if/while/for/try bodies. Namespace bodies preserve top-level status. Flips `importDeclarationInModuleDeclaration2_ts`.
+
 - [ ] **B58.3+ (FUTURE, ~1-2 tests potential): recursive-alias outer-type aliasDisplayMap fresh-id puzzle.** Originally documented in round-10 session notes. **CLOSED via B60.1 (2026-05-20)** — see entry above.
 
 - [x] **B55.1 (NEW 2026-05-19, ~3 tests potential — partial): Strict-generic-checks for distinct TypeParam args of same-base ref.** Different unconstrained Type.TypeParam declarations now treated as nominally distinct in the varTypes-based assignability check. Implementation: `isAssignableTo` gained an optional `typeParams: Set<String>` param; same-base gate (B54.9) now also fires when BOTH args are different names in the current TypeParam scope. **Status (B55.1 partial)**: `typeParameterAssignmentCompat1_ts` lines 8/9/16/17 now emit the expected TS2322 + chain (Type 'Foo<U>' is not assignable to type 'Foo<T>'. + chain hints). Test STILL fails on missing TS2208 related info — needs TypeParam declaration positions threaded through to emitTS2322.
@@ -983,8 +987,10 @@ the live plan focused. Quick reference:
   - **B61.5d (+2)**: TS2708 "Cannot use namespace 'X' as a value." for top-level `export import` where root namespace is type-side only AND not itself exported. Five-condition gate prevents FPs. Flips `importDeclWithExportModifier_ts` + `importDeclWithExportModifierAndExportAssignment_ts`.
   - **B61.5e (net-zero)**: TS1044 for class-only modifiers (public/private/protected/static) on ImportEqualsDeclaration via source-text scan (parser drops these modifiers so AST flags aren't sufficient). Pair with B61.5f.
   - **B61.5f (+1)**: Suppress TS2440 in `checkImportConflictsWithLocal` when source contains class-only modifier before import-equals. New helper `sourceHasClassOnlyModifierBeforeImportEquals`. Flips `importDeclWithClassModifiers_ts`.
+  - **B61.5g (+1)**: TS1038 for declare import-equals in ambient context. statementHasDeclareModifier extended + inAmbientContext threaded through checkDupModInStatement. Flips `importDeclWithDeclareModifierInAmbientContext_ts`.
+  - **B61.5h (+1)**: TS1473 nested import declaration. New walker `checkImportNotAtTopLevel` for ImportDeclaration in non-top-level positions. Flips `importDeclarationInModuleDeclaration2_ts`.
 
-  Round 15 totals: 9 feature commits + status/plan doc commits, +9 net tests (8862 → 8871 / 10078 = 88.02%). Surgical wins from adjacent diagnostic-pattern work: lib-shadowing TS2300 + scanner TS1351 + parser TS1005 + ImportEqualsDeclaration TS1029/TS2694/TS2708/TS1044 + TS2440 FP suppression. Each piece individually small; together they completed a coherent ImportEqualsDeclaration diagnostic chain.
+  Round 15 totals: 11 feature commits + status/plan doc commits, +11 net tests (8862 → 8873 / 10078 = 88.04%). Surgical wins from adjacent diagnostic-pattern work: lib-shadowing TS2300 + scanner TS1351 + parser TS1005 + ImportEqualsDeclaration TS1029/TS2694/TS2708/TS1044/TS1038 + TS2440 FP suppression + TS1473 nested-import. Each piece individually small; together they completed a coherent ImportEqualsDeclaration + nested-import diagnostic chain.
 
   **Round 15 exploration (no commits — tests examined and classified, no new entries needed below):**
   - JS-emit small-diff candidates (5 fresh, all 2-6 diff lines): ALL parser-recovery / JSX edge cases → Blocker #7. Tests: `parseJsxElementInUnaryExpressionNoCrash1_ts`, `fatarrowfunctionsOptionalArgs_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `TransportStream_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`.
