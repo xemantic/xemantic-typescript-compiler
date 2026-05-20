@@ -60022,18 +60022,22 @@ interface DataView {
                     }
                     // B60.7: bare TypeParam source → named non-TypeParam target.
                     // Source must be UNCONSTRAINED (no `extends`). With unconstrained T,
-                    // the apparent type is {} — not assignable to a named interface like
-                    // Object. With `T extends Object`, source IS assignable (apparent type
-                    // is Object). Narrow gate: src in typeParams, tgt NOT in typeParams,
-                    // src has no constraint.
+                    // the apparent type is {} — not assignable to a named interface.
+                    // With `T extends X`, source IS assignable (apparent type is X) —
+                    // skip the gate (only fires for unconstrained or self-circular).
                     if (srcName != tgtName && srcName in typeParams && tgtName !in typeParams) {
                         val srcDecl = currentTypeParamDecls[srcName]
-                        if (srcDecl?.constraint == null) {
-                            // Only emit for "common" wrapper-type targets that TypeScript
-                            // commonly flags — keep conservative to avoid widespread FPs.
-                            // Object/Function are the main lib wrappers TypeScript treats
-                            // as "few-overlap" for unconstrained T.
-                            if (tgtName == "Object" || tgtName == "Function") return false
+                        val isCircular = (srcDecl?.constraint as? TypeReference)?.let {
+                            (it.typeName as? Identifier)?.text == srcName
+                        } == true
+                        val effectivelyUnconstrained = srcDecl?.constraint == null || isCircular
+                        if (effectivelyUnconstrained) {
+                            // B60.7c (broadened): allow ALL named targets, not just
+                            // Object/Function. TypeScript flags unconstrained T → any
+                            // specific named interface. Skip primitive-keyword names
+                            // (those are handled elsewhere — `number`, etc. don't start
+                            // with `@` here so won't be picked up by this branch anyway).
+                            return false
                         }
                     }
                 }
