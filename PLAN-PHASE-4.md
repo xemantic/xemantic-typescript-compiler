@@ -947,7 +947,9 @@ the live plan focused. Quick reference:
 
 - [x] **B61.4 (CLOSED 2026-05-20, round 15, net-zero): TS1029 ImportEqualsDeclaration modifier order + TS1079 suppression.** checkDupModInStatement now walks ImportEqualsDeclaration for modifier ordering. TS1079 suppressed when both Declare+Export are present (baseline merges to TS1029 only).
 
-- [x] **B61.5b (CLOSED 2026-05-20, round 15, +1 flip): TS2694 for non-exported namespace member in import-equals.** Narrow AST-level export check at `checkUnresolvedInStatementCore`'s ImportEqualsDeclaration branch. Limited to single-dot `x.c` form. Sub-namespace gate (Module flag) prevents FP on dotted-namespace form `namespace A.B {}`. Flips `importDeclWithDeclareModifier_ts`. The broader multi-segment form (e.g. `c.a.b.ma`) and full TS2694 walker remain disabled pending more careful infrastructure work (see reverted B61.5 attempt — checkQualifiedNameExports caused -16 regressions).
+- [x] **B61.5b (CLOSED 2026-05-20, round 15, +1 flip): TS2694 for non-exported namespace member in import-equals (single-dot).** Narrow AST-level export check at `checkUnresolvedInStatementCore`'s ImportEqualsDeclaration branch. Sub-namespace gate (Module flag) prevents FP on dotted-namespace form `namespace A.B {}`. Flips `importDeclWithDeclareModifier_ts`.
+
+- [x] **B61.5c (CLOSED 2026-05-20, round 15, +1 flip): TS2694 for multi-segment QualifiedName.** Extends B61.5b to handle nested QualifiedName like `c.a.b.ma`. Walks intermediate segments requiring sub-namespace Module flag (auto-exported via dotted-form). Builds qualified namespace path in TS2694 message. Flips `importAnImport_ts`.
 
 - [ ] **B58.3+ (FUTURE, ~1-2 tests potential): recursive-alias outer-type aliasDisplayMap fresh-id puzzle.** Originally documented in round-10 session notes. **CLOSED via B60.1 (2026-05-20)** — see entry above.
 
@@ -971,8 +973,9 @@ the live plan focused. Quick reference:
   - **B61.4 (net-zero)**: TS1029 export-before-declare for ImportEqualsDeclaration (added ImportEqualsDeclaration to checkDupModInStatement). TS1079 suppressed when both Declare+Export present on import-equals (baseline merges to TS1029 only).
   - **B61.5 attempt (reverted -16)**: Broad checkQualifiedNameExports for ImportEqualsDeclaration QualifiedName refs. The helper was designed for type positions and over-fires for value positions: incorrectly treats `m.m` (where m is `namespace m { export var m = ''; }`) as missing export because isMemberAccessible relies on ExportValue flag which the binder doesn't set on var declarations. Reverted.
   - **B61.5b (+1)**: Narrow TS2694 for non-exported namespace member in import-equals. Limited to single-dot `x.c` QualifiedName. Sub-namespace Module-flag gate prevents FP on dotted-namespace form `namespace A.B {}`. AST-level export check (Function/Class/Interface/TypeAlias/Enum/Module modifier scan + VariableStatement body scan). Flips `importDeclWithDeclareModifier_ts`.
+  - **B61.5c (+1)**: Extends B61.5b to multi-segment QualifiedNames like `c.a.b.ma`. Walks intermediate segments requiring sub-namespace Module flag (auto-exported via dotted-form). Builds qualified namespace path in TS2694 message. Flips `importAnImport_ts`.
 
-  Round 15 totals: 5 feature commits + status/plan doc commits, +5 net tests (8862 → 8867). Surgical progress demonstrated via cross-cutting diagnostics: B61.1 (TS2300 lib-shadowing) + B61.2 (scanner TS1351) + B61.3 (parser TS1005 recovery deferred-emit) + B61.4 (TS1029 ImportEqualsDeclaration) + B61.5b (narrow TS2694 for import-equals).
+  Round 15 totals: 6 feature commits + status/plan doc commits, +6 net tests (8862 → 8868). Surgical progress demonstrated via cross-cutting diagnostics: B61.1 (TS2300 lib-shadowing) + B61.2 (scanner TS1351) + B61.3 (parser TS1005 recovery deferred-emit) + B61.4 (TS1029 ImportEqualsDeclaration) + B61.5b/c (TS2694 single+multi-segment for import-equals).
 
   **Round 15 exploration (no commits — tests examined and classified, no new entries needed below):**
   - JS-emit small-diff candidates (5 fresh, all 2-6 diff lines): ALL parser-recovery / JSX edge cases → Blocker #7. Tests: `parseJsxElementInUnaryExpressionNoCrash1_ts`, `fatarrowfunctionsOptionalArgs_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts`, `TransportStream_ts`, `fatarrowfunctionsOptionalArgsErrors2_ts`.
