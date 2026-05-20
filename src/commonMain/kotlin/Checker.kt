@@ -943,6 +943,8 @@ class Checker(
         checkExportSpecifierLocality()
         // 68. Check import declaration conflicts with local (TS2440)
         checkImportConflictsWithLocal()
+        // 68z (B61.5h). TS1473: Import declarations only allowed at top level of module
+        checkImportNotAtTopLevel()
         // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
         checkIsolatedModulesExportDefaultIsType()
         // 68aa. Check `export import X = Y` where Y is a type-only entity under isolatedModules (TS1269)
@@ -63901,6 +63903,87 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /**
+     * B61.5h: TS1473 "An import declaration can only be used at the top level of a module."
+     * Walks each file's statements; for nested function bodies / blocks etc., emits TS1473
+     * at any ImportDeclaration found. Top-level imports remain valid.
+     */
+    private fun checkImportNotAtTopLevel() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Walk each top-level statement, recursing into non-module-level constructs.
+            for (stmt in result.sourceFile.statements) {
+                walkForNestedImports(stmt, source, fileName, topLevel = true)
+            }
+        }
+    }
+
+    private fun walkForNestedImports(stmt: Statement, source: String, fileName: String, topLevel: Boolean) {
+        if (!topLevel && stmt is ImportDeclaration) {
+            val start = stmt.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "An import declaration can only be used at the top level of a module.",
+                category = DiagnosticCategory.Error,
+                code = 1473,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = 6, // "import"
+            ))
+        }
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.statements?.forEach {
+                walkForNestedImports(it, source, fileName, topLevel = false)
+            }
+            is ClassDeclaration -> {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.statements?.forEach {
+                            walkForNestedImports(it, source, fileName, topLevel = false)
+                        }
+                        is Constructor -> m.body?.statements?.forEach {
+                            walkForNestedImports(it, source, fileName, topLevel = false)
+                        }
+                        is GetAccessor -> m.body?.statements?.forEach {
+                            walkForNestedImports(it, source, fileName, topLevel = false)
+                        }
+                        is SetAccessor -> m.body?.statements?.forEach {
+                            walkForNestedImports(it, source, fileName, topLevel = false)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                // Module body — top-level inside namespace counts as top-level too
+                // (`namespace M { import X from "y"; }` is allowed).
+                (stmt.body as? ModuleBlock)?.statements?.forEach {
+                    walkForNestedImports(it, source, fileName, topLevel = true)
+                }
+            }
+            is Block -> stmt.statements.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+            is IfStatement -> {
+                walkForNestedImports(stmt.thenStatement, source, fileName, topLevel = false)
+                stmt.elseStatement?.let { walkForNestedImports(it, source, fileName, topLevel = false) }
+            }
+            is WhileStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
+            is DoStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
+            is ForStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
+            is ForInStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
+            is ForOfStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+                stmt.catchClause?.block?.statements?.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+                stmt.finallyBlock?.statements?.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+            }
+            else -> {}
+        }
     }
 
     private fun checkImportConflictsWithLocal() {
