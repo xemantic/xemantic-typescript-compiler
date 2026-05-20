@@ -41033,8 +41033,13 @@ interface DataView {
                         // T could be instantiated with a different subtype of constraint C").
                         // Otherwise fall back to the "arbitrary type unrelated" form.
                         val constraint = targetType.constraint
+                        // B62.1: When source is a fresh-literal-shaped anonymous Type.Object
+                        // with excess props relative to the constraint, TypeScript emits the
+                        // "arbitrary unrelated" form (excess-property check overrides the
+                        // structural-assignability result). Matches `errorElaborationDivesIntoApparentlyPresentPropsOnly`.
                         val constraintOk = constraint != null && try {
-                            checkTypeRelatedTo(sourceType, constraint, assignableRelation)
+                            checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
+                                !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
                         } catch (_: Throwable) { false }
                         if (constraintOk) {
                             chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
@@ -42072,9 +42077,11 @@ interface DataView {
                                 if (tt is Type.TypeParam) {
                                     val targetName = tt.symbol?.name ?: "T"
                                     // B60.2: same logic as the var-decl path at ~39819.
+                                    // B62.1: excess-property override (see helper docstring).
                                     val constraint = tt.constraint
                                     val constraintOk = constraint != null && try {
-                                        checkTypeRelatedTo(sourceType, constraint, assignableRelation)
+                                        checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
+                                            !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
                                     } catch (_: Throwable) { false }
                                     if (constraintOk) {
                                         chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint!!)}'.")
@@ -45799,6 +45806,32 @@ interface DataView {
             val mt = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { return false }
             mt is Type.TypeParam && mt in tps
         }
+    }
+
+    /**
+     * B62.1 helper: true when [source] is an anonymous (fresh-literal-shaped)
+     * Type.Object with at least one property that does NOT exist in
+     * [constraint]'s members. Used to filter "constraint subtype" elaboration
+     * chain emission in TS2322: for `function f<T extends {a:string}>(x: T) { x = {a, b, c} }`,
+     * source `{a, b, c}` has excess `b`/`c` relative to constraint `{a:string}`,
+     * so TypeScript emits the "arbitrary unrelated" chain (not "constraint subtype")
+     * — matches the `errorElaborationDivesIntoApparentlyPresentPropsOnly` baseline.
+     *
+     * Gated on: (a) source is anonymous Type.Object (no symbol, not Reference,
+     * not Interface), (b) constraint is a concrete Type.Object with no
+     * string/number index signature (an index signature accepts any extra props).
+     * `errorType` / `anyType` constraints fall through (return false) — no
+     * excess-prop check applies when the constraint is `any`-like.
+     */
+    private fun anonymousObjectHasExcessVsConstraint(source: Type, constraint: Type): Boolean {
+        if (source !is Type.Object) return false
+        if (source is Type.Reference || source is Type.Interface) return false
+        if (source.symbol != null) return false
+        if (constraint !is Type.Object) return false
+        val srcMembers = source.members ?: return false
+        val cnstrMembers = constraint.members ?: return false
+        if (constraint.stringIndexInfo != null || constraint.numberIndexInfo != null) return false
+        return srcMembers.keys.any { it !in cnstrMembers }
     }
 
     /**
