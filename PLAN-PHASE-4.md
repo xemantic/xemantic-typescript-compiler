@@ -1434,6 +1434,32 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Round 17 continuation session 2026-05-21 surveyed:**
+- `typeofInternalModules_ts` — B63.9 attempt added 2/4 missing TS2708 emissions for `typeof <importAlias>` of uninstantiated namespace; remaining 2 TS2741 require namespace-shape structural comparison (typeof Outer vs typeof instantiated property mismatch). Also introduced untraceable -1 regression elsewhere. Reverted entire walker.
+- `recursiveTupleTypeInference_ts` — B63.10 removed FP TS2456 (no longer fires for `type A = ... | A[]`). Still fails on MISS TS2345 with deep conditional-type elaboration chain through `G<T>` mapped type.
+- `unresolvableSelfReferencingAwaitedUnion_ts` — same B63.10 FP removal as above; still fails on multiple missing TS2322/TS1062 chains and unrelated TS2349 vs TS1062 swaps. Blocker #2 territory (deep generic chain).
+- `switchCasesExpressionTypeMismatch_ts` — flipped B63.8 (union-aware SwitchAllowedSet).
+- `slightlyIndirectedDeepObjectLiteralElaborations_ts` — MISS TS2322 at leaf `d: 42`, EXTRA TS2322 at outer object. Requires deep elaboration chain through binary-assignment (`q = {...}`) + parens (`({...})`). Multi-piece.
+- `incompatibleTypes_ts` — TS2353 multi-emission: we emit `e` AND `f`, TypeScript emits only `e` (first excess prop per object literal in this shape). Test `missingAndExcessProperties_ts` confirms TypeScript DOES emit multiple TS2353 on same line in other cases; unclear rule. Risky to change.
+- `discriminatedUnionErrorMessage_ts` — needs discriminant narrowing of object literal vs union target before excess-prop check. Concrete but multi-piece infrastructure (discriminant detection + member narrowing + scoped excess check).
+- `mergeSymbolReexportInterface_ts` — TS2741 wrong property name (b vs a); Row2 has merged declarations across files, TypeScript picks first (a.d.ts), we pick last (common.d.ts). Multi-file resolution order. Blocker #3.
+- `namespaceMergedWithImportAliasNoCrash_ts` — TS2694 display over-qualifies `Lib` as `"file2".Lib` (our `symbolToQualifiedName` thinks locally-declared merged namespace needs file prefix). Plus MISS TS2440 (Import conflicts with local) + EXTRA TS2339. Multi-piece.
+- `aliasUsageInOrExpression_ts`, `aliasAssignments_ts` — multi-file import-equals + `typeof import("X")` display + assignability. Blocker #3.
+- `incompatibleTypes_ts` — also MISS TS2769 overload chain at `if1(c1)`. Overload arg resolution.
+- `typePredicateInLoop_ts`, `implicitConstParameters_ts`, `discriminateWithOptionalProperty4_ts` — control flow narrowing. Blocker #1.
+- `typePredicateStructuralMatch_ts` — TypeParam in union (`T | { data: T }`) TS2339 emission + narrowing. Blocker #1 + #2.
+- `genericAssignmentCompatWithInterfaces1_ts` — chain position mismatch + per-line TS2322 elaboration; needs deep function-mismatch chain extraction.
+- `asyncFunctionReturnExpressionErrorSpans_ts` — async return Promise<T> unwrap + deep elaboration to leaf property assignment.
+- `jsFileClassPropertyType_ts`/`2`/`3` — JS class property type inference from `this.p = 0` in constructor. JS-mode feature.
+- `jsdocPropertyTagInvalid_ts`, `jsdocResolveNameFailureInTypedef_ts` — JSDoc @typedef / @property resolution. Blocker #5.
+- `importInsideModule_ts` — TypeScript suppresses emit of file1.js when import-equals target reference is only inside a namespace body; AMD-specific emit suppression.
+- `importedAliasesInTypePositions_ts` — AMD type-only import detection elides RT_ALIAS from `define([...])` deps.
+- `ClassDeclaration26_ts`, `nestedGlobalNamespaceInClass_ts`, `dontShowCompilerGeneratedMembers_ts`, `ambiguousGenericAssertion1_ts`, parser-recovery JS-emit family — parser-recovery edge cases each requiring bespoke fixes.
+- `TransportStream_ts` — invalid UTF-8 byte sequence handling.
+- `unicodeIdentifierName2_ts` — TS1127/TS1134 for Unicode identifier characters.
+
+
+
 **Round 14 session 2026-05-20 surveyed (architectural / complex multi-piece):**
 - `typeParameterExplicitlyExtendsAny_ts` — flipped B60.19 (was 1/6, now 6/6).
 - `typeParameterConstrainedToOuterTypeParameter_ts` — chain substitution gap (`Type 'U' is not assignable to type 'U[]'` should display as `string[]` after T=string substitution). Needs full function-type chain substitution infrastructure.
