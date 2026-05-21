@@ -19636,6 +19636,14 @@ class Checker(
          *  named-interface target whose only required member is `call`/`apply`/`bind`. */
         private val FUNCTION_PROTOTYPE_METHODS = setOf("call", "apply", "bind")
 
+        /** Primitive intrinsic-name set used by B64.1's TS2339-on-call-result branch to
+         *  decide whether a CallExpression's return type can be checked via its wrapper
+         *  apparent type (Number/String/Boolean/BigInt). Symbol/null/undefined/etc. are
+         *  excluded — their apparent-type lookup is less well-defined in our checker. */
+        private val PRIMITIVE_WRAPPER_INTRINSIC_NAMES = setOf(
+            "number", "string", "boolean", "bigint",
+        )
+
         /** Primitive type-keyword names that may appear as plain Identifier expressions in
          *  interface `extends` heritage clauses. Triggers TS2840. */
         private val PRIMITIVE_HERITAGE_NAMES = setOf(
@@ -44123,8 +44131,13 @@ interface DataView {
             // infer return type as `void`. Mirrors TypeScript's `function f() {}` → `() => void`.
             // Conservative: only when there are zero return statements. Functions with mixed
             // returns (some bare `return`, some with values) keep the anyType default.
+            // B64.1: When the body returns a value that's recognizable as a known primitive
+            // (number from arithmetic, string from string literal, etc.), use that inferred
+            // type. Lets `function f() { return x * 2 }` infer `() => number` so a caller's
+            // `f().length` fires TS2339 against the primitive `number`.
             val returnType = decl.type?.let { getTypeFromTypeNode(it) }
                 ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
+                ?: decl.body?.let { inferReturnTypeFromBody(it) }
                 ?: anyType
             // Resolve parameter types eagerly within the type param scope
             val paramSymbols = getParameterSymbols(decl.parameters)
@@ -51504,6 +51517,23 @@ interface DataView {
                             if (t !== anyType && t !== errorType) t else null
                         } catch (_: Throwable) { null }
                     }
+                    is BinaryExpression -> {
+                        // B64.1: arithmetic binary ops always produce `number`. JS spec
+                        // for `*` `/` `%` `-` `**` `<<` `>>` `>>>` `&` `|` `^` returns a
+                        // number value regardless of operand types (any non-number coerces
+                        // or NaN — the result TYPE is still number). Skip `+` (ambiguous:
+                        // string concat) and assignment ops. Lets `function f(x): unknown
+                        // { return x * 2 }` infer return type `number` so a caller
+                        // `f(...).length` correctly fires TS2339.
+                        when (expr.operator) {
+                            SyntaxKind.Asterisk, SyntaxKind.Slash, SyntaxKind.Percent,
+                            SyntaxKind.Minus, SyntaxKind.AsteriskAsterisk,
+                            SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+                            SyntaxKind.GreaterThanGreaterThanGreaterThan,
+                            SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret -> numberType
+                            else -> null
+                        }
+                    }
                     else -> null
                 }
             }
@@ -53987,6 +54017,32 @@ interface DataView {
                     fileName = fileName, line = line, character = character,
                     start = diagStart, length = diagLength,
                 ))
+                return
+            }
+            // B64.1: CallExpression receiver returning a primitive (number/string/
+            // boolean/bigint) — emit TS2339 when the property is absent from the
+            // primitive's apparent (wrapper) type. Display uses the primitive name,
+            // not the wrapper. Skip the broad RUNTIME_PROPERTIES filter here — the
+            // primitive wrapper interfaces (Number/String/Boolean/BigInt) authoritatively
+            // declare which members exist on the primitive; relying on getPropertyOfType
+            // against the apparent type gives the correct answer for both directions
+            // (`.length` on number → TS2339; `.toString` on number → no error).
+            if (callType is Type.Intrinsic &&
+                callType.intrinsicName in PRIMITIVE_WRAPPER_INTRINSIC_NAMES
+            ) {
+                val apparent = try { getApparentType(callType) } catch (_: StackOverflowError) { return }
+                if (apparent is Type.Object) {
+                    try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
+                    if (getPropertyOfType(apparent, propName) != null) return
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '${callType.intrinsicName}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
             }
             return
         }
