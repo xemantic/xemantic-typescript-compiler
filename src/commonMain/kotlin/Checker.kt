@@ -15009,6 +15009,39 @@ class Checker(
                         }
                     }
                 }
+                // B65.2: var hoists out of try/catch/finally blocks to the
+                // enclosing function/script scope. Collect those vars so they
+                // participate in the duplicate-identifier check against
+                // outer function/var declarations. Narrow gate: only TryStatement
+                // — extending to if/while/for bodies has broader regression risk
+                // and isn't required by the current failing test set.
+                is TryStatement -> {
+                    fun collectVarsFromStmts(stmts: List<Statement>) {
+                        for (inner in stmts) {
+                            when (inner) {
+                                is VariableStatement -> {
+                                    if (inner.declarationList.flags == SyntaxKind.VarKeyword) {
+                                        for (decl in inner.declarationList.declarations) {
+                                            val name = decl.name
+                                            if (name is Identifier) {
+                                                decls.add(DeclInfo(name.text, "var", name, inner))
+                                            }
+                                        }
+                                    }
+                                }
+                                is TryStatement -> {
+                                    collectVarsFromStmts(inner.tryBlock.statements)
+                                    inner.catchClause?.block?.let { collectVarsFromStmts(it.statements) }
+                                    inner.finallyBlock?.let { collectVarsFromStmts(it.statements) }
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                    collectVarsFromStmts(stmt.tryBlock.statements)
+                    stmt.catchClause?.block?.let { collectVarsFromStmts(it.statements) }
+                    stmt.finallyBlock?.let { collectVarsFromStmts(it.statements) }
+                }
                 else -> {}
             }
         }
