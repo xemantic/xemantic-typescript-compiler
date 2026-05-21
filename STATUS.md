@@ -1,15 +1,16 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,885 / 10,078 tests passing (~88.16%). _Round 17 (2026-05-21): /goal session targeting 20 iterations, landed +7 net via B63.x stack (5 commits)._
+**Phase 4 — Checker buildout.** 8,886 / 10,078 tests passing (~88.17%). _Round 17 (2026-05-21): /goal session targeting 20 iterations, landed +8 net via B63.x stack (6 commits)._
 
-_Round 17 (2026-05-21, +7 net — B63.x stack):_
+_Round 17 (2026-05-21, +8 net — B63.x stack):_
 - **B63.1 (+1)**: Iterative left-spine flatten for 13 binary-expression walkers (Flow.kt + Checker.kt) — fixes JVM StackOverflow on `0 + 1 + ... + 1499` chain. Flips `binderBinaryExpressionStress_ts`.
 - **B63.2 (+1)**: Reject `declare module {` without name; parser recovers as 3 separate statements. Flips `externModule_ts` JS-emit.
 - **B63.3 (+2)**: TS2430 method-vs-method arity mismatch in interface extends. Flips `addMoreOverloadsToBaseSignature_ts` + adjacent.
 - **B63.4 (+1)**: TS2362/TS2363 for arithmetic on unconstrained TypeParam (Function expression body now recursed + isValidArithmeticOperand returns false for unconstrained TP). Flips `arithmeticOnInvalidTypes2_ts`.
 - **B63.5 (+2)**: Accessor-pair type bridge — getter without annotation borrows setter param type; setter param without annotation borrows getter return type. Flips `accessors_spec_section-4.5_error-cases_ts` + adjacent.
+- **B63.8 (+1)**: Union-aware switch case comparability (TS2678). Different-kind cases now emit (was only same-kind/different-display). Annotated `declare var/let/var` declarations with union/keyword/literal annotations now contribute via SwitchAllowedSet. Flips `switchCasesExpressionTypeMismatch_ts`.
 
-_Round 17 reverted attempts (no commits): **B63.6** (TS2395 for var+var mixed export/local: +1/-1 swap), **B63.7** (TS2320 for interface multi-extends conflict: +2/-3 swap, helper too eager on lib-merged interfaces)._
+_Round 17 reverted attempts (no commits): **B63.6** (TS2395 for var+var mixed export/local: +1/-1 swap), **B63.7** (TS2320 for interface multi-extends conflict: +2/-3 swap, helper too eager on lib-merged interfaces), **B63.9** (TS2708 for `typeof X` where X aliases uninstantiated namespace: added 2 expected emissions but introduced 1 untraceable regression elsewhere, net 0; reverted)._
 
 _Round 16 (2026-05-20): starting at 8876 (post-round-15). B62.1 (+1): excess-prop overrides constraint-subtype chain — flips `errorElaborationDivesIntoApparentlyPresentPropsOnly_ts`. B62.2 (+1): TS2721/TS2722/TS2723 for nullable function callees — flips `nullableFunctionError_ts`._
 
