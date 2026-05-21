@@ -58846,6 +58846,48 @@ interface DataView {
             // B53.1 when display names collide.
             val leftObjSym = (leftType as? Type.Object)?.symbol
             val rightObjSym = (rightType as? Type.Object)?.symbol
+            // B63.32: Same-name cross-file interfaces. When two distinct Type.Interface
+            // instances share the same display name but are declared in different files
+            // (typical pattern: `import * as A from './a'; import * as B from './b';
+            // declare let a: A.F; declare let b: B.F`), `mergeSymbolTable` pollutes one
+            // side's `properties` with the other side's members. Use own-file declaration
+            // names directly for disjointness check, bypassing the merged Type.Interface
+            // contents. Emits TS2367 with `import("X").T` cross-file qualification.
+            if (leftType is Type.Object && rightType is Type.Object &&
+                leftType !is Type.Reference && rightType !is Type.Reference &&
+                leftObjSym != null && rightObjSym != null && leftObjSym !== rightObjSym &&
+                leftObjSym.name == rightObjSym.name) {
+                val leftImport = getSymbolImportName(leftObjSym)
+                val rightImport = getSymbolImportName(rightObjSym)
+                if (leftImport != null && rightImport != null && leftImport != rightImport) {
+                    val leftOwn = getOwnFileInterfacePropertyNames(leftObjSym, leftImport)
+                    val rightOwn = getOwnFileInterfacePropertyNames(rightObjSym, rightImport)
+                    if (leftOwn != null && rightOwn != null &&
+                        leftOwn.isNotEmpty() && rightOwn.isNotEmpty() &&
+                        leftOwn.intersect(rightOwn).isEmpty()) {
+                        val leftDispRaw = typeToString(leftType)
+                        val rightDispRaw = typeToString(rightType)
+                        val leftDisp = "import(\"$leftImport\").$leftDispRaw"
+                        val rightDisp = "import(\"$rightImport\").$rightDispRaw"
+                        val start = expr.pos
+                        val length = expressionTrueEnd(expr.right) - start
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "This comparison appears to be unintentional because the types '$leftDisp' and '$rightDisp' have no overlap.",
+                                category = DiagnosticCategory.Error,
+                                code = 2367,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                        return
+                    }
+                }
+            }
             if (leftType is Type.Object && rightType is Type.Object &&
                 leftType !is Type.Reference && rightType !is Type.Reference &&
                 leftObjSym != null && rightObjSym != null && leftObjSym !== rightObjSym) {
@@ -62337,6 +62379,36 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * B63.32: Collect property/method names declared in [sym]'s InterfaceDeclaration
+     * in the source file matching [basename]. Bypasses `Type.Interface.properties`
+     * which `mergeSymbolTable` pollutes with cross-file declarations of the same
+     * name. Used by TS2367 "no overlap" detection for same-name interfaces in
+     * different files.
+     */
+    private fun getOwnFileInterfacePropertyNames(sym: Symbol, basename: String): Set<String>? {
+        val name = sym.name
+        val br = binderResults.firstOrNull { r ->
+            val b = r.sourceFile.fileName.substringAfterLast('/').substringAfterLast('\\')
+                .substringBeforeLast('.')
+            b == basename
+        } ?: return null
+        val result = mutableSetOf<String>()
+        for (stmt in br.sourceFile.statements) {
+            if (stmt is InterfaceDeclaration && stmt.name.text == name) {
+                for (member in stmt.members) {
+                    val propName: String? = when (member) {
+                        is PropertyDeclaration -> (member.name as? Identifier)?.text
+                        is MethodDeclaration -> (member.name as? Identifier)?.text
+                        else -> null
+                    }
+                    if (propName != null) result.add(propName)
+                }
+            }
+        }
+        return result
     }
 
     // -----------------------------------------------------------------------
