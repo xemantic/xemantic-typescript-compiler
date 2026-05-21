@@ -103,6 +103,20 @@ class Scanner(private val text: String) {
     /** Returns whether the most-recent unterminated string literal ended after a backslash. */
     fun didStringEndAfterBackslash(): Boolean = stringEndedAfterBackslash
 
+    /** True if the last scanned BigIntLiteral has an exponent (TS1352). */
+    private var bigIntHasExponent: Boolean = false
+    fun didBigIntHaveExponent(): Boolean = bigIntHasExponent
+
+    /** True if the last scanned BigIntLiteral has a fractional part (TS1353). */
+    private var bigIntHasFraction: Boolean = false
+    fun didBigIntHaveFraction(): Boolean = bigIntHasFraction
+
+    /** "binary", "octal", or "hex" if the last numeric/BigInt literal was a non-decimal
+     * literal with NO digits after the prefix (e.g. `0bn`, `0on`, `0xn`).
+     * Used to emit TS1177 (binary) / TS1178 (octal) / TS1125 (hex). */
+    private var emptyDigitLiteralKind: String? = null
+    fun getEmptyDigitLiteralKind(): String? = emptyDigitLiteralKind
+
     /** Whether the last scanned numeric literal was a legacy octal (e.g. 01, 0123). */
     private var isLegacyOctalToken: Boolean = false
 
@@ -263,6 +277,9 @@ class Scanner(private val text: String) {
         precedingLineBreak = false
         tokenIsUnterminated = false
         stringEndedAfterBackslash = false
+        bigIntHasExponent = false
+        bigIntHasFraction = false
+        emptyDigitLiteralKind = null
         isLegacyOctalToken = false
         isLeadingZeroDecimalToken = false
 
@@ -802,16 +819,20 @@ class Scanner(private val text: String) {
                 scannedDigits[0] == '0' &&
                 scannedDigits[1].isDigit()
 
+        var hasFraction = false
+        var hasExponent = false
         if (!isLegacyOctalLiteral) {
             // Fractional part
             if (pos < end && text[pos] == '.') {
                 pos++
+                hasFraction = true
                 scanDecimalDigits()
             }
 
             // Exponent part
             if (pos < end && (text[pos] == 'e' || text[pos] == 'E')) {
                 pos++
+                hasExponent = true
                 if (pos < end && (text[pos] == '+' || text[pos] == '-')) {
                     pos++
                 }
@@ -831,6 +852,9 @@ class Scanner(private val text: String) {
         val isLegacyOctalCandidate = text[start] == '0' && (pos - start) > 1
         if (!isLegacyOctalCandidate && pos < end && text[pos] == 'n') {
             pos++
+            // Track invalid-BigInt diagnostics: TS1352 if exponent, TS1353 if fraction
+            bigIntHasExponent = hasExponent
+            bigIntHasFraction = hasFraction
             tokenValue = text.substring(start, pos)
             return SyntaxKind.BigIntLiteral
         }
@@ -852,9 +876,11 @@ class Scanner(private val text: String) {
 
     private fun scanHexLiteral(start: Int): SyntaxKind {
         pos += 2 // skip 0x
+        val digitsStart = pos
         while (pos < end && (isHexDigit(text[pos]) || text[pos] == '_')) {
             pos++
         }
+        if (pos == digitsStart) emptyDigitLiteralKind = "hex"
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
@@ -866,6 +892,7 @@ class Scanner(private val text: String) {
 
     private fun scanBinaryLiteral(start: Int): SyntaxKind {
         pos += 2 // skip 0b
+        val digitsStart = pos
         while (pos < end) {
             val ch = text[pos]
             if (ch == '0' || ch == '1' || ch == '_') {
@@ -874,6 +901,7 @@ class Scanner(private val text: String) {
                 break
             }
         }
+        if (pos == digitsStart) emptyDigitLiteralKind = "binary"
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
@@ -885,6 +913,7 @@ class Scanner(private val text: String) {
 
     private fun scanOctalLiteral(start: Int): SyntaxKind {
         pos += 2 // skip 0o
+        val digitsStart = pos
         while (pos < end) {
             val ch = text[pos]
             if (isOctalDigit(ch) || ch == '_') {
@@ -893,6 +922,7 @@ class Scanner(private val text: String) {
                 break
             }
         }
+        if (pos == digitsStart) emptyDigitLiteralKind = "octal"
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
