@@ -325,6 +325,16 @@ class Checker(
     private val aliasDisplayMap = mutableMapOf<Int, Pair<String, List<Type>>>()
     private val typeToStringInProgress = mutableSetOf<Int>()
 
+    /** B65.1: Source-text display for `TemplateLiteralType` resolutions. Each
+     *  `getTypeFromTypeNode(TemplateLiteralType)` mints a FRESH
+     *  `Type.Intrinsic("string")` (so it has a unique id) and registers the
+     *  back-tick-wrapped source rendering here. typeToString consults this
+     *  map before falling through to the default intrinsicName display so
+     *  TS2339 / TS2345 / TS2322 messages render `` `${string}:\t${number}\r\n` ``
+     *  instead of plain `string`. Assignability still flows via TypeFlags.String,
+     *  so all `=== stringType` paths remain unaffected. */
+    private val templateLiteralDisplay = mutableMapOf<Int, String>()
+
     /** 17.19: Base-class constructor signature for `super(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around each
      *  Constructor body when the class extends another class; instantiated with
@@ -43571,7 +43581,22 @@ interface DataView {
             is IndexedAccessType -> getTypeFromIndexedAccess(node)
             is ConditionalType -> getTypeFromConditionalType(node)
             is MappedType -> getTypeFromMappedType(node)
-            is TemplateLiteralType -> stringType // template literal types are string-like
+            is TemplateLiteralType -> {
+                // B65.1: preserve source-text rendering for TS2339 / TS2345 /
+                // TS2322 messages. Parser stashes the raw source slice (including
+                // backticks) in `head.rawText` (no real spans built). Each call
+                // to this branch (post-nodeTypes-cache check) mints a fresh
+                // Type.Intrinsic so distinct call sites get distinct ids, but
+                // all carry TypeFlags.String so assignability is unchanged.
+                val raw = node.head.rawText
+                if (raw.isNullOrEmpty()) {
+                    stringType
+                } else {
+                    val t = Type.Intrinsic(TypeFlags.String, "string")
+                    templateLiteralDisplay[t.id] = raw
+                    t
+                }
+            }
             is InferType -> anyType // only valid inside conditional types
             is RestType -> getTypeFromTypeNode(node.type) // unwrap rest
             is NamedTupleMember -> getTypeFromTypeNode(node.type) // unwrap named tuple member
@@ -47103,7 +47128,12 @@ interface DataView {
             // B58.1: render errorType as "any" (matches TypeScript's display behavior;
             // TypeScript doesn't expose an "error" type name in diagnostics — when type
             // resolution fails, the slot is shown as `any`).
-            is Type.Intrinsic -> if (type === errorType) "any" else type.intrinsicName
+            is Type.Intrinsic -> when {
+                type === errorType -> "any"
+                // B65.1: template-literal-type-sourced intrinsic — render source text.
+                templateLiteralDisplay[type.id] != null -> templateLiteralDisplay[type.id]!!
+                else -> type.intrinsicName
+            }
             is Type.StringLiteral -> "\"${type.value}\""
             is Type.NumberLiteral -> type.toString()
             is Type.BigIntLiteral -> type.toString()
@@ -54131,8 +54161,11 @@ interface DataView {
                     try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
                     if (getPropertyOfType(apparent, propName) != null) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    // B65.1: route through typeToString so TemplateLiteralType-sourced
+                    // intrinsics render their original source text (e.g.
+                    // `\`${string}:\t${number}\r\n\``) rather than plain `string`.
                     diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type '${callType.intrinsicName}'.",
+                        message = "Property '$propName' does not exist on type '${typeToString(callType)}'.",
                         category = DiagnosticCategory.Error, code = 2339,
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
