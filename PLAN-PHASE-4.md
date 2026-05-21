@@ -978,6 +978,24 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-21 (round 17 of /goal continued, B63.11 + B63.12 — +3 net).** Continuation /goal session after round 17's 6 prior commits + B63.10 correctness. Surgical pool empty at start (`find_candidates.py --fresh` 0/0/0). Explored 4-8 diff fresh candidates; landed two surgical wins.
+
+  - **B63.11 (+1)**: Namespace-qualified heritage clause resolution + TS1434 emission. New `resolveHeritageBaseSymbol(expr: Expression): Symbol?` helper in Checker.kt walks PropertyAccessExpression through namespace `exports` with explicit-export filter (sub-namespaces with Module flag + `declare namespace` members implicitly exported; others require Export modifier or ExportValue flag). Used in three heritage emission sites: `getTypeFromBaseTypeExpression` (base type inheritance, affects all downstream checks), `checkImplementsClauses` (TS2420), `checkInterfaceExtendsClauses` (TS2430). Plus TS1434 "Unexpected keyword or identifier." emission in `parseInterfaceDeclaration`'s `.` recovery branch when next token is identifier. **CLAUDE.md gotcha**: `NonInstantiated` namespaces carry the `NamespaceModule` symbol flag too (set by binder when state is NonInstantiated), so `isNameExportedFromNamespace`'s NamespaceModule check returns true for non-declare namespaces too — must walk declarations for actual `Declare` modifier. Without this gate, regression is -2 (`complicatedPrivacy_ts` FP TS2420 for `implements mglo5.i6` where i6 is non-exported). Flips `interfaceDeclaration4_ts`.
+
+  - **B63.12 (+2)**: Tagged template TS1109+TS1005+TS2554 emission. Three coordinated pieces for unterminated tagged templates `f \`...${ \``:
+    - (a) `parseTemplateExpression`'s unterminated TS1109 now uses `scanner.getPrevTokenEnd()` (position right after `${`) instead of `scanner.getTokenPos()` (EOF position). Matches TypeScript's "position where the expected expression should have started" convention.
+    - (b) New TS1005 "'}' expected." emission at EOF position alongside TS1109.
+    - (c) New `TaggedTemplateExpression` branch in `checkArgCountInExprCore`. For tagged template `tag\`...${a}${b}...\``, argCount = 1 (TemplateStringsArray) + spans.size + (1 if `template.isUnterminated`). When argCount > info.maxParams, emits TS2554 at `template.end` with length 0. The `isUnterminated` bonus is critical — for unterminated templates the parser stops at EOF before adding the last span, so spans.size undercounts by 1.
+
+    Flips `taggedTemplatesWithIncompleteTemplateExpressions4_ts` and `taggedTemplatesWithIncompleteTemplateExpressions5_ts`.
+
+  Reverted attempts (no commit):
+  - Extension of `resolveHeritageBaseSymbol` to `checkClassPropertyOverrides` (Checker.kt:~50296). Net-zero on full suite — no tests use the namespace-qualified pattern at this emission site. Reverted to avoid dead code.
+
+  Net: 3 commits (B63.11, B63.12, status), +3 net tests (8886 → 8889 / 10078 = 88.20%).
+
+  **`binderBinaryExpressionStress_ts` flakiness observed**: This 4971-line stress test (4 deep arithmetic chains × 250+ ops each) flaked between runs in this session — failed once during a baseline-capture run, then passed reliably afterward. The B63.1 fix (iterative left-spine flatten) appears to be one-off-stack-depth sensitive on the JVM. Not investigating further as the flake is rare and self-resolving.
+
   **Session 2026-05-21 (round 17 of /goal continued, B63.8 — +1 net).** Continuation /goal session after round 17 first 5 commits. Surgical pool was empty at start (`find_candidates.py --fresh` 0/0/0); explored adjacent diagnostic patterns and landed one win via union-aware switch case comparability.
 
   - **B63.8 (+1)**: Union-aware switch case comparability (TS2678). Extended `checkSwitchCaseComparable` (Checker.kt:~31443) with a new `SwitchAllowedSet` abstraction so a switch expression's "comparable set" can be a UNION of (kind, exactDisplay?) entries — not just a single literal binding. Two improvements: (a) different-kind cases now emit TS2678 (was only same-kind/different-display); (b) annotated `declare var/let/var` declarations with union/keyword/literal annotations now contribute via `annotatedBindings` map. Helper `allowedSetFromTypeAnnotation` flattens UnionType into list of (kind, exactDisplay?) where exactDisplay=null means any value of kind matches (`number` in `number | "hello"`). Display built deterministically from entries (`number | "hello"`) — source positions would land in trailing whitespace via node.end overshoot. Flips `switchCasesExpressionTypeMismatch_ts`.
