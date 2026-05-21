@@ -519,9 +519,16 @@ class Parser(
                 if (scanner.hasPrecedingLineBreak()) false
                 else when (token) {
                     VarKeyword, LetKeyword, ConstKeyword, FunctionKeyword, ClassKeyword,
-                    InterfaceKeyword, TypeKeyword, EnumKeyword, NamespaceKeyword, ModuleKeyword,
+                    InterfaceKeyword, TypeKeyword, EnumKeyword, NamespaceKeyword,
                     AbstractKeyword, GlobalKeyword, ImportKeyword, ExportKeyword,
                     DeclareKeyword -> true
+                    // `declare module { ... }` (no name) is NOT a valid module declaration;
+                    // fall back to treating `declare` as an identifier so the parser
+                    // recovers it as three separate statements: `declare;`, `module;`, `{ ... }`.
+                    ModuleKeyword -> {
+                        nextToken()
+                        token != OpenBrace
+                    }
                     else -> false
                 }
             }
