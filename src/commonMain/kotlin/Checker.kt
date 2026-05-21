@@ -40235,7 +40235,21 @@ interface DataView {
                                 currentLocalTypes = savedLocalTypes
                             }
                             is GetAccessor -> {
-                                checkFunctionBody(member.body, member.type, emptyList(), null, source, fileName, varTypes, classTypeParams)
+                                // B63.5: When a getter has no return-type annotation, but the
+                                // class has a paired setter for the same property with a typed
+                                // param, use the setter's param type as the effective return
+                                // type so `return X` is checked against it. Matches TypeScript's
+                                // accessor-pair return-type bridging.
+                                val effectiveReturnType = member.type ?: run {
+                                    val getterName = (member.name as? Identifier)?.text
+                                    if (getterName == null) null else {
+                                        val pairedSetter = stmt.members.firstOrNull { sm ->
+                                            sm is SetAccessor && (sm.name as? Identifier)?.text == getterName
+                                        } as? SetAccessor
+                                        pairedSetter?.parameters?.firstOrNull()?.type
+                                    }
+                                }
+                                checkFunctionBody(member.body, effectiveReturnType, emptyList(), null, source, fileName, varTypes, classTypeParams)
                             }
                             is SetAccessor -> {
                                 // B54.1: SetAccessor bodies were previously falling into the
@@ -40264,13 +40278,25 @@ interface DataView {
                                             }
                                         }
                                     }
+                                    // B63.5: When setter's param has no annotation, look up
+                                    // paired getter's return-type annotation and use it as the
+                                    // param type. Matches TypeScript's accessor-pair param-type
+                                    // bridging.
+                                    val setterName = (member.name as? Identifier)?.text
+                                    val pairedGetterType: TypeNode? = if (setterName != null) {
+                                        val pg = stmt.members.firstOrNull { sm ->
+                                            sm is GetAccessor && (sm.name as? Identifier)?.text == setterName
+                                        } as? GetAccessor
+                                        pg?.type
+                                    } else null
                                     for (p in member.parameters) {
                                         val pName = (p.name as? Identifier)?.text
-                                        val pType = p.type?.let { resolveSimpleTypeName(it) }
+                                        val effectiveParamType = p.type ?: pairedGetterType
+                                        val pType = effectiveParamType?.let { resolveSimpleTypeName(it) }
                                         if (pName != null && pType != null) setterTypes[pName] = pType
-                                        if (pName != null && p.type != null) {
+                                        if (pName != null && effectiveParamType != null) {
                                             try {
-                                                val resolvedType = getTypeFromTypeNode(p.type!!)
+                                                val resolvedType = getTypeFromTypeNode(effectiveParamType)
                                                 if (resolvedType !== anyType && resolvedType !== errorType) {
                                                     currentLocalTypes[pName] = resolvedType
                                                 }
