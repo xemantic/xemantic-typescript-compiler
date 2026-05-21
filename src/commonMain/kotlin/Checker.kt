@@ -54196,6 +54196,29 @@ interface DataView {
         // Resolve members
         resolveStructuredTypeMembers(objectType)
         if (objectType.properties.isNullOrEmpty()) {
+            // B63.33: empty `{}` Type.Object — receiver typed as truly-empty (e.g.
+            // `const z = {}; z.x` or `function f(): {} {} f().x`). Conservative gate:
+            // no symbol, no signatures, no index sigs, no base types (if Interface).
+            // Display: '{}'. Mirrors the existing ObjectLiteralExpression-direct path
+            // (17.115) but covers the Identifier-receiver case where the type was
+            // INFERRED from an empty initializer.
+            if (objectType.symbol == null &&
+                objectType.callSignatures.isNullOrEmpty() &&
+                objectType.constructSignatures.isNullOrEmpty() &&
+                objectType.stringIndexInfo == null &&
+                objectType.numberIndexInfo == null &&
+                (objectType !is Type.Interface || objectType.baseTypes.isNullOrEmpty()) &&
+                propName !in RUNTIME_PROPERTIES &&
+                propName.isNotEmpty()) {
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '{}'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+                return
+            }
             // Constructor-side class receiver (typeof K) may have no cached properties (the
             // binder may not have populated exports), but we can still check the class
             // declaration for the static-member presence and emit a precise TS2339 when
