@@ -27585,8 +27585,15 @@ interface DataView {
                 expr.arguments.forEach { findObjLitSuperRefsInExpr(it, source, fileName, code) }
             }
             expr is BinaryExpression -> {
-                findObjLitSuperRefsInExpr(expr.left, source, fileName, code)
-                findObjLitSuperRefsInExpr(expr.right, source, fileName, code)
+                // B64.8: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                findObjLitSuperRefsInExpr(cur, source, fileName, code)
+                while (rightStack.isNotEmpty()) findObjLitSuperRefsInExpr(rightStack.removeLast(), source, fileName, code)
             }
             expr is ParenthesizedExpression -> findObjLitSuperRefsInExpr(expr.expression, source, fileName, code)
             // Nested object literals are handled by walkObjLitSuperInExpr separately — don't double-emit.
@@ -27746,8 +27753,15 @@ interface DataView {
                 expr.arguments.forEach { findNestedSuperCallsInExpr(it, source, fileName, inNestedFn) }
             }
             is BinaryExpression -> {
-                findNestedSuperCallsInExpr(expr.left, source, fileName, inNestedFn)
-                findNestedSuperCallsInExpr(expr.right, source, fileName, inNestedFn)
+                // B64.8: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                findNestedSuperCallsInExpr(cur, source, fileName, inNestedFn)
+                while (rightStack.isNotEmpty()) findNestedSuperCallsInExpr(rightStack.removeLast(), source, fileName, inNestedFn)
             }
             is PropertyAccessExpression -> findNestedSuperCallsInExpr(expr.expression, source, fileName, inNestedFn)
             is ElementAccessExpression -> {
@@ -66293,8 +66307,15 @@ interface DataView {
             }
             is ParenthesizedExpression -> checkTsSyntaxInExpression(expr.expression, source, fileName)
             is BinaryExpression -> {
-                checkTsSyntaxInExpression(expr.left, source, fileName)
-                checkTsSyntaxInExpression(expr.right, source, fileName)
+                // B64.8: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkTsSyntaxInExpression(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkTsSyntaxInExpression(rightStack.removeLast(), source, fileName)
             }
             is ConditionalExpression -> {
                 checkTsSyntaxInExpression(expr.condition, source, fileName)
