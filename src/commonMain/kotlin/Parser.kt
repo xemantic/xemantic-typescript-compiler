@@ -4670,7 +4670,25 @@ class Parser(
         val result = when (token) {
             NumericLiteral -> parseNumericLiteral()
             BigIntLiteral -> {
-                val text = scanner.getTokenValue(); nextToken(); BigIntLiteralNode(
+                val text = scanner.getTokenValue()
+                val hasExponent = scanner.didBigIntHaveExponent()
+                val hasFraction = scanner.didBigIntHaveFraction()
+                val emptyKind = scanner.getEmptyDigitLiteralKind()
+                val litLen = text.length
+                nextToken()
+                when {
+                    emptyKind == "binary" -> reportError("Binary digit expected.", code = 1177,
+                        overrideStart = pos + litLen - 1, overrideLength = 0)
+                    emptyKind == "octal" -> reportError("Octal digit expected.", code = 1178,
+                        overrideStart = pos + litLen - 1, overrideLength = 0)
+                    emptyKind == "hex" -> reportError("Hexadecimal digit expected.", code = 1125,
+                        overrideStart = pos + litLen - 1, overrideLength = 0)
+                    hasExponent -> reportError("A bigint literal cannot use exponential notation.", code = 1352,
+                        overrideStart = pos, overrideLength = litLen)
+                    hasFraction -> reportError("A bigint literal must be an integer.", code = 1353,
+                        overrideStart = pos, overrideLength = litLen)
+                }
+                BigIntLiteralNode(
                     text = text,
                     pos = pos,
                     end = getEnd()
