@@ -1,8 +1,8 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,898 / 10,078 tests passing (~88.29%). _Round 17 (2026-05-21): /goal session targeting 15+ iterations, landed +20 net via B63.x stack (17 feature commits)._
+**Phase 4 — Checker buildout.** 8,895 / 10,078 tests passing (~88.26%). _Round 17 (2026-05-21): /goal session targeting 15+ iterations, landed +17 net via B63.x stack (17 feature commits)._
 
-_Round 17 (2026-05-21, +20 net — B63.x stack):_
+_Round 17 (2026-05-21, +17 net — B63.x stack):_
 - **B63.26 (+2)**: TS2591 for node-builtin bare specifier under node resolution. `checkUnresolvedModules` adds a narrow gate — when the specifier is a known node built-in (`NODE_BUILTIN_MODULES` or `node:`-prefixed) AND not an ambient module / .d.ts / node_modules package, emit TS2307 (which routes to TS2591). Flips `isolatedModulesImportExportElision_ts` both target variants.
 - **B63.23 (+1)**: ASI for `abstract` in class body. `parseModifiers` treats `abstract` as a property name (not a modifier) when inside a class body AND the next token has a preceding line break. Paired with B63.22's TS2304 emission for top-level `abstract`. Flips `asiAbstract_ts`.
 - **B63.22 (net-zero)**: TS2304 for `abstract` in expression position. Narrow exception to `KEYWORD_IDENTIFIERS` suppression — `abstract` used as Identifier in expression context (not type position, not in scope) now reports TS2304. Matches TypeScript's ASI behavior for top-level `abstract\nclass X {}`.
