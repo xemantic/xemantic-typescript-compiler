@@ -9339,8 +9339,17 @@ class Checker(
                             // whose slot is a union-with-primitive-and-function can suppress
                             // TS7006 (B6.1 — `contextualOverloadListFromUnionWithPrimitive*`).
                             val annotatedType = decl.type?.let { getTypeFromTypeNodeSafe(it) }
+                            // When the var decl has a type annotation AND the initializer
+                            // is an arrow/function expression, the params are contextually
+                            // typed by the annotation. Suppress TS7006 by setting
+                            // contextuallyTyped=true. The annotation node directly being a
+                            // FunctionType / ConstructorType / IntersectionType containing
+                            // function types is the common shape. Conservative: any
+                            // annotation when the initializer is an arrow/function.
+                            val arrowInit = declInit is ArrowFunction || declInit is FunctionExpression
+                            val ctxFn = arrowInit && decl.type != null
                             declInit?.let {
-                                checkImplicitAnyInExpr(it, source, fileName, contextualType = annotatedType)
+                                checkImplicitAnyInExpr(it, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType)
                             }
                         }
                     }
