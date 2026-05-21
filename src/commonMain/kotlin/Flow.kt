@@ -915,6 +915,24 @@ class FlowGraphBuilder {
     }
 
     private fun bindBinaryExpression(expr: BinaryExpression) {
+        // Iteratively flatten the left-spine for "no flow change" operators
+        // (arithmetic / comparison / bitwise / instanceof / in / comma) to avoid
+        // StackOverflow on deeply nested left-associative chains like
+        // `0 + 1 + 2 + ... + 1499`. Same semantic effect as recursing through
+        // bindExpression(left) + bindExpression(right). Stops at any operator
+        // that affects flow (&&, ||, ??, =, +=, etc.) and falls into the
+        // recursive handler below for that node.
+        if (isSimpleBinaryOp(expr.operator) && expr.left is BinaryExpression) {
+            val rightStack = ArrayDeque<Expression>()
+            var node: Expression = expr
+            while (node is BinaryExpression && isSimpleBinaryOp(node.operator)) {
+                rightStack.addLast(node.right)
+                node = node.left
+            }
+            bindExpression(node)
+            while (rightStack.isNotEmpty()) bindExpression(rightStack.removeLast())
+            return
+        }
         when (expr.operator) {
             // Short-circuit operators: && / || / ??
             SyntaxKind.AmpersandAmpersand -> {
@@ -983,6 +1001,34 @@ class FlowGraphBuilder {
                 bindExpression(expr.right)
             }
         }
+    }
+
+    /** True for binary operators with no flow-graph effect — safe to flatten
+     *  the left-spine iteratively in [bindBinaryExpression]. Excludes
+     *  short-circuit ops (&&, ||, ??), Equals, compound assignments, and the
+     *  short-circuit-assignment forms (&&=, ||=, ??=). Comma is included since
+     *  it has no flow effect (just left-then-right binding). */
+    private fun isSimpleBinaryOp(op: SyntaxKind): Boolean = when (op) {
+        SyntaxKind.AmpersandAmpersand,
+        SyntaxKind.BarBar,
+        SyntaxKind.QuestionQuestion,
+        SyntaxKind.Equals,
+        SyntaxKind.PlusEquals,
+        SyntaxKind.MinusEquals,
+        SyntaxKind.AsteriskEquals,
+        SyntaxKind.AsteriskAsteriskEquals,
+        SyntaxKind.SlashEquals,
+        SyntaxKind.PercentEquals,
+        SyntaxKind.LessThanLessThanEquals,
+        SyntaxKind.GreaterThanGreaterThanEquals,
+        SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
+        SyntaxKind.AmpersandEquals,
+        SyntaxKind.BarEquals,
+        SyntaxKind.CaretEquals,
+        SyntaxKind.AmpersandAmpersandEquals,
+        SyntaxKind.BarBarEquals,
+        SyntaxKind.QuestionQuestionEquals -> false
+        else -> true
     }
 
     private fun bindConditionalExpression(expr: ConditionalExpression) {

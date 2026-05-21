@@ -9030,8 +9030,11 @@ class Checker(
                 (expr.body as? Block)?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
             }
             is BinaryExpression -> {
-                walkJSDocParamTagsInExpr(expr.left, source, fileName)
-                walkJSDocParamTagsInExpr(expr.right, source, fileName)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkJSDocParamTagsInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkJSDocParamTagsInExpr(rightStack.removeLast(), source, fileName)
             }
             is CallExpression -> {
                 walkJSDocParamTagsInExpr(expr.expression, source, fileName)
@@ -21503,8 +21506,17 @@ interface DataView {
                 walkUncalledChecksInExpression(expr.whenFalse, source, fileName)
             }
             is BinaryExpression -> {
-                walkUncalledChecksInExpression(expr.left, source, fileName)
-                walkUncalledChecksInExpression(expr.right, source, fileName)
+                // Flatten the left-spine iteratively to avoid StackOverflow.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                walkUncalledChecksInExpression(cur, source, fileName)
+                while (rightStack.isNotEmpty()) {
+                    walkUncalledChecksInExpression(rightStack.removeLast(), source, fileName)
+                }
             }
             is ParenthesizedExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
             is CallExpression -> {
@@ -25160,8 +25172,11 @@ interface DataView {
                 walkExprForNamespaceThis(expr.argumentExpression, source, fileName, emitTs2683)
             }
             is BinaryExpression -> {
-                walkExprForNamespaceThis(expr.left, source, fileName, emitTs2683)
-                walkExprForNamespaceThis(expr.right, source, fileName, emitTs2683)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkExprForNamespaceThis(cur, source, fileName, emitTs2683)
+                while (rightStack.isNotEmpty()) walkExprForNamespaceThis(rightStack.removeLast(), source, fileName, emitTs2683)
             }
             is CallExpression -> {
                 walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
@@ -27120,8 +27135,11 @@ interface DataView {
                 }
             }
             is BinaryExpression -> {
-                walkObjLitSuperInExpr(expr.left, source, fileName, superValid)
-                walkObjLitSuperInExpr(expr.right, source, fileName, superValid)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkObjLitSuperInExpr(cur, source, fileName, superValid)
+                while (rightStack.isNotEmpty()) walkObjLitSuperInExpr(rightStack.removeLast(), source, fileName, superValid)
             }
             is CallExpression -> {
                 walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
@@ -27520,8 +27538,11 @@ interface DataView {
             // direct super refs in their members. Skip entirely to avoid double emission.
             is ObjectLiteralExpression -> {}
             is BinaryExpression -> {
-                walkSuperRebindExpr(expr.left, source, fileName, rebound)
-                walkSuperRebindExpr(expr.right, source, fileName, rebound)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkSuperRebindExpr(cur, source, fileName, rebound)
+                while (rightStack.isNotEmpty()) walkSuperRebindExpr(rightStack.removeLast(), source, fileName, rebound)
             }
             is CallExpression -> {
                 // `super(...)` call is TS2337 territory (handled by checkIllegalSuperCallsInNestedFunctions
@@ -27718,8 +27739,11 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
             is BinaryExpression -> {
-                walkExprForNestedClasses(expr.left, source, fileName, classMap)
-                walkExprForNestedClasses(expr.right, source, fileName, classMap)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkExprForNestedClasses(cur, source, fileName, classMap)
+                while (rightStack.isNotEmpty()) walkExprForNestedClasses(rightStack.removeLast(), source, fileName, classMap)
             }
             is CallExpression -> {
                 walkExprForNestedClasses(expr.expression, source, fileName, classMap)
@@ -28102,8 +28126,11 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
             is BinaryExpression -> {
-                walkExprForAbstractContext(expr.left, source, fileName, inAmbient)
-                walkExprForAbstractContext(expr.right, source, fileName, inAmbient)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkExprForAbstractContext(cur, source, fileName, inAmbient)
+                while (rightStack.isNotEmpty()) walkExprForAbstractContext(rightStack.removeLast(), source, fileName, inAmbient)
             }
             is CallExpression -> {
                 walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
@@ -32332,8 +32359,18 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is BinaryExpression -> {
-                walkTypeAssertionsInExpr(expr.left, source, fileName, onAssertion)
-                walkTypeAssertionsInExpr(expr.right, source, fileName, onAssertion)
+                // Flatten the left-spine iteratively to avoid StackOverflow on
+                // deeply nested binary chains (`a + b + c + ... + z`).
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                walkTypeAssertionsInExpr(cur, source, fileName, onAssertion)
+                while (rightStack.isNotEmpty()) {
+                    walkTypeAssertionsInExpr(rightStack.removeLast(), source, fileName, onAssertion)
+                }
             }
             is CallExpression -> {
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
@@ -33153,8 +33190,18 @@ interface DataView {
                 expr.arguments?.let { for (arg in it) emitTypeParamTypedOps(arg, tpVars, source, fileName) }
             }
             is BinaryExpression -> {
-                emitTypeParamTypedOps(expr.left, tpVars, source, fileName)
-                emitTypeParamTypedOps(expr.right, tpVars, source, fileName)
+                // Flatten the left-spine iteratively to avoid StackOverflow on
+                // deeply nested binary chains.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                emitTypeParamTypedOps(cur, tpVars, source, fileName)
+                while (rightStack.isNotEmpty()) {
+                    emitTypeParamTypedOps(rightStack.removeLast(), tpVars, source, fileName)
+                }
             }
             is ElementAccessExpression -> {
                 // Note: `x[1]` on a TypeParam is NOT diagnosed by TypeScript here —
@@ -33678,8 +33725,11 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                walkTParamDefaultsInExpr(expr.left, source, fileName)
-                walkTParamDefaultsInExpr(expr.right, source, fileName)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkTParamDefaultsInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkTParamDefaultsInExpr(rightStack.removeLast(), source, fileName)
             }
             is CallExpression -> {
                 walkTParamDefaultsInExpr(expr.expression, source, fileName)
@@ -35242,8 +35292,11 @@ interface DataView {
                 else -> {}
             }
             is BinaryExpression -> {
-                walkYieldInExpr(expr.left, source, fileName, isGenerator)
-                walkYieldInExpr(expr.right, source, fileName, isGenerator)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkYieldInExpr(cur, source, fileName, isGenerator)
+                while (rightStack.isNotEmpty()) walkYieldInExpr(rightStack.removeLast(), source, fileName, isGenerator)
             }
             is CallExpression -> {
                 walkYieldInExpr(expr.expression, source, fileName, isGenerator)
@@ -38219,8 +38272,11 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             is BinaryExpression -> {
-                walkExprForImplicitReturns(expr.left, source, fileName)
-                walkExprForImplicitReturns(expr.right, source, fileName)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkExprForImplicitReturns(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkExprForImplicitReturns(rightStack.removeLast(), source, fileName)
             }
             is ConditionalExpression -> {
                 walkExprForImplicitReturns(expr.condition, source, fileName)
@@ -40435,8 +40491,11 @@ interface DataView {
             }
             is ParenthesizedExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
             is BinaryExpression -> {
-                walkFunctionBodiesInExpr(expr.left, source, fileName, varTypes, typeParams)
-                walkFunctionBodiesInExpr(expr.right, source, fileName, varTypes, typeParams)
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkFunctionBodiesInExpr(cur, source, fileName, varTypes, typeParams)
+                while (rightStack.isNotEmpty()) walkFunctionBodiesInExpr(rightStack.removeLast(), source, fileName, varTypes, typeParams)
             }
             is CallExpression -> expr.arguments.forEach {
                 walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
