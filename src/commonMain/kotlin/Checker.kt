@@ -12753,7 +12753,10 @@ class Checker(
         if (name.isEmpty()) return
         if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
         // Skip keywords that parse as identifiers in our AST
-        if (name in KEYWORD_IDENTIFIERS) return
+        // Exception: `abstract` used in expression position (e.g. after ASI for
+        // `abstract\nclass X {}` at top level) IS reported as TS2304 by TypeScript.
+        if (name in KEYWORD_IDENTIFIERS && name != "abstract") return
+        if (name == "abstract" && (inTypePosition || scope.has(name))) return
         // TS2583: forward-declarable ES2015+ lib type referenced in type position
         // under `@noLib: true` or `@lib` that excludes es2015+. The KNOWN_GLOBALS set
         // contains these names, so they would otherwise pass via `scope.has` silently.
