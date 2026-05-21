@@ -24378,6 +24378,29 @@ interface DataView {
                     val body = stmt.body as? ModuleBlock ?: continue
                     collectFuncDecls(body.statements, funcParams, classCtorParams, isJsFile)
                 }
+                is VariableStatement -> {
+                    // B64.2: const variables initialized with an arrow function or function
+                    // expression with NO type annotation (otherwise the annotation's signature
+                    // governs the call arity, not the initializer's). Restricted to `const`
+                    // because `let`/`var` can be reassigned to a function with different arity.
+                    val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                    if (!isConst) continue
+                    for (decl in stmt.declarationList.declarations) {
+                        val nameNode = decl.name as? Identifier ?: continue
+                        val varName = nameNode.text
+                        if (decl.type != null) continue
+                        val init = decl.initializer
+                        val params: List<Parameter>? = when (init) {
+                            is ArrowFunction -> init.parameters
+                            is FunctionExpression -> init.parameters
+                            else -> null
+                        }
+                        if (params == null) continue
+                        // Don't overwrite an existing entry (e.g. same name as a FunctionDeclaration).
+                        if (funcParams.containsKey(varName)) continue
+                        funcParams[varName] = paramInfo(params, isJsFile)
+                    }
+                }
                 else -> {}
             }
         }
