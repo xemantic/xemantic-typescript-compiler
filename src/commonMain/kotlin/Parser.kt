@@ -4912,14 +4912,15 @@ class Parser(
                         var foundArrow = false
                         loop@ while (scanner.getToken() != SyntaxKind.EndOfFile) {
                             when (scanner.getToken()) {
-                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan -> typeDepth++
+                                SyntaxKind.OpenParen, SyntaxKind.OpenBracket, SyntaxKind.LessThan,
+                                SyntaxKind.OpenBrace -> typeDepth++
                                 SyntaxKind.CloseParen, SyntaxKind.CloseBracket -> {
                                     if (typeDepth == 0) break@loop else typeDepth--
                                 }
+                                SyntaxKind.CloseBrace -> if (typeDepth == 0) break@loop else typeDepth--
                                 SyntaxKind.GreaterThan -> if (typeDepth > 0) typeDepth--
                                 SyntaxKind.EqualsGreaterThan -> if (typeDepth == 0) { foundArrow = true; break@loop }
-                                SyntaxKind.Semicolon, SyntaxKind.OpenBrace,
-                                SyntaxKind.CloseBrace, SyntaxKind.Colon -> if (typeDepth == 0) break@loop
+                                SyntaxKind.Semicolon, SyntaxKind.Colon -> if (typeDepth == 0) break@loop
                                 else -> {}
                             }
                             scanner.scan()
