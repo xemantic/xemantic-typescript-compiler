@@ -66,9 +66,12 @@ class Parser(
     private val lineStarts: IntArray = computeLineStarts(source)
 
     fun parse(): SourceFile {
-        // TS1490: Detect binary files via Unicode replacement chars (U+FFFD) in the
-        // first 512 bytes — emit a single TS1490 at (1,1) and short-circuit parsing
-        // so we don't flood with TS1127 invalid-character diagnostics.
+        // TS1490: Detect binary files via C0 control char heuristic — emit TS1490
+        // at (1,1) and short-circuit parsing so we don't flood with TS1127. This
+        // matches TypeScript's behavior for `corrupted_ts`. Tests like
+        // `TransportStream_ts` that mix binary content with parseable tokens
+        // need additional per-byte TS1127 emission and span-merging which we
+        // don't yet implement — they remain failing.
         if (isBinaryFile(source)) {
             reportError("File appears to be binary.", code = 1490,
                 overrideStart = 0, overrideLength = 0)
