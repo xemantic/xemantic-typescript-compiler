@@ -40867,6 +40867,16 @@ interface DataView {
 
         val init = decl.initializer ?: return
 
+        // `null!` / `undefined!` (NonNullExpression of a literal null/undefined) is
+        // commonly used as a "trust me" cast under strictNullChecks. The non-null
+        // assertion makes the value satisfy any target type. Skip the assignability
+        // check for this exact shape.
+        if (init is NonNullExpression) {
+            val inner = init.expression
+            val isNullishLit = (inner is Identifier && (inner.text == "null" || inner.text == "undefined"))
+            if (isNullishLit) return
+        }
+
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
