@@ -29602,8 +29602,15 @@ interface DataView {
                 }
             }
             is BinaryExpression -> {
-                checkCrossFileUBDInExpr(expr.left, useFileIdx, localNames, source, fileName, firstDeclByName)
-                checkCrossFileUBDInExpr(expr.right, useFileIdx, localNames, source, fileName, firstDeclByName)
+                // B64.7: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkCrossFileUBDInExpr(cur, useFileIdx, localNames, source, fileName, firstDeclByName)
+                while (rightStack.isNotEmpty()) checkCrossFileUBDInExpr(rightStack.removeLast(), useFileIdx, localNames, source, fileName, firstDeclByName)
             }
             is ParenthesizedExpression -> checkCrossFileUBDInExpr(
                 expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName,
@@ -48825,8 +48832,15 @@ interface DataView {
             }
             is ParenthesizedExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
             is BinaryExpression -> {
-                findTypeParamRefsInExpr(expr.left, typeParamNames, source, fileName)
-                findTypeParamRefsInExpr(expr.right, typeParamNames, source, fileName)
+                // B64.7: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                findTypeParamRefsInExpr(cur, typeParamNames, source, fileName)
+                while (rightStack.isNotEmpty()) findTypeParamRefsInExpr(rightStack.removeLast(), typeParamNames, source, fileName)
             }
             is ConditionalExpression -> {
                 findTypeParamRefsInExpr(expr.condition, typeParamNames, source, fileName)
