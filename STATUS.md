@@ -1,6 +1,14 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,906 / 10,078 tests passing (~88.37%). _Round 19 (2026-05-21): /goal session, 8 iterations, +6 net via 5 wins + 1 net-zero correctness._
+**Phase 4 — Checker buildout.** 8,907 / 10,078 tests passing (~88.38%). _Round 20 (2026-05-21): /goal session continuation, 6 commits, +2 stable (jsdocInTypeScript + binderBinaryExpressionStress de-flake) + 3 net-zero infrastructure + MAINT-1 skip-log audit._
+
+_Round 20 (2026-05-21, +2 net via 6 commits + maint-1):_
+- **MAINT-1**: Struck out 4 stale skip-log entries flipped in earlier rounds (promiseDefinitionTest_ts, moduleAugmentationsImports3_ts, jsFileCompilationDuplicateVariableErrorReported_ts, errorWithSameNameType_ts).
+- **B64.1 (+1)**: TS2339 for primitive call-return + arithmetic return-type inference. Two coordinated changes: (a) `inferReturnTypeFromBody` recognizes arithmetic BinaryExpressions (`*`/`/`/`%`/`-`/`**`/shifts/bitwise) as `number`; (b) `getTypeOfFunction` calls `inferReturnTypeFromBody` for bodies with return statements; (c) `checkSinglePropertyAccess`'s CallExpression-receiver branch emits TS2339 when return is a primitive wrapper intrinsic and property is absent from the apparent (wrapper) type. New `PRIMITIVE_WRAPPER_INTRINSIC_NAMES` set. Flips `jsdocInTypeScript_ts`.
+- **B64.2 (net-zero)**: TS2554 for const-arrow/fn-expression variable calls. Extends `collectFuncDecls` to gather call-arity info from const VariableStatement initialized with ArrowFunction/FunctionExpression (no type annotation). Gates: const only (let/var can be reassigned), no annotation. Reduces `templateLiteralsInTypes_ts` diff from 3 to 2 lines; full flip needs template-literal-type display through `as`-cast (separate piece).
+- **B64.3 (+1 stable)**: Iterative left-spine flatten in checkCommaInExpr. Removes JVM stack-overflow flake on `binderBinaryExpressionStress_ts` (4971-line test with deep `+` chains). Mirrors B63.1's pattern but for the comma-walker site B63.1 missed. Test was flaking between pass/fail; this commit makes it deterministically pass.
+- **B64.4 (net-zero)**: Iterative left-spine flatten in 3 more walkers (`collectThisAccessInExpr`, `checkExprForCtorParamRefs`, `walkBigIntExpInExpr`). Defensive infrastructure mirroring B63.1.
+- **B64.5 (net-zero)**: Iterative left-spine flatten in `checkArithmeticInExpr` + `checkPropertyAccessInExpr`. Preserves per-spine-node diagnostic emission for arithmetic ops and TS2493 tuple-bounds check.
 
 _Round 19 (2026-05-21, +6 net via 6 commits):_
 - **B63.37 (+1)**: Track TypeParam-typed vars from inferred initializers. Extends `walkStmtForTypeParamOps`'s VariableStatement branch to also track vars whose UNANNOTATED initializer infers a TypeParam type. Two narrow patterns: (a) `var y = x` where x is already tracked; (b) `var y = f(x)` where f is a single-TP generic FunctionDeclaration with bare-T return and x is a tracked TypeParam-typed var. Flips `genericCallSpecializedToTypeArg_ts`.
