@@ -12194,7 +12194,22 @@ class Checker(
             // replicate here; the genericFundule tests would need that — out of scope).
             val isValueOnly = resolved.flags.hasAny(SymbolFlags.Value) &&
                 !resolved.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.EnumMember)
-            if (isValueOnly) {
+            // B63.36: Function+namespace ("fundule") pattern. `export function B` +
+            // `export namespace B { export var x }` makes B carry Value+Module. The
+            // namespace has only value exports (no types/sub-modules), so `A.B` in type
+            // position can't refer to a real type. Detect: Value+Module symbol where
+            // the namespace exports contain no Type or Module members.
+            val isFunduleValueOnly = !isValueOnly &&
+                resolved.flags.hasAny(SymbolFlags.Value) &&
+                resolved.flags.hasAny(SymbolFlags.Module) &&
+                !resolved.flags.hasAny(SymbolFlags.Type or SymbolFlags.Alias or SymbolFlags.EnumMember) &&
+                run {
+                    val exports = resolved.exports
+                    exports != null && exports.values.none { e ->
+                        e.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module)
+                    }
+                }
+            if (isValueOnly || isFunduleValueOnly) {
                 // Build the full source-level qualified name "A.B" for the message.
                 val fullPath = (segments + rightId.text).joinToString(".")
                 val start = qn.pos
