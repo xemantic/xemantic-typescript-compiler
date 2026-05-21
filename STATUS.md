@@ -1,8 +1,9 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,905 / 10,078 tests passing (~88.36%). _Round 19 (2026-05-21): /goal session, 6 iterations, +5 net via 4 wins + 1 net-zero correctness._
+**Phase 4 — Checker buildout.** 8,906 / 10,078 tests passing (~88.37%). _Round 19 (2026-05-21): /goal session, 8 iterations, +6 net via 5 wins + 1 net-zero correctness._
 
-_Round 19 (2026-05-21, +5 net via 5 commits):_
+_Round 19 (2026-05-21, +6 net via 6 commits):_
+- **B63.37 (+1)**: Track TypeParam-typed vars from inferred initializers. Extends `walkStmtForTypeParamOps`'s VariableStatement branch to also track vars whose UNANNOTATED initializer infers a TypeParam type. Two narrow patterns: (a) `var y = x` where x is already tracked; (b) `var y = f(x)` where f is a single-TP generic FunctionDeclaration with bare-T return and x is a tracked TypeParam-typed var. Flips `genericCallSpecializedToTypeArg_ts`.
 - **B63.36 (+2)**: TS2749 for function+namespace ("fundule") in type position. Extends existing TS2749 emission in `checkQualifiedNameExports` with new `isFunduleValueOnly` gate — Value+Module symbol where namespace exports contain ONLY values (no Type or Module members) can't refer to a real type. Suggests `typeof A.B` in message. Flips `genericFunduleInModule_ts` and `genericFunduleInModule2_ts`.
 - **B63.35 (+1)**: TS2403 cross-file var dup between .ts and .js (allowJs). Narrow check in `checkSubsequentVarTypesInGlobals` for the script-file pattern where both files declare a top-level `var x = init` with different primitive types. Emits ONLY on .ts (mirroring TypeScript's "js file isn't checked"). Flips `jsFileCompilationDuplicateVariableErrorReported_ts`; preserves `jsFileCompilationDuplicateVariable_ts` (no error when .ts comes first).
 - **B63.34 (+1)**: Skip namespace-property-access path when Variable+Module symbol. When `mergeSymbolTable` pollutes a Module symbol with Variable flag (typical when an unrelated module file shares the same name as a local `let`/`const`), `let a: A` should drive property lookup, not the module's exports. Removes FP TS2339 with `typeof a` display for cases like `let a: A; a.someMethodFromAugmentation()`. Flips `moduleAugmentationsImports3_ts`.
