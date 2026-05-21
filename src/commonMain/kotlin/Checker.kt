@@ -59281,9 +59281,28 @@ interface DataView {
         // the type-param assignments from param pinning could (in a future extension)
         // also drive return-type substitution.
         val len = minOf(sourceParams.size, targetParams.size)
+        // B63.29: When target's last param is a rest `...t: U[]`, positional comparison
+        // beyond target.size-1 (and AT target.size-1 against a non-rest source param)
+        // should use the rest element type U, not U[]. Without this, source's typed
+        // param like `bar: string` vs target's rest `...tail: any[]` contravariantly
+        // checks `any[]` vs `string` → false. Correct: check element `any` vs `string` → true.
+        val targetLast = targetParams.lastOrNull()
+        val targetLastIsRest = (targetLast?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        val targetRestElement: Type? = if (targetLastIsRest) {
+            val raw = getTypeOfSymbol(targetLast!!)
+            if (raw is Type.Reference && raw.target?.symbol?.name in setOf("Array", "ReadonlyArray"))
+                raw.resolvedTypeArguments?.firstOrNull() else null
+        } else null
         for (i in 0 until len) {
             val sourceParamType = getTypeOfSymbol(sourceParams[i])
-            val targetParamType = getTypeOfSymbol(targetParams[i])
+            val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            // For the target's rest param position, if source is also rest, compare U[] vs T[]
+            // normally. If source is non-rest at the same position, compare element vs source.
+            val targetParamType = if (i == targetParams.size - 1 && targetLastIsRest && !sourceIsRest && targetRestElement != null) {
+                targetRestElement
+            } else {
+                getTypeOfSymbol(targetParams[i])
+            }
             if (tpAssignments != null && sourceParamType is Type.TypeParam) {
                 val tpId = sourceParamType.id
                 val existing = tpAssignments[tpId]
@@ -59298,6 +59317,21 @@ interface DataView {
             }
             // Standard contravariant: target param must be assignable to source param
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
+        }
+        // B63.29 continuation: Source has MORE params than target.size — target's rest
+        // covers them. For each excess source position, check target rest element type
+        // contravariantly against the source param type.
+        if (targetLastIsRest && targetRestElement != null && sourceParams.size > targetParams.size) {
+            for (i in targetParams.size until sourceParams.size) {
+                val sourceParamType = getTypeOfSymbol(sourceParams[i])
+                val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                // Source's own rest: compare its element vs target rest element
+                val srcCmp = if (sourceIsRest && sourceParamType is Type.Reference &&
+                    sourceParamType.target?.symbol?.name in setOf("Array", "ReadonlyArray"))
+                    sourceParamType.resolvedTypeArguments?.firstOrNull() ?: sourceParamType
+                else sourceParamType
+                if (!checkTypeRelatedTo(targetRestElement, srcCmp, relation)) return false
+            }
         }
         // Check return types (covariant)
         // Void target return accepts any source return type (void means "don't care about return")
