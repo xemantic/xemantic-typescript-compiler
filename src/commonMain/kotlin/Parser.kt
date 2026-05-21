@@ -2257,7 +2257,16 @@ class Parser(
             // Call signature
             val typeParams = parseTypeParametersOpt()
             val params = parseParameterList()
-            val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+            // Call signatures in type literals / interfaces use `(params): retType`,
+            // NOT the arrow form `(params) => retType`. If we see `=>`, emit TS1005
+            // "':' expected." at the arrow position and consume the arrow + return
+            // type so the surrounding parse recovery doesn't cascade.
+            val type = if (token == SyntaxKind.EqualsGreaterThan) {
+                reportError("':' expected.", code = 1005,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 2)
+                nextToken() // consume `=>`
+                parseType()
+            } else if (parseOptional(SyntaxKind.Colon)) parseType() else null
             return MethodDeclaration(
                 name = Identifier(""),
                 typeParameters = typeParams,
