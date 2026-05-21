@@ -66,6 +66,19 @@ class Parser(
     private val lineStarts: IntArray = computeLineStarts(source)
 
     fun parse(): SourceFile {
+        // TS1490: Detect binary files via Unicode replacement chars (U+FFFD) in the
+        // first 512 bytes — emit a single TS1490 at (1,1) and short-circuit parsing
+        // so we don't flood with TS1127 invalid-character diagnostics.
+        if (isBinaryFile(source)) {
+            reportError("File appears to be binary.", code = 1490,
+                overrideStart = 0, overrideLength = 0)
+            return SourceFile(
+                fileName = fileName,
+                statements = emptyList(),
+                text = source,
+                end = source.length,
+            )
+        }
         // 16.0: Check triple-slash reference path directives for self-reference (TS1006).
         checkTripleSlashSelfReference()
         nextToken()
@@ -86,6 +99,26 @@ class Parser(
     }
 
     fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
+
+    /**
+     * Heuristic: a file appears to be binary if it contains 3 or more C0 control
+     * characters (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) within the first 512 bytes.
+     * Single occurrences may legitimately appear inside string literals (e.g.
+     * embedded SHIFT-OUT in `unicodeStringLiteral_ts`); 3+ usually indicate
+     * binary content (corrupted_ts has 0x1F/0x03/0x03/0x19/0x1F).
+     */
+    private fun isBinaryFile(text: String): Boolean {
+        val limit = minOf(text.length, 512)
+        var count = 0
+        for (i in 0 until limit) {
+            val c = text[i].code
+            if (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) {
+                count++
+                if (count >= 3) return true
+            }
+        }
+        return false
+    }
 
     // ── Infrastructure ──────────────────────────────────────────────────────
 
