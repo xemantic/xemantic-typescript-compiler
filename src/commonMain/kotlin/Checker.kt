@@ -52637,12 +52637,19 @@ interface DataView {
                 }
             }
             is BinaryExpression -> {
-                // 17.23: TS2493 for `[a, b, c] = tuple` where tuple's static length < LHS arity.
-                if (expr.operator == SyntaxKind.Equals && expr.left is ArrayLiteralExpression) {
-                    checkAssignmentTupleBounds(expr.left as ArrayLiteralExpression, expr.right, source, fileName)
+                // B64.5: iterative left-spine flatten. Preserve TS2493 emission for
+                // assignment-target ArrayLiteral on each spine node before flattening.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    if (cur.operator == SyntaxKind.Equals && cur.left is ArrayLiteralExpression) {
+                        checkAssignmentTupleBounds(cur.left as ArrayLiteralExpression, cur.right, source, fileName)
+                    }
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
                 }
-                checkPropertyAccessInExpr(expr.left, source, fileName, enclosingClassType)
-                checkPropertyAccessInExpr(expr.right, source, fileName, enclosingClassType)
+                checkPropertyAccessInExpr(cur, source, fileName, enclosingClassType)
+                while (rightStack.isNotEmpty()) checkPropertyAccessInExpr(rightStack.removeLast(), source, fileName, enclosingClassType)
             }
             is ConditionalExpression -> {
                 checkPropertyAccessInExpr(expr.condition, source, fileName, enclosingClassType)
@@ -62843,9 +62850,22 @@ interface DataView {
     private fun checkArithmeticInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
-                checkArithmeticInExpr(expr.left, source, fileName)
-                checkArithmeticInExpr(expr.right, source, fileName)
-                checkBinaryOperatorTypes(expr, source, fileName)
+                // B64.4-style iterative left-spine flatten. Run `checkBinaryOperatorTypes`
+                // for each BinaryExpression on the spine — preserves the per-node
+                // diagnostic emission while avoiding StackOverflow on deep chains.
+                val rightStack = ArrayDeque<Expression>()
+                val operatorStack = ArrayDeque<BinaryExpression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    operatorStack.addLast(cur)
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkArithmeticInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkArithmeticInExpr(rightStack.removeLast(), source, fileName)
+                // Emit binary-operator diagnostics for each spine node (post-order is fine
+                // — these are per-binary-expression checks, no cross-node dependencies).
+                while (operatorStack.isNotEmpty()) checkBinaryOperatorTypes(operatorStack.removeLast(), source, fileName)
             }
             is ParenthesizedExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
