@@ -1473,9 +1473,9 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `typeofInternalModules_ts` — B63.9 attempt added 2/4 missing TS2708 emissions for `typeof <importAlias>` of uninstantiated namespace; remaining 2 TS2741 require namespace-shape structural comparison (typeof Outer vs typeof instantiated property mismatch). Also introduced untraceable -1 regression elsewhere. Reverted entire walker.
 - `recursiveTupleTypeInference_ts` — B63.10 removed FP TS2456 (no longer fires for `type A = ... | A[]`). Still fails on MISS TS2345 with deep conditional-type elaboration chain through `G<T>` mapped type.
 - `unresolvableSelfReferencingAwaitedUnion_ts` — same B63.10 FP removal as above; still fails on multiple missing TS2322/TS1062 chains and unrelated TS2349 vs TS1062 swaps. Blocker #2 territory (deep generic chain).
-- `switchCasesExpressionTypeMismatch_ts` — flipped B63.8 (union-aware SwitchAllowedSet).
+- ~~`switchCasesExpressionTypeMismatch_ts`~~ — flipped B63.8 (union-aware SwitchAllowedSet).
 - `slightlyIndirectedDeepObjectLiteralElaborations_ts` — MISS TS2322 at leaf `d: 42`, EXTRA TS2322 at outer object. Requires deep elaboration chain through binary-assignment (`q = {...}`) + parens (`({...})`). Multi-piece.
-- `incompatibleTypes_ts` — TS2353 multi-emission: we emit `e` AND `f`, TypeScript emits only `e` (first excess prop per object literal in this shape). Test `missingAndExcessProperties_ts` confirms TypeScript DOES emit multiple TS2353 on same line in other cases; unclear rule. Risky to change.
+- `incompatibleTypes_ts` — TS2353 multi-emission: we emit `e` AND `f`, TypeScript emits only `e` (first excess prop per object literal in this shape). Test ~~`missingAndExcessProperties_ts`~~ confirms TypeScript DOES emit multiple TS2353 on same line in other cases; unclear rule. Risky to change.
 - `discriminatedUnionErrorMessage_ts` — needs discriminant narrowing of object literal vs union target before excess-prop check. Concrete but multi-piece infrastructure (discriminant detection + member narrowing + scoped excess check).
 - `mergeSymbolReexportInterface_ts` — TS2741 wrong property name (b vs a); Row2 has merged declarations across files, TypeScript picks first (a.d.ts), we pick last (common.d.ts). Multi-file resolution order. Blocker #3.
 - `namespaceMergedWithImportAliasNoCrash_ts` — TS2694 display over-qualifies `Lib` as `"file2".Lib` (our `symbolToQualifiedName` thinks locally-declared merged namespace needs file prefix). Plus MISS TS2440 (Import conflicts with local) + EXTRA TS2339. Multi-piece.
@@ -1496,22 +1496,22 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 
 
 **Round 14 session 2026-05-20 surveyed (architectural / complex multi-piece):**
-- `typeParameterExplicitlyExtendsAny_ts` — flipped B60.19 (was 1/6, now 6/6).
+- ~~`typeParameterExplicitlyExtendsAny_ts`~~ — flipped B60.19 (was 1/6, now 6/6).
 - `typeParameterConstrainedToOuterTypeParameter_ts` — chain substitution gap (`Type 'U' is not assignable to type 'U[]'` should display as `string[]` after T=string substitution). Needs full function-type chain substitution infrastructure.
 - `conditionalAnyCheckTypePicksBothBranches_ts` — `[any] extends [number] ? 1 : 0` conditional type evaluation; needs conditional type infra.
 - `noStrictGenericChecks_ts` — function-vs-function comparison with different generic TypeParam counts; Blocker #2.
 - `assignmentStricterConstraints_ts` — function-vs-function with different TP constraint shapes; Blocker #2.
-- `errorElaborationDivesIntoApparentlyPresentPropsOnly_ts` — B60.2 chain should fire "constraint subtype" form but emits "arbitrary" — checkTypeRelatedTo seems to return false for `{a:string,b:number,c:number}` → `{a:string}` constraint. Likely strict object-literal excess-property check. Out of scope without rework of relation flag.
-- `derivedGenericClassWithAny_ts` — TS2564 + TS2322 multi-element; needs strictNullChecks property-init infra.
+- ~~`errorElaborationDivesIntoApparentlyPresentPropsOnly_ts`~~ — B60.2 chain should fire "constraint subtype" form but emits "arbitrary" — checkTypeRelatedTo seems to return false for `{a:string,b:number,c:number}` → `{a:string}` constraint. Likely strict object-literal excess-property check. Out of scope without rework of relation flag.
+- ~~`derivedGenericClassWithAny_ts`~~ — TS2564 + TS2322 multi-element; needs strictNullChecks property-init infra.
 - `arrayOfSubtypeIsAssignableToReadonlyArray_ts` — variance check; over-emits 1 TS2322 + wrong chain.
 - `complexRecursiveCollections_ts` — large generic chain (immutable.ts).
 - `moduleAugmentationsImports3_ts` / `moduleAugmentationsImports4_ts` — module augmentation across files (Blocker #3 / #5).
 - `castOfAwait_ts` — `<number>void X` cast where X returns undefined; needs void-undefined cast detection.
 - `assigningFromObjectToAnythingElse_ts` — TS2558 PropertyAccess flips via B60.17 but test still fails on lib-version "and N more" count.
 - `chainedCallsWithTypeParameterConstrainedToOtherTypeParameter2_ts` — chained `then<S extends T>` calls; needs generic argument inference.
-- `genericTypeAssertions6_ts` — flipped B60.18 (3/3 emissions now).
+- ~~`genericTypeAssertions6_ts`~~ — flipped B60.18 (3/3 emissions now).
 - `bigintWithLib_ts` / `intTypeCheck_ts` / `newOperator_ts` / `constructorOverloads4_ts` — large multi-diagnostic tests, partial improvements via B60.14/B60.15.
-- `parameterNamesInTypeParameterList_ts` — was a regression risk for `T extends typeof undeclared` broadening; narrow `isTypeParamUnconstrainedOrExplicitAny` gate preserved correctness.
+- ~~`parameterNamesInTypeParameterList_ts`~~ — was a regression risk for `T extends typeof undeclared` broadening; narrow `isTypeParamUnconstrainedOrExplicitAny` gate preserved correctness.
 - `anonymousModules_ts` — TS1437 "Namespace must be given a name." + TS2591 — new diagnostics needed.
 - `arrayconcat_ts` — TS18048 missing for strictNullChecks undefined check.
 - `genericDefaultsErrors_ts` — many missing TS2344 / TS2558 / TS2706 / TS2707.
@@ -1922,7 +1922,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `pathMappingBasedModuleResolution_rootImport_*` → MISS TS2307 for path-mapping with non-existent target. Already flagged in earlier sessions.
 
 **Session 2026-04-22 (16.4ek/el) additional explored-but-skipped:**
-- `importDeclWithExportModifier_ts` / `importDeclWithExportModifierAndExportAssignment_ts` → MISS 2× TS2708 + TS2694 for `export import a = x.c` where `x` is namespace-only (only interface) and `c` is not exported. Attempted fix added an `ImportEqualsDeclaration` branch in `checkTypeAsValueInStatement` calling `checkQualifiedNameExports` for the ref, plus excluding `export =` files from the quoted-name prefix in `symbolToQualifiedName`. Gained the 2 target tests but REGRESSED −9 (broad `checkQualifiedNameExports` emitted spurious TS2694 for `import b = a.I` where a exports I; quoted-name prefix changes broke other tests). Reverted. To do properly: gate the new emission on `export` modifier + right-hand side resolving to a type-only entity (not any namespace lookup); and leave the prefix logic untouched. Narrow but requires reworking the `namespaceOnlyNames`/alias-resolution flow.
+- ~~`importDeclWithExportModifier_ts`~~ / ~~`importDeclWithExportModifierAndExportAssignment_ts`~~ → MISS 2× TS2708 + TS2694 for `export import a = x.c` where `x` is namespace-only (only interface) and `c` is not exported. Attempted fix added an `ImportEqualsDeclaration` branch in `checkTypeAsValueInStatement` calling `checkQualifiedNameExports` for the ref, plus excluding `export =` files from the quoted-name prefix in `symbolToQualifiedName`. Gained the 2 target tests but REGRESSED −9 (broad `checkQualifiedNameExports` emitted spurious TS2694 for `import b = a.I` where a exports I; quoted-name prefix changes broke other tests). Reverted. To do properly: gate the new emission on `export` modifier + right-hand side resolving to a type-only entity (not any namespace lookup); and leave the prefix logic untouched. Narrow but requires reworking the `namespaceOnlyNames`/alias-resolution flow.
 - ~~`optionalParamReferencingOtherParams2_ts__target_es5__`~~ → MISS TS2373 + TS2454 for `function strange(x = a, y = b) { var b = ""; }`. The body-var case requires coordinating TS2304 suppression because under ES5 the `var b` hoists into parameter scope (no TS2304 — fires TS2373 + TS2454 instead), while ES2015+ keeps the body-var out of parameter scope (TS2304 is correct). Narrow fix would gate on `options.target < ES2015` AND suppress the existing TS2304 path for that name at that position. 16.4el's narrow TS2373 emission specifically excludes body-var references for this reason.
 - ~~`capturedParametersInInitializers1_ts`~~ → MISS TS2373 for foo5 (`y = (() => z)()` — IIFE) and foo9 (`y = {[z]() {...}}` — computed method name). 16.4el catches foo4 (shorthand property) so the test is now 1 of 3 errors. Remaining: (a) IIFE detection — when CallExpression.expression unwraps to an ArrowFunction/FunctionExpression with no shadowing params, walk its body for forward refs; (b) computed method name — walk `MethodDeclaration.name.expression` when `name is ComputedPropertyName` inside ObjectLiteralExpression. Each is narrow but edge cases (param shadowing, nested IIFEs) risk false positives. Deferred.
 - ~~`derivedClassConstructorWithExplicitReturns01_ts__target_es5/es2015__`~~ → flipped (constructor `return expr` type-check + TS2409 emission landed in an earlier session per session note at line ~2947).
