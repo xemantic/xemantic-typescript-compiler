@@ -5311,6 +5311,10 @@ class Parser(
             // position right after the `${` — i.e. where the next expression should have been.
             if (token == SyntaxKind.EndOfFile) {
                 reportError("Expression expected.", code = 1109,
+                    overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+                // TS1005 "'}' expected." at the final EOF position — TypeScript also flags
+                // the unterminated template substitution with a brace-expected diagnostic.
+                reportError("'}' expected.", code = 1005,
                     overrideStart = scanner.getTokenPos(), overrideLength = 0)
                 isUnterminated = true
                 break

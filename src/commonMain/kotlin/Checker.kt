@@ -24404,6 +24404,42 @@ interface DataView {
                     checkArgCountInExpr(span.expression, funcParams, classCtorParams, source, fileName)
                 }
             }
+            is TaggedTemplateExpression -> {
+                // Tagged template `f\`...${a}${b}...\`` calls `f([], a, b, ...)`.
+                // argCount = 1 (TemplateStringsArray) + spans.size.
+                // For unterminated templates, the parser may stop before adding the
+                // last span — count an extra substitution when isUnterminated is set.
+                val calleeName = (expr.tag as? Identifier)?.text
+                if (calleeName != null) {
+                    val info = funcParams[calleeName]
+                    if (info != null && !info.isOverloaded) {
+                        val templateExpr = expr.template as? TemplateExpression
+                        val spanCount = templateExpr?.templateSpans?.size ?: 0
+                        val unterminatedBonus = if (templateExpr?.isUnterminated == true) 1 else 0
+                        val argCount = 1 + spanCount + unterminatedBonus
+                        if (!info.hasRest && argCount > info.maxParams) {
+                            // Position the diagnostic at the template's end (close-backtick or EOF
+                            // for unterminated cases). Length 0 — matches TypeScript's emit.
+                            val pos = expr.template.end
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Expected ${formatExpectedArgs(info.minParams, info.maxParams)} arguments, but got $argCount.",
+                                category = DiagnosticCategory.Error,
+                                code = 2554,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = pos,
+                                length = 0,
+                            ))
+                        }
+                    }
+                }
+                checkArgCountInExpr(expr.tag, funcParams, classCtorParams, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach { span ->
+                    checkArgCountInExpr(span.expression, funcParams, classCtorParams, source, fileName)
+                }
+            }
             is PropertyAccessExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
             is ElementAccessExpression -> {
                 checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)

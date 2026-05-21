@@ -1,8 +1,10 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,886 / 10,078 tests passing (~88.17%). _Round 17 (2026-05-21): /goal session targeting 20 iterations, landed +8 net via B63.x stack (6 commits)._
+**Phase 4 — Checker buildout.** 8,889 / 10,078 tests passing (~88.20%). _Round 17 (2026-05-21): /goal session targeting 20 iterations, landed +11 net via B63.x stack (8 commits)._
 
-_Round 17 (2026-05-21, +8 net — B63.x stack):_
+_Round 17 (2026-05-21, +11 net — B63.x stack):_
+- **B63.12 (+2)**: TS1109/TS1005 position fix + TS2554 arity check for tagged templates. (a) `parseTemplateExpression` now uses `scanner.getPrevTokenEnd()` (position right after `${`) for the unterminated-template TS1109 emission instead of `scanner.getTokenPos()` (EOF position). (b) New TS1005 "'}' expected." emission alongside TS1109. (c) New `TaggedTemplateExpression` branch in `checkArgCountInExprCore` — for tagged templates with `info.maxParams` < `1 + spanCount + unterminatedBonus`, emits TS2554 at `expr.template.end` with length 0. Flips `taggedTemplatesWithIncompleteTemplateExpressions4_ts` + `_5_ts`.
+- **B63.11 (+1)**: Namespace-qualified heritage clause resolution. New `resolveHeritageBaseSymbol` walks PropertyAccessExpression through namespace exports with explicit-export filter (Module sub-namespaces + `declare namespace` members implicitly exported; others require `export`). Used by `getTypeFromBaseTypeExpression` + `checkImplementsClauses` + `checkInterfaceExtendsClauses`. Plus TS1434 emission in `parseInterfaceDeclaration`'s `.` recovery branch when next token is identifier. Flips `interfaceDeclaration4_ts`.
 - **B63.1 (+1)**: Iterative left-spine flatten for 13 binary-expression walkers (Flow.kt + Checker.kt) — fixes JVM StackOverflow on `0 + 1 + ... + 1499` chain. Flips `binderBinaryExpressionStress_ts`.
 - **B63.2 (+1)**: Reject `declare module {` without name; parser recovers as 3 separate statements. Flips `externModule_ts` JS-emit.
 - **B63.3 (+2)**: TS2430 method-vs-method arity mismatch in interface extends. Flips `addMoreOverloadsToBaseSignature_ts` + adjacent.
