@@ -3416,8 +3416,15 @@ class Checker(
                 expr.arguments.forEach { collectThisAccessInExpr(it, result) }
             }
             is BinaryExpression -> {
-                collectThisAccessInExpr(expr.left, result)
-                collectThisAccessInExpr(expr.right, result)
+                // B64.3-style iterative left-spine flatten to avoid StackOverflow.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                collectThisAccessInExpr(cur, result)
+                while (rightStack.isNotEmpty()) collectThisAccessInExpr(rightStack.removeLast(), result)
             }
             is NewExpression -> {
                 collectThisAccessInExpr(expr.expression, result)
@@ -8363,8 +8370,15 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
-                checkExprForCtorParamRefs(expr.left, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
-                checkExprForCtorParamRefs(expr.right, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
+                // B64.3-style iterative flatten to avoid StackOverflow on deep chains.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkExprForCtorParamRefs(cur, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
+                while (rightStack.isNotEmpty()) checkExprForCtorParamRefs(rightStack.removeLast(), memberName, ctorNames, ctorParamPropertyNames, source, fileName)
             }
             is CallExpression -> {
                 checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
@@ -13771,26 +13785,34 @@ class Checker(
     private fun walkBigIntExpInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
-                val isExp = expr.operator == SyntaxKind.AsteriskAsterisk ||
-                    expr.operator == SyntaxKind.AsteriskAsteriskEquals
-                if (isExp && (isBigIntCall(expr.left) || isBigIntCall(expr.right))) {
-                    val start = expr.pos
-                    val end = expressionTrueEnd(expr)
-                    val length = (end - start).coerceAtLeast(1)
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Exponentiation cannot be performed on 'bigint' values unless the 'target' option is set to 'es2016' or later.",
-                        category = DiagnosticCategory.Error,
-                        code = 2791,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+                // B64.3-style iterative left-spine flatten. Check the BigInt-exp
+                // rule at each spine node BEFORE moving up.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    val isExp = cur.operator == SyntaxKind.AsteriskAsterisk ||
+                        cur.operator == SyntaxKind.AsteriskAsteriskEquals
+                    if (isExp && (isBigIntCall(cur.left) || isBigIntCall(cur.right))) {
+                        val start = cur.pos
+                        val end = expressionTrueEnd(cur)
+                        val length = (end - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Exponentiation cannot be performed on 'bigint' values unless the 'target' option is set to 'es2016' or later.",
+                            category = DiagnosticCategory.Error,
+                            code = 2791,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
                 }
-                walkBigIntExpInExpr(expr.left, source, fileName)
-                walkBigIntExpInExpr(expr.right, source, fileName)
+                walkBigIntExpInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkBigIntExpInExpr(rightStack.removeLast(), source, fileName)
             }
             is CallExpression -> {
                 walkBigIntExpInExpr(expr.expression, source, fileName)
