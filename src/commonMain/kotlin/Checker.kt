@@ -31440,6 +31440,49 @@ interface DataView {
         else -> null
     }
 
+    /**
+     * Set of types a switch expression can match.
+     * Each entry is (kind, exactDisplay) — exactDisplay=null means any value of that kind matches.
+     * `display` is the human-readable form rendered in TS2678 messages.
+     */
+    private data class SwitchAllowedSet(val entries: List<Pair<String, String?>>, val display: String) {
+        fun allows(b: ConstLiteralBinding): Boolean = entries.any { (k, exact) ->
+            b.kind == k && (exact == null || exact == b.display)
+        }
+    }
+
+    private fun allowedSetFromBinding(b: ConstLiteralBinding): SwitchAllowedSet =
+        SwitchAllowedSet(listOf(b.kind to b.display), b.display)
+
+    /** Extract a SwitchAllowedSet from a type-annotation node (UnionType or KeywordType / LiteralType).
+     *  Returns null if the annotation contains anything we can't classify (Object, Reference, etc.). */
+    private fun allowedSetFromTypeAnnotation(t: TypeNode, source: String): SwitchAllowedSet? {
+        val types: List<TypeNode> = when (t) {
+            is UnionType -> t.types
+            else -> listOf(t)
+        }
+        val entries = mutableListOf<Pair<String, String?>>()
+        val displayParts = mutableListOf<String>()
+        for (tn in types) {
+            when (tn) {
+                is KeywordTypeNode -> when (tn.kind) {
+                    SyntaxKind.NumberKeyword -> { entries.add("number" to null); displayParts.add("number") }
+                    SyntaxKind.StringKeyword -> { entries.add("string" to null); displayParts.add("string") }
+                    SyntaxKind.BooleanKeyword -> { entries.add("boolean" to null); displayParts.add("boolean") }
+                    SyntaxKind.BigIntKeyword -> { entries.add("bigint" to null); displayParts.add("bigint") }
+                    else -> return null
+                }
+                is LiteralType -> {
+                    val b = literalKindDisplay(tn.literal) ?: return null
+                    entries.add(b.kind to b.display)
+                    displayParts.add(b.display)
+                }
+                else -> return null
+            }
+        }
+        return SwitchAllowedSet(entries, displayParts.joinToString(" | "))
+    }
+
     private fun checkSwitchCaseComparable() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -31451,6 +31494,8 @@ interface DataView {
 
     private fun walkSwitchCaseComparable(stmts: List<Statement>, source: String, fileName: String) {
         val constBindings = mutableMapOf<String, ConstLiteralBinding>()
+        // Variables declared with explicit type annotation (e.g. `declare var r: number | "hello"`).
+        val annotatedBindings = mutableMapOf<String, SwitchAllowedSet>()
         for (stmt in stmts) {
             when (stmt) {
                 is VariableStatement -> {
@@ -31464,19 +31509,27 @@ interface DataView {
                             constBindings[name.text] = binding
                         }
                     }
+                    // Pick up type-annotated declarations regardless of `var`/`let`/`const`.
+                    for (d in stmt.declarationList.declarations) {
+                        val name = d.name as? Identifier ?: continue
+                        val ann = d.type ?: continue
+                        val allowed = allowedSetFromTypeAnnotation(ann, source) ?: continue
+                        annotatedBindings[name.text] = allowed
+                    }
                     // Walk initializers for nested switch/blocks
                     for (d in stmt.declarationList.declarations) {
                         d.initializer?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
                     }
                 }
                 is SwitchStatement -> {
-                    // Check case clauses if the switch expression resolves to a const literal
+                    // Check case clauses if the switch expression resolves to a known set of types.
                     val expr = stmt.expression
-                    val binding = when (expr) {
-                        is Identifier -> constBindings[expr.text]
-                        else -> literalKindDisplay(expr)
+                    val allowed: SwitchAllowedSet? = when (expr) {
+                        is Identifier -> annotatedBindings[expr.text]
+                            ?: constBindings[expr.text]?.let { allowedSetFromBinding(it) }
+                        else -> literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
                     }
-                    if (binding != null) {
+                    if (allowed != null) {
                         for (c in stmt.caseBlock) {
                             if (c !is CaseClause) continue
                             // 17.198: TS2678 for `case <ClassIdent>` — class identifier
@@ -31492,7 +31545,7 @@ interface DataView {
                                 if (isPureClass) {
                                     val (line, character) = getLineAndCharacterOfPosition(source, caseExpr.pos)
                                     diagnostics.add(Diagnostic(
-                                        message = "Type 'typeof ${caseExpr.text}' is not comparable to type '${binding.display}'.",
+                                        message = "Type 'typeof ${caseExpr.text}' is not comparable to type '${allowed.display}'.",
                                         category = DiagnosticCategory.Error,
                                         code = 2678,
                                         fileName = fileName,
@@ -31505,8 +31558,8 @@ interface DataView {
                                 }
                             }
                             val caseBinding = literalKindDisplay(c.expression) ?: continue
-                            // Same kind + different display → incompatible literal types
-                            if (caseBinding.kind == binding.kind && caseBinding.display != binding.display) {
+                            // Emit TS2678 when the case literal is NOT in the allowed set.
+                            if (!allowed.allows(caseBinding)) {
                                 val (line, character) = getLineAndCharacterOfPosition(source, c.expression.pos)
                                 val length = when (val ce = c.expression) {
                                     is NumericLiteralNode -> ce.text.length
@@ -31517,7 +31570,7 @@ interface DataView {
                                     else -> 1
                                 }
                                 diagnostics.add(Diagnostic(
-                                    message = "Type '${caseBinding.display}' is not comparable to type '${binding.display}'.",
+                                    message = "Type '${caseBinding.display}' is not comparable to type '${allowed.display}'.",
                                     category = DiagnosticCategory.Error,
                                     code = 2678,
                                     fileName = fileName,
