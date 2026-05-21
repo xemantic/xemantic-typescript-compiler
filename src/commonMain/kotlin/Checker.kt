@@ -51641,6 +51641,14 @@ interface DataView {
                         continue
                     }
                 }
+                // Tuple types structurally satisfy `Array<X>` / `ReadonlyArray<X>`
+                // constraints — tuples extend the array prototype. Our structural
+                // comparison doesn't always recognize this so add a narrow bail-out.
+                if (argType is Type.Object && argType.tupleElementTypes != null &&
+                    instantiatedConstraint is Type.Reference) {
+                    val tName = instantiatedConstraint.target.symbol?.name
+                    if (tName == "Array" || tName == "ReadonlyArray") continue
+                }
                 val argNode = typeArgs[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
                 // 16.4gc: constraint display with TypeParam substitution (see 16.4gb)
