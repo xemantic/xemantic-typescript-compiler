@@ -3274,6 +3274,17 @@ class Parser(
                 val nextToken = lookAhead { scanner.scan(); scanner.getToken() }
                 if (nextToken == SyntaxKind.CloseBrace || nextToken == SyntaxKind.EndOfFile) break@loop
             }
+            // ASI: `abstract\nfoo()` in class body — `abstract` is a property name,
+            // not a modifier for `foo`. Detect via lookahead: if after consuming the
+            // `abstract` keyword the next token has a preceding line break, AND
+            // we're parsing a class body (classBodyDepth > 0), treat as property name.
+            if (mod == ModifierFlag.Abstract && classBodyDepth > 0) {
+                val nextHasLineBreak = lookAhead {
+                    scanner.scan()
+                    scanner.hasPrecedingLineBreak()
+                }
+                if (nextHasLineBreak) break@loop
+            }
             mods.add(mod)
             nextToken()
         }
