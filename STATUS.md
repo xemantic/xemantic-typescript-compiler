@@ -1,6 +1,9 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,900 / 10,078 tests passing (~88.31%). _Round 18 (2026-05-21): /goal session targeting 10 iterations, +5 via B63.28 (+3) + B63.30 (+2) + 2 net-zero correctness fixes (B63.27, B63.29)._
+**Phase 4 — Checker buildout.** 8,901 / 10,078 tests passing (~88.32%). _Round 19 (2026-05-21): /goal session targeting 10 iterations, in progress._
+
+_Round 19 (2026-05-21, in progress):_
+- **B63.32 (+1)**: TS2367 for same-name cross-file interfaces. New helper `getOwnFileInterfacePropertyNames` walks symbol's own-file InterfaceDeclaration directly, bypassing `mergeSymbolTable` pollution of `Type.Interface.properties`. Gate: both Type.Object non-Reference, different symbols, same name, both have non-empty disjoint own-file property sets, different `getSymbolImportName` basenames. Message uses `import("X").T` cross-file qualification matching TS2741 path. Flips `errorWithSameNameType_ts`.
 
 _Round 18 (2026-05-21, +5 net via 6 commits):_
 - **B63.31 (net-zero correctness)**: Extends B63.29 — `signatureRelatedTo` treats non-array target rest types (intersection of object literals, named non-array, etc.) as accept-anything (element=anyType). Without this, `(x:string, ...rest:T) => void` → `(...args: {x:"a"} & {x:"b"}) => void` FP'd because we contravariantly compared `string` against the non-array intersection. Removes FP TS2322 on `genericRestTypes_ts` line 26.
