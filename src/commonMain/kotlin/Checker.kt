@@ -47628,8 +47628,17 @@ interface DataView {
     /**
      * Returns true if [type] contains a top-level TypeReference whose name equals
      * [target] WITHOUT being inside a generic argument list. Walks through Union /
-     * Intersection / ParenthesizedType / Array operators, all of which preserve the
+     * Intersection / ParenthesizedType, all of which preserve the
      * "direct self-reference" semantics that trigger TS2456.
+     *
+     * B63.10: ArrayType is NOT recursed through — `type A = A[]` is `Array<A>`,
+     * a generic instantiation whose recursive `A` lives inside a type argument list,
+     * which TypeScript does NOT treat as a direct cycle. Mirrors the TypeReference
+     * branch's `typeArguments.isNullOrEmpty()` guard. Suppresses FP TS2456 on
+     * `type A = "number" | "null" | A[]` (recursiveTupleTypeInference_ts) and
+     * `type T1 = 1 | Promise<T1> | T1[]` (unresolvableSelfReferencingAwaitedUnion_ts);
+     * both tests still fail on unrelated missing diagnostics but our diagnostic
+     * surface no longer carries the FP.
      */
     private fun typeNodeDirectlyReferencesName(type: TypeNode?, target: String): Boolean {
         if (type == null) return false
@@ -47644,7 +47653,6 @@ interface DataView {
             is UnionType -> type.types.any { typeNodeDirectlyReferencesName(it, target) }
             is IntersectionType -> type.types.any { typeNodeDirectlyReferencesName(it, target) }
             is ParenthesizedType -> typeNodeDirectlyReferencesName(type.type, target)
-            is ArrayType -> typeNodeDirectlyReferencesName(type.elementType, target)
             else -> false
         }
     }
