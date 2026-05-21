@@ -47701,6 +47701,11 @@ interface DataView {
                             start = pos, length = length,
                         ))
                     }
+                    // TS2577: scan for FunctionType return types that recursively reference
+                    // the alias (with or without type args) — distinct from TS2456 which only
+                    // fires for direct identifier self-cycles. Walk the alias body looking
+                    // for FunctionType nodes whose return type contains the alias name.
+                    checkFunctionReturnTypeCircular(stmt.type, aliasName, source, fileName)
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
@@ -47728,6 +47733,90 @@ interface DataView {
      * both tests still fail on unrelated missing diagnostics but our diagnostic
      * surface no longer carries the FP.
      */
+    /**
+     * TS2577: Recursively scan a type node for FunctionType / ConstructorType
+     * nodes whose return type references [target] (the enclosing type alias
+     * name). Emits TS2577 at the return type's position. Unlike
+     * [typeNodeDirectlyReferencesName] (TS2456), this detection treats
+     * generic-instantiation references like `Target<X>` as matching.
+     */
+    private fun checkFunctionReturnTypeCircular(
+        type: TypeNode?, target: String,
+        source: String, fileName: String,
+    ) {
+        if (type == null) return
+        when (type) {
+            is FunctionType -> {
+                if (typeNodeContainsName(type.type, target)) {
+                    val rPos = type.type.pos
+                    // Trim trailing whitespace/closing-punctuation past the actual type span.
+                    // Node.end typically points past the NEXT token's scan position; for a
+                    // tuple `[...]`, the true end is right after the `]`. Walk back skipping
+                    // whitespace + `?` + `;` + `,`.
+                    var rEnd = type.type.end
+                    while (rEnd > rPos && source.getOrNull(rEnd - 1)?.let {
+                        it == ' ' || it == '\t' || it == '\n' || it == '\r' ||
+                        it == '?' || it == ',' || it == ';'
+                    } == true) rEnd--
+                    val length = (rEnd - rPos).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, rPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Return type annotation circularly references itself.",
+                        category = DiagnosticCategory.Error,
+                        code = 2577,
+                        fileName = fileName,
+                        line = line, character = character,
+                        start = rPos, length = length,
+                    ))
+                }
+                checkFunctionReturnTypeCircular(type.type, target, source, fileName)
+                type.parameters.forEach { p -> p.type?.let { checkFunctionReturnTypeCircular(it, target, source, fileName) } }
+            }
+            is UnionType -> type.types.forEach { checkFunctionReturnTypeCircular(it, target, source, fileName) }
+            is IntersectionType -> type.types.forEach { checkFunctionReturnTypeCircular(it, target, source, fileName) }
+            is ParenthesizedType -> checkFunctionReturnTypeCircular(type.type, target, source, fileName)
+            is ConditionalType -> {
+                checkFunctionReturnTypeCircular(type.checkType, target, source, fileName)
+                checkFunctionReturnTypeCircular(type.extendsType, target, source, fileName)
+                checkFunctionReturnTypeCircular(type.trueType, target, source, fileName)
+                checkFunctionReturnTypeCircular(type.falseType, target, source, fileName)
+            }
+            is TupleType -> type.elements.forEach { checkFunctionReturnTypeCircular(it, target, source, fileName) }
+            is ArrayType -> checkFunctionReturnTypeCircular(type.elementType, target, source, fileName)
+            is TypeReference -> type.typeArguments?.forEach { checkFunctionReturnTypeCircular(it, target, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /**
+     * Walk a type node looking for ANY occurrence of a TypeReference named [target]
+     * (with or without type args). Recurses through union/intersection/tuple/array/
+     * function/conditional/typeref-args, etc.
+     */
+    private fun typeNodeContainsName(type: TypeNode?, target: String): Boolean {
+        if (type == null) return false
+        return when (type) {
+            is TypeReference -> {
+                val name = (type.typeName as? Identifier)?.text
+                if (name == target) return true
+                type.typeArguments?.any { typeNodeContainsName(it, target) } == true
+            }
+            is UnionType -> type.types.any { typeNodeContainsName(it, target) }
+            is IntersectionType -> type.types.any { typeNodeContainsName(it, target) }
+            is ParenthesizedType -> typeNodeContainsName(type.type, target)
+            is TupleType -> type.elements.any { typeNodeContainsName(it, target) }
+            is ArrayType -> typeNodeContainsName(type.elementType, target)
+            is RestType -> typeNodeContainsName(type.type, target)
+            is ConditionalType -> typeNodeContainsName(type.checkType, target) ||
+                typeNodeContainsName(type.extendsType, target) ||
+                typeNodeContainsName(type.trueType, target) ||
+                typeNodeContainsName(type.falseType, target)
+            is FunctionType -> typeNodeContainsName(type.type, target) ||
+                type.parameters.any { p -> typeNodeContainsName(p.type, target) }
+            else -> false
+        }
+    }
+
     private fun typeNodeDirectlyReferencesName(type: TypeNode?, target: String): Boolean {
         if (type == null) return false
         return when (type) {
