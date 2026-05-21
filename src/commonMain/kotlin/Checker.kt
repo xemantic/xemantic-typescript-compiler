@@ -55568,8 +55568,15 @@ interface DataView {
                 expr.arguments?.forEach { checkCallTypesInExpr(it, source, fileName) }
             }
             is BinaryExpression -> {
-                checkCallTypesInExpr(expr.left, source, fileName)
-                checkCallTypesInExpr(expr.right, source, fileName)
+                // B64.6: iterative left-spine flatten to avoid StackOverflow.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkCallTypesInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkCallTypesInExpr(rightStack.removeLast(), source, fileName)
             }
             is ConditionalExpression -> {
                 checkCallTypesInExpr(expr.condition, source, fileName)
@@ -63725,8 +63732,15 @@ interface DataView {
             }
             is ParenthesizedExpression -> checkTypeRefsInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                checkTypeRefsInExpr(expr.left, source, fileName)
-                checkTypeRefsInExpr(expr.right, source, fileName)
+                // B64.6: iterative left-spine flatten.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
+                }
+                checkTypeRefsInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkTypeRefsInExpr(rightStack.removeLast(), source, fileName)
             }
             else -> {}
         }
