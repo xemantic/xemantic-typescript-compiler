@@ -6536,9 +6536,17 @@ class Parser(
             }
 
             Backtick, NoSubstitutionTemplateLiteral, TemplateHead -> {
-                // Template literal type — skip for simplicity
+                // B65.1: build a TemplateLiteralType AST node so the checker can
+                // preserve the source text for diagnostics. We capture the raw
+                // source slice into `head.rawText` (a placeholder — spans stay
+                // empty) instead of building proper head + spans because the
+                // checker's display path just needs the rendered text, not the
+                // structural pieces.
                 skipTemplateType()
-                KeywordTypeNode(kind = SyntaxKind.StringKeyword, pos = pos, end = getEnd())
+                val srcEnd = scanner.getPrevTokenEnd()
+                val raw = if (pos in 0..srcEnd && srcEnd <= source.length) source.substring(pos, srcEnd) else ""
+                val head = StringLiteralNode(text = "", rawText = raw, pos = pos, end = srcEnd)
+                TemplateLiteralType(head = head, templateSpans = emptyList(), pos = pos, end = getEnd())
             }
 
             else -> {
