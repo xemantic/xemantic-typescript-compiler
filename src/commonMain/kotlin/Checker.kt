@@ -989,7 +989,144 @@ class Checker(
         checkObjectClassNameConflict()
         // 78. Check indexed access into type parameter whose constraint has private/protected member (TS4105)
         checkIndexedAccessPrivateMembers()
+        // 79. B63.30: Check parameter decorators on constructor parameters whose 2nd-param
+        // signature requires `string | symbol` (not `undefined`) — emit TS1239
+        checkParameterDecoratorsOnConstructor()
         } // end if (!declarationOnly)
+    }
+
+    /**
+     * B63.30: TS1239 "Unable to resolve signature of parameter decorator when called as an expression."
+     *
+     * For constructor parameters with `@Decorator` annotations, TypeScript checks the decorator's
+     * resolved call signature. If the 2nd parameter type does NOT include `undefined`, emit TS1239 +
+     * message chain "Argument of type 'undefined' is not assignable to parameter of type '<param 2 type>'".
+     *
+     * Rationale: parameter decorators are called as `Decorator(target, key, paramIndex)` where `key`
+     * is the property name OR `undefined` for constructor parameters. If the decorator's `key` parameter
+     * type doesn't accept `undefined`, the call fails at compile time on constructor parameters.
+     *
+     * Gated to `experimentalDecorators` mode and only fires for parameters of the Constructor member.
+     */
+    private fun checkParameterDecoratorsOnConstructor() {
+        if (!options.experimentalDecorators) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkParameterDecoratorChecks(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkParameterDecoratorChecks(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is Constructor) {
+                            for (param in member.parameters) {
+                                param.decorators?.forEach { dec ->
+                                    checkParameterDecoratorSignature(dec, source, fileName)
+                                }
+                            }
+                        }
+                    }
+                    // Recurse into nested classes inside class member bodies if needed
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                is Block -> walkParameterDecoratorChecks(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkParameterDecoratorSignature(dec: Decorator, source: String, fileName: String) {
+        // Resolve the decorator expression to a Type with call signature.
+        // Two shapes: (a) `@Name` — Name is a function reference;
+        // (b) `@Name(args)` — Name(args) returns a function.
+        val (callableType, spanPos, spanLen) = when (val e = dec.expression) {
+            is Identifier -> {
+                val sym = globals[e.text] ?: return
+                val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return
+                val sigType = getSignatureCallableTypeOfFunctionDecl(fnDecl) ?: return
+                Triple(sigType, e.pos, e.text.length)
+            }
+            is CallExpression -> {
+                val callee = e.expression as? Identifier ?: return
+                val sym = globals[callee.text] ?: return
+                val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return
+                // The fnDecl's return type IS the decorator function. For
+                // `@ParameterDecorator2(20)`, `ParameterDecorator2` has return type
+                // `(target, key, paramIndex) => void` — that's the actual decorator.
+                val returnTypeNode = fnDecl.type ?: return
+                val returnType = getTypeFromTypeNode(returnTypeNode)
+                if (returnType !is Type.Object) return
+                // Span covers the whole `Name(args)` expression.
+                Triple(returnType, callee.pos, expressionTrueEnd(e) - callee.pos)
+            }
+            else -> return
+        }
+        if (callableType !is Type.Object) return
+        val sig = callableType.callSignatures?.firstOrNull() ?: return
+        if (sig.parameters.size < 2) return
+        val keyParamType = getTypeOfSymbol(sig.parameters[1])
+        // If keyParamType includes undefined, no error.
+        if (typeIncludesUndefined(keyParamType)) return
+        // Emit TS1239.
+        val (line, character) = getLineAndCharacterOfPosition(source, spanPos)
+        val display = typeToString(keyParamType)
+        diagnostics.add(Diagnostic(
+            message = "Unable to resolve signature of parameter decorator when called as an expression.",
+            category = DiagnosticCategory.Error,
+            code = 1239,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = spanPos,
+            length = spanLen,
+            messageChain = listOf("  Argument of type 'undefined' is not assignable to parameter of type '$display'."),
+        ))
+    }
+
+    /** Resolve a top-level function declaration's "callable type" — i.e. the type the function
+     *  evaluates to. For `@Name`, this is the function type itself. For `@Name(args)`, the call's
+     *  return type. */
+    private fun getSignatureCallableTypeOfFunctionDecl(fnDecl: FunctionDeclaration): Type? {
+        // For `@Name`, the type of `Name` is a function type with call signature.
+        // For `@Name(args)`, the type of `Name(args)` is the resolved return type.
+        // We build a Type.Object with callSignatures from the function's signature.
+        val sigParams = fnDecl.parameters.map { p ->
+            val pSym = (p.name as? Identifier)?.text?.let { Symbol(SymbolFlags.FunctionScopedVariable, it) }
+                ?: Symbol(SymbolFlags.FunctionScopedVariable, "_")
+            pSym.valueDeclaration = p
+            val pType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            symbolTypes[pSym.id] = pType
+            pSym
+        }
+        val returnType = fnDecl.type?.let { getTypeFromTypeNode(it) } ?: voidType
+        val sig = Signature(
+            parameters = sigParams,
+            resolvedReturnType = returnType,
+            minArgumentCount = fnDecl.parameters.count { (it.questionToken == null && it.initializer == null && it.dotDotDotToken == null) },
+        )
+        val obj = Type.Object()
+        obj.callSignatures = listOf(sig)
+        return obj
+    }
+
+    private fun typeIncludesUndefined(t: Type): Boolean {
+        if (t === anyType || t === unknownType) return true
+        if (t.flags.hasAny(TypeFlags.Undefined or TypeFlags.Void)) return true
+        if (t is Type.Union) return t.types.any { typeIncludesUndefined(it) }
+        return false
     }
 
     // -----------------------------------------------------------------------
