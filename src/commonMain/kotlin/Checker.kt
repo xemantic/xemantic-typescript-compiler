@@ -51419,9 +51419,36 @@ interface DataView {
                     }
                 }
                 is FunctionDeclaration -> {
-                    stmt.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
-                    stmt.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
-                    stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                    // Push function's TypeParam scope so `T` references in parameter
+                    // and return type annotations resolve to the function's typeParam,
+                    // not a shadowed global. Without this, `function tem<T extends
+                    // number>(t: T): I<T>` would see `I<T>` resolve T to the global
+                    // `class T` if any (or errorType) and emit FP TS2344.
+                    val savedScope = currentTypeParamScope
+                    try {
+                        val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
+                        stmt.typeParameters?.forEach { tp ->
+                            val name = tp.name.text
+                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                val p = Type.TypeParam()
+                                p.symbol = Symbol(SymbolFlags.TypeParameter, name)
+                                p
+                            }
+                            tp.constraint?.let {
+                                if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it)
+                            }
+                            tp.default?.let {
+                                if (typeParam.default == null) typeParam.default = getTypeFromTypeNode(it)
+                            }
+                            scope[name] = typeParam
+                        }
+                        currentTypeParamScope = if (scope.isEmpty()) null else scope
+                        stmt.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                        stmt.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+                        stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                    } finally {
+                        currentTypeParamScope = savedScope
+                    }
                 }
                 is ClassDeclaration -> {
                     stmt.heritageClauses?.forEach { clause ->
@@ -51771,6 +51798,21 @@ interface DataView {
                     instantiatedConstraint is Type.Reference) {
                     val tName = instantiatedConstraint.target.symbol?.name
                     if (tName == "Array" || tName == "ReadonlyArray") continue
+                }
+                // TypeParam source with constraint: check the constraint chain against
+                // the target constraint. `function f<T extends number>(...) { I<T> }`
+                // where I's TypeParam extends number — T's constraint IS number, which
+                // trivially satisfies the `extends number` constraint. Use
+                // `argType.constraint` directly (not `getApparentType` which would
+                // wrap primitives to their interface). Only fires when source HAS a
+                // constraint (unconstrained T → would over-skip and lose genuine
+                // TS2344 cases).
+                if (argType is Type.TypeParam && argType.constraint != null) {
+                    val cnst = argType.constraint!!
+                    if (cnst !== anyType && cnst !== errorType &&
+                        checkTypeRelatedTo(cnst, instantiatedConstraint, assignableRelation)) {
+                        continue
+                    }
                 }
                 val argNode = typeArgs[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
