@@ -22386,25 +22386,41 @@ interface DataView {
     private fun checkCommaInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
-                if (expr.operator == SyntaxKind.Comma) {
-                    if (!hasSideEffects(expr.left) && !isIndirectCallComma(expr)) {
-                        val start = expr.left.pos
-                        val length = commaLeftSpanLength(expr.left, start)
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Left side of comma operator is unused and has no side effects.",
-                            category = DiagnosticCategory.Error,
-                            code = 2695,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
+                // B64.3: iterative left-spine flatten to avoid StackOverflow on
+                // deeply nested binary chains (`a + b + c + ... + z`). For each
+                // BinaryExpression on the spine, check the Comma-operator rule
+                // BEFORE flattening so the per-node diagnostic emission is
+                // preserved. Rights are pushed onto a stack and processed at
+                // the end via the recursive helper (the standard recursive
+                // path handles them since they have bounded depth from the
+                // parser).
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    if (cur.operator == SyntaxKind.Comma) {
+                        if (!hasSideEffects(cur.left) && !isIndirectCallComma(cur)) {
+                            val start = cur.left.pos
+                            val length = commaLeftSpanLength(cur.left, start)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Left side of comma operator is unused and has no side effects.",
+                                category = DiagnosticCategory.Error,
+                                code = 2695,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
                     }
+                    rightStack.addLast(cur.right)
+                    cur = cur.left
                 }
-                checkCommaInExpr(expr.left, source, fileName)
-                checkCommaInExpr(expr.right, source, fileName)
+                checkCommaInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) {
+                    checkCommaInExpr(rightStack.removeLast(), source, fileName)
+                }
             }
             is ParenthesizedExpression -> checkCommaInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
