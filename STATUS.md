@@ -2,7 +2,8 @@
 
 **Phase 4 — Checker buildout.** 8,898 / 10,078 tests passing (~88.29%). _Round 18 (2026-05-21): /goal session targeting 10 iterations, +3 via B63.27 (net-zero correctness) + B63.28 (+3, arrow lookahead `{}` depth)._
 
-_Round 18 (2026-05-21, +3 net):_
+_Round 18 (2026-05-21, +3 net via 3 commits):_
+- **B63.29 (net-zero correctness)**: `signatureRelatedTo` unwraps target rest-param element type. For target `(...t: U[]) => R`, positional comparison at and beyond target.size-1 now uses element type U (not U[]) when source param at that position is non-rest. Removes FP TS2344 on `genericRestTypes_ts` line 12.
 - **B63.28 (+3)**: Track `{ }` depth in arrow-detection lookahead. `parseParenthesizedOrArrow`'s `maybeArrow` lookahead now treats `OpenBrace` as an open-delimiter (was a terminator). Fixes arrows with TypeLiteral return types like `(...): { name: string; x: number } => ({...})`. Flips `inferFromAnnotatedReturn1_ts` + `declarationEmitTypeofRest_ts` + 1 adjacent.
 - **B63.27 (net-zero correctness)**: TS2344 FP gate for TypeParam source + scope push in fn-decl visitor. (a) `checkConstraintsForTypeArgs` skips TS2344 when argType is `Type.TypeParam` with constraint that satisfies target constraint (uses constraint directly, not apparent type). (b) `checkConstraintsInStatements`'s `FunctionDeclaration` branch pushes function's TypeParam scope before visiting types/body.
 
