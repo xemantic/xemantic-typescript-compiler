@@ -16449,6 +16449,18 @@ class Checker(
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
                     }
+                    // Node-builtin bare specifier (`"module"`, `"fs"`, etc.) under node resolution
+                    // that's NOT an ambient module / .d.ts / node_modules package: TypeScript emits
+                    // TS2591 with the @types/node hint. Narrow to known node-builtin names so we
+                    // don't FP on arbitrary unresolved bare specifiers under multi-file node mode.
+                    else if (!isRelative && !isClassicResolution
+                        && moduleName !in ambientModuleNames
+                        && moduleName !in dtsFileBaseNames
+                        && !hasNodeModulesPackage(moduleName)
+                        && (moduleName in NODE_BUILTIN_MODULES || moduleName.startsWith("node:"))
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs.
                 } else {
