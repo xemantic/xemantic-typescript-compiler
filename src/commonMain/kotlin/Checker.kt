@@ -49564,11 +49564,17 @@ interface DataView {
 
         // Collect derived interface's property types from AST
         val derivedProps = mutableMapOf<String, TypeNode>()
+        // B63.3: Also collect derived methods for arity-based TS2430.
+        val derivedMethods = mutableMapOf<String, MethodDeclaration>()
         for (member in ifaceDecl.members) {
+            if (member is MethodDeclaration) {
+                val mname = (member.name as? Identifier)?.text
+                if (mname != null) derivedMethods[mname] = member
+            }
             val (name, type) = getMemberNameAndType(member) ?: continue
             if (type != null) derivedProps[name] = type
         }
-        if (derivedProps.isEmpty()) return
+        if (derivedProps.isEmpty() && derivedMethods.isEmpty()) return
 
         for (clause in extendsClauses) {
             for (typeExpr in clause.types) {
@@ -49590,12 +49596,37 @@ interface DataView {
                 // Compare each derived property against matching base property
                 for (baseProp in baseProps) {
                     val propName = baseProp.name
-                    val derivedType = derivedProps[propName] ?: continue
+                    val derivedType = derivedProps[propName]
 
-                    // Skip method-typed properties — the derived side is just the return type
-                    // from getMemberNameAndType but the base resolves to the full function type.
-                    // Comparing return-type vs function-type produces FPs.
-                    if (baseProp.flags.hasAny(SymbolFlags.Function)) continue
+                    // B63.3: method-vs-method TS2430 with arity mismatch chain.
+                    // For `interface Foo { f(): T }` + `interface Bar extends Foo { f(a: U): T }`,
+                    // the derived's method requires MORE params than base provides — fire TS2430
+                    // with "Target signature provides too few arguments" chain.
+                    if (baseProp.flags.hasAny(SymbolFlags.Function)) {
+                        val derivedMd = derivedMethods[propName]
+                        if (derivedMd != null) {
+                            val baseMd = baseProp.declarations.firstOrNull { it is MethodDeclaration } as? MethodDeclaration
+                            if (baseMd != null && baseProp.declarations.count { it is MethodDeclaration } == 1) {
+                                val derivedRequired = derivedMd.parameters.count {
+                                    !it.questionToken && it.initializer == null && !it.dotDotDotToken
+                                }
+                                val baseMax = baseMd.parameters.count { !it.dotDotDotToken }
+                                val baseHasRest = baseMd.parameters.any { it.dotDotDotToken }
+                                if (!baseHasRest && derivedRequired > baseMax) {
+                                    val derivedSig = methodSigDisplay(derivedMd)
+                                    val baseSig = methodSigDisplay(baseMd)
+                                    emitTS2430WithMethodArityChain(
+                                        ifaceDecl.name, derivedName, baseName, propName,
+                                        derivedSig, baseSig, derivedRequired, baseMax,
+                                        source, fileName,
+                                    )
+                                    return
+                                }
+                            }
+                        }
+                        continue
+                    }
+                    if (derivedType == null) continue
 
                     // Get base property's type
                     val basePropType = getTypeOfSymbol(baseProp)
@@ -49703,6 +49734,45 @@ interface DataView {
                 "    Type '$derivedTypeName' is not assignable to type '$baseTypeName'.",
             ),
         ))
+    }
+
+    /** B63.3: TS2430 for method-vs-method arity mismatch (derived requires more args than base accepts). */
+    private fun emitTS2430WithMethodArityChain(
+        nameNode: Identifier, derivedName: String, baseName: String, propName: String,
+        derivedSig: String, baseSig: String, derivedRequired: Int, baseMax: Int,
+        source: String, fileName: String,
+    ) {
+        val start = nameNode.pos
+        val length = derivedName.length
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Interface '$derivedName' incorrectly extends interface '$baseName'.",
+            category = DiagnosticCategory.Error,
+            code = 2430,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = listOf(
+                "  Types of property '$propName' are incompatible.",
+                "    Type '$derivedSig' is not assignable to type '$baseSig'.",
+                "      Target signature provides too few arguments. Expected $derivedRequired or more, but got $baseMax.",
+            ),
+        ))
+    }
+
+    /** B63.3: render a MethodDeclaration's call-signature as `(p: T, ...) => R` for display. */
+    private fun methodSigDisplay(md: MethodDeclaration): String {
+        val params = md.parameters.joinToString(", ") { p ->
+            val pname = (p.name as? Identifier)?.text ?: "_"
+            val ptype = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val q = if (p.questionToken) "?" else ""
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$pname$q: $ptype"
+        }
+        val ret = md.type?.let { formatTypeForDisplay(it) } ?: "any"
+        return "($params) => $ret"
     }
 
     // -----------------------------------------------------------------------
