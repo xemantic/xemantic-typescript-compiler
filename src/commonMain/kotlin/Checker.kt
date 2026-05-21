@@ -32884,6 +32884,15 @@ interface DataView {
             is SpreadElement -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is YieldExpression -> expr.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             is AwaitExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            // B65.3: recurse through `void` / `typeof` / `delete` / non-null assertion
+            // so a TypeAssertionExpression nested inside (e.g. `typeof <T>expr`) is
+            // still visited by the TS2352 walker.
+            is VoidExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is TypeOfExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is DeleteExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is AsExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is ArrowFunction -> (expr.body as? Block)?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             is FunctionExpression -> expr.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
             else -> {}
@@ -32941,10 +32950,15 @@ interface DataView {
         // B51.6: also catch `<FuncType>(undefined)` casts (matching
         // `defaultValueInFunctionTypes_ts`). Source must be a bare `null` or
         // `undefined` Identifier; unwrap one level of ParenthesizedExpression.
+        // B65.3: also accept a `VoidExpression` source (`void <expr>` always
+        // produces `undefined`) — display as `undefined`.
         var inner: Expression = expr.expression
         if (inner is ParenthesizedExpression) inner = inner.expression
-        val sourceLit = (inner as? Identifier)?.text
-        if (sourceLit != "null" && sourceLit != "undefined") return
+        val sourceLit: String = when {
+            inner is Identifier && (inner.text == "null" || inner.text == "undefined") -> inner.text
+            inner is VoidExpression -> "undefined"
+            else -> return
+        }
         val typeNode = expr.type
         // 17.109: Compute the display name and gate on type-shape.
         // Allowed shapes (`null` doesn't sufficiently overlap):
@@ -32972,6 +32986,19 @@ interface DataView {
                 formatTypeForDisplay(typeNode) ?: return
             }
             is ArrayType, is TupleType -> formatTypeForDisplay(typeNode) ?: return
+            // B65.3: primitive keyword targets when source is `void <expr>` (always undefined)
+            // — `<number>void foo` is TS2352. Skip `any`/`unknown`/`void`/`null`/`undefined`
+            // (those overlap with undefined).
+            is KeywordTypeNode -> when (typeNode.kind) {
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                SyntaxKind.BigIntKeyword -> "bigint"
+                SyntaxKind.SymbolKeyword -> "symbol"
+                SyntaxKind.NeverKeyword -> "never"
+                SyntaxKind.ObjectKeyword -> "object"
+                else -> return
+            }
             else -> return
         }
 
