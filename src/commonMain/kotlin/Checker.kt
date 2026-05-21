@@ -33313,13 +33313,51 @@ interface DataView {
             )
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    val typeRef = decl.type as? TypeReference ?: continue
-                    val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
-                    val tp = currentTypeParamScope?.get(typeName) ?: continue
-                    val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
-                    if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                    val typeRef = decl.type as? TypeReference
                     val varName = (decl.name as? Identifier)?.text ?: continue
-                    tpVars[varName] = tpAst
+                    // Annotated `var x: U` form.
+                    if (typeRef != null) {
+                        val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
+                        val tp = currentTypeParamScope?.get(typeName) ?: continue
+                        val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                        if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                        tpVars[varName] = tpAst
+                        continue
+                    }
+                    // B63.37: Inferred TypeParam from initializer. Two narrow patterns:
+                    //   (a) `var y = x` where x is itself a tracked TypeParam-typed var.
+                    //   (b) `var y = f(x)` where f is a generic function with a single
+                    //       type parameter T and at least one bare-T param, called with
+                    //       x being a tracked TypeParam-typed var — and f's return type
+                    //       is also bare T. The inferred return is the TypeParam of x.
+                    val init = decl.initializer ?: continue
+                    if (decl.type != null) continue
+                    when (init) {
+                        is Identifier -> {
+                            val srcTp = tpVars[init.text] ?: continue
+                            tpVars[varName] = srcTp
+                        }
+                        is CallExpression -> {
+                            val callee = init.expression as? Identifier ?: continue
+                            val callArgs = init.arguments ?: continue
+                            val tpName = callArgs.firstNotNullOfOrNull { arg ->
+                                (arg as? Identifier)?.let { tpVars[it.text]?.name?.text }
+                            } ?: continue
+                            val tpAst = currentTypeParamAstForOps?.get(tpName) ?: continue
+                            // Verify callee is a generic function with single TP and bare-T return.
+                            val sym = currentFileLocals?.get(callee.text)
+                                ?: globals[callee.text] ?: continue
+                            val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration }
+                                as? FunctionDeclaration ?: continue
+                            val fnTps = fnDecl.typeParameters ?: continue
+                            if (fnTps.size != 1) continue
+                            val fnReturnTypeRef = fnDecl.type as? TypeReference ?: continue
+                            val fnReturnName = (fnReturnTypeRef.typeName as? Identifier)?.text ?: continue
+                            if (fnReturnName != fnTps[0].name.text) continue
+                            tpVars[varName] = tpAst
+                        }
+                        else -> {}
+                    }
                 }
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
