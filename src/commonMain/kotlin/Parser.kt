@@ -4674,6 +4674,8 @@ class Parser(
                 val hasExponent = scanner.didBigIntHaveExponent()
                 val hasFraction = scanner.didBigIntHaveFraction()
                 val emptyKind = scanner.getEmptyDigitLiteralKind()
+                val trailingSeps = scanner.getNumericTrailingSeparatorPositions()
+                val doubleSeps = scanner.getNumericDoubleSeparatorPositions()
                 val litLen = text.length
                 nextToken()
                 when {
@@ -4687,6 +4689,14 @@ class Parser(
                         overrideStart = pos, overrideLength = litLen)
                     hasFraction -> reportError("A bigint literal must be an integer.", code = 1353,
                         overrideStart = pos, overrideLength = litLen)
+                }
+                for (sp in trailingSeps) {
+                    reportError("Numeric separators are not allowed here.", code = 6188,
+                        overrideStart = sp, overrideLength = 1)
+                }
+                for (sp in doubleSeps) {
+                    reportError("Multiple consecutive numeric separators are not permitted.", code = 6189,
+                        overrideStart = sp, overrideLength = 1)
                 }
                 BigIntLiteralNode(
                     text = text,
@@ -6809,10 +6819,20 @@ class Parser(
         val text = scanner.getTokenText()
         val isLegacyOctal = scanner.isLegacyOctalLiteralToken()
         val isLeadingZeroDecimal = scanner.isLeadingZeroDecimalLiteralToken()
+        val trailingSeps = scanner.getNumericTrailingSeparatorPositions()
+        val doubleSeps = scanner.getNumericDoubleSeparatorPositions()
         val hasPrecedingMinus = prevToken == SyntaxKind.Minus
         // Capture the end of the previous token (right after '-' if present) BEFORE advancing
         val prevEnd = scanner.getPrevTokenEnd()
         nextToken()
+        for (sp in trailingSeps) {
+            reportError("Numeric separators are not allowed here.", code = 6188,
+                overrideStart = sp, overrideLength = 1)
+        }
+        for (sp in doubleSeps) {
+            reportError("Multiple consecutive numeric separators are not permitted.", code = 6189,
+                overrideStart = sp, overrideLength = 1)
+        }
         if (isLegacyOctal) {
             // TS1121: Octal literals are not allowed. Use the syntax '0o{digits}'.
             // Strip the leading '0' and any subsequent leading zeros to get minimal octal representation.
