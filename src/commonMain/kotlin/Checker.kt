@@ -59425,10 +59425,28 @@ interface DataView {
         // checks `any[]` vs `string` → false. Correct: check element `any` vs `string` → true.
         val targetLast = targetParams.lastOrNull()
         val targetLastIsRest = (targetLast?.valueDeclaration as? Parameter)?.dotDotDotToken == true
-        val targetRestElement: Type? = if (targetLastIsRest) {
-            val raw = getTypeOfSymbol(targetLast!!)
-            if (raw is Type.Reference && raw.target?.symbol?.name in setOf("Array", "ReadonlyArray"))
-                raw.resolvedTypeArguments?.firstOrNull() else null
+        // Compute the rest element type, OR a sentinel marking "non-array rest" (which
+        // can't actually accept tuple-like spreads and TypeScript treats as accept-all).
+        // - Array<U> / ReadonlyArray<U> → element type U
+        // - any → anyType (accept all)
+        // - Tuple → fall through to standard comparison (don't bail)
+        // - Anything else (intersection, named non-array, never) → anyType (accept all,
+        //   since the rest type isn't a valid spread target)
+        val targetRestRaw = if (targetLastIsRest) getTypeOfSymbol(targetLast!!) else null
+        val targetRestElement: Type? = if (targetLastIsRest && targetRestRaw != null) {
+            when {
+                targetRestRaw is Type.Reference &&
+                    targetRestRaw.target?.symbol?.name in setOf("Array", "ReadonlyArray") ->
+                    targetRestRaw.resolvedTypeArguments?.firstOrNull()
+                targetRestRaw === anyType -> anyType
+                // B63.31: Non-array rest type (intersection of object literals, named non-array,
+                // etc.) — TypeScript treats these as accept-anything since the rest spread can't
+                // actually deliver values of that shape. Fixed-arity comparison bails by using
+                // anyType for the element. Tuples (Type.Object with tupleElementTypes) fall
+                // through (we don't have per-position tuple-element comparison yet).
+                targetRestRaw is Type.Object && targetRestRaw.tupleElementTypes != null -> null
+                else -> anyType
+            }
         } else null
         for (i in 0 until len) {
             val sourceParamType = getTypeOfSymbol(sourceParams[i])
