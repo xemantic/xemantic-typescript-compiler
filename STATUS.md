@@ -1,8 +1,9 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,893 / 10,078 tests passing (~88.24%). _Round 17 (2026-05-21): /goal session targeting 15+ iterations, landed +15 net via B63.x stack (11 commits)._
+**Phase 4 — Checker buildout.** 8,894 / 10,078 tests passing (~88.25%). _Round 17 (2026-05-21): /goal session targeting 15+ iterations, landed +16 net via B63.x stack (12 commits)._
 
-_Round 17 (2026-05-21, +15 net — B63.x stack):_
+_Round 17 (2026-05-21, +16 net — B63.x stack):_
+- **B63.16 (+1)**: TS1125 for incomplete hex escape sequences. `scanEscapeSequence` in Scanner.kt now emits TS1125 "Hexadecimal digit expected." when `\xHH` is followed by fewer than 2 hex digits or `\uHHHH` (non-braced) is followed by fewer than 4. Position: right after the consumed hex (or right after `\x`/`\u` if none). Flips `stringLiteralsErrors_ts`.
 - **B63.15 (+1)**: TS1490 binary file detection. `Parser.parse()` checks for ≥3 C0 control characters (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) in the first 512 bytes; emits single TS1490 at (1,1) and short-circuits parsing. Threshold of 3 avoids FPs on tests like `unicodeStringLiteral_ts` (single embedded control char). Flips `corrupted_ts`.
 - **B63.14 (+1)**: TS1126/TS1002 for unterminated string literals. `scanStringLiteral` now sets `tokenIsUnterminated` when scan exits without closing quote; `stringEndedAfterBackslash` distinguishes the TS1126 "Unexpected end of text" case (source ended right after `\`) from the general TS1002 "Unterminated string literal". `parseStringLiteral` emits the appropriate diagnostic. Gated on `raw[0]` being an actual quote (error-recovery may call this fn with non-string tokens). Flips `unterminatedStringLiteralWithBackslash1_ts`.
 - **B63.13 (+2)**: TS1160 for unterminated NoSubstitutionTemplate literals. Both emission sites in Parser.kt (`NoSubstitutionTemplateLiteral` branch in `parsePrimaryExpression` + `parseTemplateLiteral`) emit TS1160 "Unterminated template literal." at `scanner.getPrevTokenEnd()` when `scanner.isTokenUnterminated()` is true. Mirrors existing TS1161 for unterminated regex. Flips `taggedTemplatesWithIncompleteNoSubstitutionTemplate1_ts` + `_2_ts`.
