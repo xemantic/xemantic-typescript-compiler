@@ -6715,10 +6715,14 @@ class Parser(
         val pos = getPos()
         val raw = scanner.getTokenText()
         val value = scanner.getTokenValue()
+        val startsWithQuote = raw.isNotEmpty() && (raw[0] == '\'' || raw[0] == '"')
         val singleQuote = raw.startsWith("'")
         val quote = if (singleQuote) '\'' else '"'
         // Detect unterminated string: raw token doesn't end with the opening quote char
-        val isUnterminated = raw.isNotEmpty() && raw.last() != quote
+        // Only valid when the raw token actually starts with a quote — error-recovery may
+        // call this fn when the current token isn't a real StringLiteral (e.g. Identifier).
+        val isUnterminated = startsWithQuote && raw.last() != quote
+        val endedAfterBackslash = scanner.didStringEndAfterBackslash()
         // Store raw content between quotes to preserve escape sequences (e.g. \u2730, \n)
         val rawContent = when {
             !isUnterminated && raw.length >= 2 -> raw.substring(1, raw.length - 1)
@@ -6728,6 +6732,20 @@ class Parser(
         // Emit TS1487/TS1488 diagnostics for any escape errors found in this string
         emitStringEscapeErrors()
         nextToken()
+        // For unterminated strings: TS1126 "Unexpected end of text." if the source ended
+        // mid-escape (right after a `\`); otherwise TS1002 "Unterminated string literal."
+        // Position is the end of the string literal text (after nextToken, getPrevTokenEnd
+        // returns position right after the just-consumed string).
+        if (isUnterminated) {
+            val emitPos = scanner.getPrevTokenEnd()
+            if (endedAfterBackslash) {
+                reportError("Unexpected end of text.", code = 1126,
+                    overrideStart = emitPos, overrideLength = 0)
+            } else {
+                reportError("Unterminated string literal.", code = 1002,
+                    overrideStart = emitPos, overrideLength = 0)
+            }
+        }
         return StringLiteralNode(text = value, singleQuote = singleQuote, rawText = rawContent,
             isUnterminated = isUnterminated, pos = pos, end = getEnd())
     }

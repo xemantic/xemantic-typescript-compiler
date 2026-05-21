@@ -95,6 +95,14 @@ class Scanner(private val text: String) {
     /** Whether the last scanned template literal token was unterminated. */
     private var tokenIsUnterminated: Boolean = false
 
+    /** For unterminated string literals: true if the string ended right after a `\`
+     * (no character followed the backslash before EOF). Used to distinguish TS1126
+     * "Unexpected end of text" from TS1002 "Unterminated string literal". */
+    private var stringEndedAfterBackslash: Boolean = false
+
+    /** Returns whether the most-recent unterminated string literal ended after a backslash. */
+    fun didStringEndAfterBackslash(): Boolean = stringEndedAfterBackslash
+
     /** Whether the last scanned numeric literal was a legacy octal (e.g. 01, 0123). */
     private var isLegacyOctalToken: Boolean = false
 
@@ -254,6 +262,7 @@ class Scanner(private val text: String) {
         trailingComments = null
         precedingLineBreak = false
         tokenIsUnterminated = false
+        stringEndedAfterBackslash = false
         isLegacyOctalToken = false
         isLeadingZeroDecimalToken = false
 
@@ -898,10 +907,13 @@ class Scanner(private val text: String) {
         val quote = text[pos]
         pos++ // skip opening quote
         val sb = StringBuilder()
+        var terminated = false
+        var endedAfterBackslash = false
         while (pos < end) {
             val ch = text[pos]
             if (ch == quote) {
                 pos++ // skip closing quote
+                terminated = true
                 break
             }
             if (ch == '\\') {
@@ -909,15 +921,21 @@ class Scanner(private val text: String) {
                 if (pos < end) {
                     val escaped = scanEscapeSequence()
                     sb.append(escaped)
+                } else {
+                    endedAfterBackslash = true
                 }
                 continue
             }
             if (isLineBreak(ch)) {
-                // Unterminated string literal
+                // Unterminated string literal — line break before closing quote
                 break
             }
             sb.append(ch)
             pos++
+        }
+        if (!terminated) {
+            tokenIsUnterminated = true
+            stringEndedAfterBackslash = endedAfterBackslash
         }
         tokenValue = sb.toString()
         return SyntaxKind.StringLiteral
