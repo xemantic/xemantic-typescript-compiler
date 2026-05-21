@@ -4646,6 +4646,12 @@ class Parser(
                 val text = scanner.getTokenValue(); val unterminated = scanner.isTokenUnterminated()
                 emitStringEscapeErrors()
                 nextToken()
+                if (unterminated) {
+                    // TS1160 "Unterminated template literal." at the position right
+                    // after the unterminated text (where the closing backtick was expected).
+                    reportError("Unterminated template literal.", code = 1160,
+                        overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+                }
                 NoSubstitutionTemplateLiteralNode(
                     text = text,
                     isUnterminated = unterminated,
@@ -5277,6 +5283,12 @@ class Parser(
             val pos = getPos()
             emitStringEscapeErrors()
             nextToken()
+            if (unterminated) {
+                // TS1160 "Unterminated template literal." at the position right after
+                // the unterminated text (where the closing backtick was expected).
+                reportError("Unterminated template literal.", code = 1160,
+                    overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+            }
             return NoSubstitutionTemplateLiteralNode(text = text, isUnterminated = unterminated, pos = pos, end = getEnd())
         }
         return parseTemplateExpression()
