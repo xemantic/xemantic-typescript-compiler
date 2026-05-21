@@ -32952,11 +32952,19 @@ interface DataView {
         // `undefined` Identifier; unwrap one level of ParenthesizedExpression.
         // B65.3: also accept a `VoidExpression` source (`void <expr>` always
         // produces `undefined`) — display as `undefined`.
+        // B65.4: also accept Identifier source whose declared type is a
+        // concrete primitive different from the target primitive
+        // (`<boolean>(n)` where `n: number`).
         var inner: Expression = expr.expression
         if (inner is ParenthesizedExpression) inner = inner.expression
+        val identType: Type? = if (inner is Identifier && inner.text != "null" && inner.text != "undefined") {
+            try { getTypeOfIdentifier(inner) } catch (_: StackOverflowError) { null }
+        } else null
         val sourceLit: String = when {
             inner is Identifier && (inner.text == "null" || inner.text == "undefined") -> inner.text
             inner is VoidExpression -> "undefined"
+            identType is Type.Intrinsic && identType.intrinsicName in
+                setOf("number", "string", "boolean", "bigint", "symbol") -> identType.intrinsicName
             else -> return
         }
         val typeNode = expr.type
@@ -32989,15 +32997,22 @@ interface DataView {
             // B65.3: primitive keyword targets when source is `void <expr>` (always undefined)
             // — `<number>void foo` is TS2352. Skip `any`/`unknown`/`void`/`null`/`undefined`
             // (those overlap with undefined).
-            is KeywordTypeNode -> when (typeNode.kind) {
-                SyntaxKind.NumberKeyword -> "number"
-                SyntaxKind.StringKeyword -> "string"
-                SyntaxKind.BooleanKeyword -> "boolean"
-                SyntaxKind.BigIntKeyword -> "bigint"
-                SyntaxKind.SymbolKeyword -> "symbol"
-                SyntaxKind.NeverKeyword -> "never"
-                SyntaxKind.ObjectKeyword -> "object"
-                else -> return
+            is KeywordTypeNode -> {
+                val tgtName = when (typeNode.kind) {
+                    SyntaxKind.NumberKeyword -> "number"
+                    SyntaxKind.StringKeyword -> "string"
+                    SyntaxKind.BooleanKeyword -> "boolean"
+                    SyntaxKind.BigIntKeyword -> "bigint"
+                    SyntaxKind.SymbolKeyword -> "symbol"
+                    SyntaxKind.NeverKeyword -> "never"
+                    SyntaxKind.ObjectKeyword -> "object"
+                    else -> return
+                }
+                // B65.4: when the source is a typed primitive Identifier, only fire
+                // when source and target primitives are DIFFERENT (`<number>n` where
+                // `n: number` is a no-op, not an error).
+                if (identType != null && sourceLit == tgtName) return
+                tgtName
             }
             else -> return
         }
