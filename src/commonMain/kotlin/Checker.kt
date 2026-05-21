@@ -13935,9 +13935,96 @@ class Checker(
     }
 
     private fun checkSubsequentVarTypesInGlobals() {
-        // Cross-file duplicate var type checking is deferred — too many FPs from
-        // imports, path mapping, and module resolution creating merged variable symbols.
-        // The function-level check handles single-file vars.
+        // B63.35: Narrow cross-file TS2403 check for the .ts + .js (allowJs) script-file
+        // pair where both files declare a top-level `var x = init` with different simple
+        // (primitive) inferred types. Gate is conservative to avoid FPs:
+        //   - @allowJs must be on (the pattern is only intentional under allowJs)
+        //   - both files must be SCRIPT files (no top-level import/export statements)
+        //   - both files must declare the var at top level (not nested)
+        //   - var must be `var` (not let/const), with no annotation, with a simple
+        //     primitive initializer
+        //   - inferred types must differ (already filtered by isSimpleTypeForTs2403)
+        // Emits at the .ts declaration's pos (last-by-binderResults order) with TS6203
+        // related info pointing to the .js declaration.
+        if (!options.allowJs) return
+        // Group top-level var decls by name across files.
+        data class Entry(val decl: VariableDeclaration, val fileName: String, val source: String, val isJs: Boolean)
+        val byName = mutableMapOf<String, MutableList<Entry>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+            // Script files only: no top-level import/export.
+            val hasModuleStmt = result.sourceFile.statements.any {
+                it is ImportDeclaration || it is ExportDeclaration ||
+                it is ExportAssignment || it is ImportEqualsDeclaration
+            }
+            if (hasModuleStmt) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
+                for (decl in stmt.declarationList.declarations) {
+                    val name = (decl.name as? Identifier)?.text ?: continue
+                    // Require an initializer and no annotation — annotated vars
+                    // route through other paths (declare merges, etc.).
+                    if (decl.type != null) continue
+                    if (decl.initializer == null) continue
+                    byName.getOrPut(name) { mutableListOf() }.add(Entry(decl, fileName, source, isJs))
+                }
+            }
+        }
+        for ((name, entries) in byName) {
+            if (entries.size < 2) continue
+            // Must have at least one .js and one .ts entry (allowJs cross-file pattern).
+            val hasJs = entries.any { it.isJs }
+            val hasTs = entries.any { !it.isJs }
+            if (!hasJs || !hasTs) continue
+            // TypeScript only checks .ts files — .js files don't receive diagnostics.
+            // For each .ts entry, look for a PRIOR .js entry (earlier in binderResults
+            // order, which matches @filename declaration order) and emit on the .ts
+            // entry if the types differ. Conversely, when the .js entry comes AFTER
+            // the .ts entry, no diagnostic fires (the .js declaration is silently
+            // accepted, mirroring TypeScript's "js file isn't checked" behavior).
+            for ((tsIdx, e) in entries.withIndex()) {
+                if (e.isJs) continue
+                // Find the earliest prior .js declaration of the same name with a
+                // simple type that differs from the .ts decl's type.
+                val priorJs = entries.subList(0, tsIdx).firstOrNull { it.isJs } ?: continue
+                val priorType = getVarDeclType(priorJs.decl) ?: continue
+                if (!isSimpleTypeForTs2403(priorType)) continue
+                val declType = getVarDeclType(e.decl) ?: continue
+                if (!isSimpleTypeForTs2403(declType)) continue
+                if (priorType === declType) continue
+                val priorTypeName = typeToString(priorType)
+                val declTypeName = typeToString(declType)
+                if (priorTypeName == declTypeName) continue
+                val priorNameNode = priorJs.decl.name as? Identifier ?: continue
+                val (priorLine, priorChar) = getLineAndCharacterOfPosition(priorJs.source, priorNameNode.pos)
+                val nameNode = e.decl.name as? Identifier ?: continue
+                val start = nameNode.pos
+                val length = nameNode.text.length
+                val (line, character) = getLineAndCharacterOfPosition(e.source, start)
+                val relatedInfo = listOf(Diagnostic(
+                    message = "'$name' was also declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 6203,
+                    fileName = priorJs.fileName,
+                    line = priorLine, character = priorChar,
+                    start = priorNameNode.pos, length = priorNameNode.text.length,
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Subsequent variable declarations must have the same type.  Variable '$name' must be of type '$priorTypeName', but here has type '$declTypeName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2403,
+                    fileName = e.fileName,
+                    line = line, character = character,
+                    start = start, length = length,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+        }
     }
 
     private fun checkSubsequentVarTypesInStatements(stmts: List<Statement>, source: String, fileName: String) {
