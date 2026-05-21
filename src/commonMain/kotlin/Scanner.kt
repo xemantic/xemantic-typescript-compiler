@@ -984,8 +984,16 @@ class Scanner(private val text: String) {
             'f' -> "\u000C"
             'v' -> "\u000B"
             'x' -> {
-                // \xHH
+                // \xHH — must have exactly 2 hex digits
                 val hex = readHexChars(2)
+                if (hex.length < 2) {
+                    // TS1125 "Hexadecimal digit expected." at position right after the
+                    // consumed hex (or right after `\x` if none consumed).
+                    stringEscapeErrorList.add(StringEscapeError(
+                        start = pos, length = 0, code = 1125,
+                        message = "Hexadecimal digit expected.",
+                    ))
+                }
                 if (hex.isEmpty()) "\\x" else hex.toInt(16).toChar().toString()
             }
 
@@ -1002,8 +1010,16 @@ class Scanner(private val text: String) {
                     val str = sb.toString()
                     if (str.isEmpty()) "\\u{}" else codePointToString(str.toInt(16))
                 } else {
-                    // \uHHHH
+                    // \uHHHH — must have exactly 4 hex digits
                     val hex = readHexChars(4)
+                    if (hex.length < 4) {
+                        // TS1125 "Hexadecimal digit expected." at position right after
+                        // the consumed hex (or right after `\u` if none consumed).
+                        stringEscapeErrorList.add(StringEscapeError(
+                            start = pos, length = 0, code = 1125,
+                            message = "Hexadecimal digit expected.",
+                        ))
+                    }
                     if (hex.isEmpty()) "\\u" else hex.toInt(16).toChar().toString()
                 }
             }
