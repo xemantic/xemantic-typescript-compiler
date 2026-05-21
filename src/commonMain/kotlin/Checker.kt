@@ -43488,15 +43488,67 @@ interface DataView {
         }
     }
 
+    /**
+     * Resolve a heritage-clause base expression (Identifier or PropertyAccessExpression)
+     * to a Symbol. For `Foo.I1`, walks `Foo`'s `exports` to find `I1` but only when
+     * `I1` is actually exported (i.e., would be accessible from outside `Foo`). For
+     * multi-segment `A.B.C`, recursively resolves the parent then walks exports.
+     * Returns null when not exported (caller should also emit TS2694).
+     */
+    private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? {
+        return when (expr) {
+            is Identifier -> globals[expr.text]
+            is PropertyAccessExpression -> {
+                val parent = resolveHeritageBaseSymbol(expr.expression) ?: return null
+                val resolvedParent = resolveAlias(parent)
+                val propName = (expr.name as? Identifier)?.text ?: return null
+                val memberSym = resolvedParent.exports?.get(propName) ?: return null
+                // Implicit-export rules:
+                //  - Sub-namespaces (Module flag) are always accessible (parent.Sub usage).
+                //  - `declare namespace` members are implicitly exported (any decl carries Declare).
+                // Otherwise require explicit `export` modifier on the member declaration.
+                if (memberSym.flags.hasAny(SymbolFlags.Module)) return memberSym
+                val parentIsAmbient = resolvedParent.declarations.any {
+                    it is ModuleDeclaration && ModifierFlag.Declare in it.modifiers
+                }
+                if (parentIsAmbient) return memberSym
+                val memberIsExported = memberSym.flags.hasAny(SymbolFlags.ExportValue) ||
+                    memberSym.declarations.any { d ->
+                        when (d) {
+                            is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
+                            is ClassDeclaration -> ModifierFlag.Export in d.modifiers
+                            is InterfaceDeclaration -> ModifierFlag.Export in d.modifiers
+                            is TypeAliasDeclaration -> ModifierFlag.Export in d.modifiers
+                            is EnumDeclaration -> ModifierFlag.Export in d.modifiers
+                            is ModuleDeclaration -> ModifierFlag.Export in d.modifiers
+                            else -> false
+                        }
+                    } ||
+                    // VariableStatement export check: scan parent module body
+                    resolvedParent.declarations.any { nsDecl ->
+                        val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
+                        body?.statements?.any { stmt ->
+                            stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers &&
+                                stmt.declarationList.declarations.any { vd ->
+                                    vd.name is Identifier && (vd.name as Identifier).text == propName
+                                }
+                        } == true
+                    }
+                if (!memberIsExported) return null
+                memberSym
+            }
+            else -> null
+        }
+    }
+
     /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */
     private fun getTypeFromBaseTypeExpression(expr: ExpressionWithTypeArguments): Type {
         val baseExpr = expr.expression
-        val name = when (baseExpr) {
-            is Identifier -> baseExpr.text
-            is PropertyAccessExpression -> baseExpr.name.text
+        val symbol = when (baseExpr) {
+            is Identifier -> globals[baseExpr.text]
+            is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr)
             else -> return errorType
-        }
-        val symbol = globals[name] ?: return errorType
+        } ?: return errorType
         val declared = getDeclaredTypeOfSymbol(symbol)
         // 16.0n: Honor type arguments on the base: `extends Foo<X>` → Type.Reference(Foo, [X]).
         // Type args are resolved with the enclosing interface's type params in scope.
@@ -49265,7 +49317,10 @@ interface DataView {
                 if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) {
                     continue@typeExprLoop
                 }
-                val ifaceSymbol = globals[baseIfaceName] ?: continue
+                val ifaceSymbol = when (val tn = typeExpr.expression) {
+                    is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
+                    else -> globals[baseIfaceName]
+                } ?: continue
                 // 16.4l: Handle both interface (TS2420) and class (TS2720) targets.
                 val isClassTarget = ifaceSymbol.flags.hasAny(SymbolFlags.Class) &&
                     !ifaceSymbol.flags.hasAny(SymbolFlags.Interface)
@@ -49671,7 +49726,10 @@ interface DataView {
                     else -> null
                 } ?: continue
 
-                val baseSymbol = globals[baseName] ?: continue
+                val baseSymbol = when (val tn = typeExpr.expression) {
+                    is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
+                    else -> globals[baseName]
+                } ?: continue
                 if (!baseSymbol.flags.hasAny(SymbolFlags.Interface)) continue
 
                 // Get base interface type and resolve members

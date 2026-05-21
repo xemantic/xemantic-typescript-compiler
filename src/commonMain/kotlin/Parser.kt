@@ -2070,6 +2070,15 @@ class Parser(
             reportError("'{' expected.", code = 1005,
                 overrideStart = dotPos, overrideLength = 1)
             nextToken() // consume `.` so outer parser starts at the qualifier identifier
+            // TypeScript also emits TS1434 "Unexpected keyword or identifier."
+            // at the identifier-after-dot position. The outer parser will then
+            // parse `<ident>;` as an expression statement (which fires TS2304).
+            if (isIdentifier()) {
+                val identPos = getPos()
+                val identLen = scanner.getTokenText().length
+                reportError("Unexpected keyword or identifier.", code = 1434,
+                    overrideStart = identPos, overrideLength = identLen)
+            }
             return InterfaceDeclaration(
                 name = name, typeParameters = null, heritageClauses = emptyList(),
                 members = emptyList(), modifiers = modifiers, pos = pos, end = getEnd(),
