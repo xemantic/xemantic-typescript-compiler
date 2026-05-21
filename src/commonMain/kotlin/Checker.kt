@@ -54103,7 +54103,13 @@ interface DataView {
                 // === Namespace/Module property access ===
                 // Skip import aliases — can't reliably resolve imported module exports
                 if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
-                if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class)) {
+                if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
+                    !identSymbol.flags.hasAny(SymbolFlags.Variable)) {
+                    // B63.34: Skip the namespace path when the symbol ALSO carries Variable
+                    // flag — typically caused by `mergeSymbolTable` polluting an unrelated
+                    // module symbol with a same-named `let`/`const` declaration. In that
+                    // case, the variable's type annotation should drive property lookup
+                    // (falls through to the `getTypeOfSymbol(identSymbol)` branch below).
                     val exports = identSymbol.exports
                     if (exports != null) {
                         if (isNameExportedFromNamespace(identSymbol, propName)) return
