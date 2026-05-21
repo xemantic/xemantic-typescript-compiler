@@ -117,6 +117,16 @@ class Scanner(private val text: String) {
     private var emptyDigitLiteralKind: String? = null
     fun getEmptyDigitLiteralKind(): String? = emptyDigitLiteralKind
 
+    /** Source positions of trailing `_` separators in the last numeric/BigInt literal
+     * (e.g. `123_n` → position of the `_`). Used to emit TS6188. */
+    private var numericTrailingSeparatorPositions: List<Int> = emptyList()
+    fun getNumericTrailingSeparatorPositions(): List<Int> = numericTrailingSeparatorPositions
+
+    /** Source positions of `__` (consecutive separator) sequences in the last numeric/
+     * BigInt literal. Used to emit TS6189. */
+    private var numericDoubleSeparatorPositions: List<Int> = emptyList()
+    fun getNumericDoubleSeparatorPositions(): List<Int> = numericDoubleSeparatorPositions
+
     /** Whether the last scanned numeric literal was a legacy octal (e.g. 01, 0123). */
     private var isLegacyOctalToken: Boolean = false
 
@@ -280,6 +290,8 @@ class Scanner(private val text: String) {
         bigIntHasExponent = false
         bigIntHasFraction = false
         emptyDigitLiteralKind = null
+        numericTrailingSeparatorPositions = emptyList()
+        numericDoubleSeparatorPositions = emptyList()
         isLegacyOctalToken = false
         isLeadingZeroDecimalToken = false
 
@@ -847,6 +859,10 @@ class Scanner(private val text: String) {
             isLeadingZeroDecimalToken = true
         }
 
+        // Numeric separator validation (TS6188 trailing, TS6189 double `__`) for the
+        // body up to the optional `n` BigInt suffix.
+        detectNumericSeparatorErrors(start, pos)
+
         // BigInt suffix — only for pure decimal (no legacy octal like 0123n, no float)
         // Legacy octal: starts with '0' followed by more digits (0123) — not a valid BigInt
         val isLegacyOctalCandidate = text[start] == '0' && (pos - start) > 1
@@ -861,6 +877,38 @@ class Scanner(private val text: String) {
 
         tokenValue = text.substring(start, pos)
         return SyntaxKind.NumericLiteral
+    }
+
+    /**
+     * Detect numeric separator errors in `text[start..endPos)`:
+     * - TS6188 "Numeric separators are not allowed here." at trailing `_`
+     *   (an `_` not followed by a digit / hex / etc.)
+     * - TS6189 "Multiple consecutive numeric separators are not permitted." at
+     *   any consecutive `__` sequence.
+     *
+     * Positions are added to `numericTrailingSeparatorPositions` /
+     * `numericDoubleSeparatorPositions`; the parser flushes them after scanning.
+     */
+    private fun detectNumericSeparatorErrors(start: Int, endPos: Int) {
+        val trailing = mutableListOf<Int>()
+        val doubles = mutableListOf<Int>()
+        var i = start
+        while (i < endPos) {
+            val ch = text[i]
+            if (ch == '_') {
+                val nextCh = if (i + 1 < endPos) text[i + 1] else ' '
+                if (nextCh == '_') {
+                    // The second `_` is the diagnostic position
+                    doubles.add(i + 1)
+                } else if (nextCh == ' ' || (!isHexDigit(nextCh) && nextCh != '.' && nextCh != 'e' && nextCh != 'E' && nextCh != '+' && nextCh != '-')) {
+                    // Trailing `_` (no following digit-like char)
+                    trailing.add(i)
+                }
+            }
+            i++
+        }
+        if (trailing.isNotEmpty()) numericTrailingSeparatorPositions = trailing
+        if (doubles.isNotEmpty()) numericDoubleSeparatorPositions = doubles
     }
 
     private fun scanDecimalDigits() {
@@ -881,6 +929,7 @@ class Scanner(private val text: String) {
             pos++
         }
         if (pos == digitsStart) emptyDigitLiteralKind = "hex"
+        detectNumericSeparatorErrors(digitsStart, pos)
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
@@ -902,6 +951,7 @@ class Scanner(private val text: String) {
             }
         }
         if (pos == digitsStart) emptyDigitLiteralKind = "binary"
+        detectNumericSeparatorErrors(digitsStart, pos)
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
@@ -923,6 +973,7 @@ class Scanner(private val text: String) {
             }
         }
         if (pos == digitsStart) emptyDigitLiteralKind = "octal"
+        detectNumericSeparatorErrors(digitsStart, pos)
         if (pos < end && text[pos] == 'n') {
             pos++
             tokenValue = text.substring(start, pos)
