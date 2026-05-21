@@ -1,6 +1,10 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,895 / 10,078 tests passing (~88.26%). _Round 17 (2026-05-21): /goal session targeting 15+ iterations, landed +17 net via B63.x stack (17 feature commits)._
+**Phase 4 — Checker buildout.** 8,898 / 10,078 tests passing (~88.29%). _Round 18 (2026-05-21): /goal session targeting 10 iterations, +3 via B63.27 (net-zero correctness) + B63.28 (+3, arrow lookahead `{}` depth)._
+
+_Round 18 (2026-05-21, +3 net):_
+- **B63.28 (+3)**: Track `{ }` depth in arrow-detection lookahead. `parseParenthesizedOrArrow`'s `maybeArrow` lookahead now treats `OpenBrace` as an open-delimiter (was a terminator). Fixes arrows with TypeLiteral return types like `(...): { name: string; x: number } => ({...})`. Flips `inferFromAnnotatedReturn1_ts` + `declarationEmitTypeofRest_ts` + 1 adjacent.
+- **B63.27 (net-zero correctness)**: TS2344 FP gate for TypeParam source + scope push in fn-decl visitor. (a) `checkConstraintsForTypeArgs` skips TS2344 when argType is `Type.TypeParam` with constraint that satisfies target constraint (uses constraint directly, not apparent type). (b) `checkConstraintsInStatements`'s `FunctionDeclaration` branch pushes function's TypeParam scope before visiting types/body.
 
 _Round 17 (2026-05-21, +17 net — B63.x stack):_
 - **B63.26 (+2)**: TS2591 for node-builtin bare specifier under node resolution. `checkUnresolvedModules` adds a narrow gate — when the specifier is a known node built-in (`NODE_BUILTIN_MODULES` or `node:`-prefixed) AND not an ambient module / .d.ts / node_modules package, emit TS2307 (which routes to TS2591). Flips `isolatedModulesImportExportElision_ts` both target variants.
