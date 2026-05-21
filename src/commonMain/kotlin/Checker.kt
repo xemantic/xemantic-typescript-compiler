@@ -61967,12 +61967,29 @@ interface DataView {
             is ArrowFunction -> {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = currentLocalTypes.toMutableMap()
-                populateParameterLocalTypes(expr.parameters)
+                val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
+                try {
+                    populateParameterLocalTypes(expr.parameters)
+                } finally {
+                    currentTypeParamScope = savedScope
+                }
                 when (val body = expr.body) {
                     is Block -> checkArithmeticInStatements(body.statements, source, fileName)
                     is Expression -> checkArithmeticInExpr(body, source, fileName)
                     else -> {}
                 }
+                currentLocalTypes = savedLocalTypes
+            }
+            is FunctionExpression -> {
+                val savedLocalTypes = currentLocalTypes
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
+                try {
+                    populateParameterLocalTypes(expr.parameters)
+                } finally {
+                    currentTypeParamScope = savedScope
+                }
+                checkArithmeticInStatements(expr.body.statements, source, fileName)
                 currentLocalTypes = savedLocalTypes
             }
             is TemplateExpression -> expr.templateSpans.forEach { checkArithmeticInExpr(it.expression, source, fileName) }
@@ -62136,11 +62153,12 @@ interface DataView {
         if (type.flags.hasAny(TypeFlags.EnumLiteral)) return true
         // Unions: all constituents must be valid
         if (type is Type.Union) return type.types.all { isValidArithmeticOperand(it, allowString) }
-        // 17.73: TypeParam — recurse on constraint (apparent type). Treat
-        // unconstrained as anyType-equivalent here to avoid regressing tests
-        // that previously saw `t: T` as anyType (no constraint resolved).
+        // TypeParam — recurse on constraint (apparent type). Unconstrained
+        // TypeParams are NOT valid arithmetic operands — they could be any
+        // type, including non-numeric ones. (TypeScript correctly emits
+        // TS2362/TS2363 in this case.)
         if (type is Type.TypeParam) {
-            val c = type.constraint ?: return true
+            val c = type.constraint ?: return false
             return isValidArithmeticOperand(c, allowString)
         }
         if (allowString && isStringLikeType(type)) return true
