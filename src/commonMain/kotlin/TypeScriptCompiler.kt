@@ -2361,6 +2361,26 @@ private fun emitIsolatedDeclarationsDiagnostics(
             else -> {}
         }
     }
+    // Pass 2b (B70.6): collect names of identifiers referenced as
+    // bare-identifier computed property names inside EXPORTED variable
+    // object-literal initializers. Used below as a narrow gate to fire TS9010
+    // on non-exported `let X = init` whose value flows into an exported
+    // declaration's emit shape via `[X]`. Matches TypeScript's behavior for
+    // `let u = Symbol(); export let o4 = { [u]: 1 }`.
+    val computedPropIdentRefs = mutableSetOf<String>()
+    for (stmt in sourceFile.statements) {
+        if (stmt !is VariableStatement) continue
+        if (ModifierFlag.Export !in stmt.modifiers) continue
+        for (decl in stmt.declarationList.declarations) {
+            val init = decl.initializer as? ObjectLiteralExpression ?: continue
+            for (prop in init.properties) {
+                if (prop !is PropertyAssignment) continue
+                val n = prop.name as? ComputedPropertyName ?: continue
+                val inner = n.expression
+                if (inner is Identifier) computedPropIdentRefs.add(inner.text)
+            }
+        }
+    }
     // Pass 3: walk top-level statements once for the main emissions (var-decl
     // TS9010/TS9022/TS9007, class-decl TS9021).
     for (stmt in sourceFile.statements) {
@@ -2436,6 +2456,16 @@ private fun emitIsolatedDeclarationsDiagnostics(
                         // typing the variable in .d.ts).
                         if (name.text in expandoNames) {
                             emitIsolatedDeclFnExprMissingReturn(decl, name, init, fileName, source, results)
+                        }
+                        // B70.6: TS9010 on non-exported `let X = init` when X is
+                        // referenced bare in some exported obj-literal computed
+                        // property name (`[X]`). The .d.ts emit of the exported
+                        // decl needs X's type. Narrow gate: only fires when init
+                        // is itself a TS9010-trigger expression kind.
+                        if (ModifierFlag.Export !in stmt.modifiers &&
+                            name.text in computedPropIdentRefs) {
+                            val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                            emitIsolatedDeclVarInitTs9010(name, init, isConst, fileName, source, results)
                         }
                     }
                 }
