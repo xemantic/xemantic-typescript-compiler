@@ -1559,6 +1559,49 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Round 26 session 2026-05-22 surveyed (after B69.1+B69.2 wins, +2 net):**
+- ~~`conditionalReturnExpression_ts`~~ — flipped via B69.1 (per-branch conditional return-expression TS2322).
+- ~~`indexSignatureWithInitializer1_ts`~~ — flipped via B69.2 (TS1020+TS2371 for index sig param initializer).
+- `classPropertyErrorOnNameOnly_ts` — needs switch exhaustiveness checking + function-expression return type union inference from string literal returns. Multi-piece (Blocker #1 control flow narrowing).
+- `interfaceNaming1_ts` — parser-level: we emit TS1212 ("reserved word in strict mode") for `interface` as identifier, expected TS2693 + TS1438 ("Interface must be given a name") + TS2363 arithmetic. Parser surgery needed for `interface { }` shape.
+- `contextualTypingWithFixedTypeParameters1_ts` — needs generic argument inference (Blocker #2) for `f10('', () => a => a.foo, '')` where T should be inferred as string.
+- `exhaustiveSwitchCheckCircularity_ts` — Blocker #1 (switch exhaustiveness for literal type unions).
+- `subclassThisTypeAssignable01_ts` — multi-piece: generic constraint TS2744 + this-type assignment + chain elaboration.
+- `objectLiteralFunctionArgContextualTyping_ts` — needs contextual typing of arrow params from target type + body return-type inference.
+- `protectedAccessThroughContextualThis_ts` — needs contextual this-type for function expressions assigned to `(this: Foo) => void` types.
+- `indexSignatureWithInitializer1_ts` — flipped via B69.2.
+- `es6ImportNamedImportIdentifiersParsing_ts` — needs distinguishing `yield` vs `default` in import specifiers. `yield` is allowed as local binding in modules (only when `import { yield }` shape), but `default` always needs TS1003 when used as local binding without alias. Conflict with `exportsAndImportsWithContextualKeywordNames01` which DOES expect TS1214 for `set as yield`. Multi-piece detection.
+- `defaultArgsInFunctionExpressions_ts` — needs contextual return type inference + default arg checking + TS2708 namespace-as-value. Multi-piece.
+- `bigintIndex_ts` — needs TS2538 (`bigint cannot be used as index type`) + `keyof any` resolution to `string | number | symbol`. Multi-piece.
+- `qualify_ts` — needs namespace-qualified-type assignability comparison + qualified display (`T.I` vs `I`). Multi-piece.
+- `chainedAssignment3_ts` — partial: B69.3 attempt to narrow null-skip gate on strictNullChecks regressed 1 test, reverted. Test needs both null-property-chained-assignment AND class A→B mismatch detection in outer chained assignment (b = a = new A()).
+- `functionTypeArgumentArityErrors_ts` — needs overloaded-function TS2558/TS2743 emission. Currently isOverloaded check returns early. Multi-piece extension to handle ranges from defaults + multi-overload arity sets.
+- `functionsWithModifiersInBlocks1_ts` — needs TS1184 ("Modifiers cannot appear here") for declare/export on FunctionDeclarations inside blocks + TS2393 (duplicate function impl) in block scope. Multi-piece walker.
+- `recursiveTypeRelations_ts` — Blocker #2 (generic argument inference for Array.reduce).
+- `shebangError_ts` — needs TS18026 + special parsing for `#!` not at file start.
+- `excessPropertyChecksWithNestedIntersections_ts` — needs nested-intersection excess property checking and TS6500 "expected type comes from" related info. Multi-piece.
+- `enumAssignmentCompat_ts` — needs `typeof Enum` vs `number` and `Enum` vs `typeof Enum` assignability. Multi-piece enum/namespace merge.
+- `nestedExcessPropertyChecking_ts` — needs TS2559 ("no properties in common") emission. New diagnostic.
+- `conditionalTypeAssignabilityWhenDeferred_ts` — conditional type evaluation infrastructure. Multi-piece.
+- `circularOptionalityRemoval_ts` — TS2502 + TS2372 parameter self-reference detection. Multi-piece.
+- `errorRecoveryWithDotFollowedByNamespaceKeyword_ts` — parser-recovery cascade.
+- `errorRecoveryInClassDeclaration_ts` — parser-recovery cascade.
+- `classMemberWithMissingIdentifier2_ts` — parser-recovery cascade.
+- `didYouMeanStringLiteral_ts` — needs TS2820 (spelling suggestion for string literal types) + intersection resolution of string literal unions + literal preservation through `as` cast. Multi-piece.
+- `genericMappedTypeAsClause_ts` — mapped types + as-clause. Multi-piece.
+- `genericCallWithObjectLiteralArguments1_ts` — Blocker #2 (generic argument inference).
+- `contextualTypingWithGenericAndNonGenericSignature_ts` — needs TS7006 emission for function expression params (we skip too aggressively under contextual typing).
+- `overloadsWithComputedNames_ts` — computed names + overload TS2389/TS2391. Multi-piece.
+- `extension_ts` — parser-recovery cascade for `export extension class`.
+- `duplicateIdentifiersAcrossFileBoundaries_ts` — cross-file class/interface/function merging detection. Multi-piece.
+- `downlevelLetConst16_ts` — `[]` empty-array element-type inference + iteration-of-empty-array detection. Multi-piece.
+- `narrowByClauseExpressionInSwitchTrue3_ts` — Blocker #1 (switch-true discriminant narrowing).
+- `emitCapturingThisInTupleDestructuring1_ts` — TS7041 + TS7017 + TS2493. Multi-piece.
+- `controlFlowNullTypeAndLiteral_ts` — Blocker #1.
+- `classUsedBeforeInitializedVariables_ts__target_es5/es2015__` — Blocker #1 (TS2729 used-before-init).
+- `abstractPropertyNegative_ts__target_es5/es2015__` — TS2654 abstract impl tracking + TS2676 + TS1005 accessor body. Multi-piece.
+- `jsFileCompilationBindMultipleDefaultExports_ts` — TS2652 + parser-recovery for `export default var`. Multi-piece.
+
 **Round 25 session 2026-05-22 surveyed (after B68.6 win, +1 net, post-round-24):**
 - ~~`typePredicateInherit_ts`~~ — flipped via B68.6 (TS2416 type-predicate mismatch chain).
 - `correctOrderOfPromiseMethod_ts` — needs lib subsetting (Promise not in `@lib: dom, es7`). B68.7 added AsExpression walker for TS2352 `as readonly [...]` but target blocked by lib subsetting; net-zero infra reverted.
