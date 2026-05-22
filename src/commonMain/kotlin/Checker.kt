@@ -59830,6 +59830,12 @@ interface DataView {
         val excessProps = mutableListOf<Pair<String, Int>>() // (propName, position)
         for (sourceProp in sourceProps) {
             val name = sourceProp.name
+            // B66.5: OBJECT_PROTOTYPE_PROPERTIES (toString, valueOf, hasOwnProperty, …)
+            // are inherited via Object.prototype on every object literal — they're
+            // never "excess" relative to a target shape. TypeScript checks them
+            // against the corresponding Object signature (e.g. `toString(): string`)
+            // via the standard property-type check and emits TS2322 there instead.
+            if (name in OBJECT_PROTOTYPE_PROPERTIES) continue
             if (name !in targetPropNames) {
                 // Find the position of this property in the object literal
                 val propNode = objLiteral.properties.firstOrNull { prop ->
