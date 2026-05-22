@@ -2546,12 +2546,17 @@ class Parser(
             parseExpected(SyntaxKind.CloseBracket)
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             parseSemicolon() // consume trailing ; if present (extends span to include it for TS1021)
+            // B68.4: Suppress TS1021 when the param type is an invalid keyword
+            // (any/boolean/etc.) — the checker emits TS1268 instead, matching TypeScript
+            // (TypeScript doesn't double-report TS1021 + TS1268 for the same sig).
+            val paramTypeIsInvalidKeyword = paramType is KeywordTypeNode &&
+                paramType.kind !in INDEX_SIG_ALLOWED_PARAM_KEYWORDS
             if (questionPos >= 0) {
                 // TS1019: An index signature parameter cannot have a question mark.
                 // Suppress TS1021 when TS1019 fires (TypeScript doesn't emit both)
                 reportError("An index signature parameter cannot have a question mark.", code = 1019,
                     overrideStart = questionPos, overrideLength = 1)
-            } else if (!hasExtraParams && type == null) {
+            } else if (!hasExtraParams && type == null && !paramTypeIsInvalidKeyword) {
                 // TS1021: An index signature must have a type annotation.
                 val nodeEnd = scanner.getPrevTokenEnd()
                 reportError("An index signature must have a type annotation.", code = 1021,
@@ -7057,6 +7062,19 @@ class Parser(
 private val RESERVED_TYPE_KEYWORD_NAMES = setOf(
     "string", "number", "boolean", "any", "unknown", "never",
     "object", "symbol", "bigint", "undefined",
+)
+
+/**
+ * B68.4: Keyword TypeNode kinds that are valid as the parameter type of an index
+ * signature. Per TypeScript, only `string`, `number`, `symbol`, and (since 4.4)
+ * template literal types are allowed. Anything else (any, boolean, void, etc.)
+ * triggers TS1268 from the Checker. The Parser uses this set to suppress the
+ * conflicting TS1021 "must have a type annotation" emission for the same sig.
+ */
+private val INDEX_SIG_ALLOWED_PARAM_KEYWORDS = setOf(
+    SyntaxKind.StringKeyword,
+    SyntaxKind.NumberKeyword,
+    SyntaxKind.SymbolKeyword,
 )
 
 /**

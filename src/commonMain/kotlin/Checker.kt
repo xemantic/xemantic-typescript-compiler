@@ -49680,6 +49680,16 @@ interface DataView {
             checkIndexSigsInMembers(literal.members, typeParamNames, source, fileName)
             return
         }
+        // B68.4: VariableStatement with TypeLiteral annotation — surface index-sig
+        // diagnostics for `var x: { [k: any]: T }` patterns. Each decl's annotation
+        // is checked independently.
+        if (stmt is VariableStatement) {
+            for (decl in stmt.declarationList.declarations) {
+                val literal = decl.type as? TypeLiteral ?: continue
+                checkIndexSigsInMembers(literal.members, emptySet(), source, fileName)
+            }
+            return
+        }
         val members: List<ClassElement> = when (stmt) {
             is ClassDeclaration -> stmt.members
             is InterfaceDeclaration -> stmt.members.filterIsInstance<ClassElement>()
