@@ -1,10 +1,11 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 24 (2026-05-22): /goal session (10-iteration target) — 2 successful commits, +3 net via B68.1-B68.2._
+**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 24 (2026-05-22): /goal session (10-iteration target) — 3 successful commits, +3 net via B68.1-B68.2 + B68.4 (net-zero infra)._
 
-_Round 24 (2026-05-22, +3 net via 2 commits + 1 reverted):_
-- **B68.1 (+2)**: TS1147 for `import * as X from "Y"` / `import X from "Y"` / `import {a} from "Y"` inside namespace bodies. Added ImportDeclaration branch to `walkRequireImportInNamespace` (the existing TS1147 walker for `import = require()` form). Squiggle lands on the moduleSpecifier StringLiteralNode (includes surrounding quotes). Flips both `es5ModuleInternalNamedImports_ts__target_es5__` and `__target_es2015__`.
+_Round 24 (2026-05-22, +3 net via 3 commits + 1 reverted):_
+- **B68.4 (net-zero infra)**: Two coordinated changes for index-signature param-type diagnostics. (a) Checker `checkIndexSigInStatement` extended to walk `VariableStatement` declarations whose type annotation is a `TypeLiteral` — so TS1268 now fires for `var foo: { [index: any]; }` patterns (was only covering class / interface / module / TypeAliasDeclaration). (b) Parser suppresses TS1021 when the index sig param type is an invalid `KeywordTypeNode` (any/boolean/void/etc.) — TypeScript doesn't double-report TS1021 + TS1268 for the same signature. New `INDEX_SIG_ALLOWED_PARAM_KEYWORDS` constant in Parser.kt. Net zero on suite — `arraySigChecking_ts` still fails on 3 other MISS TS2322s, but diff is reduced from 5 to 3.
 - **B68.2 (+1)**: TS2484 "Export declaration conflicts with exported declaration of 'X'." for `export { x };` (no `from`) inside a namespace block where `x` is already exported from a sibling/merged block of the same merged namespace. New checker `checkExportConflictInNamespace` pre-computes per-file `Map<namespaceName, Set<exportedNames>>` of file-scope merged blocks, then walks each block's body for ExportSpecifiers whose name conflicts. Squiggle on the ExportSpecifier's name identifier. Flips `multipleExports_ts`.
+- **B68.1 (+2)**: TS1147 for `import * as X from "Y"` / `import X from "Y"` / `import {a} from "Y"` inside namespace bodies. Added ImportDeclaration branch to `walkRequireImportInNamespace` (the existing TS1147 walker for `import = require()` form). Squiggle lands on the moduleSpecifier StringLiteralNode (includes surrounding quotes). Flips both `es5ModuleInternalNamedImports_ts__target_es5__` and `__target_es2015__`.
 - **B68.3 (reverted)**: Tried removing `options.allowJs` from `forceJsxForJs` (which forces JSX parsing in `.js` files). Hypothesis was that allowJs alone shouldn't enable JSX. Result: -8 regressions in suite. Reverted. Suggests some tests rely on the current behavior even though TypeScript-the-tool requires explicit `--jsx` for `.js` files.
 
 ---
