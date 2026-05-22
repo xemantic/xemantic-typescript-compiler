@@ -39625,6 +39625,11 @@ interface DataView {
         try {
             val targetType = getTypeFromTypeNode(retTypeNode)
             if (targetType === anyType || targetType === errorType) return
+            // B69.1: Per-branch conditional return-expression checking. Mirrors
+            // TypeScript's behavior of checking each branch of `cond ? a : b`
+            // against the declared return type independently, so each side gets
+            // its own TS2322 diagnostic at its own position.
+            if (checkConditionalReturnBranches(body, targetType, retTypeNode, source, fileName)) return
             val bodyType = getTypeOfExpression(body)
             if (bodyType === anyType || bodyType === errorType) return
             // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
@@ -39653,6 +39658,71 @@ interface DataView {
                 length = length,
             ))
         } catch (_: StackOverflowError) { /* circular */ }
+    }
+
+    /**
+     * B69.1: If `expr` (after unwrapping parens) is a ConditionalExpression, check
+     * each branch (whenTrue / whenFalse) independently against [targetType] and
+     * emit per-branch TS2322 at the branch's inner expression position. Mirrors
+     * TypeScript's behavior — `cond ? 1 : 2` against return type `3` emits two
+     * separate errors, not one aggregated error.
+     *
+     * Returns `true` if either branch emitted a diagnostic; caller should suppress
+     * the outer aggregated emission in that case.
+     *
+     * Skips any branch whose type is `any`/`error` (e.g. `getAny()`).
+     * Recurses through ParenthesizedExpression wrappers to land the squiggle on
+     * the innermost expression. AsExpression / non-Conditional expressions fall
+     * through (return false) so the caller emits its normal outer-level error.
+     */
+    private fun checkConditionalReturnBranches(
+        expr: Expression?,
+        targetType: Type,
+        targetNode: TypeNode,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        if (expr == null) return false
+        val unwrapped = unwrapParens(expr)
+        if (unwrapped !is ConditionalExpression) return false
+        var emitted = false
+        for (branch in listOf(unwrapped.whenTrue, unwrapped.whenFalse)) {
+            val inner = unwrapParens(branch)
+            // Recurse into nested conditionals: `cond ? (a ? b : c) : d` — each leaf
+            // branch should be checked individually.
+            if (inner is ConditionalExpression) {
+                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName)) emitted = true
+                continue
+            }
+            // Compute branch type with literal preservation when target contains literals.
+            val branchType = try {
+                if (propTypeContainsLiteral(targetType)) {
+                    literalTypeOfExpression(inner) ?: getTypeOfExpression(inner)
+                } else getTypeOfExpression(inner)
+            } catch (_: StackOverflowError) { continue }
+            if (branchType === anyType || branchType === errorType) continue
+            if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+            if (!canUseTypeEngine(branchType, targetType)) continue
+            if (checkTypeRelatedTo(branchType, targetType, assignableRelation)) continue
+            val displaySource = typeToString(branchType)
+            val displayTarget = formatTypeForDisplay(targetNode) ?: typeToString(targetType)
+            val start = inner.pos
+            val length = expressionTrueEnd(inner) - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            emitted = true
+        }
+        return emitted
     }
 
     /**
@@ -42522,6 +42592,13 @@ interface DataView {
         if (returnTypeNode != null) {
             try {
                 val targetType = getTypeFromTypeNode(returnTypeNode)
+                // B69.1: Per-branch conditional return-expression checking. Must run
+                // BEFORE the standard aggregated check so per-branch positions land
+                // instead of one outer error.
+                if (targetType !== anyType && targetType !== errorType &&
+                    checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName)) {
+                    return
+                }
                 // 16.0: contextual typing — set return type as context for arrow/function
                 // return expressions so their params get typed from the expected signature.
                 val savedContextual = contextualType
