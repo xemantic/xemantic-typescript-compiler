@@ -66145,55 +66145,76 @@ interface DataView {
             try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
         } else symbol
 
-        // Get type parameters from the function/class declarations
-        var maxTypeParams = -1
-        var minTypeParams = -1
-        var isOverloaded = false
+        // Get type parameters from the function/class declarations. For overloaded
+        // functions, collect per-overload (min, max) ranges and compute the union
+        // of acceptable type-arg counts. Implementation declarations (bodied
+        // FunctionDeclaration when there are also body-less overload signatures)
+        // are skipped — TypeScript's TS2558/TS2743 only consider the declared
+        // overload signatures, not the impl signature.
+        val perOverloadRanges = mutableListOf<IntRange>()
+        var lastNonFnMaxParams = -1
+        var lastNonFnMinParams = -1
+        val fnDecls = resolved.declarations.filterIsInstance<FunctionDeclaration>()
+        val hasOverloadSigs = fnDecls.count { it.body == null } >= 1 && fnDecls.size >= 2
+        var anyFnDecl = false
         for (decl in resolved.declarations) {
-            val typeParams = when (decl) {
+            when (decl) {
                 is FunctionDeclaration -> {
-                    // Check for overloaded functions (multiple declarations)
-                    if (resolved.declarations.count { it is FunctionDeclaration } > 1) {
-                        isOverloaded = true
-                    }
-                    decl.typeParameters
+                    // When overload signatures exist, skip the impl (bodied) decl
+                    if (hasOverloadSigs && decl.body != null) continue
+                    val tps = decl.typeParameters
+                    val paramCount = tps?.size ?: 0
+                    val minRequired = tps?.count { it.default == null } ?: 0
+                    perOverloadRanges.add(minRequired..paramCount)
+                    anyFnDecl = true
                 }
-                is ClassDeclaration -> decl.typeParameters
-                is InterfaceDeclaration -> decl.typeParameters
+                is ClassDeclaration -> {
+                    val tps = decl.typeParameters ?: continue
+                    val paramCount = tps.size
+                    val minRequired = tps.count { it.default == null }
+                    if (lastNonFnMaxParams < 0 || paramCount > lastNonFnMaxParams) lastNonFnMaxParams = paramCount
+                    if (lastNonFnMinParams < 0 || minRequired < lastNonFnMinParams) lastNonFnMinParams = minRequired
+                }
+                is InterfaceDeclaration -> {
+                    val tps = decl.typeParameters ?: continue
+                    val paramCount = tps.size
+                    val minRequired = tps.count { it.default == null }
+                    if (lastNonFnMaxParams < 0 || paramCount > lastNonFnMaxParams) lastNonFnMaxParams = paramCount
+                    if (lastNonFnMinParams < 0 || minRequired < lastNonFnMinParams) lastNonFnMinParams = minRequired
+                }
                 is VariableDeclaration -> {
-                    // Variable holding a generic arrow function or function expression
-                    when (val init = decl.initializer) {
+                    val tps = when (val init = decl.initializer) {
                         is ArrowFunction -> init.typeParameters
                         is FunctionExpression -> init.typeParameters
                         else -> null
-                    }
+                    } ?: continue
+                    val paramCount = tps.size
+                    val minRequired = tps.count { it.default == null }
+                    if (lastNonFnMaxParams < 0 || paramCount > lastNonFnMaxParams) lastNonFnMaxParams = paramCount
+                    if (lastNonFnMinParams < 0 || minRequired < lastNonFnMinParams) lastNonFnMinParams = minRequired
                 }
-                else -> null
-            } ?: continue
-
-            val paramCount = typeParams.size
-            val minRequired = typeParams.count { it.default == null }
-            if (maxTypeParams < 0 || paramCount > maxTypeParams) maxTypeParams = paramCount
-            if (minTypeParams < 0 || minRequired < minTypeParams) minTypeParams = minRequired
+                else -> {}
+            }
         }
 
-        if (maxTypeParams < 0) return // no generic declarations found
-        // Skip overloaded functions — each overload may have different type param counts
-        if (isOverloaded) return
+        // Always also include the non-function decls (classes/interfaces are NOT
+        // overloaded — they merge into a single declared shape).
+        if (lastNonFnMaxParams >= 0) {
+            perOverloadRanges.add(lastNonFnMinParams..lastNonFnMaxParams)
+        }
+        if (perOverloadRanges.isEmpty()) return
+        // If only FunctionDeclarations were found AND none have typeParameters,
+        // skip emission unless overloads (then we report TS2558 "Expected 0").
+        if (!anyFnDecl && lastNonFnMaxParams < 0) return
 
         val providedCount = typeArguments.size
-        // Check: too few or too many type arguments
-        if (providedCount in minTypeParams..maxTypeParams) return // correct range
-        // Skip when there are default type parameters — TypeScript uses different messages
-        // (TS2707 etc.) which we don't implement yet
-        if (minTypeParams != maxTypeParams) return
+        // Acceptable counts = union of all overload ranges
+        if (perOverloadRanges.any { providedCount in it }) return
 
         // Compute squiggle span — covers the type argument text only (no < >)
         val firstArg = typeArguments.first()
         val lastArg = typeArguments.last()
         val start = firstArg.pos
-        // lastArg.end overshoots (includes next token start), so find the actual end
-        // by scanning backwards from lastArg.end for non-whitespace before '>'
         var endPos = lastArg.end
         while (endPos > start && endPos < source.length) {
             val ch = source[endPos - 1]
@@ -66202,10 +66223,66 @@ interface DataView {
             } else break
         }
         val length = endPos - start
-
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        // Decide TS2743 (overload-aware) vs TS2558 (out-of-range or single-overload).
+        // TS2743 fires when providedCount sits BETWEEN overload mins/maxes (i.e. some
+        // overload accepts fewer and some accepts more) but no overload's exact range
+        // covers it.
+        val overallMin = perOverloadRanges.minOf { it.first }
+        val overallMax = perOverloadRanges.maxOf { it.last }
+        if (perOverloadRanges.size >= 2 && providedCount in (overallMin + 1) until overallMax) {
+            // TS2743 — list the "bracketing" boundary counts: for each overload
+            // entirely BELOW providedCount, take its max; for each overload
+            // entirely ABOVE providedCount, take its min. Matches TypeScript's
+            // wording "either N or M" / "N, M, or P".
+            val brackets = sortedSetOf<Int>()
+            for (r in perOverloadRanges) {
+                if (r.last < providedCount) brackets.add(r.last)
+                else if (r.first > providedCount) brackets.add(r.first)
+            }
+            val list = brackets.toList()
+            val countListText = when (list.size) {
+                1 -> "${list[0]}"
+                2 -> "either ${list[0]} or ${list[1]}"
+                else -> list.dropLast(1).joinToString(", ") + ", or ${list.last()}"
+            }
+            diagnostics.add(Diagnostic(
+                message = "No overload expects $providedCount type arguments, but overloads do exist that expect $countListText type arguments.",
+                category = DiagnosticCategory.Error, code = 2743,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+            ))
+            return
+        }
+
+        // TS2558 — "Expected X type arguments, but got Y." X is the boundary overload's range:
+        // - if providedCount > overallMax → X = overallMax
+        // - if providedCount < overallMin → X = overallMin
+        // - single overload with default-typed params: X = "min-max"
+        val expectedText = if (providedCount > overallMax) {
+            overallMax.toString()
+        } else if (providedCount < overallMin) {
+            overallMin.toString()
+        } else {
+            // Edge: providedCount IS in some overload range but our check missed?
+            // Fallback: pick the closest range.
+            val targetRange = perOverloadRanges.minByOrNull {
+                if (providedCount > it.last) providedCount - it.last
+                else it.first - providedCount
+            } ?: perOverloadRanges.first()
+            if (targetRange.first == targetRange.last) "${targetRange.first}"
+            else "${targetRange.first}-${targetRange.last}"
+        }
+        // When there's only ONE overload range and it spans (min..max with min<max), prefer "min-max".
+        val finalExpected = if (perOverloadRanges.size == 1) {
+            val r = perOverloadRanges[0]
+            if (r.first == r.last) "${r.first}"
+            else "${r.first}-${r.last}"
+        } else expectedText
+
         diagnostics.add(Diagnostic(
-            message = "Expected $maxTypeParams type arguments, but got $providedCount.",
+            message = "Expected $finalExpected type arguments, but got $providedCount.",
             category = DiagnosticCategory.Error,
             code = 2558,
             fileName = fileName,
