@@ -53310,7 +53310,39 @@ interface DataView {
                     }
                 }
             }
-            is ForOfStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            is ForOfStatement -> {
+                // B70.4: for-of loop variable types as the iterable's element type
+                // (Array<T> → T, string → string). Push into currentLocalTypes for the
+                // body walk. Conservative: only handle Array<T> Reference and string
+                // iterables — other shapes (Iterable, generators) fall through.
+                val forOfVarName = when (val init = stmt.initializer) {
+                    is Identifier -> init.text
+                    is VariableDeclarationList -> (init.declarations.firstOrNull()?.name as? Identifier)?.text
+                    else -> null
+                }
+                val elemType: Type? = if (forOfVarName != null) {
+                    try {
+                        val iterableT = getTypeOfExpression(stmt.expression)
+                        when {
+                            iterableT === stringType -> stringType
+                            iterableT is Type.Reference && iterableT.target?.symbol?.name == "Array" ->
+                                iterableT.resolvedTypeArguments?.firstOrNull()
+                            else -> null
+                        }
+                    } catch (_: StackOverflowError) { null }
+                } else null
+                val prevType = forOfVarName?.let { currentLocalTypes[it] }
+                val hadPrev = forOfVarName != null && currentLocalTypes.containsKey(forOfVarName)
+                if (forOfVarName != null && elemType != null) currentLocalTypes[forOfVarName] = elemType
+                try {
+                    checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+                } finally {
+                    if (forOfVarName != null && elemType != null) {
+                        if (hadPrev) currentLocalTypes[forOfVarName] = prevType!!
+                        else currentLocalTypes.remove(forOfVarName)
+                    }
+                }
+            }
             is WhileStatement -> {
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
