@@ -59140,7 +59140,10 @@ interface DataView {
             // are never "missing" — every JS object has them via the prototype chain.
             // Without this filter, an empty `{a:string}` fails to satisfy `Object` because
             // `constructor` etc. are listed as Object's own properties in our embedded lib.
-            if (targetName in OBJECT_PROTOTYPE_PROPERTIES) continue
+            // B67.3: only skip when source doesn't EXPLICITLY define this property — if
+            // source has its own `toString: 5`, fall through to the type-compatibility
+            // check (number vs () => string emits TS2322 per `assignmentToObject_ts`).
+            if (targetName in OBJECT_PROTOTYPE_PROPERTIES && !sourceMembers.containsKey(targetName)) continue
             // 17.27: When source is a function type (has callSignatures), Function.prototype
             // methods (call/apply/bind) are implicitly available through the apparent type.
             // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
