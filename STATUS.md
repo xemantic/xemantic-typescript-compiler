@@ -1,6 +1,15 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,924 / 10,078 tests passing (~88.55%). _Round 23 (2026-05-22): /goal session (10-iteration target) — 7 successful commits, +8 net via B67.1-B67.4 + B67.6-B67.7._
+**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 24 (2026-05-22): /goal session (10-iteration target) — 2 successful commits, +3 net via B68.1-B68.2._
+
+_Round 24 (2026-05-22, +3 net via 2 commits + 1 reverted):_
+- **B68.1 (+2)**: TS1147 for `import * as X from "Y"` / `import X from "Y"` / `import {a} from "Y"` inside namespace bodies. Added ImportDeclaration branch to `walkRequireImportInNamespace` (the existing TS1147 walker for `import = require()` form). Squiggle lands on the moduleSpecifier StringLiteralNode (includes surrounding quotes). Flips both `es5ModuleInternalNamedImports_ts__target_es5__` and `__target_es2015__`.
+- **B68.2 (+1)**: TS2484 "Export declaration conflicts with exported declaration of 'X'." for `export { x };` (no `from`) inside a namespace block where `x` is already exported from a sibling/merged block of the same merged namespace. New checker `checkExportConflictInNamespace` pre-computes per-file `Map<namespaceName, Set<exportedNames>>` of file-scope merged blocks, then walks each block's body for ExportSpecifiers whose name conflicts. Squiggle on the ExportSpecifier's name identifier. Flips `multipleExports_ts`.
+- **B68.3 (reverted)**: Tried removing `options.allowJs` from `forceJsxForJs` (which forces JSX parsing in `.js` files). Hypothesis was that allowJs alone shouldn't enable JSX. Result: -8 regressions in suite. Reverted. Suggests some tests rely on the current behavior even though TypeScript-the-tool requires explicit `--jsx` for `.js` files.
+
+---
+
+
 
 _Round 23 (2026-05-22, +8 net via 7 commits + 2 reverted):_
 - **B67.7 (+2)**: TS1194 "Export declarations are not permitted in a namespace." for `export { x };` (no `from`) inside namespace bodies. New ExportDeclaration branch in `walkDefaultExportInNamespace` (the walker added by B67.6). Conservative gate: `stmt.moduleSpecifier == null` — skips `export ... from "X"` and `export * from X` forms whose parser-recovery shape interferes with the gate (see B67.5 revert). Squiggle covers entire stmt source span (computed by forward-scanning for `;` or `\n`). Net +2 on the full suite (multipleExports_ts itself still missing TS2484 chain elaboration, but adjacent tests like `es6ModuleInternalNamedImports*` flipped).
