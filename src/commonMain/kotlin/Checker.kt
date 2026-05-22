@@ -518,6 +518,13 @@ class Checker(
     private val umdGlobalNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * Names declared inside any file's `declare global { var X: ... }` block.
+     * Used to suppress TS2591 (node-builtin "did you mean @types/node?")
+     * when the user has explicitly augmented the global namespace.
+     */
+    private val globalAugmentationNames: MutableSet<String> = mutableSetOf()
+
+    /**
      * 17.33: file names that are modules (have imports/exports OR — for
      * JS files — a top-level `require(...)` call). Used as the second
      * gate for TS2686 emission. Populated alongside [umdGlobalNames].
@@ -2279,6 +2286,38 @@ class Checker(
             val isModule = isModuleFile(result.sourceFile.statements) ||
                 (isJs && requireRegex.containsMatchIn(source))
             if (isModule) moduleFiles.add(fileName)
+            // Collect `declare global { var X: ... }` declared names so TS2591
+            // (and similar global-aware checks) can skip names the user explicitly
+            // augmented onto the global namespace.
+            collectGlobalAugmentationNames(result.sourceFile.statements)
+        }
+    }
+
+    /** Walk statements collecting names declared inside `declare global { ... }` blocks. */
+    private fun collectGlobalAugmentationNames(statements: List<Statement>) {
+        for (stmt in statements) {
+            if (stmt is ModuleDeclaration &&
+                (stmt.name as? Identifier)?.text == "global" &&
+                ModifierFlag.Declare in stmt.modifiers
+            ) {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    for (inner in body.statements) {
+                        when (inner) {
+                            is VariableStatement -> for (decl in inner.declarationList.declarations) {
+                                (decl.name as? Identifier)?.text?.let { globalAugmentationNames.add(it) }
+                            }
+                            is FunctionDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
+                            is ClassDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
+                            else -> {}
+                        }
+                    }
+                }
+            } else if (stmt is ModuleDeclaration) {
+                // Recurse into nested modules — `declare module "X" { global { ... } }` etc.
+                val body = stmt.body
+                if (body is ModuleBlock) collectGlobalAugmentationNames(body.statements)
+            }
         }
     }
 
@@ -10148,6 +10187,13 @@ class Checker(
             } else {
                 fileScope.names.addAll(KNOWN_GLOBALS)
             }
+            // B66.1: In `.js`/`.jsx` files, CommonJS implicit globals (`module`,
+            // `process`, `require`, `Buffer`) are always available (no TS2304/TS2591).
+            // Same for names augmented via any file's `declare global { var X }`.
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) {
+                fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
+            }
+            fileScope.names.addAll(globalAugmentationNames)
 
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
@@ -12940,7 +12986,11 @@ class Checker(
         // Skip keywords that parse as identifiers in our AST
         // Exception: `abstract` used in expression position (e.g. after ASI for
         // `abstract\nclass X {}` at top level) IS reported as TS2304 by TypeScript.
-        if (name in KEYWORD_IDENTIFIERS && name != "abstract") return
+        // Exception: node-builtin globals like `module` (contextual keyword for
+        // `module X {}` legacy namespace syntax) still get TS2591 when used as
+        // bare identifiers because `@types/node` isn't loaded.
+        if (name in KEYWORD_IDENTIFIERS && name != "abstract" &&
+            name !in NODE_BUILTIN_GLOBALS_TS2591) return
         if (name == "abstract" && (inTypePosition || scope.has(name))) return
         // TS2583: forward-declarable ES2015+ lib type referenced in type position
         // under `@noLib: true` or `@lib` that excludes es2015+. The KNOWN_GLOBALS set
@@ -13021,6 +13071,26 @@ class Checker(
                 ))
                 return
             }
+        }
+
+        // B66.1: TS2591 for node-builtin globals before TS2552 spelling suggestion
+        // (otherwise `require` spell-suggests `Required`, `process` → `Process`, etc.).
+        // Suppressed in `.js`/`.jsx` files (CommonJS implicit globals) and when any file's
+        // `declare global { var X }` augments the global namespace.
+        if (name in NODE_BUILTIN_GLOBALS_TS2591 &&
+            !fileName.endsWith(".js") && !fileName.endsWith(".jsx") &&
+            name !in globalAugmentationNames) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find name '$name'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
+                category = DiagnosticCategory.Error,
+                code = 2591,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
         }
 
         // Try to find a spelling suggestion (TS2552)
@@ -19783,6 +19853,16 @@ class Checker(
          * These are always considered "in scope" to avoid false positives
          * when we don't have actual lib.d.ts type definitions.
          */
+        /**
+         * Node.js runtime globals that require `@types/node` to be resolvable.
+         * TypeScript emits TS2591 (with the "@types/node" hint) for unresolved
+         * references rather than the generic TS2304. We don't ship `@types/node`,
+         * so these always resolve as unresolved unless the user declared them.
+         */
+        private val NODE_BUILTIN_GLOBALS_TS2591: Set<String> = setOf(
+            "Buffer", "module", "process", "require",
+        )
+
         private val KNOWN_GLOBALS: Set<String> = setOf(
             // Special identifiers
             "undefined", "globalThis",
@@ -19909,8 +19989,11 @@ class Checker(
             // Windows scripting / runtime
             "WScript", "Windows",
             // Node.js
-            "require", "module", "exports", "global",
-            "process", "Buffer",
+            // NOTE: `require`, `module`, `process`, `Buffer` are intentionally
+            // NOT in KNOWN_GLOBALS — they require `@types/node` to be available.
+            // TypeScript emits TS2591 (with "@types/node" hint) for unresolved
+            // references; see `NODE_BUILTIN_GLOBALS_TS2591` below.
+            "exports", "global",
             "__dirname", "__filename",
             "__non_webpack_require__",
             // Web Worker APIs
@@ -20058,8 +20141,9 @@ class Checker(
             "crypto", "performance",
             "indexedDB", "structuredClone", "reportError",
             "WScript", "Windows",
-            "require", "module", "exports", "global",
-            "process", "__dirname", "__filename", "__non_webpack_require__",
+            // require, module, process, Buffer — removed (see KNOWN_GLOBALS note).
+            "exports", "global",
+            "__dirname", "__filename", "__non_webpack_require__",
             "importScripts",
             "describe", "it", "test", "expect", "jest",
             "beforeEach", "afterEach", "beforeAll", "afterAll", "suite",
