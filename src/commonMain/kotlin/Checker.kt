@@ -10606,6 +10606,16 @@ class Checker(
                         // requires a value, but T resolves only to an enclosing type
                         // parameter (no value-side binding in any outer scope).
                         emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, scope, source, fileName)
+                        // B67.2: TS2562 — `class C<T> extends Base<T>()` references C's
+                        // own type parameters in the heritage expression's call/new
+                        // type-args. T isn't in scope at the heritage expression's
+                        // evaluation point.
+                        if (clause.token == SyntaxKind.ExtendsKeyword && !stmt.typeParameters.isNullOrEmpty()) {
+                            val ownTypeParamNames = stmt.typeParameters!!.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                            if (ownTypeParamNames.isNotEmpty()) {
+                                checkBaseExprForOwnTypeParamRefs(type.expression, ownTypeParamNames, source, fileName)
+                            }
+                        }
                         // 17.226: TS2694 for `implements ns.Member` where ns is a namespace and
                         // Member is missing from its exports. Limited to implements clause +
                         // single-level PropertyAccess to keep regression risk low.
@@ -11032,6 +11042,83 @@ class Checker(
      * @param parentScope scope BEFORE class type parameters were added — used to
      *   detect whether the name has a value-side binding outside the class.
      */
+    /**
+     * B67.2: Emit TS2562 "Base class expressions cannot reference class type
+     * parameters." for `class C<T> extends Base<T>()` patterns where the
+     * heritage expression's CallExpression/NewExpression typeArguments reference
+     * the class's own type parameters. The class's type parameters aren't in
+     * scope at heritage-expression evaluation time. Squiggle lands on the
+     * offending TypeParam identifier inside the typeArguments.
+     */
+    private fun checkBaseExprForOwnTypeParamRefs(
+        expr: Expression, ownTypeParamNames: Set<String>,
+        source: String, fileName: String,
+    ) {
+        when (expr) {
+            is CallExpression -> {
+                expr.typeArguments?.forEach { ta ->
+                    walkTypeNodeForOwnTPRefs(ta, ownTypeParamNames, source, fileName)
+                }
+                checkBaseExprForOwnTypeParamRefs(expr.expression, ownTypeParamNames, source, fileName)
+                expr.arguments.forEach { arg ->
+                    checkBaseExprForOwnTypeParamRefs(arg, ownTypeParamNames, source, fileName)
+                }
+            }
+            is NewExpression -> {
+                expr.typeArguments?.forEach { ta ->
+                    walkTypeNodeForOwnTPRefs(ta, ownTypeParamNames, source, fileName)
+                }
+                checkBaseExprForOwnTypeParamRefs(expr.expression, ownTypeParamNames, source, fileName)
+                expr.arguments?.forEach { arg ->
+                    checkBaseExprForOwnTypeParamRefs(arg, ownTypeParamNames, source, fileName)
+                }
+            }
+            is PropertyAccessExpression -> {
+                checkBaseExprForOwnTypeParamRefs(expr.expression, ownTypeParamNames, source, fileName)
+            }
+            is ParenthesizedExpression -> {
+                checkBaseExprForOwnTypeParamRefs(expr.expression, ownTypeParamNames, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkTypeNodeForOwnTPRefs(
+        node: TypeNode, ownTypeParamNames: Set<String>,
+        source: String, fileName: String,
+    ) {
+        when (node) {
+            is TypeReference -> {
+                val name = node.typeName
+                if (name is Identifier && name.text in ownTypeParamNames) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Base class expressions cannot reference class type parameters.",
+                        category = DiagnosticCategory.Error,
+                        code = 2562,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = name.pos,
+                        length = name.text.length,
+                    ))
+                }
+                node.typeArguments?.forEach {
+                    walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName)
+                }
+            }
+            is UnionType -> node.types.forEach { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+            is IntersectionType -> node.types.forEach { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+            is ArrayType -> walkTypeNodeForOwnTPRefs(node.elementType, ownTypeParamNames, source, fileName)
+            is TupleType -> node.elements.forEach { el ->
+                val ty: TypeNode = if (el is NamedTupleMember) el.type else el
+                walkTypeNodeForOwnTPRefs(ty, ownTypeParamNames, source, fileName)
+            }
+            is ParenthesizedType -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            else -> {}
+        }
+    }
+
     private fun emitTs2304ForHeritageExtendsTypeParam(
         expr: Expression, classScope: NameScope, parentScope: NameScope,
         source: String, fileName: String,
