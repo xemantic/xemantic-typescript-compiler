@@ -60852,6 +60852,28 @@ interface DataView {
      * literals, void, undefined, null, never). Used to guard function-to-function
      * structural comparison against generic-inference FPs.
      */
+    /**
+     * B70.7: Format target's params [startIdx..end] as a labeled-tuple display
+     * `[name: type, name: type, ...name: type]` for use in rest-param elaboration
+     * (source rest param absorbing target positional params). Uses the param's
+     * AST type-node source text when available (preserves `T` for unbound
+     * TypeParams in function-type alias bodies); falls back to `typeToString`.
+     * Returns null if any param lacks a usable display.
+     */
+    private fun formatTargetParamsAsTuple(targetParams: List<Symbol>, startIdx: Int): String? {
+        val parts = mutableListOf<String>()
+        for (i in startIdx until targetParams.size) {
+            val sym = targetParams[i]
+            val paramDecl = sym.valueDeclaration as? Parameter ?: return null
+            val isRest = paramDecl.dotDotDotToken
+            val typeNode = paramDecl.type
+            val typeText = typeNode?.let { formatTypeForDisplay(it) } ?: typeToString(getTypeOfSymbol(sym))
+            val prefix = if (isRest) "..." else ""
+            parts.add("$prefix${sym.name}: $typeText")
+        }
+        return "[${parts.joinToString(", ")}]"
+    }
+
     private fun sigHasOnlySimpleTypes(sig: Signature): Boolean {
         val ret = sig.resolvedReturnType ?: return false
         if (ret !== voidType && !isSimpleCheckableType(ret)) return false
@@ -60936,6 +60958,25 @@ interface DataView {
                 continue
             }
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, assignableRelation)) {
+                // B70.7: When source's param at position i is REST and target has
+                // a non-rest param at position i (and may have more positions
+                // after), TypeScript constructs a labeled-tuple `[name: type, ...]`
+                // from target's params [i..end] and displays that as the "from"
+                // type, comparing it against source's rest type as a whole.
+                // Example (`genericRestTypes_ts`):
+                //   source `(...args: never) => void`, target `(x:string, ...rest:T) => void`
+                //   → chain `Type '[x: string, ...rest: T]' is not assignable to type 'never'.`
+                val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                val targetIsRest = (targetParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                if (sourceIsRest && i == sourceParams.size - 1 && !targetIsRest && targetParams.size > i) {
+                    val tupleDisplay = formatTargetParamsAsTuple(targetParams, i)
+                    if (tupleDisplay != null) {
+                        return listOf(
+                            "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                            "    Type '$tupleDisplay' is not assignable to type '${typeToString(sourceParamType)}'.",
+                        )
+                    }
+                }
                 // 17.15a: When both inner param types are function types, recurse
                 // for deeper "Types of parameters X and Y are incompatible" chain
                 // matching TypeScript's contravariant elaboration. The inner call's
