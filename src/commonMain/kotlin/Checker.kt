@@ -14091,6 +14091,32 @@ class Checker(
                     else -> {}
                 }
             }
+            is ImportDeclaration -> {
+                // B68.1: TS1147 for `import * as X from "Y"` / `import X from "Y"` /
+                // `import "Y"` / `import {a} from "Y"` inside namespace bodies. Squiggle
+                // lands on the moduleSpecifier (typically a StringLiteralNode, includes
+                // the surrounding quotes).
+                if (!inNamespace) return
+                val expr = stmt.moduleSpecifier
+                val (start, length) = when (expr) {
+                    is StringLiteralNode -> {
+                        val len = (expr.rawText?.length ?: expr.text.length) + 2
+                        expr.pos to len
+                    }
+                    else -> expr.pos to (expr.end - expr.pos).coerceAtLeast(1)
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Import declarations in a namespace cannot reference a module.",
+                    category = DiagnosticCategory.Error,
+                    code = 1147,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
             is ImportEqualsDeclaration -> {
                 if (!inNamespace) return
                 val ref = stmt.moduleReference as? ExternalModuleReference ?: return
