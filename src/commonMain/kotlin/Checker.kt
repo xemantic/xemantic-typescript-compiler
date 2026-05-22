@@ -949,6 +949,9 @@ class Checker(
         checkRequireImportInNamespace()
         // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
         checkDefaultExportInNamespace()
+        // 65c3. B68.2: TS2484 — `export { x }` inside namespace re-exports a name
+        // already exported from a sibling/merged block of the same namespace.
+        checkExportConflictInNamespace()
         // 65d. Check BigInt exponentiation under target<ES2016 (TS2791)
         if (options.effectiveTarget < ScriptTarget.ES2016) {
             checkBigIntExponentiation()
@@ -14244,6 +14247,96 @@ class Checker(
                 ))
             }
             else -> {}
+        }
+    }
+
+    /**
+     * B68.2: TS2484 — `export { x };` inside a namespace block re-exports a name
+     * that is already exported from a sibling/merged block of the same namespace.
+     * Per-file pre-computation: build `Map<namespaceName, Set<exportedNames>>` of
+     * file-scope merged namespaces, then walk each ModuleDeclaration body for
+     * `export { name }` (no `from`) where `name` is in the merged set. Squiggle
+     * lands on the ExportSpecifier's name identifier.
+     */
+    private fun checkExportConflictInNamespace() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            val mergedExports = mutableMapOf<String, MutableSet<String>>()
+            for (stmt in statements) {
+                if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                    val nm = (stmt.name as Identifier).text
+                    if (nm == "global") continue
+                    val set = mergedExports.getOrPut(nm) { mutableSetOf() }
+                    collectExportedNamesInBody(stmt.body, set)
+                }
+            }
+            for (stmt in statements) {
+                if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                    val nm = (stmt.name as Identifier).text
+                    if (nm == "global") continue
+                    val exports = mergedExports[nm] ?: continue
+                    checkExportConflictInModuleBlock(stmt.body, exports, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun collectExportedNamesInBody(body: Node?, out: MutableSet<String>) {
+        if (body !is ModuleBlock) return
+        for (s in body.statements) {
+            when (s) {
+                is VariableStatement -> {
+                    if (ModifierFlag.Export in s.modifiers) {
+                        for (decl in s.declarationList.declarations) {
+                            val n = decl.name
+                            if (n is Identifier) out.add(n.text)
+                        }
+                    }
+                }
+                is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name != null) out.add(s.name.text)
+                is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name != null) out.add(s.name.text)
+                is InterfaceDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is TypeAliasDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is EnumDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is ImportEqualsDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is ModuleDeclaration -> {
+                    val n = s.name
+                    if (n is Identifier && ModifierFlag.Export in s.modifiers) out.add(n.text)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkExportConflictInModuleBlock(
+        body: Node?, mergedExports: Set<String>, source: String, fileName: String,
+    ) {
+        if (body !is ModuleBlock) return
+        for (s in body.statements) {
+            if (s is ExportDeclaration && s.moduleSpecifier == null) {
+                val clause = s.exportClause as? NamedExports ?: continue
+                for (spec in clause.elements) {
+                    val exportedName = spec.name.text
+                    if (exportedName in mergedExports) {
+                        val pos = spec.name.pos
+                        val length = spec.name.text.length
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Export declaration conflicts with exported declaration of '$exportedName'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2484,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = length,
+                        ))
+                    }
+                }
+            }
         }
     }
 
