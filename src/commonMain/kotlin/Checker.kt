@@ -14189,6 +14189,34 @@ class Checker(
                     emitTS1319AtDefaultKeyword(stmt.pos, source, fileName)
                 }
             }
+            is ExportDeclaration -> {
+                // B67.7: TS1194 "Export declarations are not permitted in a namespace."
+                // for `export { x };` (no specifier) inside a namespace body. Squiggle
+                // covers the entire statement source span.
+                // NOTE: `export { x } from "X"` and `export * from X` cases are deferred —
+                // they parse with a moduleSpecifier that's tricky to disambiguate from
+                // parser-recovery synthetic literals (see B67.5 revert in PLAN-PHASE-4).
+                if (!inNamespace) return
+                if (stmt.moduleSpecifier != null) return
+                val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                // Find statement end: scan forward from pos for the close-paren / semi.
+                // Use a conservative span by re-scanning the source slice for the next
+                // `;` or `\n`.
+                var endPos = stmt.pos
+                while (endPos < source.length && source[endPos] != ';' && source[endPos] != '\n') endPos++
+                if (endPos < source.length && source[endPos] == ';') endPos++  // include trailing `;`
+                val length = endPos - stmt.pos
+                diagnostics.add(Diagnostic(
+                    message = "Export declarations are not permitted in a namespace.",
+                    category = DiagnosticCategory.Error,
+                    code = 1194,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = stmt.pos,
+                    length = length,
+                ))
+            }
             else -> {}
         }
     }
