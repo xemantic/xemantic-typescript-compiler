@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 23 (2026-05-22): /goal session (10-iteration target) — 7 successful commits, +8 net via B67.1-B67.4 + B67.6-B67.7._
+**Phase 4 — Checker buildout.** 8,924 / 10,078 tests passing (~88.55%). _Round 23 (2026-05-22): /goal session (10-iteration target) — 7 successful commits, +8 net via B67.1-B67.4 + B67.6-B67.7._
 
 _Round 23 (2026-05-22, +8 net via 7 commits + 2 reverted):_
 - **B67.7 (+2)**: TS1194 "Export declarations are not permitted in a namespace." for `export { x };` (no `from`) inside namespace bodies. New ExportDeclaration branch in `walkDefaultExportInNamespace` (the walker added by B67.6). Conservative gate: `stmt.moduleSpecifier == null` — skips `export ... from "X"` and `export * from X` forms whose parser-recovery shape interferes with the gate (see B67.5 revert). Squiggle covers entire stmt source span (computed by forward-scanning for `;` or `\n`). Net +2 on the full suite (multipleExports_ts itself still missing TS2484 chain elaboration, but adjacent tests like `es6ModuleInternalNamedImports*` flipped).
@@ -14,7 +14,7 @@ _Reverted attempts:_
 - **B67.5 (reverted)**: TS1194 for `export { x } from "..."` in namespace bodies. Initial implementation flipped `exportDeclarationsInAmbientNamespaces2_ts` but regressed both `exportDeclarationInInternalModule_ts__target_es5__` and `__target_es2015__` (-2 net). Even after adding `spec !is StringLiteralNode` gate, the regression persisted — our parser appears to parse `export * from Aaa` Identifier as a synthetic StringLiteralNode for recovery, defeating the gate. Reverted; B67.7's `moduleSpecifier == null` gate sidesteps the issue by only handling the no-`from` case.
 - **B67.6 (B67.6-IndexSignature attempt, reverted)**: TS1020 + TS2371 for `[a: type = init]: type` index signatures. Our parser doesn't construct an IndexSignature AST for `[a: number = 1]: number` — it falls into parser-recovery cascade (TS1021/TS1005/TS2564), so the IndexSignature visitor never sees the offending Parameter. Multi-piece parser fix needed.
 
-_Round 23 productivity_: 7 feature commits (+8 net flips: 8916 → 8924 → 8927). Two reverts documented for future agents. CLAUDE.md gotcha added for OBJECT_PROTOTYPE_PROPERTIES source-defined exception.
+_Round 23 productivity_: 7 feature commits (+8 net flips: 8916 → 8924, ~88.55%). Two reverts documented for future agents. CLAUDE.md gotcha added for OBJECT_PROTOTYPE_PROPERTIES source-defined exception.
 
 ---
 
