@@ -59509,7 +59509,21 @@ interface DataView {
                 source is Type.NumberLiteral || source is Type.BigIntLiteral)) {
             val targetName = target.symbol?.name
             val isWrapperTarget = targetName in WRAPPER_INTERFACE_NAMES
-            if (!isWrapperTarget) {
+            if (isWrapperTarget) {
+                // B69.8: Primitive → matching wrapper assignment is allowed via
+                // auto-boxing. `number → Number`, `string → String`, etc.
+                // `boolean → Boolean` (including literal true/false) is also valid.
+                val srcIntrinsicName = (source as? Type.Intrinsic)?.intrinsicName
+                val matchingWrapper = when {
+                    source is Type.NumberLiteral || srcIntrinsicName == "number" -> "Number"
+                    source is Type.StringLiteral || srcIntrinsicName == "string" -> "String"
+                    source is Type.BigIntLiteral || srcIntrinsicName == "bigint" -> "BigInt"
+                    srcIntrinsicName == "boolean" || source.flags.hasAny(TypeFlags.BooleanLiteral) -> "Boolean"
+                    srcIntrinsicName == "symbol" -> "Symbol"
+                    else -> null
+                }
+                if (matchingWrapper != null && targetName == matchingWrapper) return true
+            } else {
                 val apparent = getApparentType(source)
                 if (apparent !== source && apparent is Type.Object) {
                     return checkTypeRelatedTo(apparent, target, relation)
