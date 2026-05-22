@@ -19771,6 +19771,12 @@ class Checker(
          *  named-interface target whose only required member is `call`/`apply`/`bind`. */
         private val FUNCTION_PROTOTYPE_METHODS = setOf("call", "apply", "bind")
 
+        /** Function-side properties implicitly available on any function value via
+         *  Function.prototype + JS runtime. Used to skip these target properties
+         *  when source is callSigs-only (no own members). Mirrors the `Function`
+         *  interface's required non-method properties. */
+        private val FUNCTION_RUNTIME_PROPERTIES = setOf("prototype", "arguments", "caller")
+
         /** Primitive intrinsic-name set used by B64.1's TS2339-on-call-result branch to
          *  decide whether a CallExpression's return type can be checked via its wrapper
          *  apparent type (Number/String/Boolean/BigInt). Symbol/null/undefined/etc. are
@@ -59018,6 +59024,10 @@ interface DataView {
             // methods (call/apply/bind) are implicitly available through the apparent type.
             // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
             if (sourceHasCallSigs && targetName in FUNCTION_PROTOTYPE_METHODS) continue
+            // B66.4: Function-side runtime properties (prototype/arguments/caller) are
+            // implicitly available on any function value via Function.prototype.
+            // Lets a function expression / arrow satisfy the `Function` interface.
+            if (sourceHasCallSigs && targetName in FUNCTION_RUNTIME_PROPERTIES) continue
             // 17.74: Function.prototype's `length: number` and `name: string` implicitly
             // satisfy the corresponding target property when source has callSignatures.
             // Lets `() => void` satisfy `interface ArrayLike<T> { length: number }` —
