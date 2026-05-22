@@ -49254,11 +49254,16 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
             try {
                 for (stmt in result.sourceFile.statements) {
                     checkMultiBaseInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {}
+            } catch (_: StackOverflowError) {
+            } finally {
+                currentFileLocals = savedLocals
+            }
         }
     }
 
@@ -49281,10 +49286,11 @@ interface DataView {
                 }.toSet()
 
                 // Collect properties from each base type
-                data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?)
+                data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?, val isOptional: Boolean = false, val isMethod: Boolean = false, val typeArgs: List<TypeNode>? = null)
                 val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
 
                 for (typeExpr in baseTypeExprs) {
+                    val effectiveTypeArgs: List<TypeNode>? = typeExpr.typeArguments
                     // 16.4cu: Resolve both bare Identifier (`extends Mover`) and qualified
                     // PropertyAccessExpression (`extends NS.Mover`) base types. For qualified,
                     // the base name displayed in the diagnostic is the rightmost segment.
@@ -49299,6 +49305,15 @@ interface DataView {
                         }
                         else -> continue
                     }
+                    // B67.4: For display in TS2320 message, use the source-text base
+                    // expression so generic refs render as `A<string>` not just `A`.
+                    // Falls back to symbol-resolved name for non-generic-typed extends.
+                    val baseDisplay = if (effectiveTypeArgs != null && effectiveTypeArgs.isNotEmpty()) {
+                        val argTexts = effectiveTypeArgs.joinToString(", ") {
+                            source.substring(it.pos, it.end).trim()
+                        }
+                        "$baseName<$argTexts>"
+                    } else baseName
                     // Get members from all declarations (class or interface)
                     for (decl in baseSymbol.declarations) {
                         val members: List<Any> = when (decl) {
@@ -49310,21 +49325,27 @@ interface DataView {
                             val propName: String
                             val isPrivate: Boolean
                             val propType: TypeNode?
+                            val isOpt: Boolean
+                            val isMethod: Boolean
                             when (member) {
                                 is PropertyDeclaration -> {
                                     propName = (member.name as? Identifier)?.text ?: continue
                                     isPrivate = ModifierFlag.Private in member.modifiers
                                     propType = member.type
+                                    isOpt = member.questionToken
+                                    isMethod = false
                                 }
                                 is MethodDeclaration -> {
                                     propName = (member.name as? Identifier)?.text ?: continue
                                     isPrivate = ModifierFlag.Private in member.modifiers
                                     propType = member.type
+                                    isOpt = member.questionToken
+                                    isMethod = true
                                 }
                                 else -> continue
                             }
                             propSources.getOrPut(propName) { mutableListOf() }
-                                .add(BaseProperty(baseName, isPrivate, propType))
+                                .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs))
                         }
                     }
                 }
@@ -49342,13 +49363,33 @@ interface DataView {
 
                     // Conflict reason:
                     // - Any-private sources → always conflict (distinct privacy).
-                    // - All-public → conflict ONLY when types differ (neither direction assignable).
+                    // - B67.4: Optionality mismatch (one optional, one not) → conflict.
+                    // - B67.4: Methods (call signatures with potentially different generic typeParameters)
+                    //   → fall through to type-based check; if either has a typeParameters
+                    //   list and the other doesn't, that's a structural difference → conflict.
+                    // - B67.4: Different parent typeArgs lists (`A<string>` vs `A<number>`) on
+                    //   the same base symbol → conflict (substituted property types diverge).
+                    // - All-public + matching optionality → conflict ONLY when types differ.
+                    val src1 = sources.first { it.baseName == base1 }
+                    val src2 = sources.first { it.baseName == base2 }
                     val conflict = if (hasPrivate) {
                         true
+                    } else if (src1.isOptional != src2.isOptional) {
+                        true
+                    } else if (src1.typeArgs != null && src2.typeArgs != null && src1.typeArgs.size == src2.typeArgs.size && src1.typeArgs.isNotEmpty()) {
+                        // Same base, different type args: parent types substituted differently.
+                        // Mismatch if any pair of type args disagrees by source text.
+                        var anyMismatch = false
+                        for (i in src1.typeArgs.indices) {
+                            val a = source.substring(src1.typeArgs[i].pos, src1.typeArgs[i].end).trim()
+                            val b = source.substring(src2.typeArgs[i].pos, src2.typeArgs[i].end).trim()
+                            if (a != b) { anyMismatch = true; break }
+                        }
+                        anyMismatch
                     } else {
                         // Compare two distinct bases' first-declaration types.
-                        val t0Node = sources.first { it.baseName == base1 }.propType
-                        val t1Node = sources.first { it.baseName == base2 }.propType
+                        val t0Node = src1.propType
+                        val t1Node = src2.propType
                         if (t0Node != null && t1Node != null) {
                             try {
                                 val t0 = getTypeFromTypeNode(t0Node)
