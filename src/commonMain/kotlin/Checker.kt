@@ -41993,7 +41993,13 @@ interface DataView {
                 return
             }
             if (canUse && !isAssignable) {
-                val displaySource = typeToString(sourceType)
+                // B69.7: Widen literal source for display when target type doesn't
+                // contain literal members (mirrors B69.5 in checkAssignmentExpression).
+                // `var b: Boolean = true` displays as `Type 'boolean' is not
+                // assignable to type 'Boolean'`, not `'true'`.
+                val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
+                    else getWidenedLiteralType(sourceType)
+                val displaySource = typeToString(displaySourceType)
                 // Use annotation text for display (handles generics correctly)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                 // 17.216: Suppress TS2322 when assigning a function expression/arrow
