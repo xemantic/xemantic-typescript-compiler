@@ -14253,32 +14253,43 @@ class Checker(
     /**
      * B68.2: TS2484 — `export { x };` inside a namespace block re-exports a name
      * that is already exported from a sibling/merged block of the same namespace.
-     * Per-file pre-computation: build `Map<namespaceName, Set<exportedNames>>` of
-     * file-scope merged namespaces, then walk each ModuleDeclaration body for
-     * `export { name }` (no `from`) where `name` is in the merged set. Squiggle
-     * lands on the ExportSpecifier's name identifier.
+     * Per-scope pre-computation: build `Map<namespaceName, Set<exportedNames>>` of
+     * merged namespaces, then walk each ModuleDeclaration body for `export { name }`
+     * (no `from`) where `name` is in the merged set. Squiggle lands on the
+     * ExportSpecifier's name identifier. Recurses into nested namespaces — each
+     * scope (file or namespace body) has its own merged-exports map.
      */
     private fun checkExportConflictInNamespace() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            val statements = result.sourceFile.statements
-            val mergedExports = mutableMapOf<String, MutableSet<String>>()
-            for (stmt in statements) {
-                if (stmt is ModuleDeclaration && stmt.name is Identifier) {
-                    val nm = (stmt.name as Identifier).text
-                    if (nm == "global") continue
-                    val set = mergedExports.getOrPut(nm) { mutableSetOf() }
-                    collectExportedNamesInBody(stmt.body, set)
-                }
+            checkExportConflictInScope(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkExportConflictInScope(
+        statements: List<Statement>, source: String, fileName: String,
+    ) {
+        val mergedExports = mutableMapOf<String, MutableSet<String>>()
+        for (stmt in statements) {
+            if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                val nm = (stmt.name as Identifier).text
+                if (nm == "global") continue
+                val set = mergedExports.getOrPut(nm) { mutableSetOf() }
+                collectExportedNamesInBody(stmt.body, set)
             }
-            for (stmt in statements) {
-                if (stmt is ModuleDeclaration && stmt.name is Identifier) {
-                    val nm = (stmt.name as Identifier).text
-                    if (nm == "global") continue
-                    val exports = mergedExports[nm] ?: continue
-                    checkExportConflictInModuleBlock(stmt.body, exports, source, fileName)
+        }
+        for (stmt in statements) {
+            if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+                val nm = (stmt.name as Identifier).text
+                if (nm == "global") continue
+                val exports = mergedExports[nm] ?: continue
+                checkExportConflictInModuleBlock(stmt.body, exports, source, fileName)
+                // Recurse into nested namespaces — each namespace body is its own scope
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    checkExportConflictInScope(body.statements, source, fileName)
                 }
             }
         }
