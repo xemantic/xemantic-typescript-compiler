@@ -47465,6 +47465,13 @@ interface DataView {
             if (indexType.flags.hasAny(TypeFlags.StringLike)) {
                 val strIdx = apparent.stringIndexInfo
                 if (strIdx != null) return strIdx.type
+                // B70.3: string indexing on Array<T> returns T (JS arrays support
+                // string keys that auto-convert to numeric). Without this, `arr[i]`
+                // where `i: string` returns `anyType`, blocking downstream TS7053
+                // emission for `arr[i][j]` patterns. Mirrors TypeScript's behavior.
+                if (apparent is Type.Reference && apparent.target?.symbol?.name == "Array") {
+                    apparent.resolvedTypeArguments?.firstOrNull()?.let { return it }
+                }
             }
             if (indexType.flags.hasAny(TypeFlags.NumberLike)) {
                 val numIdx = apparent.numberIndexInfo
