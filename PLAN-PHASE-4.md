@@ -1559,6 +1559,35 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Round 24 session 2026-05-22 surveyed (after B68.1+B68.2 wins, +3 net):**
+- ~~`multipleExports_ts`~~ — flipped via B68.2 (TS2484 in merged namespace).
+- ~~`es5ModuleInternalNamedImports_ts__target_es5__/__target_es2015__`~~ — flipped via B68.1 (TS1147 for ImportDeclaration in namespace).
+- `elidedJSImport1_ts` — needs TS18042 ("'X' is a type and cannot be imported in JavaScript files") + TS2708 (namespace as value). Multi-piece JS-file type-only import infrastructure with ambient-module-default-export resolution.
+- `dottedModuleName_ts` — `function f(x:number)=>2*x;` — expected TS1144 `'{' or ';' expected.` at `=>` after function declaration with no body. We emit TS2391 + TS1109 + cascading TS2304. Parser-recovery cascade; would need narrow detection of "function decl head followed by `=>`" to emit TS1144 and suppress downstream.
+- `parseUnmatchedTypeAssertion_ts` — `@<[[import(obju2c77,` — parser-recovery cascade differs (we emit ')' expected and ']' expected instead of TS1141 + TS2304 + TS1005 '{').
+- `parseJsxElementInUnaryExpressionNoCrash1_ts`, `parseUnaryExpressionNoTypeAssertionInJsx4_ts` — `.js` files with `~< <` patterns. Expected TS1003 + TS1109 (non-JSX parse). We emit JSX errors because `forceJsxForJs` includes `allowJs` as a trigger. Tried removing `allowJs` from the gate (B68.3 attempt) but -8 regression. Skip — some tests rely on current behavior even though TypeScript-the-tool requires explicit `--jsx`.
+- `baseClassImprovedMismatchErrors_ts` (+4 MISS) — TS2416 method assignability with deep chain elaboration. Generic class hierarchy.
+- `declarationEmitExpressionInExtends3_ts` (+4 MISS) — generic argument inference for `getLocalClass<LocalInterface>(undefined)` calls. Blocker #2.
+- `duplicateIdentifierRelatedSpans_moduleAugmentation_ts` (+4) — TS2451 for var `x` declared in both `/dir/a.ts` and module augmentation `declare module "./a"`. Multi-file resolution.
+- `importAliasInModuleAugmentation_ts` (+4) — `declare global { ... import f = require("fs") }` — needs TS2667 (imports not permitted in module augmentations) for require inside global block + TS2591 for `fs` as node module + `export import x = A.y` to register x as a global. Multi-piece.
+- `indexedAccessWithVariableElement_ts` — `[number, ...number[], number][2]` should infer `number | undefined` under `noUncheckedIndexedAccess`. Rest-tuple indexing.
+- `inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult_ts` — complex generic inference with `Assign<T, ...>`.
+- `jsExtendsImplicitAny_ts` — JS file `@extends` JSDoc tag. Blocker #5.
+- `recursiveConditionalCrash4_ts` — recursive conditional type + `Iterator<T>` lib subsetting.
+- `reverseMappedPartiallyInferableTypes_ts` — mapped types + generic inference.
+- `spreadUnionPropOverride_ts` — TS2783 for `{x: 1, ...{x: 2}}` override detection through union spread. Needs object-literal-with-spread property override analysis.
+- `styledComponentsInstantiaionLimitNotReached_ts` — needs `react` types + TS5102 for `arguments` in strict mode + complex generic chains.
+- `temporal_ts` — needs `esnext.temporal` lib types (Temporal.Instant, PlainMonthDay). Lib subsetting.
+- `thisInPropertyBoundDeclarations_ts` — TS2683 `this` implicit any in class property initializers. Default-on TS2683 in this context (gate mismatch).
+- `thislessFunctionsNotContextSensitive1_ts` — contextual typing with generics.
+- `transformNestedGeneratorsWithTry_ts` — Promise type from `bluebird.d.ts` module. SWAP TS2355 → TS1055.
+- `umdGlobalAugmentationNoCrash_ts` — `export as namespace React;` + `declare global { const React: typeof import("./module"); }` — register `React` as global from `export as namespace`. Multi-piece.
+- `arraySigChecking_ts` (+5) — TS1268 for invalid index signature param type (e.g. `[index: any]`). We emit TS1021 instead. Plus 4 more MISS TS2322s.
+- `assignmentToObjectAndFunction_ts` (+5) — Object/Function structural comparison with detailed display elaboration.
+- `errorElaboration_ts` (+5) — TS2538 vs TS2537 SWAP for index type errors.
+- `interfaceClassMerging_ts` (+5) — TS2322 vs TS2741 at line 39 for `bar = obj`.
+- `recursiveComplicatedClasses_ts` (+2) — TS2345 cross-class arg mismatch + TS2507 `SymbolConstructor` is not a constructor.
+
 **Round 17 continuation session 2026-05-21 surveyed:**
 - `typeofInternalModules_ts` — B63.9 attempt added 2/4 missing TS2708 emissions for `typeof <importAlias>` of uninstantiated namespace; remaining 2 TS2741 require namespace-shape structural comparison (typeof Outer vs typeof instantiated property mismatch). Also introduced untraceable -1 regression elsewhere. Reverted entire walker.
 - `recursiveTupleTypeInference_ts` — B63.10 removed FP TS2456 (no longer fires for `type A = ... | A[]`). Still fails on MISS TS2345 with deep conditional-type elaboration chain through `G<T>` mapped type.
