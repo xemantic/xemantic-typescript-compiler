@@ -31242,6 +31242,18 @@ interface DataView {
             }
             if (!found) break
         }
+        // B69.6: After backward scan, validate that pos is at a true modifier-
+        // sequence start (preceded only by whitespace going back to start of file
+        // OR another known modifier). Without this, `let E = {...} as const\n
+        // export const o8 = ...` walks the backward scan into `as const`'s `const`
+        // (matches the keyword regex), then the forward scan crosses the newline
+        // and finds BOTH the prev-statement `const` AND the current-statement
+        // `const`, emitting FP TS1030 at the current-statement `const`.
+        run {
+            var validStart = pos
+            while (validStart > 0 && source[validStart - 1].isWhitespace()) validStart--
+            if (validStart > 0 && source[validStart - 1].isLetterOrDigit()) return
+        }
         val seen = mutableSetOf<String>()
         val end = (stmtPos + 200).coerceAtMost(source.length) // scan up to 200 chars
         while (pos < end) {
