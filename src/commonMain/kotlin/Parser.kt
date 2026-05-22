@@ -1001,6 +1001,20 @@ class Parser(
     /** True if the current token is `...` (DotDotDot) — used to decide whether to capture leading comments first. */
     private fun dotDotDotToken(): Boolean = token == SyntaxKind.DotDotDot
 
+    /**
+     * B66.3: True if [expr] is a PropertyAccessExpression rooted at an Identifier
+     * named `module` (or other node-builtin identifier). Used to gate TS1005
+     * emission for `module.X { ... }` patterns without regressing parser
+     * error-recovery paths.
+     */
+    private fun isModuleRootedPropertyAccess(expr: Expression): Boolean {
+        var cur: Expression = expr
+        while (cur is PropertyAccessExpression) {
+            cur = cur.expression
+        }
+        return cur is Identifier && cur.text == "module"
+    }
+
     private fun parseExpressionStatement(): ExpressionStatement {
         val pos = getPos()
         val comments = leadingComments()
@@ -1009,6 +1023,16 @@ class Parser(
         // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
         // Only when no preceding line break — comments on a new line belong to the next statement.
         val semiInline = if (!scanner.hasPrecedingLineBreak()) scanner.consumeTrailingComments()?.ifEmpty { null } else null
+        // B66.3: `module.X { ... }` on the same line (e.g. `module.module { }`) —
+        // the next `{` starts a block statement, not a continuation. Emit TS1005
+        // "';' expected." at the `{` token. Narrow gate: expression is a
+        // PropertyAccessExpression rooted at `module` (a NODE_BUILTIN global) —
+        // avoids regressing parser error-recovery paths in class/interface bodies.
+        if (token == SyntaxKind.OpenBrace && !scanner.hasPrecedingLineBreak() &&
+            isModuleRootedPropertyAccess(expr)) {
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(), overrideLength = 1)
+        }
         parseSemicolon()
         val trailing = trailingComments()
         return ExpressionStatement(
