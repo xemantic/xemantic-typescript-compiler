@@ -46291,6 +46291,8 @@ interface DataView {
             if (t != null && f != null) getUnionType(listOf(t, f)) else null
         }
         is ParenthesizedExpression -> literalTypeOfExpression(expr.expression)
+        // B70.5: `expr!` (non-null assertion) preserves literal type — `(0 as const)!` is `0`.
+        is NonNullExpression -> literalTypeOfExpression(expr.expression)
         else -> null
     }
 
