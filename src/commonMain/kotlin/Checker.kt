@@ -51061,6 +51061,61 @@ interface DataView {
         return "($params) => $ret"
     }
 
+    /**
+     * Like [methodSigDisplay] but for derived members that may lack a return type annotation —
+     * derives a display from the body's return shape (return literal → string/number/boolean,
+     * no return value → void, anything else → any). Used by TS2416 predicate-mismatch chains so
+     * `method3() { return true }` displays as `() => boolean` rather than the `() => any` we
+     * intentionally inferred for assignment safety (see CLAUDE.md TS2416 gotcha).
+     */
+    private fun methodSigDisplayWithBodyReturn(md: MethodDeclaration): String {
+        val params = md.parameters.joinToString(", ") { p ->
+            val pname = (p.name as? Identifier)?.text ?: "_"
+            val ptype = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val q = if (p.questionToken) "?" else ""
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$pname$q: $ptype"
+        }
+        val ret = methodSigReturnDisplay(md)
+        return "($params) => $ret"
+    }
+
+    /** Display a method as `(params): returnType` — used in the "Signature '...' must be a type predicate." chain. */
+    private fun methodSigColonDisplay(md: MethodDeclaration): String {
+        val params = md.parameters.joinToString(", ") { p ->
+            val pname = (p.name as? Identifier)?.text ?: "_"
+            val ptype = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val q = if (p.questionToken) "?" else ""
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$pname$q: $ptype"
+        }
+        val ret = methodSigReturnDisplay(md)
+        return "($params): $ret"
+    }
+
+    private fun methodSigReturnDisplay(md: MethodDeclaration): String {
+        md.type?.let { return formatTypeForDisplay(it) ?: "any" }
+        val body = md.body ?: return "any"
+        if (!bodyHasReturnValue(body)) return "void"
+        for (stmt in body.statements) {
+            if (stmt is ReturnStatement) {
+                val expr = stmt.expression
+                if (expr != null) {
+                    return when (expr) {
+                        is StringLiteralNode -> "string"
+                        is NumericLiteralNode -> "number"
+                        is Identifier -> when (expr.text) {
+                            "true", "false" -> "boolean"
+                            else -> "any"
+                        }
+                        else -> "any"
+                    }
+                }
+            }
+        }
+        return "any"
+    }
+
     // -----------------------------------------------------------------------
     // TS2729: Property used before its initialization
     // -----------------------------------------------------------------------
@@ -51552,19 +51607,52 @@ interface DataView {
 
                     if (derivedType === anyType || basePropType === anyType) continue
 
-                    if (!checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
+                    // B68.6: type-predicate mismatch — when the base method's return type is a
+                    // non-asserting `this is X` predicate, the derived must also be a type predicate.
+                    // The raw assignability check sees both signatures returning boolean (TypePredicate
+                    // resolves to booleanType via getTypeFromTypeNode), so a derived `(): boolean`
+                    // override silently passes structurally. This block detects that and forces TS2416
+                    // with the "must be a type predicate" chain.
+                    val baseMethodDecl = baseDecl as? MethodDeclaration
+                    val derivedMethodDecl = member as? MethodDeclaration
+                    val basePredicate = baseMethodDecl?.type as? TypePredicate
+                    val derivedPredicate = derivedMethodDecl?.type as? TypePredicate
+                    val isPredicateMismatch = basePredicate != null &&
+                        !basePredicate.assertsModifier &&
+                        derivedMethodDecl != null &&
+                        derivedPredicate == null
+
+                    val baseDisplayForChain = if (isPredicateMismatch && baseMethodDecl != null) {
+                        methodSigDisplay(baseMethodDecl)
+                    } else {
+                        typeToString(basePropType)
+                    }
+                    val derivedDisplayForChain = if (isPredicateMismatch && derivedMethodDecl != null) {
+                        methodSigDisplayWithBodyReturn(derivedMethodDecl)
+                    } else {
+                        typeToString(derivedType)
+                    }
+
+                    val assignable = checkTypeRelatedTo(derivedType, basePropType, assignableRelation)
+
+                    if (!assignable || isPredicateMismatch) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         val message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'."
                         val chain = mutableListOf<String>()
-                        chain.add("  Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(basePropType)}'.")
+                        chain.add("  Type '$derivedDisplayForChain' is not assignable to type '$baseDisplayForChain'.")
 
                         // TS2208 related info: when derived is an unconstrained TypeParam declared
                         // on this class, hint that adding `extends {}` might resolve the mismatch.
                         val relatedInfo = mutableListOf<Diagnostic>()
-                        // Add signature elaboration for function types
-                        // (also populates `relatedInfo` with TS2208 when base has a
-                        // method-level TypeParam that derived overrides with a concrete type).
-                        addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
+                        if (isPredicateMismatch && derivedMethodDecl != null) {
+                            val sigColon = methodSigColonDisplay(derivedMethodDecl)
+                            chain.add("    Signature '$sigColon' must be a type predicate.")
+                        } else {
+                            // Add signature elaboration for function types
+                            // (also populates `relatedInfo` with TS2208 when base has a
+                            // method-level TypeParam that derived overrides with a concrete type).
+                            addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
+                        }
                         if (derivedType is Type.TypeParam && derivedType.constraint == null &&
                             classTypeParams != null) {
                             val tpName = derivedType.symbol?.name
@@ -62834,6 +62922,36 @@ interface DataView {
                     else -> return null
                 }
                 "typeof $name"
+            }
+            is TypePredicate -> {
+                val paramName = when (val pn = typeNode.parameterName) {
+                    is Identifier -> pn.text
+                    // Parser quirk: `c is C1` parses `c` as TypeReference. See narrowByCallPredicate.
+                    is TypeReference -> (pn.typeName as? Identifier)?.text
+                    is ThisType -> "this"
+                    else -> null
+                } ?: return null
+                val asserts = if (typeNode.assertsModifier) "asserts " else ""
+                val tPart = typeNode.type
+                if (tPart == null) {
+                    "$asserts$paramName"
+                } else {
+                    val typePart = formatTypeForDisplay(tPart) ?: return null
+                    "$asserts$paramName is $typePart"
+                }
+            }
+            is LiteralType -> when (val lit = typeNode.literal) {
+                is NumericLiteralNode -> lit.text
+                is StringLiteralNode -> "\"${lit.text}\""
+                is NoSubstitutionTemplateLiteralNode -> "\"${lit.text}\""
+                is Identifier -> when (lit.text) {
+                    "true", "false", "null", "undefined" -> lit.text
+                    else -> null
+                }
+                is PrefixUnaryExpression -> if (lit.operand is NumericLiteralNode && lit.operator == SyntaxKind.Minus) {
+                    "-${(lit.operand as NumericLiteralNode).text}"
+                } else null
+                else -> null
             }
             else -> null
         }
