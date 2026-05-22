@@ -978,6 +978,23 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-22 (round 27 of /goal, B69.11+B69.12 + MAINT-4 — +3 net via 2 feature commits + 1 maintenance).** /goal session targeting 10 iterations after round 26. Pool returned 1 fresh MISS (`primitiveMembers_ts`) at start. Per anti-loop rule, attacked it with literal-inferred widening + arrow-body TS2872 suppression. Initial attempts to add `currentLocalTypes.containsKey` shortcut + unannotated-param shadow tracking regressed 3 tests; narrowed via comparing local type to file-symbol raw type. Then extended to namespace-local var shadow case (`enclosingNsShadow` walker) which flipped 2 more tests.
+
+  - **B69.11 (+1)**: TS2339 widening for `var x = LITERAL` patterns. Two coordinated changes in `checkMemberAccessMissing` and `checkAlwaysTruthyInExpr`:
+    (a) Widen the primitive apparent-type gate to accept top-level (parent==null) literal-initialized vars. Detect local shadowing via comparing `currentLocalTypes[name]` against `getTypeOfSymbol(identSymbol)` — if they differ (after `getWidenedLiteralType`), an inner annotated param shadows the file var; gate must not fire. Skip if symbol has >1 declarations.
+    (b) Add `inArrowExprBody` flag saved/restored in the ArrowFunction expression-body branch. New NumericLiteralNode emission of TS2872 in `||` LHS gated on `!inArrowExprBody` — TypeScript suppresses TS2872 for `(s: number) => 1 || foo()` (the `1` is a default-value pattern).
+    Flips `primitiveMembers_ts`. Zero regressions.
+
+  - **B69.12 (+2)**: TS2339 for namespace-local var shadowing outer namespace. Before `globals[identName]` lookup, walk `propertyAccessEnclosingNamespaces` innermost-first looking for a Variable (not Module/Class) symbol matching identName. If found, use it as `enclosingNsShadow` instead of the global. Extend B69.11's literal-inferred gate to accept this shadow case (bypass the parent==null check). Flips `typeValueConflict1_ts` + `typeValueConflict2_ts`.
+
+  - **MAINT-4 (net-zero)**: Stale skip-log audit. Custom script identified 4 entries no longer in failing-tests set: `declarationEmitOptionalMethod_ts`, `numericLiteralsWithTrailingDecimalPoints01_ts` (likely B61.3 round 15), `moduleNoneDynamicImport` (both target variants — likely B47.5/B47.6), `importHelpersWithLocalCollisions_ts__module_amd/system__`.
+
+  **Iterations attempted but reverted/no-op:**
+  - **B69.10 initial attempt**: Combined literal-widening + `currentLocalTypes.containsKey` shortcut + populateParameterLocalTypes-for-unannotated-params. Flipped primitiveMembers + typeValueConflict1 but regressed contextuallyTypingOrOperator_ts + functionOverloads43_ts + moduleVisibilityTest2_ts. Root cause: `currentLocalTypes.containsKey` is too broad — the same map also holds file-level vars from TS2322 walk. Narrowed by comparing types (B69.11 final).
+  - **B52.2 (Generic argument inference — step 2)**: Relaxed `isAnonymousObjectWithTypeParamMembers` from "all members TP" to "at least one member TP + remaining concrete". Net-zero on suite — no test currently uses the mixed-property shape.
+
+  Session-end: 8930 → 8933 / 10078 (+3 net, 88.64%). Per find_candidates.py --fresh: 0/0/0 fresh, all remaining candidates are documented architectural blockers. Recommendation: next session should commit to architectural Blocker #1 (control flow narrowing) or Blocker #3 (per-file scope construction) per CLAUDE.md.
+
   **Session 2026-05-22 (round 23 of /goal, B67.1-B67.4 — +4 net via 4 commits + 1 reverted).** /goal session targeting 10 iterations after round 22. Pool returned 2 fresh MISS candidates at start (`innerModExport2_ts`, `elidedJSImport1_ts`). Per anti-loop rule, picked off the smallest tractable targets and surfaced adjacent diagnostic patterns.
 
   - **B67.1 (+1)**: TS2395 for var hoisted from anon-module Block into namespace. After B66.2 parser change, `namespace Outer { module { var X } var X }` — the inner Block (parsed from `module {`) has its `var X` hoisted to Outer's namespace scope per JS var semantics. New `inNamespaceBody: Boolean` parameter on `checkDuplicateDeclarations` gates Block recursion — only fires at namespace-body call site, NOT at file-scope (where `anonymousModules_ts`'s outer `module {}` Block keeps its inner vars isolated to match TypeScript baseline). Flips `innerModExport2_ts`.
