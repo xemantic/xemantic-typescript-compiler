@@ -1,6 +1,9 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 24 (2026-05-22): /goal session (10-iteration target) — 3 successful commits, +3 net via B68.1-B68.2 + B68.4 (net-zero infra)._
+**Phase 4 — Checker buildout.** 8,927 / 10,078 tests passing (~88.58%). _Round 24 (2026-05-22): /goal session (10-iteration target) — 3 feature commits + 1 reverted + 3 doc/skip-log commits, +3 net via B68.1-B68.2 + B68.4 (net-zero infra)._
+
+_Round 24 productivity_: 3 feature commits (+3 net: 8924 → 8927). Surgical pool truly exhausted at end of session — `find_candidates.py --fresh` returns 0/0/0 after the 3 fresh candidates were addressed. Strong recommendation: next session should commit to an architectural blocker (#1 control flow narrowing or #3 cross-file scope construction).
+
 
 _Round 24 (2026-05-22, +3 net via 3 commits + 1 reverted):_
 - **B68.4 (net-zero infra)**: Two coordinated changes for index-signature param-type diagnostics. (a) Checker `checkIndexSigInStatement` extended to walk `VariableStatement` declarations whose type annotation is a `TypeLiteral` — so TS1268 now fires for `var foo: { [index: any]; }` patterns (was only covering class / interface / module / TypeAliasDeclaration). (b) Parser suppresses TS1021 when the index sig param type is an invalid `KeywordTypeNode` (any/boolean/void/etc.) — TypeScript doesn't double-report TS1021 + TS1268 for the same signature. New `INDEX_SIG_ALLOWED_PARAM_KEYWORDS` constant in Parser.kt. Net zero on suite — `arraySigChecking_ts` still fails on 3 other MISS TS2322s, but diff is reduced from 5 to 3.
