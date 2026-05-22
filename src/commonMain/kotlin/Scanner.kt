@@ -1210,6 +1210,64 @@ class Scanner(private val text: String) {
                     message = "Escape sequence '\\$ch' is not allowed.",
                 ))
             }
+            // B70.8: TS1125/TS1198 for hex/unicode escapes in template literals.
+            // String literals already handle these via scanEscapeSequence; templates
+            // preserve escapes raw and need separate validation.
+            ch == 'x' -> {
+                // \xHH must have exactly 2 hex digits after \x
+                var hexCount = 0
+                var probe = pos + 2 // position after \x
+                while (probe < end && hexCount < 2 && isHexDigit(text[probe])) {
+                    probe++
+                    hexCount++
+                }
+                if (hexCount < 2) {
+                    stringEscapeErrorList.add(StringEscapeError(
+                        start = probe, length = 0, code = 1125,
+                        message = "Hexadecimal digit expected.",
+                    ))
+                }
+            }
+            ch == 'u' -> {
+                if (pos + 2 < end && text[pos + 2] == '{') {
+                    // \u{HHHHHH...} — value must be ≤ 0x10FFFF
+                    var probe = pos + 3 // position after \u{
+                    val hexStart = probe
+                    while (probe < end && isHexDigit(text[probe])) probe++
+                    if (probe > hexStart) {
+                        val hexText = text.substring(hexStart, probe)
+                        // Parse as long to avoid overflow on >8 hex digits
+                        val codePoint = try { hexText.toLong(16) } catch (_: NumberFormatException) { -1L }
+                        if (codePoint > 0x10FFFFL) {
+                            stringEscapeErrorList.add(StringEscapeError(
+                                start = hexStart, length = (probe - hexStart),
+                                code = 1198,
+                                message = "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive.",
+                            ))
+                        }
+                    } else {
+                        // Empty `\u{}` — TS1125
+                        stringEscapeErrorList.add(StringEscapeError(
+                            start = hexStart, length = 0, code = 1125,
+                            message = "Hexadecimal digit expected.",
+                        ))
+                    }
+                } else {
+                    // \uHHHH — must have exactly 4 hex digits
+                    var hexCount = 0
+                    var probe = pos + 2 // position after \u
+                    while (probe < end && hexCount < 4 && isHexDigit(text[probe])) {
+                        probe++
+                        hexCount++
+                    }
+                    if (hexCount < 4) {
+                        stringEscapeErrorList.add(StringEscapeError(
+                            start = probe, length = 0, code = 1125,
+                            message = "Hexadecimal digit expected.",
+                        ))
+                    }
+                }
+            }
         }
     }
 
