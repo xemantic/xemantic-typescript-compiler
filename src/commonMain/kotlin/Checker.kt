@@ -947,6 +947,8 @@ class Checker(
         checkSubsequentVarTypes()
         // 65c. Check `import x = require(...)` inside namespace bodies (TS1147)
         checkRequireImportInNamespace()
+        // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
+        checkDefaultExportInNamespace()
         // 65d. Check BigInt exponentiation under target<ES2016 (TS2791)
         if (options.effectiveTarget < ScriptTarget.ES2016) {
             checkBigIntExponentiation()
@@ -14136,6 +14138,82 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * B67.6: TS1319 — `export default class/function/...` is only valid in
+     * ECMAScript-style modules (file-level). Inside a `namespace { ... }`
+     * body, the `default` modifier is meaningless. Squiggle covers the
+     * `default` keyword (7 chars). Walks Identifier-named namespace bodies
+     * recursively. Nested-in-namespace gate matches `checkRequireImportInNamespace`.
+     */
+    private fun checkDefaultExportInNamespace() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                walkDefaultExportInNamespace(stmt, inNamespace = false, source = source, fileName = fileName)
+            }
+        }
+    }
+
+    private fun walkDefaultExportInNamespace(
+        stmt: Statement, inNamespace: Boolean, source: String, fileName: String,
+    ) {
+        when (stmt) {
+            is ModuleDeclaration -> {
+                val nm = stmt.name
+                val isInternalNamespace = nm is Identifier && nm.text != "global"
+                val nestedInNamespace = inNamespace || isInternalNamespace
+                when (val body = stmt.body) {
+                    is ModuleBlock -> body.statements.forEach {
+                        walkDefaultExportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    }
+                    is ModuleDeclaration -> walkDefaultExportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    else -> {}
+                }
+            }
+            is ClassDeclaration -> {
+                if (inNamespace && ModifierFlag.Default in stmt.modifiers) {
+                    emitTS1319AtDefaultKeyword(stmt.pos, source, fileName)
+                }
+            }
+            is FunctionDeclaration -> {
+                if (inNamespace && ModifierFlag.Default in stmt.modifiers) {
+                    emitTS1319AtDefaultKeyword(stmt.pos, source, fileName)
+                }
+            }
+            is InterfaceDeclaration -> {
+                if (inNamespace && ModifierFlag.Default in stmt.modifiers) {
+                    emitTS1319AtDefaultKeyword(stmt.pos, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTS1319AtDefaultKeyword(stmtPos: Int, source: String, fileName: String) {
+        // stmtPos is the position of the body keyword (`class`/`function`/`interface`).
+        // The `export default` modifiers precede it. Scan backwards line-by-line for
+        // the `default` keyword.
+        val before = source.substring(0, stmtPos.coerceIn(0, source.length))
+        val regex = Regex("""\bdefault\b""")
+        val matches = regex.findAll(before).toList()
+        val match = matches.lastOrNull() ?: return
+        // Sanity: the matched `default` should be relatively close (within ~50 chars).
+        if (stmtPos - match.range.first > 100) return
+        val (line, character) = getLineAndCharacterOfPosition(source, match.range.first)
+        diagnostics.add(Diagnostic(
+            message = "A default export can only be used in an ECMAScript-style module.",
+            category = DiagnosticCategory.Error,
+            code = 1319,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = match.range.first,
+            length = 7,
+        ))
     }
 
     private fun checkSubsequentVarTypesInGlobals() {
