@@ -978,7 +978,9 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-22 (round 28 of /goal, MAINT-5 + B70.1-B70.4 + 2 reverted explorations — +0 net flips).** /goal session targeting 10 iterations after round 27. `find_candidates.py --fresh` returned 0/0/0 at start (confirmed surgical pool empty as round 27 predicted). Per anti-loop rule, looked for stale skip-log entries via custom script comparing skip-log basenames against current failing tests by first-word matching.
+  **Session 2026-05-22 (round 28 of /goal, MAINT-5 + B70.1-B70.5 + 2 reverted explorations — +0 net flips, 10 iterations landed).** /goal session targeting 10 iterations after round 27. `find_candidates.py --fresh` returned 0/0/0 at start (confirmed surgical pool empty as round 27 predicted). Per anti-loop rule, looked for stale skip-log entries via custom script comparing skip-log basenames against current failing tests by first-word matching.
+
+  - **B70.5 (net-zero correctness, +0 flips)**: `literalTypeOfExpression` extends to `NonNullExpression` — `(0 as const)!` preserves literal `0`. Foundational; prevents widening through non-null assertions in literal-typed contexts.
 
   - **B70.4 (net-zero correctness, +0 flips)**: For-of loop variable typed as iterable element. `checkPropertyAccessInStatement`'s ForOfStatement branch now pushes the for-of variable into `currentLocalTypes` (Array<T> → T, string → string; other iterables fall through). Mirrors B70.2's for-in fix. Foundational; pairs with B70.2 for full loop-variable typing coverage.
 
