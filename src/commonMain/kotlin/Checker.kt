@@ -24904,8 +24904,28 @@ interface DataView {
                 is FunctionDeclaration -> {
                     val name = stmt.name?.text ?: continue
                     if (stmt.body == null) {
-                        // Overload signature — mark as overloaded
-                        funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                        // B70.10: Body-less FunctionDeclaration. If another declaration of the
+                        // same name already exists (or appears later), this is an overload
+                        // signature — skip checking. If it's the SOLE declaration (typical
+                        // `declare function f(...)`), treat the signature as authoritative
+                        // for arity. Use a two-pass-aware merge: any previously-recorded
+                        // info implies an overload, AND we look ahead briefly to see if a
+                        // sibling declaration follows.
+                        val existing = funcParams[name]
+                        if (existing != null) {
+                            funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                            continue
+                        }
+                        // Look ahead in the same statement list for a sibling declaration.
+                        val hasSibling = statements.any { other ->
+                            other !== stmt && other is FunctionDeclaration && other.name?.text == name
+                        }
+                        if (hasSibling) {
+                            funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                            continue
+                        }
+                        // Sole declaration — record its real param info
+                        funcParams[name] = paramInfo(stmt.parameters, isJsFile)
                         continue
                     }
                     if (funcParams[name]?.isOverloaded == true) continue // already marked as overloaded
