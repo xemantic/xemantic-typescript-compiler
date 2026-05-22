@@ -543,6 +543,20 @@ class Parser(
                     token != SyntaxKind.CloseParen && token != SyntaxKind.Semicolon &&
                     token != SyntaxKind.EndOfFile && token != SyntaxKind.OpenBrace
             }
+            // B66.2: `module { ... }` (legacy anonymous-module syntax) — emit
+            // TS1437 "Namespace must be given a name." at the `{` position.
+            // The body is still parsed as expression statement + block; TS2591
+            // fires on the `module` identifier via checkIdentifierResolved.
+            // Emit inside lookAhead — scanner state restores but the diagnostic
+            // persists.
+            lookAhead {
+                nextToken()
+                if (token == SyntaxKind.OpenBrace && !scanner.hasPrecedingLineBreak()) {
+                    reportError("Namespace must be given a name.", code = 1437,
+                        overrideStart = scanner.getTokenPos(), overrideLength = 1)
+                }
+                true
+            }
             if (isDecl) parseModuleDeclaration() else parseExpressionStatement()
         }
         AbstractKeyword -> parseAbstractOrDeclaration()
