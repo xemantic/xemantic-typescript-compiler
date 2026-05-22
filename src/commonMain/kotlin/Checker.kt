@@ -55176,7 +55176,21 @@ interface DataView {
                 return
             }
             val identName = objectExpr.text
-            val identSymbol = globals[identName]
+            // B69.12: enclosing-namespace local-var shadow. When `M.X` is accessed
+            // inside `namespace M2 { var M = 0; ... M.X }` (and there's an outer
+            // `namespace M { export class X {} }`), the `var M` shadows the outer
+            // namespace within M2's body. Walk the namespace stack innermost-first
+            // looking for a Variable symbol (not also Module) that shadows.
+            var enclosingNsShadow: Symbol? = null
+            for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+                val sym = ns.exports?.get(identName) ?: continue
+                if (sym.flags.hasAny(SymbolFlags.Variable) &&
+                    !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Class)) {
+                    enclosingNsShadow = sym
+                    break
+                }
+            }
+            val identSymbol = enclosingNsShadow ?: globals[identName]
 
             if (identSymbol != null) {
                 // 17.194: TS2339 for `A.foo()` where A is a top-level class and
@@ -55262,14 +55276,20 @@ interface DataView {
                 // detected by comparing the local type to the file-level symbol type: if
                 // they differ (after literal widening), an inner scope shadows the file
                 // var and the gate must not fire.
+                // B69.12: namespace-local-var shadow case (enclosingNsShadow != null) is
+                // also literal-init eligible — bypass the parent==null check because
+                // namespace-internal vars have a parent. localShadow is irrelevant here
+                // (currentLocalTypes doesn't carry namespace-internal vars).
                 val exprType = if (rawType !is Type.Object) {
                     val decl = identSymbol.valueDeclaration
                     val annotated = decl is VariableDeclaration && decl.type != null
-                    val localShadow = currentLocalTypes[identName]?.let {
+                    val isNsShadow = enclosingNsShadow != null
+                    val localShadow = !isNsShadow && currentLocalTypes[identName]?.let {
                         it !== rawType && it !== getWidenedLiteralType(rawType)
                     } == true
                     val literalInferred = !annotated && decl is VariableDeclaration &&
-                        identSymbol.parent == null && identSymbol.declarations.size == 1 &&
+                        (isNsShadow || identSymbol.parent == null) &&
+                        identSymbol.declarations.size == 1 &&
                         !localShadow && when (val init = decl.initializer) {
                             is NumericLiteralNode -> true
                             is StringLiteralNode -> true
