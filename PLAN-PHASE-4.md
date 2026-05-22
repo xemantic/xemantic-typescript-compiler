@@ -1586,7 +1586,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `subclassThisTypeAssignable01_ts` — multi-piece: generic constraint TS2744 + this-type assignment + chain elaboration.
 - `objectLiteralFunctionArgContextualTyping_ts` — needs contextual typing of arrow params from target type + body return-type inference.
 - `protectedAccessThroughContextualThis_ts` — needs contextual this-type for function expressions assigned to `(this: Foo) => void` types.
-- `indexSignatureWithInitializer1_ts` — flipped via B69.2.
+- ~~`indexSignatureWithInitializer1_ts`~~ — flipped via B69.2 (duplicate entry; see above).
 - `es6ImportNamedImportIdentifiersParsing_ts` — needs distinguishing `yield` vs `default` in import specifiers. `yield` is allowed as local binding in modules (only when `import { yield }` shape), but `default` always needs TS1003 when used as local binding without alias. Conflict with `exportsAndImportsWithContextualKeywordNames01` which DOES expect TS1214 for `set as yield`. Multi-piece detection.
 - `defaultArgsInFunctionExpressions_ts` — needs contextual return type inference + default arg checking + TS2708 namespace-as-value. Multi-piece.
 - `bigintIndex_ts` — needs TS2538 (`bigint cannot be used as index type`) + `keyof any` resolution to `string | number | symbol`. Multi-piece.
@@ -1793,7 +1793,7 @@ All remain in the JS-emit candidate pool but are feature-scale work, not surgica
 - ~~`genericArrayAssignmentCompatErrors_ts`~~ → TS2351 ("This expression is not constructable"). Not implemented.
 - ~~`aliasUsageInGenericFunction_ts`~~ → TS2352 ("Conversion of type X to Y may be a mistake…"). Not implemented (type-assertion compatibility check).
 - ~~`argumentsObjectIterator02_ES5_ts`~~ → TS2802 ("can only be iterated through when using `--downlevelIteration`"). Not implemented.
-- `promiseDefinitionTest_ts__target_es5__` → TS2300 duplicate identifier against lib. Needs class-vs-lib-var conflict detection at binder level.
+- ~~`promiseDefinitionTest_ts__target_es5__`~~ → TS2300 duplicate identifier against lib. **Stale (2026-05-21): flipped B61.1 round 15.**
 - ~~`simpleRecursionWithBaseCase1_ts`~~ / `trivialSubtypeReductionNoStructuralCheck_ts` / `conflictingDeclarationsImportFromNamespace1_ts` / `conflictingDeclarationsImportFromNamespace2_ts` → TS7023 (recursive function needs return-type annotation). Not implemented. The `conflictingDeclarations*` pair ALSO needs TS2497 at the module specifier — TypeScript fires this when `import * as X from "./m"` references a module with `export = X` AND `esModuleInterop` defaults to false for the current `module` setting (e.g. CJS). Our default `esModuleInterop = true` regardless of module setting (CLAUDE.md gotcha) blocks this — would need per-module-default logic that risks broad regressions across CJS-targeted tests.
 - ~~`narrowByEquality_ts`~~ → TS2839 ("This condition will always return 'false'…"). Narrowing (blocker-adjacent).
 - ~~`nestedLoopTypeGuards_ts`~~ → flipped 17.30a (flow-graph definite-assignment via `checkDefiniteAssignmentViaFlowGraph`).
@@ -1826,7 +1826,7 @@ All remain in the JS-emit candidate pool but are feature-scale work, not surgica
 - `booleanAssignment_ts` → EXTRA TS2322 for `true`/`boolean` → `Boolean` wrapper. Primitive-to-wrapper assignability (blocker-adjacent — see "Wrapper/display tweaks" below). Test also needs `{} → Boolean` elaboration via `valueOf()` structural comparison.
 - ~~`assignmentIndexedToPrimitives_ts`~~ → SWAP. `{ "0": number; }` vs our `{ 0: number; }` — numeric-looking string literal keys need quoted display. Display-only issue but coupled with duplicate-message elaboration on every line (12 redundant elaborations our walker emits). Two-bug fix required.
 - ~~`genericClassWithStaticFactory_ts`~~ → flipped 17.21 (namespace-aware `getCalleeType` + class TypeParam scope for namespace-nested classes + new-expression sig param re-resolution under class scope).
-- `promiseDefinitionTest_ts__target_es5__` → MISSING TS2300 `Duplicate identifier 'Promise'`. Needs binder-level conflict detection between user class declaration and lib-declared var. Non-trivial — risk of regressing many tests that legitimately shadow lib names.
+- ~~`promiseDefinitionTest_ts__target_es5__`~~ → **Stale (2026-05-21): flipped B61.1 round 15** via class-vs-lib shadowing walker.
 
 **Session 2026-04-17 (16.4ch/ci) additional explored-but-skipped:**
 - ~~`enumBasics1_ts`~~ → flipped 17.22. New `tryEmitEnumMemberAccessTs2339` helper; gated on `enumSym.declarations.any { it is EnumDeclaration }` (avoids namespace-with-nested-const-enum FP — those pick up `SymbolFlags.ConstEnum` from `ModuleInstanceState.ConstEnumOnly`) and `memberSym.flags.hasAny(SymbolFlags.EnumMember)`; prop must also be absent from both Number and String wrapper apparent types.
@@ -1834,7 +1834,7 @@ All remain in the JS-emit candidate pool but are feature-scale work, not surgica
 - ~~`classMemberWithMissingIdentifier_ts` → SWAP TS1005 `'}' expected.` vs `';' expected.` at `{` in `public {};`. Parser error-recovery path for malformed class member after a modifier.~~ **STALE 2026-05-11: passing — flipped 17.152 (TS1146 + TS1005 emission at class-body `{` after access modifier).**
 - `elaboratedErrorsOnNullableTargets01_ts` → target-type display order (`null | { … } | undefined` vs canonical `{ … } | undefined`) + missing nested property-elaboration chain. Display + elaboration refactor — out of scope.
 - ~~`importedModuleAddToGlobal_ts`~~ → two bugs: (a) TS2503 missing spelling suggestion → TS2833; fix is trivial (add `collectNamespaceNames` + `getSpellingSuggestionFromNames` in the `!scope.has(lname)` branch at Checker.kt:8531). (b) FP TS2322 for `return null` against an unresolvable `b.B` qualified type — we resolve to just `B` instead of bailing to `errorType`. Fixing (a) alone still fails the test because of (b).
-- ~~`typecheckIfCondition_ts`~~ / `moduleKeywordRepeatError_ts` / ~~`parser519458_ts`~~ / `typingsSuggestion1/2_ts` → TS2591 for node-specific identifiers (`module`, `process`, `require`, `Buffer`, …) when @types/node isn't present. Currently these are in `KNOWN_GLOBALS` which silently suppresses TS2304. Would need to move them out of `KNOWN_GLOBALS` and emit TS2591 instead — broad regression risk because many tests today compile code like `module.exports = X` without expecting any diagnostic.
+- ~~`typecheckIfCondition_ts`~~ / ~~`moduleKeywordRepeatError_ts`~~ / ~~`parser519458_ts`~~ / `typingsSuggestion1/2_ts` → TS2591 for node-specific identifiers (`module`, `process`, `require`, `Buffer`, …) when @types/node isn't present. (`moduleKeywordRepeatError_ts` flipped B66.3.) Currently these are in `KNOWN_GLOBALS` which silently suppresses TS2304. Would need to move them out of `KNOWN_GLOBALS` and emit TS2591 instead — broad regression risk because many tests today compile code like `module.exports = X` without expecting any diagnostic.
 - ~~`undeclaredModuleError_ts`~~ → TS2591 for node-specific module specifier `require('fs')`. Contained change to `emitTS2307` (well-known-name check before emitting), but the test also needs missing TS2345 for a callback argument — single-sentence fix alone won't flip it.
 
 **Session 2026-04-17 (16.4cm/cn/co) additional explored-but-skipped:**
@@ -2173,7 +2173,7 @@ Full-suite run confirms 8291 passing. `find_candidates.py --fresh` returns only 
 - `ambientPropertyDeclarationInJs_ts` → MISS TS2322 + TS2339 for `declare prop: string` in JS file. Blocker #2 (JSDoc/.js property declarations).
 - ~~`moduleExports1_ts`~~ → MISS 2× TS2591 for `module.exports`. Need to move `module` out of KNOWN_GLOBALS and emit TS2591; broad regression risk (see 16.4ci note).
 - `moduleAugmentationEnumClassMergeOfReexportIsError_ts` → MISS 2× TS2567 for class+enum merge via re-export. Binder-level class-vs-enum conflict detection + cross-file re-export tracking.
-- `typePredicateInherit_ts` → MISS 5× TS2416 with "Signature '...' must be a type predicate" elaboration. Type predicate inheritance check — not implemented.
+- ~~`typePredicateInherit_ts`~~ → MISS 5× TS2416 with "Signature '...' must be a type predicate" elaboration. **Stale (2026-05-22): flipped B68.6 round 25.**
 - ~~`superAccess2_ts`~~ → MISS TS2339 + TS2576 for `super.x`/`super.y` in static vs instance method context + JS emit mismatch (static bar method). **Stale (2026-05-19): passing (flipped by B50.9).**
 
 **Session 2026-04-18 (16.4db) additional explored-but-skipped:**
