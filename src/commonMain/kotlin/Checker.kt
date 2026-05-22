@@ -46282,6 +46282,15 @@ interface DataView {
             "undefined" -> undefinedType
             else -> null
         }
+        // ConditionalExpression with two literal-typed branches: return union of literals
+        // so contextual literal preservation (e.g. `const x: 0 | 1 = cond ? 0 : 1`) sees the
+        // narrow source type instead of widening through `getTypeOfExpression`.
+        is ConditionalExpression -> {
+            val t = literalTypeOfExpression(expr.whenTrue)
+            val f = literalTypeOfExpression(expr.whenFalse)
+            if (t != null && f != null) getUnionType(listOf(t, f)) else null
+        }
+        is ParenthesizedExpression -> literalTypeOfExpression(expr.expression)
         else -> null
     }
 
