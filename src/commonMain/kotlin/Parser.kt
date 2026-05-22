@@ -1869,6 +1869,15 @@ class Parser(
                 val questionPos = if (token == SyntaxKind.Question) getPos() else -1
                 if (questionPos >= 0) nextToken() // consume ?
                 val paramType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+                // B69.2: `[a: T = expr]` — index sig param with initializer.
+                // TypeScript emits TS1020 + TS2371 (in place of TS1021).
+                val hasInitializer = token == SyntaxKind.Equals
+                var initEndForTs2371 = -1
+                if (hasInitializer) {
+                    nextToken() // consume =
+                    parseAssignmentExpression()
+                    initEndForTs2371 = scanner.getPrevTokenEnd()
+                }
                 parseExpected(SyntaxKind.CloseBracket)
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 parseSemicolon()
@@ -1882,6 +1891,25 @@ class Parser(
                     // Suppress TS1021 when TS1019 fires
                     reportError("An index signature parameter cannot have a question mark.", code = 1019,
                         overrideStart = questionPos, overrideLength = 1)
+                } else if (hasInitializer) {
+                    // B69.2: TS1020 + TS2371 for index sig param initializer.
+                    // Suppress TS1021 — these errors take its place. Both land at the
+                    // param name position; emit directly to bypass reportError's same-
+                    // position dedup (TypeScript explicitly emits BOTH).
+                    reportError("An index signature parameter cannot have an initializer.", code = 1020,
+                        overrideStart = paramName.pos, overrideLength = paramName.text.length.coerceAtLeast(1))
+                    val ts2371Len = (initEndForTs2371 - paramName.pos).coerceAtLeast(1)
+                    val (lineN, charN) = getLineAndCharacterOfPosition(paramName.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "A parameter initializer is only allowed in a function or constructor implementation.",
+                        category = DiagnosticCategory.Error,
+                        code = 2371,
+                        fileName = fileName,
+                        line = lineN,
+                        character = charN,
+                        start = paramName.pos,
+                        length = ts2371Len,
+                    ))
                 } else if (type == null) {
                     // TS1021: An index signature must have a type annotation.
                     val nodeEnd = scanner.getPrevTokenEnd()
@@ -2529,6 +2557,17 @@ class Parser(
             if (questionPos >= 0) nextToken() // consume ?
             parseExpected(SyntaxKind.Colon)
             val paramType = parseType()
+            // B69.2: `[a: T = expr]` — index sig param with initializer. TypeScript
+            // emits TS1020 (at param name, length 1) + TS2371 (at param name,
+            // spanning through the initializer). Consume the initializer so the
+            // rest of the parse continues normally.
+            val hasInitializer = token == SyntaxKind.Equals
+            var initEndForTs2371 = -1
+            if (hasInitializer) {
+                nextToken() // consume =
+                parseAssignmentExpression()
+                initEndForTs2371 = scanner.getPrevTokenEnd()
+            }
             params.add(Parameter(name = paramName, type = paramType))
             // Parse any additional parameters (invalid — TS1096 for multi-param index signature)
             var hasExtraParams = false
@@ -2556,6 +2595,15 @@ class Parser(
                 // Suppress TS1021 when TS1019 fires (TypeScript doesn't emit both)
                 reportError("An index signature parameter cannot have a question mark.", code = 1019,
                     overrideStart = questionPos, overrideLength = 1)
+            } else if (hasInitializer) {
+                // B69.2: TS1020 + TS2371 for index sig param initializer. Suppress
+                // TS1021 — these errors take its place.
+                reportError("An index signature parameter cannot have an initializer.", code = 1020,
+                    overrideStart = paramName.pos, overrideLength = paramName.text.length.coerceAtLeast(1))
+                val ts2371Len = (initEndForTs2371 - paramName.pos).coerceAtLeast(1)
+                reportError(
+                    "A parameter initializer is only allowed in a function or constructor implementation.",
+                    code = 2371, overrideStart = paramName.pos, overrideLength = ts2371Len)
             } else if (!hasExtraParams && type == null && !paramTypeIsInvalidKeyword) {
                 // TS1021: An index signature must have a type annotation.
                 val nodeEnd = scanner.getPrevTokenEnd()
