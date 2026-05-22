@@ -53282,7 +53282,27 @@ interface DataView {
                 stmt.incrementor?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
-            is ForInStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+            is ForInStatement -> {
+                // B70.2: for-in loop variable is always `string`. Push into currentLocalTypes
+                // so body walkers (TS7053 etc.) see the correct primitive type instead of
+                // falling back to `anyType` via getTypeOfIdentifier's globals lookup.
+                val forInVarName = when (val init = stmt.initializer) {
+                    is Identifier -> init.text
+                    is VariableDeclarationList -> (init.declarations.firstOrNull()?.name as? Identifier)?.text
+                    else -> null
+                }
+                val prevType = forInVarName?.let { currentLocalTypes[it] }
+                val hadPrev = forInVarName != null && currentLocalTypes.containsKey(forInVarName)
+                if (forInVarName != null) currentLocalTypes[forInVarName] = stringType
+                try {
+                    checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
+                } finally {
+                    if (forInVarName != null) {
+                        if (hadPrev) currentLocalTypes[forInVarName] = prevType!!
+                        else currentLocalTypes.remove(forInVarName)
+                    }
+                }
+            }
             is ForOfStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             is WhileStatement -> {
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
@@ -55718,7 +55738,17 @@ interface DataView {
         // block which returns for non-literal keys.
         if (arg is Identifier && (options.noImplicitAny || options.strict)) {
             val argType = try { getTypeOfIdentifier(arg) } catch (_: StackOverflowError) { null }
-            if (argType === anyType) {
+            // B70.2: accept both `any` and `string` as the index expression's type.
+            // For-in loop variables (typed as `string` via the ForInStatement walker)
+            // also trigger TS7053 with `'string'` in the message — TypeScript's rule
+            // is "no index signature with a parameter of type 'string'" applies
+            // regardless of whether the source is `any` or `string`.
+            val argDisplay = when {
+                argType === anyType -> "any"
+                argType === stringType -> "string"
+                else -> null
+            }
+            if (argDisplay != null) {
                 val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
                 if (recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
                     try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { /* fall-through */ }
@@ -55733,10 +55763,14 @@ interface DataView {
                         val length = (end - recvStart).coerceAtLeast(1)
                         val recvDisplay = typeToString(recvType)
                         val (line, character) = getLineAndCharacterOfPosition(source, recvStart)
+                        val chain = if (argDisplay == "string") listOf(
+                            "  No index signature with a parameter of type 'string' was found on type '$recvDisplay'.",
+                        ) else emptyList()
                         diagnostics.add(Diagnostic(
-                            message = "Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '$recvDisplay'.",
+                            message = "Element implicitly has an 'any' type because expression of type '$argDisplay' can't be used to index type '$recvDisplay'.",
                             category = DiagnosticCategory.Error,
                             code = 7053,
+                            messageChain = chain,
                             fileName = fileName,
                             line = line,
                             character = character,
