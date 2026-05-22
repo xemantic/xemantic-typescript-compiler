@@ -4498,7 +4498,7 @@ class Parser(
                                 )
                             }
                             typeArgs != null && (token == SyntaxKind.NoSubstitutionTemplateLiteral || token == SyntaxKind.TemplateHead) -> {
-                                val template = parseTemplateLiteral()
+                                val template = parseTemplateLiteral(isTagged = true)
                                 TaggedTemplateExpression(
                                     tag = result,
                                     typeArguments = typeArgs,
@@ -4673,7 +4673,7 @@ class Parser(
                 }
 
                 NoSubstitutionTemplateLiteral, TemplateHead -> {
-                    val template = parseTemplateLiteral()
+                    val template = parseTemplateLiteral(isTagged = true)
                     // 17.185: TS2796 — tagging a template literal with another
                     // template literal is almost always a missing-comma error
                     // (e.g. inside an array literal). Squiggle on the tag (the
@@ -5452,12 +5452,12 @@ class Parser(
         )
     }
 
-    private fun parseTemplateLiteral(): Expression {
+    private fun parseTemplateLiteral(isTagged: Boolean = false): Expression {
         if (token == SyntaxKind.NoSubstitutionTemplateLiteral) {
             val text = scanner.getTokenValue()
             val unterminated = scanner.isTokenUnterminated()
             val pos = getPos()
-            emitStringEscapeErrors()
+            emitStringEscapeErrors(suppressOctalIllegal = isTagged)
             nextToken()
             if (unterminated) {
                 // TS1160 "Unterminated template literal." at the position right after
@@ -5467,13 +5467,13 @@ class Parser(
             }
             return NoSubstitutionTemplateLiteralNode(text = text, isUnterminated = unterminated, pos = pos, end = getEnd())
         }
-        return parseTemplateExpression()
+        return parseTemplateExpression(isTagged)
     }
 
-    private fun parseTemplateExpression(): TemplateExpression {
+    private fun parseTemplateExpression(isTagged: Boolean = false): TemplateExpression {
         val pos = getPos()
         val headText = scanner.getTokenValue()
-        emitStringEscapeErrors() // emit errors from template head before consuming it
+        emitStringEscapeErrors(suppressOctalIllegal = isTagged) // emit errors from template head before consuming it
         nextToken() // consume template head
         val head = StringLiteralNode(text = headText, pos = pos, end = getEnd())
         val spans = mutableListOf<TemplateSpan>()
@@ -5485,7 +5485,7 @@ class Parser(
             val literalKind = scanner.reScanTemplateToken()
             val literalText = scanner.getTokenValue()
             val litPos = getPos()
-            emitStringEscapeErrors() // emit errors from middle/tail before consuming it
+            emitStringEscapeErrors(suppressOctalIllegal = isTagged) // emit errors from middle/tail before consuming it
             nextToken()
             val literal: Node = if (literalKind == SyntaxKind.TemplateTail) {
                 StringLiteralNode(text = literalText, pos = litPos, end = getEnd())
@@ -6875,11 +6875,19 @@ class Parser(
     }
 
     /**
-     * Emits TS1487/TS1488 diagnostics for octal or illegal escape sequences found in the
-     * last scanned string/template literal token. Call BEFORE [nextToken] to capture errors.
+     * Emits TS1125/TS1198/TS1487/TS1488 diagnostics for escape sequence errors
+     * found in the last scanned string/template literal token. Call BEFORE
+     * [nextToken] to capture errors.
+     *
+     * B70.8: When [suppressOctalIllegal] is true (set by tagged-template parser
+     * paths), ALL escape-error diagnostics for THIS token are suppressed —
+     * TypeScript permits any escape sequence (octal, illegal, malformed hex /
+     * unicode) inside tagged templates because the tag function receives the
+     * RAW text and may interpret the escape itself.
      */
-    private fun emitStringEscapeErrors() {
+    private fun emitStringEscapeErrors(suppressOctalIllegal: Boolean = false) {
         val escapeErrors = scanner.getAndClearStringEscapeErrors()
+        if (suppressOctalIllegal) return
         for (err in escapeErrors) {
             val (line, character) = getLineAndCharacterOfPosition(err.start)
             diagnostics.add(Diagnostic(
