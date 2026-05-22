@@ -43120,7 +43120,14 @@ interface DataView {
                             return
                         }
                         if (canUse && !isAssignable) {
-                            val displaySource = typeToString(sourceType)
+                            // B69.5: Widen literal source for display when target type
+                            // doesn't contain literal members. TypeScript shows `boolean`
+                            // (widened) not `false` when target is `{ [n: number]: any }`
+                            // (no literal context). When target preserves literal (e.g.
+                            // `false` or `true | false`), keep the literal display.
+                            val displaySourceType = if (propTypeContainsLiteral(tt)) sourceType
+                                else getWidenedLiteralType(sourceType)
+                            val displaySource = typeToString(displaySourceType)
                             // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
                             // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
                             // over the type-annotation alias name. TypeScript expands type
