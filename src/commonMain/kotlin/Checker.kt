@@ -14792,7 +14792,7 @@ class Checker(
                     is ModuleBlock -> {
                         val ambient = ModifierFlag.Declare in stmt.modifiers
                         checkDuplicatesInStatements(body.statements, source, fileName)
-                        checkDuplicateDeclarations(body.statements, source, fileName, isAmbientContext = ambient)
+                        checkDuplicateDeclarations(body.statements, source, fileName, isAmbientContext = ambient, inNamespaceBody = true)
                     }
                     else -> {}
                 }
@@ -14978,6 +14978,7 @@ class Checker(
         source: String,
         fileName: String,
         isAmbientContext: Boolean = false,
+        inNamespaceBody: Boolean = false,
     ) {
         // Collect all declaration names with their kind and node
         data class DeclInfo(val name: String, val kind: String, val nameNode: Node, val stmt: Statement? = null)
@@ -15077,6 +15078,39 @@ class Checker(
                                 decls.add(DeclInfo(name.text, "var", name))
                             }
                         }
+                    }
+                }
+                // Var hoists out of standalone block statements (e.g. parser output
+                // from anonymous `module { ... }` per B66.2) into the enclosing
+                // namespace scope. Gated on `inNamespaceBody`: at file scope a
+                // standalone Block represents an anonymous-module-as-Block whose
+                // contents form their own (failed-parse) module scope, so its
+                // vars must NOT hoist out to merge with file-level decls (matches
+                // TypeScript baseline for `anonymousModules_ts`). Inside a real
+                // namespace, the Block is a nested anonymous-module artifact
+                // whose vars DO merge with the namespace's own decls (matches
+                // `innerModExport2_ts`).
+                is Block -> {
+                    if (inNamespaceBody) {
+                        fun collectVarsFromBlockStmts(stmts: List<Statement>) {
+                            for (inner in stmts) {
+                                when (inner) {
+                                    is VariableStatement -> {
+                                        if (inner.declarationList.flags == SyntaxKind.VarKeyword) {
+                                            for (decl in inner.declarationList.declarations) {
+                                                val name = decl.name
+                                                if (name is Identifier) {
+                                                    decls.add(DeclInfo(name.text, "var", name, inner))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    is Block -> collectVarsFromBlockStmts(inner.statements)
+                                    else -> {}
+                                }
+                            }
+                        }
+                        collectVarsFromBlockStmts(stmt.statements)
                     }
                 }
                 // B65.2: var hoists out of try/catch/finally blocks to the
