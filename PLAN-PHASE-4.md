@@ -1559,6 +1559,27 @@ the live plan focused. Quick reference:
 
 Tests examined this session and deliberately skipped. Categorized by root cause so a future agent can judge whether to attempt the architectural work below or keep hunting surgical wins elsewhere. Each entry records what was checked and why the surgical fix didn't pan out. **Before re-investigating a test listed here, read the skip reason** — the failure mode is already characterized.
 
+**Round 25 session 2026-05-22 surveyed (after B68.6 win, +1 net, post-round-24):**
+- ~~`typePredicateInherit_ts`~~ — flipped via B68.6 (TS2416 type-predicate mismatch chain).
+- `correctOrderOfPromiseMethod_ts` — needs lib subsetting (Promise not in `@lib: dom, es7`). B68.7 added AsExpression walker for TS2352 `as readonly [...]` but target blocked by lib subsetting; net-zero infra reverted.
+- `namespaceDisambiguationInUnion_ts` — needs constituent-elaboration to pick correct disambiguating constituent ("bar.yep" vs "foo.yep" mismatch) + ArrayLiteral→Tuple TS2322 chain "Target requires N element(s)". Multi-piece. Initial QualifiedName-display attempt (B68.8) was correct but cascaded 16 regressions across `moduleAndInterfaceSharingName*`, `collisionExportsRequire*`. Would need narrower gate (only qualify when ambiguous).
+- `typePredicateInLoop_ts` — TS1345 emission walker landed but target test still blocked by pre-existing FP TS2345 (flow-narrowing of `arg` from `if (guard(arg))` doesn't propagate into nested `for (const ITEM of arg.arr)` body — Blocker #1 control flow narrowing). Net-zero, reverted.
+- `assignLambdaToNominalSubtypeOfFunction_ts` — TS2345 should fire for `(a,b)=>true` arg to `IResultCallback extends Function { x: number }` because lambda missing `x`. Conservative TS2345 gate (per CLAUDE.md "Conservative parameter type checking" gotcha) skips Object/Interface paramType, blocking the emission.
+- `arrayOfSubtypeIsAssignableToReadonlyArray_ts` — FP TS2322 on `rra = crb` (C<B> to ReadonlyArray<A>). We treat `readonly A[]` as having all Array methods incl. push/pop; would need lib-aware ReadonlyArray vs Array distinction.
+- `elaboratedErrorsOnNullableTargets01_ts` — display differs: we emit `null | { ... } | undefined` vs expected `{ foo: { bar: string | null; } | undefined; }` (TS narrows target union to non-null/undef constituent when source non-null). Needs union-elaboration narrowing.
+- `conditionalAnyCheckTypePicksBothBranches_ts` — needs conditional type evaluation: `[any] extends [number] ? 1 : 0` should evaluate to `1`. Multi-piece conditional type infra.
+- `aliasUsageInOrExpression_ts` — needs `typeof import("X")` namespace display infrastructure.
+- `aliasAssignments_ts` — same module-typeof display infrastructure.
+- `defaultBestCommonTypesHaveDecls_ts` — generic argument inference (Blocker #2) for `concat<T>(x:T, y:T)`.
+- `recursiveTypeRelations_ts` — Array.reduce overload resolution + generic argument inference (Blocker #2).
+- `varianceAnnotationValidation_ts` — needs `out T` / `in T` variance annotation parsing + TS2636 validation walker. Multi-piece feature.
+- `inferFromGenericFunctionReturnTypes1_ts` — generic compose chain inference (Blocker #2).
+- `arrayConcatMap_ts` — `[].concat(...)` needs empty-array `never[]` inference + overload resolution (Blocker #2).
+- `arrowFunctionWithObjectLiteralBody1/2_ts` — TS7006 implicit any for unannotated arrow param at file level. Documented Blocker #6 (TS7006 over-suppression — currently we always skip when `contextuallyTyped=true` regardless of whether ctx actually types the param).
+- `defaultBestCommonTypesHaveDecls_ts` / `quickIntersectionCheckCorrectlyCachesErrors_ts` — generic argument inference / .tsx JSX-with-generics. Blocker #2 / multi-piece.
+- `recursiveComplicatedClasses_ts` — TS2345 cross-class arg mismatch + TS2507 `SymbolConstructor` not a constructor.
+- `noStrictGenericChecks_ts` — Blocker #2 (full TypeParam-vs-TypeParam matching across nested sigs).
+
 **Round 24 session 2026-05-22 surveyed (after B68.1+B68.2 wins, +3 net):**
 - ~~`multipleExports_ts`~~ — flipped via B68.2 (TS2484 in merged namespace).
 - ~~`es5ModuleInternalNamedImports_ts__target_es5__/__target_es2015__`~~ — flipped via B68.1 (TS1147 for ImportDeclaration in namespace).
