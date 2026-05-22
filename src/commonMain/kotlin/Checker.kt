@@ -21820,6 +21820,15 @@ interface DataView {
                     } else if (isAlwaysFalsyExpr(expr.left)) {
                         emitTS2873(expr.left, source, fileName)
                     }
+                    // B69.11: numeric-literal LHS — emit TS2872 only when NOT
+                    // inside an arrow expression body (TypeScript suppresses there;
+                    // the literal serves as a default-value pattern).
+                    if (!inArrowExprBody && expr.left is NumericLiteralNode) {
+                        val v = (expr.left as NumericLiteralNode).text.toDoubleOrNull()
+                        if (v != null && v != 0.0 && !v.isNaN()) {
+                            emitTS2872(expr.left, source, fileName)
+                        }
+                    }
                 }
                 // Iterative left spine to avoid StackOverflow
                 var current: Expression = expr
@@ -21829,6 +21838,12 @@ interface DataView {
                             emitTS2872(current.left, source, fileName)
                         } else if (isAlwaysFalsyExpr(current.left)) {
                             emitTS2873(current.left, source, fileName)
+                        }
+                        if (!inArrowExprBody && current.left is NumericLiteralNode) {
+                            val v = (current.left as NumericLiteralNode).text.toDoubleOrNull()
+                            if (v != null && v != 0.0 && !v.isNaN()) {
+                                emitTS2872(current.left, source, fileName)
+                            }
                         }
                     }
                     checkAlwaysTruthyInExpr(current.right, source, fileName)
@@ -21847,13 +21862,26 @@ interface DataView {
             }
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> checkAlwaysTruthyInStatements(body.statements, source, fileName)
-                is Expression -> checkAlwaysTruthyInExpr(body, source, fileName)
+                is Expression -> {
+                    val saved = inArrowExprBody
+                    inArrowExprBody = true
+                    try {
+                        checkAlwaysTruthyInExpr(body, source, fileName)
+                    } finally {
+                        inArrowExprBody = saved
+                    }
+                }
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             else -> {}
         }
     }
+
+    /** B69.11: tracks whether we're inside an arrow expression body for the
+     *  always-truthy walker. TypeScript suppresses TS2872 for numeric-literal
+     *  LHS of `||` in this context (the literal is a default-value pattern). */
+    private var inArrowExprBody: Boolean = false
 
     /**
      * TS2845: "This condition will always return 'false'/'true'." for an enum
@@ -55228,12 +55256,29 @@ interface DataView {
                 // Narrow gate: only fire for file-level Variable declarations with an
                 // explicit type annotation — avoids FPs on function params/destructured
                 // bindings whose inferred types may be stale primitives.
+                // B69.11: also accept top-level (parent == null) literal-initialized vars
+                // (`var x = 5;` / `var s = "y";` / `var b = true|false;`). Skip when the
+                // name is locally shadowed via `currentLocalTypes` (function/arrow scope) —
+                // detected by comparing the local type to the file-level symbol type: if
+                // they differ (after literal widening), an inner scope shadows the file
+                // var and the gate must not fire.
                 val exprType = if (rawType !is Type.Object) {
                     val decl = identSymbol.valueDeclaration
                     val annotated = decl is VariableDeclaration && decl.type != null
-                    if (!annotated || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
+                    val localShadow = currentLocalTypes[identName]?.let {
+                        it !== rawType && it !== getWidenedLiteralType(rawType)
+                    } == true
+                    val literalInferred = !annotated && decl is VariableDeclaration &&
+                        identSymbol.parent == null && identSymbol.declarations.size == 1 &&
+                        !localShadow && when (val init = decl.initializer) {
+                            is NumericLiteralNode -> true
+                            is StringLiteralNode -> true
+                            is Identifier -> init.text == "true" || init.text == "false"
+                            else -> false
+                        }
+                    if ((!annotated && !literalInferred) || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
                     if (propName.isEmpty()) return
-                    displayTypeOverride = rawType
+                    displayTypeOverride = if (literalInferred) getWidenedLiteralType(rawType) else rawType
                     getApparentType(rawType)
                 } else rawType
                 if (exprType !is Type.Object) return
