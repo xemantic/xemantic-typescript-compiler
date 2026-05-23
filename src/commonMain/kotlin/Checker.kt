@@ -32112,6 +32112,9 @@ interface DataView {
         // For `as`, the end is after the type annotation; expr.end may overshoot
         // by one token, so prefer `type.end` when available, else fallback.
         is AsExpression -> expr.end
+        // `expr satisfies T` — the satisfies type is the trailing token, so the
+        // squiggle should cover through the type-annotation end.
+        is SatisfiesExpression -> expr.type.end
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
