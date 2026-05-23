@@ -60569,7 +60569,35 @@ interface DataView {
         if (targetType !is Type.Reference) return
         if (targetType.target?.symbol?.name != "Array") return
         val elementType = targetType.resolvedTypeArguments?.firstOrNull() ?: return
-        if (elementType !is Type.Object) return
+        if (elementType !is Type.Object) {
+            // Primitive element type (e.g. `string[] = [voidFn()]`) — narrow void-call
+            // element check. `void` call results can't satisfy any concrete primitive
+            // element type. Skip if elementType is any/unknown/never/itself void.
+            if (elementType is Type.Intrinsic &&
+                !elementType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never or TypeFlags.Void)) {
+                val elementDisplay = typeToString(elementType)
+                for (elem in init.elements) {
+                    if (elem !is CallExpression) continue
+                    val callType = getReturnTypeOfCallExpression(elem) ?: continue
+                    if (!callType.flags.hasAny(TypeFlags.Void)) continue
+                    val start = elem.pos
+                    val length = expressionTrueEnd(elem) - start
+                    if (length <= 0) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'void' is not assignable to type '$elementDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            return
+        }
         try {
             resolveStructuredTypeMembers(elementType)
             if (elementType.properties.isNullOrEmpty()) return
