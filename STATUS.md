@@ -1,6 +1,21 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,938 / 10,078 tests passing (~88.69%). _Round 29 (2026-05-22): /goal session — 5 feature commits, +5 net via B70.6–B70.10._
+**Phase 4 — Checker buildout.** 8,939 / 10,078 tests passing (~88.70%). _Round 31 (2026-05-23): /goal session — 10 commits, +1 net via array literal element checks._
+
+_Round 31 (2026-05-23, +1 net via iter1+iter2 + 8 net-zero correctness)_:
+- **iter1 (net-zero correctness)**: `checkArrayLiteralElementExcessProps` recurses into nested ArrayLiteralExpression elements when the expected element type is itself Array<X>. Widens literal types in TS2322 displays (1 → number). Handles `number[][][] = [[1, 2]]` shape.
+- **iter2 (+1)**: TS2322 for void-call as array literal element vs primitive target. New branch handles primitive (string/number/etc.) element-type case via CallExpression-with-void-return detection. Combined with iter1's recursion, flips `arraySigChecking_ts` (was 1/4 errors emitting, now all 4).
+- **iter3 (net-zero correctness)**: `isUndefinedRef` and `isNullRef` unwrap parens. `(undefined)` and `(null)` now narrow identically.
+- **iter4 (net-zero correctness)**: `isAlwaysFalsyExpr` handles SatisfiesExpression for TS2873.
+- **iter5 (net-zero correctness)**: `inferReturnTypeFromBody` handles NoSubstitutionTemplateLiteralNode → stringType, BigIntLiteralNode → bigintType, Identifier 'true'/'false' → booleanType, and parens unwrap.
+- **iter6 (net-zero correctness)**: `getCalleeType` handles NonNullExpression + SatisfiesExpression alongside ParenthesizedExpression.
+- **iter7 (net-zero correctness)**: `getReturnTypeOfCallExpression` unwraps value-preserving wrappers (ParenthesizedExpression / NonNullExpression / SatisfiesExpression) before classifying callee.
+- **iter8 (net-zero correctness)**: `getTypeOfElementAccess` unwraps parens around index expression. `obj[("prop")]` resolves like `obj["prop"]`.
+- **iter9 (net-zero correctness)**: `getReturnTypeOfNewExpression` unwraps value-preserving wrappers like iter7.
+- **iter10 (net-zero correctness)**: `expressionTrueEnd` handles SatisfiesExpression via `expr.type.end` (was falling to `expr.end` overshoot).
+
+Session-end: 8939 / 10078 (+1 net, 88.70%). `find_candidates.py --fresh` returned 0/0/0 throughout the session; flip came from targeted reading of skip-log diff lines. The 8 wrapper-unwrap improvements are pure correctness — match existing pattern from round 30 iter7-iter10 (paren unwrapping across narrowing helpers).
+
 
 _Round 29 (2026-05-22, +5 net via 5 feature commits + 1 reverted attempt)_:
 - **B70.6 (+1)**: TS9010 for non-exported `let X = init` when X is referenced as bare-Identifier computed property name (`[X]`) inside an exported obj-literal initializer in the same file. Narrow gate via new Pass 2b in `emitIsolatedDeclarationsDiagnostics` collecting referenced names. Flips `computedPropertiesNarrowed_ts`.
