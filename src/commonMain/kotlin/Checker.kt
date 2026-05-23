@@ -52493,10 +52493,19 @@ interface DataView {
         val block = body as? Block ?: return null
         for (stmt in block.statements) {
             if (stmt is ReturnStatement) {
-                val expr = stmt.expression ?: continue
+                val rawExpr = stmt.expression ?: continue
+                // Unwrap parens — `return (1)` should infer same as `return 1`.
+                var expr = rawExpr
+                while (expr is ParenthesizedExpression) expr = expr.expression
                 return when (expr) {
                     is StringLiteralNode -> stringType
+                    is NoSubstitutionTemplateLiteralNode -> stringType
                     is NumericLiteralNode -> numberType
+                    is BigIntLiteralNode -> bigintType
+                    is Identifier -> when (expr.text) {
+                        "true", "false" -> booleanType
+                        else -> null
+                    }
                     is PrefixUnaryExpression -> if (expr.operand is NumericLiteralNode) numberType else null
                     is NewExpression -> {
                         // 17.156: mirror 17.154's FunctionExpression inference into the
