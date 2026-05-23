@@ -45696,6 +45696,10 @@ interface DataView {
             val receiverPath = getReferencePath(expr.expression) ?: return null
             "$receiverPath.${expr.name.text}"
         }
+        // `(x)` and `(x).prop` should narrow identically to `x` / `x.prop` — the parens
+        // are syntactic noise. Skip synthetic-paren instantiation-expression markers,
+        // since those represent a separate semantic op the narrower shouldn't merge.
+        is ParenthesizedExpression -> if (expr.instantiationEnd == null) getReferencePath(expr.expression) else null
         else -> null
     }
 
