@@ -60613,6 +60613,19 @@ interface DataView {
                             ))
                         }
                     }
+                    is ArrowFunction, is FunctionExpression -> {
+                        // Skip — function expressions get checked elsewhere
+                    }
+                    is ArrayLiteralExpression -> {
+                        // Nested array literal: if the expected element type is itself
+                        // an Array<X>, recurse so the inner literal's primitive
+                        // elements get checked against X. Handles `number[][][] =
+                        // [[1, 2]]` shape where the inner `[1, 2]` needs each
+                        // numeric literal checked against `number[]`.
+                        if (elementType is Type.Reference && elementType.target?.symbol?.name == "Array") {
+                            checkArrayLiteralElementExcessProps(elem, elementType, source, fileName)
+                        }
+                    }
                     else -> {
                         // 16.0: Primitive element vs Object element type — emit TS2322.
                         val elemType = getTypeOfExpression(elem)
@@ -60624,8 +60637,9 @@ interface DataView {
                         if (!elemIsPrimitive) continue
                         // null/undefined/void → skip (strictNullChecks variance)
                         if (elemType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or TypeFlags.Any)) continue
-                        // Primitive can never be assignable to a non-empty object type
-                        val displaySource = typeToString(elemType)
+                        // Primitive can never be assignable to a non-empty object type.
+                        // Widen literal types for display (TypeScript convention).
+                        val displaySource = typeToString(getWidenedLiteralType(elemType))
                         val start = elem.pos
                         val length = expressionTrueEnd(elem) - start
                         if (length <= 0) continue
