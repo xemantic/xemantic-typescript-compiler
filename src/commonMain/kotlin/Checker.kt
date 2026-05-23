@@ -9978,8 +9978,18 @@ class Checker(
         return when (type) {
             is Type.Object -> try {
                 resolveStructuredTypeMembers(type)
-                val sym = type.members?.get(name) ?: return null
-                getTypeOfSymbol(sym)
+                val sym = type.members?.get(name)
+                if (sym != null) getTypeOfSymbol(sym)
+                else {
+                    // Fall back to index signature when no named property matches:
+                    // numeric-looking name → numberIndexInfo (with stringIndexInfo fallback),
+                    // else stringIndexInfo. Matches TypeScript's contextual-typing fallback
+                    // for object-literal property values against interface index signatures.
+                    val isNumericName = name.toIntOrNull() != null
+                    val info = if (isNumericName) type.numberIndexInfo ?: type.stringIndexInfo
+                               else type.stringIndexInfo
+                    info?.type
+                }
             } catch (_: StackOverflowError) {
                 null
             }
