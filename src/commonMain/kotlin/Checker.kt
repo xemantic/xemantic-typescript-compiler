@@ -21999,6 +21999,7 @@ interface DataView {
             is ParenthesizedExpression -> isAlwaysFalsyExpr(expr.expression)
             is TypeAssertionExpression -> isAlwaysFalsyExpr(expr.expression)
             is AsExpression -> isAlwaysFalsyExpr(expr.expression)
+            is SatisfiesExpression -> isAlwaysFalsyExpr(expr.expression)
             is Identifier -> expr.text == "null" || expr.text == "undefined"
             else -> false
         }
