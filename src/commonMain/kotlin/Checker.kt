@@ -7721,21 +7721,23 @@ class Checker(
     }
 
     private fun isStringLiteralNotUndefined(expr: Expression): Boolean {
-        val text = (expr as? StringLiteralNode)?.text
-            ?: (expr as? NoSubstitutionTemplateLiteralNode)?.text
+        val unwrapped = unwrapParensExpr(expr)
+        val text = (unwrapped as? StringLiteralNode)?.text
+            ?: (unwrapped as? NoSubstitutionTemplateLiteralNode)?.text
             ?: return false
         return text != "undefined"
     }
 
     private fun isUndefinedStringLiteral(expr: Expression): Boolean {
-        val text = (expr as? StringLiteralNode)?.text
-            ?: (expr as? NoSubstitutionTemplateLiteralNode)?.text
+        val unwrapped = unwrapParensExpr(expr)
+        val text = (unwrapped as? StringLiteralNode)?.text
+            ?: (unwrapped as? NoSubstitutionTemplateLiteralNode)?.text
             ?: return false
         return text == "undefined"
     }
 
     private fun isVarRef(expr: Expression, varName: String): Boolean {
-        return (expr as? Identifier)?.text == varName
+        return (unwrapParensExpr(expr) as? Identifier)?.text == varName
     }
 
     private fun isUndefinedRef(expr: Expression): Boolean {
