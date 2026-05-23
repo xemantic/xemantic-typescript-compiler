@@ -58433,6 +58433,8 @@ interface DataView {
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
             is ParenthesizedExpression -> getCalleeType(expr.expression)
+            is NonNullExpression -> getCalleeType(expr.expression)
+            is SatisfiesExpression -> getCalleeType(expr.expression)
             is CallExpression -> try { getReturnTypeOfCallExpression(expr) } catch (_: StackOverflowError) { anyType }
             else -> anyType
         }
