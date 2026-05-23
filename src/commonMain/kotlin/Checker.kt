@@ -46327,6 +46327,18 @@ interface DataView {
         is ParenthesizedExpression -> literalTypeOfExpression(expr.expression)
         // B70.5: `expr!` (non-null assertion) preserves literal type — `(0 as const)!` is `0`.
         is NonNullExpression -> literalTypeOfExpression(expr.expression)
+        // `expr as const` preserves the literal — `0 as const` is `0`, not `number`.
+        // Other `as T` casts don't preserve (the cast intentionally changes the type),
+        // so only the `const` keyword form is treated as literal-preserving here.
+        is AsExpression -> {
+            val t = expr.type
+            if (t is TypeReference && (t.typeName as? Identifier)?.text == "const") {
+                literalTypeOfExpression(expr.expression)
+            } else null
+        }
+        // `expr satisfies T` is a pure-type-check: the runtime expression and its
+        // type are unchanged. Preserve literal type for source literal preservation.
+        is SatisfiesExpression -> literalTypeOfExpression(expr.expression)
         else -> null
     }
 
