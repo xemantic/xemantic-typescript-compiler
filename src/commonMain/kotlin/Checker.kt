@@ -32070,7 +32070,15 @@ interface DataView {
         is NewExpression -> {
             // new Foo() — end of closing ) after arguments
             if (expr.arguments?.isNotEmpty() == true) expressionTrueEnd(expr.arguments!!.last()) + 1
-            else if (expr.arguments != null) expressionTrueEnd(expr.expression) + 2 // +2 for ()
+            else if (expr.arguments != null) {
+                // `new Foo<T>()` or `new Foo()` — include type args when present
+                if (!expr.typeArguments.isNullOrEmpty()) expr.typeArguments!!.last().end + 2
+                else expressionTrueEnd(expr.expression) + 2 // +2 for ()
+            }
+            else if (!expr.typeArguments.isNullOrEmpty()) {
+                // `new Foo<T>` (no parens, no args)
+                expr.typeArguments!!.last().end
+            }
             else expressionTrueEnd(expr.expression)
         }
         is ObjectLiteralExpression -> {
