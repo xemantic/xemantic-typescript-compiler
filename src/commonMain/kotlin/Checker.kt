@@ -56660,8 +56660,11 @@ interface DataView {
         val symbol = currentFileLocals?.get(name) ?: globals[name] ?: return false
         if (!symbol.flags.hasAny(SymbolFlags.Variable)) return false
         val decl = symbol.valueDeclaration as? VariableDeclaration ?: return false
-        // Definitively implicit-any only when BOTH annotation and initializer are absent.
-        return decl.type == null && decl.initializer == null
+        // Definitively implicit-any when BOTH annotation and initializer are absent.
+        if (decl.type == null && decl.initializer == null) return true
+        // Explicit `: any` annotation also counts (`declare var g: any; g<T>()`).
+        val ann = decl.type
+        return ann is KeywordTypeNode && ann.kind == SyntaxKind.AnyKeyword
     }
 
     /**
