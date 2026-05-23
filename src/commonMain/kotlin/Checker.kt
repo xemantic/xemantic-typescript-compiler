@@ -54265,7 +54265,8 @@ interface DataView {
         // property; only the constructor side does. Display uses the
         // constructor's name (Identifier) to mirror TypeScript's baseline.
         if (expr.name.text == "prototype") {
-            val recv = expr.expression
+            var recv: Expression = expr.expression
+            while (recv is ParenthesizedExpression) recv = recv.expression
             if (recv is NewExpression) {
                 val ctor = recv.expression
                 if (ctor is Identifier) {
