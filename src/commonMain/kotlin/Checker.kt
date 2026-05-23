@@ -46705,7 +46705,18 @@ interface DataView {
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
         // 16.0: super(...) call inside a constructor returns void
         if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") return voidType
-        val calleeType = when (val callee = expr.expression) {
+        // Unwrap value-preserving wrappers before classifying the callee.
+        // `(fn)()`, `fn!()`, and `(fn satisfies T)()` should resolve like `fn()`.
+        var callee: Expression = expr.expression
+        while (true) {
+            callee = when (callee) {
+                is ParenthesizedExpression -> if (callee.instantiationEnd == null) callee.expression else break
+                is NonNullExpression -> callee.expression
+                is SatisfiesExpression -> callee.expression
+                else -> break
+            }
+        }
+        val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
             else -> return anyType
