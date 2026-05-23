@@ -7714,7 +7714,10 @@ class Checker(
         if (expr is ParenthesizedExpression) unwrapParensExpr(expr.expression) else expr
 
     private fun isTypeofOf(expr: Expression, varName: String): Boolean {
-        return expr is TypeOfExpression && (expr.expression as? Identifier)?.text == varName
+        if (expr !is TypeOfExpression) return false
+        // `typeof (x)` should narrow identically to `typeof x` — unwrap parens.
+        val inner = unwrapParensExpr(expr.expression)
+        return (inner as? Identifier)?.text == varName
     }
 
     private fun isStringLiteralNotUndefined(expr: Expression): Boolean {
