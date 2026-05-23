@@ -7741,11 +7741,11 @@ class Checker(
     }
 
     private fun isUndefinedRef(expr: Expression): Boolean {
-        return (expr as? Identifier)?.text == "undefined"
+        return (unwrapParensExpr(expr) as? Identifier)?.text == "undefined"
     }
 
     private fun isNullRef(expr: Expression): Boolean {
-        return expr.kind == SyntaxKind.NullKeyword
+        return unwrapParensExpr(expr).kind == SyntaxKind.NullKeyword
     }
 
     private fun isNotNullOrUndefinedRef(expr: Expression): Boolean {
