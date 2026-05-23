@@ -47518,7 +47518,9 @@ interface DataView {
     private fun getTypeOfElementAccess(expr: ElementAccessExpression): Type {
         val objectType = getTypeOfExpression(expr.expression)
         if (objectType === anyType || objectType === errorType) return anyType
-        val indexExpr = expr.argumentExpression ?: return anyType
+        val rawIndexExpr = expr.argumentExpression ?: return anyType
+        // Unwrap parens: `obj[("prop")]` should resolve like `obj["prop"]`.
+        val indexExpr = unwrapParensExpr(rawIndexExpr)
         // String literal key: obj["prop"] → resolve as named property
         if (indexExpr is StringLiteralNode) {
             val prop = getPropertyOfType(objectType, indexExpr.text)
