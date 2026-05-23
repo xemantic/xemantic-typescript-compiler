@@ -47354,7 +47354,18 @@ interface DataView {
 
     /** Get the return type of a new expression by resolving the construct signature. */
     private fun getReturnTypeOfNewExpression(expr: NewExpression): Type {
-        val calleeType = when (val callee = expr.expression) {
+        // Unwrap value-preserving wrappers: `new (Foo)()`, `new Foo!()`,
+        // `new (Foo satisfies T)()` should resolve like `new Foo()`.
+        var callee: Expression = expr.expression
+        while (true) {
+            callee = when (callee) {
+                is ParenthesizedExpression -> if (callee.instantiationEnd == null) callee.expression else break
+                is NonNullExpression -> callee.expression
+                is SatisfiesExpression -> callee.expression
+                else -> break
+            }
+        }
+        val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             else -> return anyType
         }
