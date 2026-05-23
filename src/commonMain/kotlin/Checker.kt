@@ -32061,6 +32061,10 @@ interface DataView {
         is CallExpression -> {
             // end of closing ) after arguments
             if (expr.arguments.isNotEmpty()) expressionTrueEnd(expr.arguments.last()) + 1
+            else if (!expr.typeArguments.isNullOrEmpty()) {
+                // `f<T>()` — start from last type arg's end (already past `>`) + `()`
+                expr.typeArguments!!.last().end + 2
+            }
             else expressionTrueEnd(expr.expression) + 2 // +2 for empty `()`
         }
         is NewExpression -> {
