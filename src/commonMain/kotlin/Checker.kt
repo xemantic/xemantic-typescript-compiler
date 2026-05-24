@@ -32137,6 +32137,7 @@ interface DataView {
                 checkRestLastInParams(expr.parameters, source, fileName)
                 when (val body = expr.body) {
                     is Block -> checkRestLastInStatements(body.statements, source, fileName)
+                    is Expression -> checkRestLastInExpr(body, source, fileName)
                     else -> {}
                 }
             }
@@ -32154,20 +32155,78 @@ interface DataView {
                         checkRestLastInParams(m.parameters, source, fileName)
                         m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
                     }
+                    is GetAccessor -> m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> {
+                        checkRestLastInParams(m.parameters, source, fileName)
+                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
+                    is PropertyDeclaration -> m.initializer?.let { checkRestLastInExpr(it, source, fileName) }
                     else -> {}
                 }
             }
             is ParenthesizedExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkRestLastInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkRestLastInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkRestLastInExpr(expr.condition, source, fileName)
+                checkRestLastInExpr(expr.whenTrue, source, fileName)
+                checkRestLastInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkRestLastInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) checkRestLastInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                checkRestLastInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkRestLastInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkRestLastInExpr(expr.expression, source, fileName)
+                checkRestLastInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkRestLastInExpr(e, source, fileName)
             is ObjectLiteralExpression -> for (prop in expr.properties) {
                 when (prop) {
+                    is PropertyAssignment -> checkRestLastInExpr(prop.initializer, source, fileName)
+                    is SpreadAssignment -> checkRestLastInExpr(prop.expression, source, fileName)
                     is MethodDeclaration -> {
                         checkRestLastInParams(prop.parameters, source, fileName)
                         prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
                     }
-                    is SetAccessor -> checkRestLastInParams(prop.parameters, source, fileName)
+                    is GetAccessor -> prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> {
+                        checkRestLastInParams(prop.parameters, source, fileName)
+                        prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
+                    }
                     else -> {}
                 }
             }
+            is SpreadElement -> checkRestLastInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkRestLastInExpr(it, source, fileName) }
+            is VoidExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkRestLastInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkRestLastInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkRestLastInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkRestLastInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkRestLastInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkRestLastInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkRestLastInExpr(e, source, fileName)
             else -> {}
         }
     }
