@@ -38399,10 +38399,51 @@ interface DataView {
                 for (arg in expr.arguments) findClassesForTS2815InExpr(arg, source, fileName)
             }
             is ParenthesizedExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is AsExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is NonNullExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
-                findClassesForTS2815InExpr(expr.left, source, fileName)
-                findClassesForTS2815InExpr(expr.right, source, fileName)
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                findClassesForTS2815InExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) findClassesForTS2815InExpr(rightStack.removeLast(), source, fileName)
             }
+            is ConditionalExpression -> {
+                findClassesForTS2815InExpr(expr.condition, source, fileName)
+                findClassesForTS2815InExpr(expr.whenTrue, source, fileName)
+                findClassesForTS2815InExpr(expr.whenFalse, source, fileName)
+            }
+            is PropertyAccessExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                findClassesForTS2815InExpr(expr.expression, source, fileName)
+                findClassesForTS2815InExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) findClassesForTS2815InExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> findClassesForTS2815InExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> findClassesForTS2815InExpr(p.expression, source, fileName)
+                    else -> {}
+                }
+            }
+            is SpreadElement -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> findClassesForTS2815InExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> findClassesForTS2815InExpr(expr.operand, source, fileName)
+            is AwaitExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
+            is VoidExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is DeleteExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) findClassesForTS2815InExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                findClassesForTS2815InExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) findClassesForTS2815InExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) findClassesForTS2815InExpr(e, source, fileName)
             // FunctionExpression/ArrowFunction as the TOP-LEVEL return — look for class inside
             is FunctionExpression -> {
                 findClassesForTS2815InStatements(expr.body.statements, source, fileName)
