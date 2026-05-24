@@ -63524,9 +63524,12 @@ interface DataView {
             is NumericLiteralNode -> true
             is StringLiteralNode -> true
             is NoSubstitutionTemplateLiteralNode -> true
+            is BigIntLiteralNode -> true
             is Identifier -> true // All identifiers are "simple" (no elaboration chain)
             is ParenthesizedExpression -> isSimpleLiteral(expr.expression)
-            is PrefixUnaryExpression -> expr.operand is NumericLiteralNode
+            is NonNullExpression -> isSimpleLiteral(expr.expression)
+            is SatisfiesExpression -> isSimpleLiteral(expr.expression)
+            is PrefixUnaryExpression -> expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode
             is BinaryExpression -> expr.operator == SyntaxKind.Equals && isSimpleLiteral(expr.right)
             else -> false
         }
