@@ -35266,12 +35266,47 @@ interface DataView {
 
     private fun walkForOptionalParamsInExpr(expr: Expression?, source: String, fileName: String) {
         when (expr) {
-            is ArrowFunction -> checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
+            is ArrowFunction -> {
+                checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
+                when (val body = expr.body) {
+                    is Block -> walkForOptionalParams(body.statements, source, fileName)
+                    is Expression -> walkForOptionalParamsInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
             is FunctionExpression -> {
                 checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
                 walkForOptionalParams(expr.body.statements, source, fileName)
             }
             is ParenthesizedExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is NewExpression -> {
+                walkForOptionalParamsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkForOptionalParamsInExpr(expr.expression, source, fileName)
+                walkForOptionalParamsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
+            is TemplateExpression -> expr.templateSpans.forEach { walkForOptionalParamsInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkForOptionalParamsInExpr(expr.tag, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { walkForOptionalParamsInExpr(it.expression, source, fileName) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkForOptionalParamsInExpr(it, source, fileName) }
+            is PrefixUnaryExpression -> walkForOptionalParamsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkForOptionalParamsInExpr(expr.operand, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
             is BinaryExpression -> {
                 var current: Expression = expr
                 while (current is BinaryExpression) {
@@ -38165,6 +38200,14 @@ interface DataView {
             is PostfixUnaryExpression -> checkExprForTS2815Arguments(expr.operand, source, fileName)
             is TypeAssertionExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
             is AsExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is NonNullExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is AwaitExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
+            is DeleteExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is VoidExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is TypeOfExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { checkExprForTS2815Arguments(it, source, fileName) }
             is SpreadElement -> checkExprForTS2815Arguments(expr.expression, source, fileName)
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
@@ -39325,6 +39368,7 @@ interface DataView {
             is ArrowFunction -> {
                 val body = expr.body
                 if (body is Block) walkForUnusedLabels(body.statements, source, fileName)
+                else if (body is Expression) walkExprForUnusedLabels(body, source, fileName)
             }
             is ClassExpression -> {
                 for (m in expr.members) {
@@ -39335,6 +39379,50 @@ interface DataView {
                     }
                 }
             }
+            is ParenthesizedExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is AsExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is NonNullExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is CallExpression -> {
+                walkExprForUnusedLabels(expr.expression, source, fileName)
+                expr.arguments.forEach { walkExprForUnusedLabels(it, source, fileName) }
+            }
+            is NewExpression -> {
+                walkExprForUnusedLabels(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkExprForUnusedLabels(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkExprForUnusedLabels(current.right, source, fileName)
+                    current = current.left
+                }
+                walkExprForUnusedLabels(current, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkExprForUnusedLabels(expr.condition, source, fileName)
+                walkExprForUnusedLabels(expr.whenTrue, source, fileName)
+                walkExprForUnusedLabels(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForUnusedLabels(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkExprForUnusedLabels(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkExprForUnusedLabels(prop.expression, source, fileName)
+                is MethodDeclaration -> prop.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForUnusedLabels(it.expression, source, fileName) }
+            is SpreadElement -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkExprForUnusedLabels(expr.expression, source, fileName)
+                walkExprForUnusedLabels(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkExprForUnusedLabels(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkExprForUnusedLabels(expr.operand, source, fileName)
+            is AwaitExpression -> walkExprForUnusedLabels(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkExprForUnusedLabels(it, source, fileName) }
             else -> {}
         }
     }
@@ -39445,7 +39533,59 @@ interface DataView {
             is ArrowFunction -> {
                 val body = expr.body
                 if (body is Block) walkForFallthroughCases(body.statements, source, fileName)
+                else if (body is Expression) walkExprForFallthroughCases(body, source, fileName)
             }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is AsExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is NonNullExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is CallExpression -> {
+                walkExprForFallthroughCases(expr.expression, source, fileName)
+                expr.arguments.forEach { walkExprForFallthroughCases(it, source, fileName) }
+            }
+            is NewExpression -> {
+                walkExprForFallthroughCases(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkExprForFallthroughCases(it, source, fileName) }
+            }
+            is BinaryExpression -> {
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkExprForFallthroughCases(current.right, source, fileName)
+                    current = current.left
+                }
+                walkExprForFallthroughCases(current, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkExprForFallthroughCases(expr.condition, source, fileName)
+                walkExprForFallthroughCases(expr.whenTrue, source, fileName)
+                walkExprForFallthroughCases(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForFallthroughCases(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkExprForFallthroughCases(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkExprForFallthroughCases(prop.expression, source, fileName)
+                is MethodDeclaration -> prop.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForFallthroughCases(it.expression, source, fileName) }
+            is SpreadElement -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkExprForFallthroughCases(expr.expression, source, fileName)
+                walkExprForFallthroughCases(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkExprForFallthroughCases(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkExprForFallthroughCases(expr.operand, source, fileName)
+            is AwaitExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkExprForFallthroughCases(it, source, fileName) }
             else -> {}
         }
     }
