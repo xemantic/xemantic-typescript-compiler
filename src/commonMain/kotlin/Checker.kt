@@ -31547,6 +31547,7 @@ interface DataView {
         when (expr) {
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> checkUBDInStatements(body.statements, source, fileName)
+                is Expression -> checkUBDInExprForNested(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkUBDInStatements(it.statements, source, fileName) }
@@ -31554,9 +31555,70 @@ interface DataView {
                 when (m) {
                     is MethodDeclaration -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
                     is Constructor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
                     else -> {}
                 }
             }
+            is ParenthesizedExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is AsExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is NonNullExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    checkUBDInExprForNested(cur.right, source, fileName)
+                    cur = cur.left
+                }
+                checkUBDInExprForNested(cur, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkUBDInExprForNested(expr.condition, source, fileName)
+                checkUBDInExprForNested(expr.whenTrue, source, fileName)
+                checkUBDInExprForNested(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkUBDInExprForNested(expr.expression, source, fileName)
+                expr.arguments.forEach { checkUBDInExprForNested(it, source, fileName) }
+            }
+            is NewExpression -> {
+                checkUBDInExprForNested(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkUBDInExprForNested(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkUBDInExprForNested(expr.expression, source, fileName)
+                checkUBDInExprForNested(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkUBDInExprForNested(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkUBDInExprForNested(prop.initializer, source, fileName)
+                    is SpreadAssignment -> checkUBDInExprForNested(prop.expression, source, fileName)
+                    is MethodDeclaration -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkUBDInExprForNested(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkUBDInExprForNested(expr.operand, source, fileName)
+            is AwaitExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkUBDInExprForNested(it, source, fileName) }
+            is VoidExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is DeleteExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is TypeOfExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
+            is TemplateExpression -> expr.templateSpans.forEach { checkUBDInExprForNested(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                checkUBDInExprForNested(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkUBDInExprForNested(it.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkUBDInExprForNested(it, source, fileName) }
             else -> {}
         }
     }
