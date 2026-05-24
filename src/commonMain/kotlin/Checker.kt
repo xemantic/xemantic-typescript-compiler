@@ -39185,6 +39185,54 @@ interface DataView {
                     checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
                 }
             }
+            // Value-preserving wrappers — `(expr)` propagates isAssignmentLhs; `expr!`,
+            // `expr as T`, `<T>expr`, `expr satisfies T` are still valid assignment
+            // targets and preserve the LHS context for private-field set detection.
+            is ParenthesizedExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, isAssignmentLhs)
+            is NonNullExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, isAssignmentLhs)
+            is AsExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, isAssignmentLhs)
+            is TypeAssertionExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, isAssignmentLhs)
+            is SatisfiesExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, isAssignmentLhs)
+            is CallExpression -> {
+                checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+                expr.arguments.forEach { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            }
+            is NewExpression -> {
+                checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+                expr.arguments?.forEach { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            }
+            is ElementAccessExpression -> {
+                checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+                checkExprForPrivateFieldAccess(expr.argumentExpression, source, fileName, tslibExports, false)
+            }
+            is PrefixUnaryExpression -> {
+                // ++this.#x / --this.#x → Set (private field assignment)
+                val isAssignOp = expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus
+                checkExprForPrivateFieldAccess(expr.operand, source, fileName, tslibExports, isAssignOp)
+            }
+            is PostfixUnaryExpression -> {
+                val isAssignOp = expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus
+                checkExprForPrivateFieldAccess(expr.operand, source, fileName, tslibExports, isAssignOp)
+            }
+            is ConditionalExpression -> {
+                checkExprForPrivateFieldAccess(expr.condition, source, fileName, tslibExports, false)
+                checkExprForPrivateFieldAccess(expr.whenTrue, source, fileName, tslibExports, false)
+                checkExprForPrivateFieldAccess(expr.whenFalse, source, fileName, tslibExports, false)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> checkExprForPrivateFieldAccess(prop.initializer, source, fileName, tslibExports, false)
+                is SpreadAssignment -> checkExprForPrivateFieldAccess(prop.expression, source, fileName, tslibExports, false)
+                else -> {}
+            }
+            is SpreadElement -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+            is AwaitExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+            is YieldExpression -> expr.expression?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            is DeleteExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+            is VoidExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+            is TypeOfExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
+            is TemplateExpression -> expr.templateSpans.forEach { checkExprForPrivateFieldAccess(it.expression, source, fileName, tslibExports, false) }
+            is CommaListExpression -> expr.elements.forEach { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
             else -> {}
         }
     }
