@@ -64170,6 +64170,12 @@ interface DataView {
                 if (assertedType != null) assertedType
                 else inferSimpleExprType(expr.expression, varTypes)
             }
+            is TypeAssertionExpression -> {
+                // `<T>expr` legacy assertion form — mirrors AsExpression
+                val assertedType = resolveSimpleTypeName(expr.type)
+                if (assertedType != null) assertedType
+                else inferSimpleExprType(expr.expression, varTypes)
+            }
             is ArrayLiteralExpression -> "array" // Used internally for assignability
             is BinaryExpression -> when (expr.operator) {
                 SyntaxKind.Equals -> inferSimpleExprType(expr.right, varTypes)
