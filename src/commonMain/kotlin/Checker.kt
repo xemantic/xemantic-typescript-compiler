@@ -13805,6 +13805,19 @@ class Checker(
             }
             is AsExpression -> checkJsxInExpr(expr.expression, source, fileName)
             is NonNullExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is NewExpression -> {
+                checkJsxInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkJsxInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkJsxInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkJsxInExpr(expr.expression, source, fileName)
+                checkJsxInExpr(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkJsxInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkJsxInExpr(expr.operand, source, fileName)
             is CommaListExpression -> {
                 expr.elements.forEach { checkJsxInExpr(it, source, fileName) }
             }
@@ -27203,6 +27216,24 @@ interface DataView {
                 expr.templateSpans.forEach { walkExprForDelete(it.expression, source, fileName, isStrict) }
             }
             is CommaListExpression -> expr.elements.forEach { walkExprForDelete(it, source, fileName, isStrict) }
+            is AsExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is TypeAssertionExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is SatisfiesExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is NonNullExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is NewExpression -> {
+                walkExprForDelete(expr.expression, source, fileName, isStrict)
+                expr.arguments?.forEach { walkExprForDelete(it, source, fileName, isStrict) }
+            }
+            is PropertyAccessExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is ElementAccessExpression -> {
+                walkExprForDelete(expr.expression, source, fileName, isStrict)
+                walkExprForDelete(expr.argumentExpression, source, fileName, isStrict)
+            }
+            is PrefixUnaryExpression -> walkExprForDelete(expr.operand, source, fileName, isStrict)
+            is PostfixUnaryExpression -> walkExprForDelete(expr.operand, source, fileName, isStrict)
+            is SpreadElement -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is AwaitExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is YieldExpression -> expr.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
             else -> {}
         }
     }
