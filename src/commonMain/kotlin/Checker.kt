@@ -69320,6 +69320,8 @@ interface DataView {
                 when (m) {
                     is MethodDeclaration -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
                     is Constructor -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+                    is GetAccessor -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+                    is SetAccessor -> m.body?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
                     is PropertyDeclaration -> m.initializer?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
                     else -> {}
                 }
@@ -69337,6 +69339,22 @@ interface DataView {
             is ForInStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
             is ForOfStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
             is WhileStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is DoStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkCallTypeArgCountInStmts(c.statements, source, fileName, locals)
+                    is DefaultClause -> checkCallTypeArgCountInStmts(c.statements, source, fileName, locals)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                checkCallTypeArgCountInStmts(stmt.tryBlock.statements, source, fileName, locals)
+                stmt.catchClause?.let { checkCallTypeArgCountInStmts(it.block.statements, source, fileName, locals) }
+                stmt.finallyBlock?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
+            }
+            is LabeledStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is ThrowStatement -> stmt.expression?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+            is ExportAssignment -> checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
             else -> {}
         }
     }
