@@ -19545,6 +19545,10 @@ class Checker(
                 }
                 is FunctionExpression -> node.body?.statements?.forEach { stack.addLast(it) }
                 is ParenthesizedExpression -> stack.addLast(node.expression)
+                is AsExpression -> stack.addLast(node.expression)
+                is TypeAssertionExpression -> stack.addLast(node.expression)
+                is SatisfiesExpression -> stack.addLast(node.expression)
+                is NonNullExpression -> stack.addLast(node.expression)
                 is BinaryExpression -> {
                     // Push both sides — iterative instead of recursive to handle deep nesting
                     stack.addLast(node.left)
@@ -19553,6 +19557,34 @@ class Checker(
                 is CallExpression -> {
                     stack.addLast(node.expression)
                     node.arguments.forEach { stack.addLast(it) }
+                }
+                is NewExpression -> {
+                    stack.addLast(node.expression)
+                    node.arguments?.forEach { stack.addLast(it) }
+                }
+                is ConditionalExpression -> {
+                    stack.addLast(node.condition)
+                    stack.addLast(node.whenTrue)
+                    stack.addLast(node.whenFalse)
+                }
+                is ArrayLiteralExpression -> node.elements.forEach { stack.addLast(it) }
+                is PropertyAccessExpression -> stack.addLast(node.expression)
+                is ElementAccessExpression -> {
+                    stack.addLast(node.expression)
+                    stack.addLast(node.argumentExpression)
+                }
+                is PrefixUnaryExpression -> stack.addLast(node.operand)
+                is PostfixUnaryExpression -> stack.addLast(node.operand)
+                is SpreadElement -> stack.addLast(node.expression)
+                is AwaitExpression -> stack.addLast(node.expression)
+                is YieldExpression -> node.expression?.let { stack.addLast(it) }
+                is TemplateExpression -> node.templateSpans.forEach { stack.addLast(it.expression) }
+                is TaggedTemplateExpression -> {
+                    stack.addLast(node.tag)
+                    when (val templ = node.template) {
+                        is TemplateExpression -> templ.templateSpans.forEach { stack.addLast(it.expression) }
+                        else -> {}
+                    }
                 }
                 else -> {}
             }
@@ -26309,6 +26341,31 @@ interface DataView {
                 is Expression -> walkExprForNamespaceThis(b, source, fileName, emitTs2683)
                 else -> {}
             }
+            is AsExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is TypeAssertionExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is SatisfiesExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is NonNullExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkExprForNamespaceThis(prop.initializer, source, fileName, emitTs2683)
+                is SpreadAssignment -> walkExprForNamespaceThis(prop.expression, source, fileName, emitTs2683)
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForNamespaceThis(it.expression, source, fileName, emitTs2683) }
+            is TaggedTemplateExpression -> {
+                walkExprForNamespaceThis(expr.tag, source, fileName, emitTs2683)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { walkExprForNamespaceThis(it.expression, source, fileName, emitTs2683) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is AwaitExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is YieldExpression -> expr.expression?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+            is DeleteExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is VoidExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is TypeOfExpression -> walkExprForNamespaceThis(expr.expression, source, fileName, emitTs2683)
+            is CommaListExpression -> expr.elements.forEach { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
             // FunctionExpression, ClassExpression: nested function/class rebinds `this` — skip.
             else -> {}
         }
