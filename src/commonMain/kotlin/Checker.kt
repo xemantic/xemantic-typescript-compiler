@@ -68397,6 +68397,41 @@ interface DataView {
                     checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
                 }
             }
+            is DoStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                }
+            }
+            is SwitchStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+                    for (c in stmt.caseBlock) when (c) {
+                        is CaseClause -> {
+                            checkBigIntLiteralsInExpr(c.expression, source, fileName)
+                            checkBigIntLiteralsInStmts(c.statements, source, fileName, ambient = false)
+                        }
+                        is DefaultClause -> checkBigIntLiteralsInStmts(c.statements, source, fileName, ambient = false)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                if (!ambient) {
+                    checkBigIntLiteralsInStmts(stmt.tryBlock.statements, source, fileName, ambient = false)
+                    stmt.catchClause?.let { checkBigIntLiteralsInStmts(it.block.statements, source, fileName, ambient = false) }
+                    stmt.finallyBlock?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false) }
+                }
+            }
+            is LabeledStatement -> {
+                if (!ambient) checkBigIntLiteralsInStmt(stmt.statement, source, fileName, ambient = false)
+            }
+            is ThrowStatement -> {
+                if (!ambient) stmt.expression?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+            }
+            is ExportAssignment -> {
+                if (!ambient) checkBigIntLiteralsInExpr(stmt.expression, source, fileName)
+            }
             is FunctionDeclaration -> {
                 val isDeclare = ModifierFlag.Declare in stmt.modifiers
                 stmt.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = isDeclare) }
@@ -68416,6 +68451,12 @@ interface DataView {
                                 if (ModifierFlag.Declare !in member.modifiers) {
                                     member.initializer?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
                                 }
+                            }
+                            is GetAccessor -> member.body?.let {
+                                checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
+                            }
+                            is SetAccessor -> member.body?.let {
+                                checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
                             }
                             else -> {}
                         }
