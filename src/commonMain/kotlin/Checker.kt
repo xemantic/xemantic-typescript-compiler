@@ -34478,12 +34478,17 @@ interface DataView {
                     when (m) {
                         is MethodDeclaration -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
                         is Constructor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
                         else -> {}
                     }
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
                 is ExpressionStatement -> walkSwitchCaseComparableInExpr(stmt.expression, source, fileName)
                 is LabeledStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
+                is ReturnStatement -> stmt.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
+                is ThrowStatement -> stmt.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
+                is ExportAssignment -> walkSwitchCaseComparableInExpr(stmt.expression, source, fileName)
                 else -> {}
             }
         }
