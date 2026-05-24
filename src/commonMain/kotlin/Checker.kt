@@ -24135,6 +24135,10 @@ interface DataView {
         return when (expr) {
             is Identifier -> expr.text == "true"
             is ParenthesizedExpression -> isAlwaysTrue(expr.expression)
+            is AsExpression -> isAlwaysTrue(expr.expression)
+            is SatisfiesExpression -> isAlwaysTrue(expr.expression)
+            is NonNullExpression -> isAlwaysTrue(expr.expression)
+            is TypeAssertionExpression -> isAlwaysTrue(expr.expression)
             else -> false
         }
     }
@@ -24143,6 +24147,10 @@ interface DataView {
         return when (expr) {
             is Identifier -> expr.text == "false"
             is ParenthesizedExpression -> isAlwaysFalse(expr.expression)
+            is AsExpression -> isAlwaysFalse(expr.expression)
+            is SatisfiesExpression -> isAlwaysFalse(expr.expression)
+            is NonNullExpression -> isAlwaysFalse(expr.expression)
+            is TypeAssertionExpression -> isAlwaysFalse(expr.expression)
             else -> false
         }
     }
