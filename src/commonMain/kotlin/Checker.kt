@@ -29924,6 +29924,35 @@ interface DataView {
                 walkExprForAbstractContext(expr.whenTrue, source, fileName, inAmbient)
                 walkExprForAbstractContext(expr.whenFalse, source, fileName, inAmbient)
             }
+            is PropertyAccessExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is ElementAccessExpression -> {
+                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+                walkExprForAbstractContext(expr.argumentExpression, source, fileName, inAmbient)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> walkExprForAbstractContext(prop.initializer, source, fileName, inAmbient)
+                    is SpreadAssignment -> walkExprForAbstractContext(prop.expression, source, fileName, inAmbient)
+                    else -> {}
+                }
+            }
+            is SpreadElement -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is PrefixUnaryExpression -> walkExprForAbstractContext(expr.operand, source, fileName, inAmbient)
+            is PostfixUnaryExpression -> walkExprForAbstractContext(expr.operand, source, fileName, inAmbient)
+            is AwaitExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is YieldExpression -> expr.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            is VoidExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is DeleteExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is TypeOfExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForAbstractContext(it.expression, source, fileName, inAmbient) }
+            is TaggedTemplateExpression -> {
+                walkExprForAbstractContext(expr.tag, source, fileName, inAmbient)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkExprForAbstractContext(it.expression, source, fileName, inAmbient)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
             else -> {}
         }
     }
