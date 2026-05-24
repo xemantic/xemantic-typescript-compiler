@@ -64246,6 +64246,7 @@ interface DataView {
             is AsExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is TypeAssertionExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is NonNullExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
@@ -64723,6 +64724,19 @@ interface DataView {
             is TemplateExpression -> {
                 for (span in expr.templateSpans) checkInvalidAssignInExpr(span.expression, source, fileName)
             }
+            is AsExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is NewExpression -> {
+                checkInvalidAssignInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkInvalidAssignInExpr(it, source, fileName) }
+            }
+            is ElementAccessExpression -> {
+                checkInvalidAssignInExpr(expr.expression, source, fileName)
+                checkInvalidAssignInExpr(expr.argumentExpression, source, fileName)
+            }
+            is PropertyAccessExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
             else -> {}
         }
     }
