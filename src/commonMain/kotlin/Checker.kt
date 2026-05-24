@@ -22413,6 +22413,59 @@ interface DataView {
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+            is CallExpression -> {
+                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkAlwaysTruthyInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkAlwaysTruthyInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+                checkAlwaysTruthyInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkAlwaysTruthyInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkAlwaysTruthyInExpr(prop.initializer, source, fileName)
+                    is SpreadAssignment -> checkAlwaysTruthyInExpr(prop.expression, source, fileName)
+                    is MethodDeclaration -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkAlwaysTruthyInExpr(span.expression, source, fileName)
+            }
+            is TaggedTemplateExpression -> {
+                checkAlwaysTruthyInExpr(expr.tag, source, fileName)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) checkAlwaysTruthyInExpr(span.expression, source, fileName)
+                }
+            }
+            is PrefixUnaryExpression -> checkAlwaysTruthyInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkAlwaysTruthyInExpr(expr.operand, source, fileName)
+            is SpreadElement -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+            is VoidExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) checkAlwaysTruthyInExpr(e, source, fileName)
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
