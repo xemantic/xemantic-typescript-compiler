@@ -1,6 +1,11 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 38 (2026-05-24): /goal session — 21 commits, 0 net flips, 21 net-zero structure-walking broadenings across 21 different walker functions. No reverts. Surgical pool remains exhausted (find_candidates.py --fresh 0/0/0)._
+**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 38 (2026-05-24): /goal session — 22 commits, +2 net flips. 21 structure-walking broadenings (iter1-iter21, net-zero) + 1 narrow TS7023 emission (iter22, +2 flipping `trivialSubtypeReductionNoStructuralCheck` es5/es2015). The TS7023 fix followed SESSION-PROMPT.md step 9(a) (small new diagnostic items when surgical pool empty)._
+
+_Round 38b (2026-05-24, +2 net via iter22 — TS7023 for self-referential getter)_:
+- **iter22 (+2)**: New TS7023 emission for GetAccessor without return type annotation whose body returns `<expr> as T` AsExpression wrapping ObjectLiteralExpression containing any PropertyAssignment with value bare `this`. Narrow gate matches the exact `trivialSubtypeReductionNoStructuralCheck` cyclic-inference shape. New helper `isAsExprWrappingObjLitWithThis`. Avoids FP on `return this`/`return this.field` (no cycle). Flips both `__target_es5__` and `__target_es2015__` variants.
+
+
 
 _Round 38 (2026-05-24, 0 net flips via 21 net-zero structure-walking broadenings)_:
 - **iter1**: `walkParameterDecoratorChecks` (TS1239 parameter decorator signature) gains GetAccessor/SetAccessor bodies in ClassDeclaration + statement kinds If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
