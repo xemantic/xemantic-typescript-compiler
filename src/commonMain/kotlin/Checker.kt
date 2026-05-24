@@ -47726,7 +47726,18 @@ interface DataView {
             // Assignment → type of left
             SyntaxKind.Equals -> getTypeOfExpression(expr.right)
             SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
-            SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals -> getTypeOfExpression(expr.left)
+            SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
+            SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
+            SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
+            SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
+            SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> getTypeOfExpression(expr.left)
+            // Logical assignment ops — type is the union of LHS (kept) and RHS (assigned).
+            SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
+            SyntaxKind.QuestionQuestionEquals -> {
+                val leftT = getTypeOfExpression(expr.left)
+                val rightT = getTypeOfExpression(expr.right)
+                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+            }
 
             // Logical → union of operands
             SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(expr.right)
