@@ -67512,12 +67512,19 @@ interface DataView {
                 stmt.elseStatement?.let { checkInvalidAssignInStatement(it, source, fileName) }
             }
             is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { checkInvalidAssignInExpr(it, source, fileName) }
                 stmt.condition?.let { checkInvalidAssignInExpr(it, source, fileName) }
                 stmt.incrementor?.let { checkInvalidAssignInExpr(it, source, fileName) }
                 checkInvalidAssignInStatement(stmt.statement, source, fileName)
             }
-            is ForInStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> {
+                checkInvalidAssignInExpr(stmt.expression, source, fileName)
+                checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkInvalidAssignInExpr(stmt.expression, source, fileName)
+                checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            }
             is WhileStatement -> {
                 checkInvalidAssignInExpr(stmt.expression, source, fileName)
                 checkInvalidAssignInStatement(stmt.statement, source, fileName)
@@ -67554,6 +67561,9 @@ interface DataView {
                 }
             }
             is LabeledStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
+            is ExportAssignment -> checkInvalidAssignInExpr(stmt.expression, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
             else -> {}
         }
     }
