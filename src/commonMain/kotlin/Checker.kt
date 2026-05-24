@@ -8303,6 +8303,53 @@ class Checker(
                 is ReturnStatement -> {
                     checkPropertyInitInExpr(stmt.expression, source, fileName)
                 }
+                is ForStatement -> {
+                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                    when (val init = stmt.initializer) {
+                        is VariableDeclarationList -> for (decl in init.declarations) checkPropertyInitInExpr(decl.initializer, source, fileName)
+                        is Expression -> checkPropertyInitInExpr(init, source, fileName)
+                        else -> {}
+                    }
+                    stmt.condition?.let { checkPropertyInitInExpr(it, source, fileName) }
+                    stmt.incrementor?.let { checkPropertyInitInExpr(it, source, fileName) }
+                }
+                is ForInStatement -> {
+                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                }
+                is ForOfStatement -> {
+                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                }
+                is WhileStatement -> {
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                }
+                is DoStatement -> {
+                    checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                }
+                is SwitchStatement -> {
+                    checkPropertyInitInExpr(stmt.expression, source, fileName)
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> {
+                                checkPropertyInitInExpr(clause.expression, source, fileName)
+                                checkPropertyInitInStatements(clause.statements, source, fileName)
+                            }
+                            is DefaultClause -> checkPropertyInitInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkPropertyInitInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkPropertyInitInStatements(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> checkPropertyInitInExpr(stmt.expression, source, fileName)
+                is ExportAssignment -> checkPropertyInitInExpr(stmt.expression, source, fileName)
                 else -> {}
             }
         }
