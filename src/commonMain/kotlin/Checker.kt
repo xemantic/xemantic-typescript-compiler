@@ -30274,6 +30274,55 @@ interface DataView {
                         emitTS1359(stmt.name, source, fileName, name)
                     }
                 }
+                is IfStatement -> {
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                    walkForReservedWords(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForReservedWords(listOf(it), source, fileName) }
+                }
+                is ForStatement -> {
+                    stmt.condition?.let { walkForReservedWordsInExpr(it, source, fileName) }
+                    stmt.incrementor?.let { walkForReservedWordsInExpr(it, source, fileName) }
+                    walkForReservedWords(listOf(stmt.statement), source, fileName)
+                }
+                is ForInStatement -> {
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                    walkForReservedWords(listOf(stmt.statement), source, fileName)
+                }
+                is ForOfStatement -> {
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                    walkForReservedWords(listOf(stmt.statement), source, fileName)
+                }
+                is WhileStatement -> {
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                    walkForReservedWords(listOf(stmt.statement), source, fileName)
+                }
+                is DoStatement -> {
+                    walkForReservedWords(listOf(stmt.statement), source, fileName)
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                }
+                is SwitchStatement -> {
+                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
+                    for (clause in stmt.caseBlock) {
+                        val clauseStmts = when (clause) {
+                            is CaseClause -> {
+                                walkForReservedWordsInExpr(clause.expression, source, fileName)
+                                clause.statements
+                            }
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        walkForReservedWords(clauseStmts, source, fileName)
+                    }
+                }
+                is TryStatement -> {
+                    walkForReservedWords(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForReservedWords(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForReservedWords(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForReservedWords(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> stmt.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
+                is ReturnStatement -> stmt.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
+                is ExportAssignment -> walkForReservedWordsInExpr(stmt.expression, source, fileName)
                 else -> {}
             }
         }
