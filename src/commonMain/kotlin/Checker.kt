@@ -32328,13 +32328,99 @@ interface DataView {
         when (expr) {
             is ArrowFunction -> {
                 for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                val body = expr.body
-                if (body is Block) checkRestElemPropNamesInStatements(body.statements, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> checkRestElemPropNamesInStatements(body.statements, source, fileName)
+                    is Expression -> checkRestElemPropNamesInExpr(body, source, fileName)
+                    else -> {}
+                }
             }
             is FunctionExpression -> {
                 for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
                 expr.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
             }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is PropertyDeclaration -> m.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) {
+                    rightStack.addLast(cur.right); cur = cur.left
+                }
+                // The left-most can be an Identifier for destructuring assignment — handled by BinaryExpression's right walk
+                // Object destructuring assignment shows up as BinaryExpression with `=` operator and ObjectLiteralExpression on left.
+                // Handle that case by checking each binary expression directly.
+                checkRestElemPropNamesInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkRestElemPropNamesInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkRestElemPropNamesInExpr(expr.condition, source, fileName)
+                checkRestElemPropNamesInExpr(expr.whenTrue, source, fileName)
+                checkRestElemPropNamesInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) checkRestElemPropNamesInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkRestElemPropNamesInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+                checkRestElemPropNamesInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkRestElemPropNamesInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> checkRestElemPropNamesInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> checkRestElemPropNamesInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> {
+                    for (param in p.parameters) checkRestElemPropNamesInBinding(param.name, source, fileName)
+                    p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    for (param in p.parameters) checkRestElemPropNamesInBinding(param.name, source, fileName)
+                    p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+            is SpreadElement -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
+            is VoidExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkRestElemPropNamesInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkRestElemPropNamesInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkRestElemPropNamesInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkRestElemPropNamesInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkRestElemPropNamesInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkRestElemPropNamesInExpr(e, source, fileName)
             else -> {}
         }
     }
