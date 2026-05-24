@@ -52506,6 +52506,8 @@ interface DataView {
                 stmt.finallyBlock?.let { findTypeParamRefsInStatement(it, typeParamNames, source, fileName) }
             }
             is ThrowStatement -> stmt.expression?.let { findTypeParamRefsInExpr(it, typeParamNames, source, fileName) }
+            is LabeledStatement -> findTypeParamRefsInStatement(stmt.statement, typeParamNames, source, fileName)
+            is ExportAssignment -> findTypeParamRefsInExpr(stmt.expression, typeParamNames, source, fileName)
             else -> {}
         }
     }
