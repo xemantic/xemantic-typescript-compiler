@@ -66322,9 +66322,15 @@ interface DataView {
             }
             is FunctionExpression -> expr.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
             is CallExpression -> {
+                checkInvalidAssignInExpr(expr.expression, source, fileName)
                 for (arg in expr.arguments) checkInvalidAssignInExpr(arg, source, fileName)
             }
-            is TaggedTemplateExpression -> checkInvalidAssignInExpr(expr.tag, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkInvalidAssignInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkInvalidAssignInExpr(span.expression, source, fileName)
+                }
+            }
             is PrefixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
             is PostfixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
             is SpreadElement -> checkInvalidAssignInExpr(expr.expression, source, fileName)
@@ -66337,6 +66343,9 @@ interface DataView {
                         is PropertyAssignment -> checkInvalidAssignInExpr(prop.initializer, source, fileName)
                         is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
                         is SpreadAssignment -> checkInvalidAssignInExpr(prop.expression, source, fileName)
+                        is MethodDeclaration -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
                         else -> {}
                     }
                 }
@@ -66357,6 +66366,20 @@ interface DataView {
                 checkInvalidAssignInExpr(expr.argumentExpression, source, fileName)
             }
             is PropertyAccessExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
+            is VoidExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) checkInvalidAssignInExpr(e, source, fileName)
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
+                else -> {}
+            }
             else -> {}
         }
     }
