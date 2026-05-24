@@ -46595,8 +46595,21 @@ interface DataView {
      * isn't a class symbol or the RHS isn't a recognized class reference.
      */
     private fun resolveInstanceOfRhsType(expr: Expression): Type? {
-        val symbol = when (expr) {
-            is Identifier -> currentFileLocals?.get(expr.text) ?: globals[expr.text]
+        // Unwrap value-preserving wrappers so `x instanceof (C)` / `x instanceof C!`
+        // narrows the same as `x instanceof C`.
+        var e = expr
+        while (true) {
+            e = when (e) {
+                is ParenthesizedExpression -> if (e.instantiationEnd == null) e.expression else return null
+                is NonNullExpression -> e.expression
+                is AsExpression -> e.expression
+                is TypeAssertionExpression -> e.expression
+                is SatisfiesExpression -> e.expression
+                else -> break
+            }
+        }
+        val symbol = when (e) {
+            is Identifier -> currentFileLocals?.get(e.text) ?: globals[e.text]
             else -> null
         } ?: return null
         if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
@@ -46778,7 +46791,7 @@ interface DataView {
         val leftTypeofRef = isTypeOfRef(expr.left, name)
         val rightTypeofRef = isTypeOfRef(expr.right, name)
         if (!leftTypeofRef && !rightTypeofRef) return null
-        val literalSide = if (leftTypeofRef) expr.right else expr.left
+        val literalSide = unwrapParensExpr(if (leftTypeofRef) expr.right else expr.left)
         val guard = when (literalSide) {
             is StringLiteralNode -> literalSide.text
             is NoSubstitutionTemplateLiteralNode -> literalSide.text
@@ -46788,9 +46801,11 @@ interface DataView {
     }
 
     private fun isTypeOfRef(expr: Expression, name: String): Boolean {
-        if (expr !is TypeOfExpression) return false
+        // `(typeof x) === "string"` should narrow identically to `typeof x === "string"`.
+        val unwrapped = unwrapParensExpr(expr)
+        if (unwrapped !is TypeOfExpression) return false
         // 17.34b: path-based comparison so `typeof A._a` matches when name="A._a".
-        return getReferencePath(expr.expression) == name
+        return getReferencePath(unwrapped.expression) == name
     }
 
     /**
