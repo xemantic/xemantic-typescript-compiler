@@ -52378,6 +52378,18 @@ interface DataView {
                         checkNonConstructorExtendsInStatements(body.statements, source, fileName)
                     }
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
                 else -> {}
             }
         }
