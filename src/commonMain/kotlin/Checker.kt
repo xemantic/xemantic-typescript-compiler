@@ -26987,6 +26987,47 @@ interface DataView {
                 is ModuleBlock -> checkThisDirectInNamespaceBody(b.statements, source, fileName, emitTs2683)
                 else -> {}
             }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+                stmt.condition?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+                stmt.incrementor?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+                walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+            }
+            is ForInStatement -> {
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+                walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+            }
+            is ForOfStatement -> {
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+                walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+            }
+            is WhileStatement -> {
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+                walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+            }
+            is DoStatement -> {
+                walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+            }
+            is SwitchStatement -> {
+                walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        walkExprForNamespaceThis(clause.expression, source, fileName, emitTs2683)
+                        clause.statements.forEach { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+                    }
+                    is DefaultClause -> clause.statements.forEach { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+                stmt.catchClause?.block?.statements?.forEach { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+                stmt.finallyBlock?.statements?.forEach { walkStmtForNamespaceThis(it, source, fileName, emitTs2683) }
+            }
+            is LabeledStatement -> walkStmtForNamespaceThis(stmt.statement, source, fileName, emitTs2683)
+            is ThrowStatement -> stmt.expression?.let { walkExprForNamespaceThis(it, source, fileName, emitTs2683) }
+            is ExportAssignment -> walkExprForNamespaceThis(stmt.expression, source, fileName, emitTs2683)
             else -> {}
         }
     }
