@@ -67873,6 +67873,13 @@ interface DataView {
                 stmt.finallyBlock?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
             }
             is FunctionDeclaration -> stmt.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+                is Constructor -> m.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+                is GetAccessor -> m.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+                is SetAccessor -> m.body?.let { checkForInLhsInStatements(it.statements, locals, source, fileName, inAmbient) }
+                else -> {}
+            }
             is LabeledStatement -> checkForInLhsInStmt(stmt.statement, locals, source, fileName, inAmbient)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 val ambient = inAmbient || ModifierFlag.Declare in stmt.modifiers
