@@ -52209,6 +52209,43 @@ interface DataView {
                         checkCircularTypeAliasInStatements(body.statements, source, fileName)
                     }
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is Block -> checkCircularTypeAliasInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkCircularTypeAliasInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkCircularTypeAliasInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkCircularTypeAliasInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkCircularTypeAliasInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkCircularTypeAliasInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkCircularTypeAliasInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkCircularTypeAliasInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
