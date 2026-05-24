@@ -46311,6 +46311,12 @@ interface DataView {
     ): Type {
         return when (expr) {
             is ParenthesizedExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
+            // Value-preserving wrappers (`x as T`, `<T>x`, `x satisfies T`, `x!`) do not
+            // change the runtime reference — narrow the inner expression.
+            is AsExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
+            is TypeAssertionExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
+            is SatisfiesExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
+            is NonNullExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
             is PrefixUnaryExpression -> if (expr.operator == SyntaxKind.Exclamation) {
                 applyConditionNarrowing(t, expr.operand, !isTrue, name)
             } else t
