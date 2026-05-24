@@ -14445,6 +14445,30 @@ class Checker(
             is NonNullExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
             is TypeAssertionExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
             is TemplateExpression -> expr.templateSpans.forEach { walkBigIntExpInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkBigIntExpInExpr(expr.tag, source, fileName)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) walkBigIntExpInExpr(span.expression, source, fileName)
+                }
+            }
+            is SpreadElement -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkBigIntExpInExpr(it, source, fileName) }
+            is VoidExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkBigIntExpInExpr(e, source, fileName)
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkBigIntExpInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
