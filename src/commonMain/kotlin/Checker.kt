@@ -36923,7 +36923,19 @@ interface DataView {
             is NonNullExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
             is AsExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
             is TypeAssertionExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is AwaitExpression -> expr.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+            is SatisfiesExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is AwaitExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is VoidExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is DeleteExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is TypeOfExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
+            is TemplateExpression -> for (span in expr.templateSpans) walkYieldInExpr(span.expression, source, fileName, isGenerator)
+            is TaggedTemplateExpression -> {
+                walkYieldInExpr(expr.tag, source, fileName, isGenerator)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkYieldInExpr(span.expression, source, fileName, isGenerator)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkYieldInExpr(e, source, fileName, isGenerator)
             else -> {}
         }
     }
