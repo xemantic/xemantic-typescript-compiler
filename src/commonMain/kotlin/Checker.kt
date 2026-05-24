@@ -35469,6 +35469,14 @@ interface DataView {
                 stmt.incrementor?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
                 walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
             }
+            is ForInStatement -> {
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
+                walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
+            }
+            is ForOfStatement -> {
+                walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
+                walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
+            }
             is WhileStatement -> {
                 walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
                 walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
@@ -35477,6 +35485,8 @@ interface DataView {
                 walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
                 walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
             }
+            is LabeledStatement -> walkTypeAssertionsInStmt(stmt.statement, source, fileName, onAssertion)
+            is ExportAssignment -> walkTypeAssertionsInExpr(stmt.expression, source, fileName, onAssertion)
             is ReturnStatement -> stmt.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             is ThrowStatement -> stmt.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
             is TryStatement -> {
