@@ -14495,6 +14495,35 @@ class Checker(
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 walkBigIntExpInStmts(it.statements, source, fileName)
             }
+            is ForInStatement -> {
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+                walkBigIntExpInStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+                walkBigIntExpInStmt(stmt.statement, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkBigIntExpInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkBigIntExpInExpr(clause.expression, source, fileName)
+                            clause.statements.forEach { walkBigIntExpInStmt(it, source, fileName) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { walkBigIntExpInStmt(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkBigIntExpInStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkBigIntExpInStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkBigIntExpInStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> walkBigIntExpInStmt(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { walkBigIntExpInExpr(it, source, fileName) }
+            is ExportAssignment -> walkBigIntExpInExpr(stmt.expression, source, fileName)
             else -> {}
         }
     }
