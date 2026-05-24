@@ -35666,7 +35666,12 @@ interface DataView {
         when (expr) {
             is TypeAssertionExpression -> checkFunctionTypeParams(expr.type, source, fileName)
             is AsExpression -> checkFunctionTypeParams(expr.type, source, fileName)
+            is SatisfiesExpression -> {
+                checkFunctionTypeParams(expr.type, source, fileName)
+                checkExprForFunctionTypeParams(expr.expression, source, fileName)
+            }
             is ParenthesizedExpression -> checkExprForFunctionTypeParams(expr.expression, source, fileName)
+            is NonNullExpression -> checkExprForFunctionTypeParams(expr.expression, source, fileName)
             else -> {}
         }
     }
