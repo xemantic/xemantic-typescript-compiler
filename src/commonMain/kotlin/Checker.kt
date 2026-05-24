@@ -33272,6 +33272,12 @@ interface DataView {
                     for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
                     m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
                 }
+                is GetAccessor -> m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
+                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+                }
+                is PropertyDeclaration -> m.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
                 else -> {}
             }
             is Block -> checkRestElemPropNamesInStatements(stmt.statements, source, fileName)
@@ -33294,6 +33300,23 @@ interface DataView {
                 if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
                 checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
             }
+            is WhileStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkRestElemPropNamesInStatements(c.statements, source, fileName)
+                    is DefaultClause -> checkRestElemPropNamesInStatements(c.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                checkRestElemPropNamesInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { checkRestElemPropNamesInStatements(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
+            is ExportAssignment -> checkRestElemPropNamesInExpr(stmt.expression, source, fileName)
             is ReturnStatement -> stmt.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
             else -> {}
