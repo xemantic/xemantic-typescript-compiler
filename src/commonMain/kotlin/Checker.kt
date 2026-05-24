@@ -68283,7 +68283,22 @@ interface DataView {
                 stmt.elseStatement?.let { checkDownlevelIterationInStmt(it, source, fileName, iteratorVars) }
             }
             is WhileStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
+            is DoStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
             is ForStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
+            is ForInStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkDownlevelIterationInStatements(c.statements, source, fileName, iteratorVars)
+                    is DefaultClause -> checkDownlevelIterationInStatements(c.statements, source, fileName, iteratorVars)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                checkDownlevelIterationInStatements(stmt.tryBlock.statements, source, fileName, iteratorVars)
+                stmt.catchClause?.let { checkDownlevelIterationInStatements(it.block.statements, source, fileName, iteratorVars) }
+                stmt.finallyBlock?.let { checkDownlevelIterationInStatements(it.statements, source, fileName, iteratorVars) }
+            }
+            is LabeledStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars)
             is FunctionDeclaration -> stmt.body?.let {
                 checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
             }
@@ -68295,8 +68310,17 @@ interface DataView {
                     is Constructor -> member.body?.let {
                         checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
                     }
+                    is GetAccessor -> member.body?.let {
+                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
+                    }
+                    is SetAccessor -> member.body?.let {
+                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements))
+                    }
                     else -> {}
                 }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                checkDownlevelIterationInStatements(it.statements, source, fileName, iteratorVars)
             }
             else -> {}
         }
