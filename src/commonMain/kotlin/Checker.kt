@@ -723,6 +723,9 @@ class Checker(
         // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
         // functions with definitely-non-nullable return types.
         checkImplicitReturns()
+        // 18d2. TS2677: type predicate's type must be assignable to its parameter's type.
+        // Currently scoped to the `?T` JSDoc-nullable recovery pattern: `a: T` + `a is ?T`.
+        checkTypePredicateNullableRecovery()
         // 18e. Check exported type alias references nested-only private name (TS4081)
         if (options.declaration) {
             checkExportTypeAliasPrivateNameRef()
@@ -39384,6 +39387,105 @@ interface DataView {
             val source = result.sourceFile.text
             walkForImplicitReturns(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    private fun checkTypePredicateNullableRecovery() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkTPNRStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkTPNRStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkTPNRStmt(stmt, source, fileName)
+    }
+
+    private fun walkTPNRStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                checkTPNRForCallable(stmt.parameters, stmt.type, source, fileName)
+                stmt.body?.let { walkTPNRStmts(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> {
+                    checkTPNRForCallable(m.parameters, m.type, source, fileName)
+                    m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
+                }
+                is GetAccessor -> checkTPNRForCallable(emptyList(), m.type, source, fileName)
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkTPNRStmts(it.statements, source, fileName) }
+            is Block -> walkTPNRStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkTPNRStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkTPNRStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is ForStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is TryStatement -> {
+                walkTPNRStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkTPNRStmts(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkTPNRStmts(it.statements, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun checkTPNRForCallable(
+        parameters: List<Parameter>,
+        returnType: TypeNode?,
+        source: String,
+        fileName: String
+    ) {
+        val predicate = returnType as? TypePredicate ?: return
+        val predType = predicate.type ?: return
+        val paramName = (predicate.parameterName as? Identifier)?.text
+            ?: (predicate.parameterName as? TypeReference)?.let { (it.typeName as? Identifier)?.text }
+            ?: return
+        // Look for `?` between the `is` keyword and predType.pos — indicates `?T` recovery.
+        val gapStart = (predicate.parameterName as? Identifier)?.end
+            ?: (predicate.parameterName as? TypeReference)?.end
+            ?: return
+        val gapEnd = predType.pos
+        if (gapStart < 0 || gapEnd <= gapStart || gapEnd > source.length) return
+        val gap = source.substring(gapStart, gapEnd)
+        val qOffset = gap.indexOf('?')
+        if (qOffset < 0) return
+        val qAbs = gapStart + qOffset
+        // Find param by name to get its declared type.
+        val param = parameters.firstOrNull { (it.name as? Identifier)?.text == paramName } ?: return
+        val paramTypeNode = param.type ?: return
+        val paramTypeStr = formatTypeForDisplay(paramTypeNode) ?: return
+        val predTypeStr = formatTypeForDisplay(predType) ?: return
+        // Conservative gate: only emit when param type doesn't already permit null
+        // (i.e., paramTypeStr doesn't contain "null"). Avoids spurious errors on
+        // `a: T | null` + `a is ?T` cases (where the predicate is still valid).
+        if (paramTypeStr.contains("null")) return
+        val nullableSrc = "$predTypeStr | null"
+        val (line, character) = getLineAndCharacterOfPosition(source, qAbs)
+        // Length spans `?<typeText>` — predType.end overshoots (it's set after the
+        // scanner advanced past the next token), so derive from display text length.
+        val length = (predType.pos - qAbs) + predTypeStr.length
+        diagnostics.add(Diagnostic(
+            message = "A type predicate's type must be assignable to its parameter's type.",
+            category = DiagnosticCategory.Error,
+            code = 2677,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = qAbs,
+            length = length,
+            messageChain = listOf(
+                "  Type '$nullableSrc' is not assignable to type '$paramTypeStr'.",
+                "    Type 'null' is not assignable to type '$paramTypeStr'.",
+            ),
+        ))
     }
 
     private fun walkForImplicitReturns(stmts: List<Statement>, source: String, fileName: String) {
