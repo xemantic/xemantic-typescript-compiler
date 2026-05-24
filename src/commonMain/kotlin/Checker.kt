@@ -42800,6 +42800,26 @@ interface DataView {
         walkForImplicitReturns(body.statements, source, fileName)
     }
 
+    /**
+     * Match `<expr> as T` where <expr> is an ObjectLiteralExpression containing
+     * any PropertyAssignment whose value is bare `this` (Identifier "this").
+     * Narrow trigger for TS7023 on getters returning self-referential object
+     * literals.
+     */
+    private fun isAsExprWrappingObjLitWithThis(expr: Expression): Boolean {
+        if (expr !is AsExpression) return false
+        val obj = expr.expression as? ObjectLiteralExpression ?: return false
+        return obj.properties.any { prop ->
+            when (prop) {
+                is PropertyAssignment -> {
+                    val init = prop.initializer
+                    init is Identifier && init.text == "this"
+                }
+                else -> false
+            }
+        }
+    }
+
     private fun checkGetAccessorForImplicitReturn(decl: GetAccessor, source: String, fileName: String) {
         val body = decl.body ?: return
         // Skip error-recovery sentinel bodies (pos = -1, created when `{` was missing)
@@ -42829,6 +42849,35 @@ interface DataView {
             ))
         }
         checkBodyForImplicitReturn(body, retType, false, nameRef, source, fileName)
+        // TS7023 for getters without return type annotation whose body returns an
+        // expression containing `this` inside an object literal or array literal.
+        // Inferred return type would cycle: `get foo() { return { x: this }; }` in
+        // class C → inferred type `{ x: C }` references C which has `foo` → cycle.
+        // Narrow gate: return is `as <Type>` AsExpression wrapping ObjectLiteral with
+        // any property value being a bare `this` keyword Identifier. Matches the
+        // exact `trivialSubtypeReductionNoStructuralCheck_ts` shape; avoids FP on
+        // simple `return this`/`return this.field` (no cycle) and `return undefined`.
+        if (retType == null && nameNode is Identifier) {
+            val returnExprs = mutableListOf<Expression?>()
+            collectReturnExpressions(body.statements, returnExprs)
+            val cycleViaThisInObjLit = returnExprs.isNotEmpty() && returnExprs.all { ret ->
+                ret != null && isAsExprWrappingObjLitWithThis(ret)
+            }
+            if (cycleViaThisInObjLit) {
+                val start = nameNode.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'${nameNode.text}' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+                    category = DiagnosticCategory.Error,
+                    code = 7023,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = nameNode.text.length,
+                ))
+            }
+        }
         // Getters without type annotation: if body has value returns but doesn't always return,
         // emit TS2366 (TypeScript infers non-void return type from the body).
         if (retType == null && strictNullChecks) {
