@@ -52582,7 +52582,17 @@ interface DataView {
                         "true", "false" -> booleanType
                         else -> null
                     }
-                    is PrefixUnaryExpression -> if (expr.operand is NumericLiteralNode) numberType else null
+                    is PrefixUnaryExpression -> when (expr.operator) {
+                        SyntaxKind.Exclamation -> booleanType
+                        SyntaxKind.Tilde -> numberType
+                        SyntaxKind.Minus, SyntaxKind.Plus, SyntaxKind.PlusPlus, SyntaxKind.MinusMinus ->
+                            if (expr.operand is NumericLiteralNode) numberType else numberType
+                        else -> null
+                    }
+                    is PostfixUnaryExpression -> numberType  // x++ / x-- always number
+                    is TypeOfExpression -> stringType
+                    is VoidExpression -> undefinedType
+                    is DeleteExpression -> booleanType
                     is NewExpression -> {
                         // 17.156: mirror 17.154's FunctionExpression inference into the
                         // broader callable family (MethodDeclaration / FunctionDeclaration /
@@ -58508,10 +58518,12 @@ interface DataView {
                 getTypeOfSymbol(symbol)
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
+            is ElementAccessExpression -> getTypeOfElementAccess(expr)
             is ParenthesizedExpression -> getCalleeType(expr.expression)
             is NonNullExpression -> getCalleeType(expr.expression)
             is SatisfiesExpression -> getCalleeType(expr.expression)
             is CallExpression -> try { getReturnTypeOfCallExpression(expr) } catch (_: StackOverflowError) { anyType }
+            is NewExpression -> try { getReturnTypeOfNewExpression(expr) } catch (_: StackOverflowError) { anyType }
             else -> anyType
         }
     }
