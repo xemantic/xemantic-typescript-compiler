@@ -26516,6 +26516,12 @@ interface DataView {
             is AsExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
+            is TypeAssertionExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+            }
+            is SatisfiesExpression -> {
+                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+            }
             is NonNullExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
             }
