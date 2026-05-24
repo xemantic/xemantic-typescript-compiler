@@ -3507,6 +3507,51 @@ class Checker(
             }
             is ArrayLiteralExpression -> expr.elements.forEach { collectThisAccessInExpr(it, result) }
             is TemplateExpression -> expr.templateSpans.forEach { collectThisAccessInExpr(it.expression, result) }
+            is ElementAccessExpression -> {
+                val obj = expr.expression
+                if (obj is Identifier && obj.text == "this") {
+                    // this["propName"] — collect the string-literal key only
+                    val arg = expr.argumentExpression
+                    if (arg is StringLiteralNode) result.add(arg.text)
+                } else {
+                    collectThisAccessInExpr(obj, result)
+                }
+                collectThisAccessInExpr(expr.argumentExpression, result)
+            }
+            is TaggedTemplateExpression -> {
+                collectThisAccessInExpr(expr.tag, result)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) collectThisAccessInExpr(span.expression, result)
+                }
+            }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> collectThisAccessInExpr(prop.initializer, result)
+                    is SpreadAssignment -> collectThisAccessInExpr(prop.expression, result)
+                    is MethodDeclaration -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is GetAccessor -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is SetAccessor -> prop.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> collectThisAccessInExpr(expr.expression, result)
+            is AwaitExpression -> collectThisAccessInExpr(expr.expression, result)
+            is YieldExpression -> expr.expression?.let { collectThisAccessInExpr(it, result) }
+            is VoidExpression -> collectThisAccessInExpr(expr.expression, result)
+            is DeleteExpression -> collectThisAccessInExpr(expr.expression, result)
+            is TypeOfExpression -> collectThisAccessInExpr(expr.expression, result)
+            is CommaListExpression -> for (e in expr.elements) collectThisAccessInExpr(e, result)
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is Constructor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is GetAccessor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is SetAccessor -> m.body?.let { collectThisPropertyAccesses(it.statements, result) }
+                    is PropertyDeclaration -> m.initializer?.let { collectThisAccessInExpr(it, result) }
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
