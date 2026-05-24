@@ -32598,6 +32598,8 @@ interface DataView {
             }
             is LabeledStatement -> checkSetterInStatement(stmt.statement, source, fileName)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkSetterInStatements(it.statements, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { checkSetterInExpr(it, source, fileName) }
+            is ExportAssignment -> checkSetterInExpr(stmt.expression, source, fileName)
             else -> {}
         }
     }
