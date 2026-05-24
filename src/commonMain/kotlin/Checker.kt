@@ -8131,6 +8131,93 @@ class Checker(
                 decl.initializer?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
             }
             is ParenthesizedExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is AsExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is TypeAssertionExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is SatisfiesExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is NonNullExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is ConditionalExpression -> {
+                walkTs2719Assignments(node.condition, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.whenTrue, propsTypedAsTypeParam, source, fileName)
+                walkTs2719Assignments(node.whenFalse, propsTypedAsTypeParam, source, fileName)
+            }
+            is CallExpression -> {
+                walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+                for (arg in node.arguments) walkTs2719Assignments(arg, propsTypedAsTypeParam, source, fileName)
+            }
+            is NewExpression -> {
+                walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+                node.arguments?.forEach { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            }
+            is ArrayLiteralExpression -> {
+                for (elem in node.elements) walkTs2719Assignments(elem, propsTypedAsTypeParam, source, fileName)
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in node.properties) {
+                    when (prop) {
+                        is PropertyAssignment -> walkTs2719Assignments(prop.initializer, propsTypedAsTypeParam, source, fileName)
+                        is SpreadAssignment -> walkTs2719Assignments(prop.expression, propsTypedAsTypeParam, source, fileName)
+                        is MethodDeclaration -> prop.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is GetAccessor -> prop.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is SetAccessor -> prop.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ArrowFunction -> {
+                when (val body = node.body) {
+                    is Block -> walkTs2719Assignments(body, propsTypedAsTypeParam, source, fileName)
+                    is Expression -> walkTs2719Assignments(body, propsTypedAsTypeParam, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> node.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is SpreadElement -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is AwaitExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is YieldExpression -> node.expression?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is PrefixUnaryExpression -> walkTs2719Assignments(node.operand, propsTypedAsTypeParam, source, fileName)
+            is PostfixUnaryExpression -> walkTs2719Assignments(node.operand, propsTypedAsTypeParam, source, fileName)
+            is VoidExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is DeleteExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is TypeOfExpression -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
+            is TemplateExpression -> {
+                for (span in node.templateSpans) walkTs2719Assignments(span.expression, propsTypedAsTypeParam, source, fileName)
+            }
+            is TaggedTemplateExpression -> {
+                walkTs2719Assignments(node.tag, propsTypedAsTypeParam, source, fileName)
+                val tpl = node.template
+                if (tpl is TemplateExpression) {
+                    for (span in tpl.templateSpans) walkTs2719Assignments(span.expression, propsTypedAsTypeParam, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in node.elements) walkTs2719Assignments(e, propsTypedAsTypeParam, source, fileName)
+            is FunctionDeclaration -> node.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in node.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is Constructor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is GetAccessor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is SetAccessor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ClassExpression -> {
+                for (member in node.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is Constructor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is GetAccessor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is SetAccessor -> member.body?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        is PropertyDeclaration -> member.initializer?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is ModuleDeclaration -> (node.body as? ModuleBlock)?.let { walkTs2719Assignments(it, propsTypedAsTypeParam, source, fileName) }
+            is ModuleBlock -> for (s in node.statements) walkTs2719Assignments(s, propsTypedAsTypeParam, source, fileName)
+            is ExportAssignment -> walkTs2719Assignments(node.expression, propsTypedAsTypeParam, source, fileName)
             else -> {}
         }
     }
