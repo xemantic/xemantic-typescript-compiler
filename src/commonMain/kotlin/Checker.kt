@@ -38248,6 +38248,7 @@ interface DataView {
             is ArrowFunction -> {
                 val body = expr.body
                 if (body is Block) walkForWithStatements(body.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
+                else if (body is Expression) walkExprForWithStatements(body, source, fileName, isStrict, isInWith)
             }
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -38262,6 +38263,66 @@ interface DataView {
                     body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = memberIsAsync, isInWith = false) }
                 }
             }
+            is ParenthesizedExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is AsExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is TypeAssertionExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is SatisfiesExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is NonNullExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkExprForWithStatements(cur, source, fileName, isStrict, isInWith)
+                while (rightStack.isNotEmpty()) walkExprForWithStatements(rightStack.removeLast(), source, fileName, isStrict, isInWith)
+            }
+            is ConditionalExpression -> {
+                walkExprForWithStatements(expr.condition, source, fileName, isStrict, isInWith)
+                walkExprForWithStatements(expr.whenTrue, source, fileName, isStrict, isInWith)
+                walkExprForWithStatements(expr.whenFalse, source, fileName, isStrict, isInWith)
+            }
+            is CallExpression -> {
+                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+                for (arg in expr.arguments) walkExprForWithStatements(arg, source, fileName, isStrict, isInWith)
+            }
+            is NewExpression -> {
+                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+                expr.arguments?.forEach { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
+            }
+            is PropertyAccessExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is ElementAccessExpression -> {
+                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+                walkExprForWithStatements(expr.argumentExpression, source, fileName, isStrict, isInWith)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkExprForWithStatements(e, source, fileName, isStrict, isInWith)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> walkExprForWithStatements(p.initializer, source, fileName, isStrict, isInWith)
+                    is SpreadAssignment -> walkExprForWithStatements(p.expression, source, fileName, isStrict, isInWith)
+                    is MethodDeclaration -> {
+                        val mAsync = ModifierFlag.Async in p.modifiers
+                        p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = mAsync, isInWith = false) }
+                    }
+                    is GetAccessor -> p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = false, isInWith = false) }
+                    is SetAccessor -> p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = false, isInWith = false) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is PrefixUnaryExpression -> walkExprForWithStatements(expr.operand, source, fileName, isStrict, isInWith)
+            is PostfixUnaryExpression -> walkExprForWithStatements(expr.operand, source, fileName, isStrict, isInWith)
+            is AwaitExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is YieldExpression -> expr.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
+            is VoidExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is DeleteExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is TypeOfExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
+            is TemplateExpression -> for (span in expr.templateSpans) walkExprForWithStatements(span.expression, source, fileName, isStrict, isInWith)
+            is TaggedTemplateExpression -> {
+                walkExprForWithStatements(expr.tag, source, fileName, isStrict, isInWith)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkExprForWithStatements(span.expression, source, fileName, isStrict, isInWith)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkExprForWithStatements(e, source, fileName, isStrict, isInWith)
             else -> {}
         }
     }
