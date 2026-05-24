@@ -33089,9 +33089,73 @@ interface DataView {
         when (expr) {
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> checkMultiDefaultsInStatements(body.statements, source, fileName)
+                is Expression -> checkMultiDefaultsInExpr(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+            is ClassExpression -> for (member in expr.members) when (member) {
+                is MethodDeclaration -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is Constructor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is GetAccessor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is SetAccessor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> member.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkMultiDefaultsInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkMultiDefaultsInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkMultiDefaultsInExpr(expr.condition, source, fileName)
+                checkMultiDefaultsInExpr(expr.whenTrue, source, fileName)
+                checkMultiDefaultsInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkMultiDefaultsInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkMultiDefaultsInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkMultiDefaultsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkMultiDefaultsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkMultiDefaultsInExpr(expr.expression, source, fileName)
+                checkMultiDefaultsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkMultiDefaultsInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> checkMultiDefaultsInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> checkMultiDefaultsInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is GetAccessor -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
+            is VoidExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkMultiDefaultsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkMultiDefaultsInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkMultiDefaultsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkMultiDefaultsInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkMultiDefaultsInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkMultiDefaultsInExpr(e, source, fileName)
             else -> {}
         }
     }
