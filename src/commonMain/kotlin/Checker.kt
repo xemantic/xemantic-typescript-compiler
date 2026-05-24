@@ -26878,8 +26878,18 @@ interface DataView {
                 node.elements.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
             }
             is PropertyAccessExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is ElementAccessExpression -> {
+                walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+                walkNodeForObjectLiterals(node.argumentExpression, source, fileName, depth + 1)
+            }
             is TemplateExpression -> {
                 node.templateSpans.forEach { walkNodeForObjectLiterals(it.expression, source, fileName, depth + 1) }
+            }
+            is TaggedTemplateExpression -> {
+                walkNodeForObjectLiterals(node.tag, source, fileName, depth + 1)
+                (node.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkNodeForObjectLiterals(it.expression, source, fileName, depth + 1)
+                }
             }
             is LabeledStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
             is ModuleDeclaration -> {
@@ -26890,6 +26900,27 @@ interface DataView {
             is SpreadElement -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
             is AsExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
             is TypeAssertionExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is SatisfiesExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is NonNullExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is PrefixUnaryExpression -> walkNodeForObjectLiterals(node.operand, source, fileName, depth + 1)
+            is PostfixUnaryExpression -> walkNodeForObjectLiterals(node.operand, source, fileName, depth + 1)
+            is AwaitExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is YieldExpression -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            is VoidExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is DeleteExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is TypeOfExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
+            is CommaListExpression -> node.elements.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+            is ClassExpression -> for (m in node.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
+                    else -> {}
+                }
+            }
+            is ThrowStatement -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
             else -> {}
         }
     }
