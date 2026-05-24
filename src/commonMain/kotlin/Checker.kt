@@ -40973,6 +40973,8 @@ interface DataView {
                     when (m) {
                         is MethodDeclaration -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
                         is Constructor -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
+                        is GetAccessor -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
+                        is SetAccessor -> m.body?.let { walkForDuplicateLabels(it.statements, source, fileName, mutableSetOf()) }
                         else -> {}
                     }
                 }
