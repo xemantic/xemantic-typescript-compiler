@@ -33914,7 +33914,14 @@ interface DataView {
             is PostfixUnaryExpression -> walkTypeAssertionsInExpr(expr.operand, source, fileName, onAssertion)
             is ArrayLiteralExpression -> for (e in expr.elements) walkTypeAssertionsInExpr(e, source, fileName, onAssertion)
             is ObjectLiteralExpression -> for (p in expr.properties) {
-                (p as? PropertyAssignment)?.initializer?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+                when (p) {
+                    is PropertyAssignment -> walkTypeAssertionsInExpr(p.initializer, source, fileName, onAssertion)
+                    is SpreadAssignment -> walkTypeAssertionsInExpr(p.expression, source, fileName, onAssertion)
+                    is MethodDeclaration -> p.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is GetAccessor -> p.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    is SetAccessor -> p.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                    else -> {}
+                }
             }
             is SpreadElement -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is YieldExpression -> expr.expression?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
@@ -33928,8 +33935,28 @@ interface DataView {
             is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is AsExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
-            is ArrowFunction -> (expr.body as? Block)?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+            is TemplateExpression -> for (span in expr.templateSpans) walkTypeAssertionsInExpr(span.expression, source, fileName, onAssertion)
+            is TaggedTemplateExpression -> {
+                walkTypeAssertionsInExpr(expr.tag, source, fileName, onAssertion)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkTypeAssertionsInExpr(span.expression, source, fileName, onAssertion)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkTypeAssertionsInExpr(e, source, fileName, onAssertion)
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                is Expression -> walkTypeAssertionsInExpr(body, source, fileName, onAssertion)
+                else -> {}
+            }
             is FunctionExpression -> expr.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+            is ClassExpression -> for (member in expr.members) when (member) {
+                is MethodDeclaration -> member.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                is Constructor -> member.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                is GetAccessor -> member.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                is SetAccessor -> member.body?.statements?.forEach { walkTypeAssertionsInStmt(it, source, fileName, onAssertion) }
+                is PropertyDeclaration -> member.initializer?.let { walkTypeAssertionsInExpr(it, source, fileName, onAssertion) }
+                else -> {}
+            }
             else -> {}
         }
     }
