@@ -29552,6 +29552,32 @@ interface DataView {
                 val body = stmt.body
                 if (body is ModuleBlock) walkSuperRebindStmts(body.statements, source, fileName, rebound)
             }
+            is ForInStatement -> {
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+            }
+            is ForOfStatement -> {
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+            }
+            is SwitchStatement -> {
+                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        walkSuperRebindExpr(clause.expression, source, fileName, rebound)
+                        clause.statements.forEach { walkSuperRebindStmt(it, source, fileName, rebound) }
+                    }
+                    is DefaultClause -> clause.statements.forEach { walkSuperRebindStmt(it, source, fileName, rebound) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                walkSuperRebindStmts(stmt.tryBlock.statements, source, fileName, rebound)
+                stmt.catchClause?.block?.statements?.let { walkSuperRebindStmts(it, source, fileName, rebound) }
+                stmt.finallyBlock?.statements?.let { walkSuperRebindStmts(it, source, fileName, rebound) }
+            }
+            is LabeledStatement -> walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
+            is ExportAssignment -> walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
             else -> {}
         }
     }
