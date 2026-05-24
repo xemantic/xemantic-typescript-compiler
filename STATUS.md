@@ -1,6 +1,30 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,943 / 10,078 tests passing (~88.74%). _Round 32 (2026-05-24): /goal session — 20 commits, +4 net flips via diagnostic-shape extensions + 16 wrapper-unwrap correctness improvements._
+**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 33 (2026-05-24): /goal session — 20 commits, +1 net flip via new TS2677 diagnostic + 19 wrapper/coverage broadenings across 18 walker/helper functions._
+
+_Round 33 (2026-05-24, +1 net via iter1 + 19 net-zero correctness)_:
+- **iter1 (+1)**: TS2677 "A type predicate's type must be assignable to its parameter's type" for `?T` JSDoc-nullable recovery patterns. New walker `checkTypePredicateNullableRecovery` walks FunctionDeclaration / MethodDeclaration / GetAccessor return types; when return is TypePredicate with `?` in source between `is` keyword and predicate type, emit TS2677 with chain "Type 'T | null' is not assignable to type 'T'. Type 'null' is not assignable to type 'T'." Conservative gate skips when param type already permits null. Flips `parseInvalidNullableTypes_ts`.
+- **iter2 (net-zero)**: `walkExprForImplicitReturns` adds SatisfiesExpression alongside existing AsExpression / TypeAssertionExpression / NonNullExpression.
+- **iter3 (net-zero)**: `checkExprForFunctionTypeParams` (TS2371) gains SatisfiesExpression (checks .type AND recurses .expression) + NonNullExpression wrapper.
+- **iter4 (net-zero)**: `checkJsxInExpr` (TS7026/TS2304) gains SatisfiesExpression / TypeAssertionExpression / NewExpression / PropertyAccess / ElementAccess / Prefix/Postfix unary. `walkExprForDelete` (TS2790/TS2696/TS2704) gains AsExpression / TypeAssertionExpression / SatisfiesExpression / NonNullExpression / NewExpression / PropertyAccess / ElementAccess / Prefix/Postfix unary / SpreadElement / Await / Yield.
+- **iter5 (net-zero)**: `walkExprForNestedClasses` and `walkExprForAbstractContext` gain AsExpression / TypeAssertionExpression / SatisfiesExpression / NonNullExpression / ConditionalExpression. Abstract member checks now reach `(class Foo extends Base {}) as T`.
+- **iter6 (net-zero)**: `checkArithmeticInExpr` (TS2362/TS2363/TS2365) gains SpreadElement / Await / Yield / Delete / Void / TypeOf / TaggedTemplate / CommaListExpression.
+- **iter7 (net-zero)**: `checkUnusedInExpr` (TS6133) gains SatisfiesExpression / TypeAssertionExpression / Delete / Void / TypeOf / CommaList. `walkExprForEmptyTypeArgs` (TS1099) extended from 6 to ~22 expression kinds (all four wrappers, ElementAccess, Prefix/Postfix unary, Spread, Await/Yield, ArrayLit, ObjectLit, Template, TaggedTemplate, CommaList).
+- **iter8 (net-zero)**: `checkJumpInExpr` (TS1107/TS1108/TS1116) extended from 5 to ~24 expression kinds. Break/continue inside nested function detection now reaches wrappers + all common expression types.
+- **iter9 (net-zero)**: `walkForOptionalParamsInExpr` (TS1015) extended with full wrapper + expression coverage (~15 new cases). ArrowFunction expression-body now recurses into the expression. Same broadening applied to `walkExprForUnusedLabels` (TS7028) + `checkExprForTS2815Arguments` (TS2815) + `walkExprForFallthroughCases` (TS7029).
+- **iter10 (net-zero)**: `applyConditionNarrowing` (flow-graph narrowing dispatch) unwraps AsExpression / TypeAssertionExpression / SatisfiesExpression / NonNullExpression before re-dispatching. `if ((x as T))` now narrows `x` to truthy on the then-branch.
+- **iter11 (net-zero)**: `resolveInstanceOfRhsType` (instanceof RHS) unwraps Paren/NonNull/As/TypeAssertion/Satisfies; `tryNarrowByTypeOf` / `isTypeOfRef` unwrap parens around the typeof expression AND the literalSide.
+- **iter12 (net-zero)**: `narrowByCallPredicate` callee unwrap; `isConstructorAccessOf` and `isDiscriminantAccessOf` paren-unwrap. `(predFn)(x)` / `(x.kind) === 'a'` / `((x.constructor)) === C` now narrow.
+- **iter13 (net-zero)**: `narrowByInOperator` LHS paren-unwrap. `walkJSDocParamTagsInExpr` extended from 5 to ~22 expression kinds (JS-files only).
+- **iter14 (net-zero)**: `isTypeofOf` unwraps parens around the typeof expression itself (mirror of iter11 fix for the flow-graph variant `isTypeOfRef`).
+- **iter15 (net-zero)**: `walkExprForNamespaceThis` (TS2683) gains ~14 wrapper + expression cases. `walkExprForObjectLiteralModifiers` (TS1042/TS1184) iterative stack-traversal gains wrappers + most common expression kinds.
+- **iter16 (net-zero)**: `checkExprForPrivateFieldAccess` (TS2343 __classPrivateFieldGet/Set) extended from 2 to ~17 cases. Wrappers propagate `isAssignmentLhs`; PrefixUnary/PostfixUnary detect ++/-- as assignment ops; rest as value-context recursion.
+- **iter17 (net-zero)**: `isAlwaysFalsyExpr` handles NonNullExpression. `void 0!` / `null!` correctly classify as always-falsy.
+- **iter18 (net-zero)**: `expressionTrueEnd` handles DeleteExpression / YieldExpression / SpreadElement (was overshooting via `expr.end`). `isAlwaysTruthyExpr` handles NoSubstitutionTemplateLiteralNode + BigIntLiteralNode. `inferReturnTypeFromBody` unwraps NonNull/Satisfies wrappers (not As — asserted type should be the return type).
+- **iter19 (net-zero)**: `inferSimpleExprType` handles TypeAssertionExpression alongside AsExpression.
+- **iter20 (net-zero)**: `isSimpleLiteral` handles AsExpression and TypeAssertionExpression alongside Paren/NonNull/Satisfies.
+
+Session-end: 8943 → 8944 / 10078 (+1 net, ~88.75%). Strategy: 1 flip via new TS2677 diagnostic implementation (the only fresh candidate); rest is systematic wrapper/coverage broadening across 18 walker and helper functions to bring coverage in line with already-broadened helpers from round 32. Each broadening prepares ground for future flips when paired with broader infrastructure (e.g. narrowing tests with wrapped condition expressions, span-aware diagnostics on delete/yield/spread, etc.).
 
 _Round 32 (2026-05-24, +4 net via 4 feature commits + 16 net-zero correctness)_:
 - **iter1 (+1)**: TS1025 trailing comma in index signatures. `[key: T,]: V` in classes, type literals, interfaces now emits TS1025 instead of silently swallowing the comma or cascading errors. Two parallel emission sites (parseClassMember + parseIndexSignatureOrProperty). Flips `indexSignatureWithTrailingComma_ts`.
