@@ -9735,9 +9735,44 @@ class Checker(
                             ))
                         }
                     }
+                    // Recurse into member bodies for nested classes
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                            is Constructor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
                 is Block -> checkAbstractAccessorInStatements(stmt.statements, source, fileName)
+                is FunctionDeclaration -> stmt.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                is IfStatement -> {
+                    checkAbstractAccessorInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkAbstractAccessorInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkAbstractAccessorInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkAbstractAccessorInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkAbstractAccessorInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
