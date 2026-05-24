@@ -25882,7 +25882,19 @@ interface DataView {
             is PostfixUnaryExpression -> checkArgCountInExpr(expr.operand, funcParams, classCtorParams, source, fileName)
             is TypeAssertionExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
             is AsExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is SatisfiesExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
             is NonNullExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
+            is CommaListExpression -> for (el in expr.elements) checkArgCountInExpr(el, funcParams, classCtorParams, source, fileName)
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
+                    is Constructor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+                    else -> {}
+                }
+            }
             is SpreadElement -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
             is AwaitExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
             is YieldExpression -> expr.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
