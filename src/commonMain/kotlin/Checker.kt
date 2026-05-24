@@ -35345,12 +35345,23 @@ interface DataView {
                 walkTParamDefaultsInExpr(expr.argumentExpression, source, fileName)
             }
             is ConditionalExpression -> {
+                walkTParamDefaultsInExpr(expr.condition, source, fileName)
                 walkTParamDefaultsInExpr(expr.whenTrue, source, fileName)
                 walkTParamDefaultsInExpr(expr.whenFalse, source, fileName)
             }
             is ArrayLiteralExpression -> for (e in expr.elements) walkTParamDefaultsInExpr(e, source, fileName)
             is ObjectLiteralExpression -> for (p in expr.properties) {
-                (p as? PropertyAssignment)?.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+                when (p) {
+                    is PropertyAssignment -> walkTParamDefaultsInExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> walkTParamDefaultsInExpr(p.expression, source, fileName)
+                    is MethodDeclaration -> {
+                        p.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
+                        p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                        for (param in p.parameters) param.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                        p.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
             }
             is TypeAssertionExpression -> {
                 walkTParamDefaultsInType(expr.type, source, fileName)
@@ -35360,11 +35371,27 @@ interface DataView {
                 walkTParamDefaultsInType(expr.type, source, fileName)
                 walkTParamDefaultsInExpr(expr.expression, source, fileName)
             }
+            is SatisfiesExpression -> {
+                walkTParamDefaultsInType(expr.type, source, fileName)
+                walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            }
+            is NonNullExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
             is SpreadElement -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
             is AwaitExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
             is YieldExpression -> expr.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+            is VoidExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
             is PrefixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
             is PostfixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkTParamDefaultsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkTParamDefaultsInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkTParamDefaultsInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkTParamDefaultsInExpr(e, source, fileName)
             else -> {}
         }
     }
