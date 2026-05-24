@@ -30992,6 +30992,52 @@ interface DataView {
             is ParenthesizedExpression -> checkCrossFileUBDInExpr(
                 expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName,
             )
+            is AsExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is TypeAssertionExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is SatisfiesExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is NonNullExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is ConditionalExpression -> {
+                checkCrossFileUBDInExpr(expr.condition, useFileIdx, localNames, source, fileName, firstDeclByName)
+                checkCrossFileUBDInExpr(expr.whenTrue, useFileIdx, localNames, source, fileName, firstDeclByName)
+                checkCrossFileUBDInExpr(expr.whenFalse, useFileIdx, localNames, source, fileName, firstDeclByName)
+            }
+            is CallExpression -> {
+                checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+                expr.arguments.forEach { checkCrossFileUBDInExpr(it, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            }
+            is NewExpression -> {
+                checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+                expr.arguments?.forEach { checkCrossFileUBDInExpr(it, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            }
+            is PropertyAccessExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is ElementAccessExpression -> {
+                checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+                checkCrossFileUBDInExpr(expr.argumentExpression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkCrossFileUBDInExpr(it, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            is SpreadElement -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is PrefixUnaryExpression -> checkCrossFileUBDInExpr(expr.operand, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is PostfixUnaryExpression -> checkCrossFileUBDInExpr(expr.operand, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is AwaitExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is YieldExpression -> expr.expression?.let { checkCrossFileUBDInExpr(it, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            is VoidExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is DeleteExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is TypeOfExpression -> checkCrossFileUBDInExpr(expr.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+            is TemplateExpression -> expr.templateSpans.forEach { checkCrossFileUBDInExpr(it.expression, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            is TaggedTemplateExpression -> {
+                checkCrossFileUBDInExpr(expr.tag, useFileIdx, localNames, source, fileName, firstDeclByName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkCrossFileUBDInExpr(it.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkCrossFileUBDInExpr(it, useFileIdx, localNames, source, fileName, firstDeclByName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkCrossFileUBDInExpr(prop.initializer, useFileIdx, localNames, source, fileName, firstDeclByName)
+                    is SpreadAssignment -> checkCrossFileUBDInExpr(prop.expression, useFileIdx, localNames, source, fileName, firstDeclByName)
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
