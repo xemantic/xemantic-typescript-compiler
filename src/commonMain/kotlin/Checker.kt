@@ -54716,13 +54716,51 @@ interface DataView {
 
     private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
-            is ClassDeclaration -> checkClassPropertyOverrides(stmt, source, fileName)
+            is ClassDeclaration -> {
+                checkClassPropertyOverrides(stmt, source, fileName)
+                // Recurse into nested class declarations in member bodies
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
             is ModuleDeclaration -> {
                 val body = stmt.body
                 if (body is ModuleBlock) {
                     for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName)
                 }
             }
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+            is Block -> for (s in stmt.statements) checkPropertyOverrideInStatement(s, source, fileName)
+            is IfStatement -> {
+                checkPropertyOverrideInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkPropertyOverrideInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                        is DefaultClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
             else -> {}
         }
     }
