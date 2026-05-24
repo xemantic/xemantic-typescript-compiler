@@ -8680,6 +8680,16 @@ class Checker(
                     stmt.catchClause?.block?.statements?.let { collectVarDeclaredNamesInBlock(it, result) }
                     stmt.finallyBlock?.statements?.let { collectVarDeclaredNamesInBlock(it, result) }
                 }
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> collectVarDeclaredNamesInBlock(clause.statements, result)
+                            is DefaultClause -> collectVarDeclaredNamesInBlock(clause.statements, result)
+                            else -> {}
+                        }
+                    }
+                }
+                is LabeledStatement -> collectVarDeclaredNamesInBlock(listOf(stmt.statement), result)
                 else -> {}
             }
         }
