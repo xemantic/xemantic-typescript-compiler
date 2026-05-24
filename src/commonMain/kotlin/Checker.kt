@@ -22212,6 +22212,12 @@ interface DataView {
             is TypeAssertionExpression -> isAlwaysFalsyExpr(expr.expression)
             is AsExpression -> isAlwaysFalsyExpr(expr.expression)
             is SatisfiesExpression -> isAlwaysFalsyExpr(expr.expression)
+            // `expr!` (non-null assertion) preserves runtime value; if the inner
+            // expression is always falsy (e.g. `void 0`), `expr!` is too. Note:
+            // `null!` / `undefined!` are intentionally treated as falsy here even
+            // though the assertion is conceptually "not null" — the runtime value
+            // is still falsy.
+            is NonNullExpression -> isAlwaysFalsyExpr(expr.expression)
             is Identifier -> expr.text == "null" || expr.text == "undefined"
             else -> false
         }
