@@ -7140,18 +7140,66 @@ class Checker(
             is BinaryExpression -> {
                 // Iterative left-spine walk to avoid StackOverflow on deep binary chains
                 var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkDefiniteAssignmentInExprContext(current.right, source, fileName)
-                    current = current.left
-                }
+                val rightStack = ArrayDeque<Expression>()
+                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
                 checkDefiniteAssignmentInExprContext(current, source, fileName)
+                while (rightStack.isNotEmpty()) checkDefiniteAssignmentInExprContext(rightStack.removeLast(), source, fileName)
             }
             is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is AsExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is NonNullExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
             is ConditionalExpression -> {
                 checkDefiniteAssignmentInExprContext(expr.condition, source, fileName)
                 checkDefiniteAssignmentInExprContext(expr.whenTrue, source, fileName)
                 checkDefiniteAssignmentInExprContext(expr.whenFalse, source, fileName)
             }
+            is PropertyAccessExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> checkDefiniteAssignmentInExprContext(p.initializer, source, fileName)
+                is SpreadAssignment -> checkDefiniteAssignmentInExprContext(p.expression, source, fileName)
+                is MethodDeclaration -> p.body?.let {
+                    checkDefiniteAssignmentInStatements(
+                        it.statements, source, fileName,
+                        preInitialized = collectParamNames(p.parameters),
+                    )
+                }
+                is GetAccessor -> p.body?.let {
+                    checkDefiniteAssignmentInStatements(
+                        it.statements, source, fileName,
+                        preInitialized = collectParamNames(p.parameters),
+                    )
+                }
+                is SetAccessor -> p.body?.let {
+                    checkDefiniteAssignmentInStatements(
+                        it.statements, source, fileName,
+                        preInitialized = collectParamNames(p.parameters),
+                    )
+                }
+                else -> {}
+            }
+            is SpreadElement -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is AwaitExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+            is VoidExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is DeleteExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is TypeOfExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkDefiniteAssignmentInExprContext(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName)
             else -> {}
         }
     }
