@@ -36626,6 +36626,42 @@ interface DataView {
                     decl.initializer?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
                 }
             }
+            is ReturnStatement -> stmt.expression?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
+            is Block -> stmt.statements.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+            is IfStatement -> {
+                walkJSDocVoidCastInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkJSDocVoidCastInStmt(it, source, fileName) }
+            }
+            is ForStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                when (clause) {
+                    is CaseClause -> clause.statements.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+                    is DefaultClause -> clause.statements.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> walkJSDocVoidCastInStmt(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { it.statements.forEach { s -> walkJSDocVoidCastInStmt(s, source, fileName) } }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { it.statements.forEach { s -> walkJSDocVoidCastInStmt(s, source, fileName) } }
+                is Constructor -> m.body?.let { it.statements.forEach { s -> walkJSDocVoidCastInStmt(s, source, fileName) } }
+                is GetAccessor -> m.body?.let { it.statements.forEach { s -> walkJSDocVoidCastInStmt(s, source, fileName) } }
+                is SetAccessor -> m.body?.let { it.statements.forEach { s -> walkJSDocVoidCastInStmt(s, source, fileName) } }
+                is PropertyDeclaration -> m.initializer?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+            is ExportAssignment -> walkJSDocVoidCastInExpr(stmt.expression, source, fileName)
             else -> {}
         }
     }
