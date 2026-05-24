@@ -28276,8 +28276,14 @@ interface DataView {
                 stmt.incrementor?.let { checkConstAssignmentInExpr(it, source, fileName, forConsts) }
                 checkConstAssignmentInStatement(stmt.statement, source, fileName, forConsts)
             }
-            is ForInStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
-            is ForOfStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            is ForInStatement -> {
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            }
+            is ForOfStatement -> {
+                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
+                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            }
             is WhileStatement -> {
                 checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
                 checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
@@ -28320,6 +28326,9 @@ interface DataView {
                     }
                     // Pass outer constNames so class/enum assignments in methods are caught
                     body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
+                    if (member is PropertyDeclaration) {
+                        member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+                    }
                 }
             }
             is ModuleDeclaration -> {
@@ -28329,6 +28338,8 @@ interface DataView {
                 }
             }
             is LabeledStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            is ThrowStatement -> stmt.expression?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+            is ExportAssignment -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
             else -> {}
         }
     }
