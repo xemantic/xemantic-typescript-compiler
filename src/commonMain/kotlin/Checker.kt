@@ -19833,8 +19833,43 @@ class Checker(
                 checkStrictModeInExpr(expr.expression, source, fileName, restricted)
                 expr.arguments?.forEach { checkStrictModeInExpr(it, source, fileName, restricted) }
             }
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    val operand = expr.operand
+                    if (operand is Identifier && operand.text in restricted) {
+                        checkStrictModeName(operand, source, fileName, restricted)
+                        if (operand.text == "eval") emitTs2630EvalAssign(operand, source, fileName)
+                    }
+                }
+                checkStrictModeInExpr(expr.operand, source, fileName, restricted)
+            }
+            is PostfixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    val operand = expr.operand
+                    if (operand is Identifier && operand.text in restricted) {
+                        checkStrictModeName(operand, source, fileName, restricted)
+                        if (operand.text == "eval") emitTs2630EvalAssign(operand, source, fileName)
+                    }
+                }
+                checkStrictModeInExpr(expr.operand, source, fileName, restricted)
+            }
             else -> {}
         }
+    }
+
+    private fun emitTs2630EvalAssign(name: Identifier, source: String, fileName: String) {
+        val start = name.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot assign to '${name.text}' because it is a function.",
+            category = DiagnosticCategory.Error,
+            code = 2630,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = name.text.length,
+        ))
     }
 
     private fun checkStrictModeBindingName(
