@@ -28827,6 +28827,24 @@ interface DataView {
             is ArrayLiteralExpression -> expr.elements.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
             is PrefixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
             is PostfixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
+            is AsExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is TypeAssertionExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is SatisfiesExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is NonNullExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is SpreadElement -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is AwaitExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is YieldExpression -> expr.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
+            is VoidExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is DeleteExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is TypeOfExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
+            is TemplateExpression -> for (span in expr.templateSpans) walkSuperRebindExpr(span.expression, source, fileName, rebound)
+            is TaggedTemplateExpression -> {
+                walkSuperRebindExpr(expr.tag, source, fileName, rebound)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkSuperRebindExpr(span.expression, source, fileName, rebound)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkSuperRebindExpr(e, source, fileName, rebound)
             else -> {}
         }
     }
