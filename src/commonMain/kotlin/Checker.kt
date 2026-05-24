@@ -33063,9 +33063,73 @@ interface DataView {
         when (expr) {
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> walkSwitchCaseComparable(body.statements, source, fileName)
+                is Expression -> walkSwitchCaseComparableInExpr(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+            is ClassExpression -> for (member in expr.members) when (member) {
+                is MethodDeclaration -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is Constructor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is GetAccessor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is SetAccessor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is PropertyDeclaration -> member.initializer?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkSwitchCaseComparableInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkSwitchCaseComparableInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkSwitchCaseComparableInExpr(expr.condition, source, fileName)
+                walkSwitchCaseComparableInExpr(expr.whenTrue, source, fileName)
+                walkSwitchCaseComparableInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkSwitchCaseComparableInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkSwitchCaseComparableInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+                walkSwitchCaseComparableInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkSwitchCaseComparableInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkSwitchCaseComparableInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkSwitchCaseComparableInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is GetAccessor -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
+            is VoidExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkSwitchCaseComparableInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkSwitchCaseComparableInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkSwitchCaseComparableInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkSwitchCaseComparableInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkSwitchCaseComparableInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkSwitchCaseComparableInExpr(e, source, fileName)
             else -> {}
         }
     }
