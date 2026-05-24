@@ -24400,6 +24400,36 @@ interface DataView {
                 }
             }
             is ArrayLiteralExpression -> expr.elements.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            // Value-preserving wrappers — recurse through the inner expression
+            is AsExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is TypeAssertionExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is SatisfiesExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is NonNullExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            // Unary / expression wrappers
+            is PrefixUnaryExpression -> checkTypeAsValueInExpr(expr.operand, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is PostfixUnaryExpression -> checkTypeAsValueInExpr(expr.operand, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is SpreadElement -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is AwaitExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is YieldExpression -> expr.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            is VoidExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            is DeleteExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            // Note: TypeOfExpression handled above with TS2693 logic
+            // Template / tagged template — recurse into spans (tag is checked for TaggedTemplate)
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                checkTypeAsValueInExpr(span.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            }
+            is TaggedTemplateExpression -> {
+                checkTypeAsValueInExpr(expr.tag, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                val template = expr.template
+                if (template is TemplateExpression) {
+                    for (span in template.templateSpans) {
+                        checkTypeAsValueInExpr(span.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                    }
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) {
+                checkTypeAsValueInExpr(e, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            }
             else -> {}
         }
     }
