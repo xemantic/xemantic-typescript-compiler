@@ -28149,24 +28149,96 @@ interface DataView {
 
     private fun walkForParamPropsInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
-            is ArrowFunction -> checkParamPropsInParams(expr.parameters, source, fileName)
+            is ArrowFunction -> {
+                checkParamPropsInParams(expr.parameters, source, fileName)
+                when (val body = expr.body) {
+                    is Block -> walkForParameterProperties(body.statements, source, fileName)
+                    is Expression -> walkForParamPropsInExpr(body, source, fileName)
+                    else -> {}
+                }
+            }
             is FunctionExpression -> {
                 checkParamPropsInParams(expr.parameters, source, fileName)
                 walkForParameterProperties(expr.body.statements, source, fileName)
             }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> {
+                    checkParamPropsInParams(m.parameters, source, fileName)
+                    m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    // Constructor param-props are legitimate; only check non-param-props
+                    m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                is GetAccessor -> m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    checkParamPropsInParams(m.parameters, source, fileName)
+                    m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                is PropertyDeclaration -> m.initializer?.let { walkForParamPropsInExpr(it, source, fileName) }
+                else -> {}
+            }
             is ParenthesizedExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
                 var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkForParamPropsInExpr(current.right, source, fileName)
-                    current = current.left
-                }
+                val rightStack = ArrayDeque<Expression>()
+                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
                 walkForParamPropsInExpr(current, source, fileName)
+                while (rightStack.isNotEmpty()) walkForParamPropsInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkForParamPropsInExpr(expr.condition, source, fileName)
+                walkForParamPropsInExpr(expr.whenTrue, source, fileName)
+                walkForParamPropsInExpr(expr.whenFalse, source, fileName)
             }
             is CallExpression -> {
                 walkForParamPropsInExpr(expr.expression, source, fileName)
                 expr.arguments.forEach { walkForParamPropsInExpr(it, source, fileName) }
             }
+            is NewExpression -> {
+                walkForParamPropsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkForParamPropsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkForParamPropsInExpr(expr.expression, source, fileName)
+                walkForParamPropsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkForParamPropsInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkForParamPropsInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkForParamPropsInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> {
+                    checkParamPropsInParams(p.parameters, source, fileName)
+                    p.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                is GetAccessor -> p.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    checkParamPropsInParams(p.parameters, source, fileName)
+                    p.body?.let { walkForParameterProperties(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+            is SpreadElement -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkForParamPropsInExpr(it, source, fileName) }
+            is VoidExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkForParamPropsInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkForParamPropsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkForParamPropsInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkForParamPropsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkForParamPropsInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkForParamPropsInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkForParamPropsInExpr(e, source, fileName)
             else -> {}
         }
     }
