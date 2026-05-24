@@ -29049,6 +29049,35 @@ interface DataView {
                 val body = stmt.body
                 if (body is ModuleBlock) walkForObjLitSuper(body.statements, source, fileName, superValid)
             }
+            is ForInStatement -> {
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
+                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
+            }
+            is ForOfStatement -> {
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
+                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
+            }
+            is SwitchStatement -> {
+                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkObjLitSuperInExpr(clause.expression, source, fileName, superValid)
+                            clause.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
+                stmt.catchClause?.block?.statements?.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
+                stmt.finallyBlock?.statements?.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
+            }
+            is LabeledStatement -> walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
+            is ThrowStatement -> stmt.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
+            is ExportAssignment -> walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
             else -> {}
         }
     }
