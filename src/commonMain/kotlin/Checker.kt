@@ -41036,10 +41036,13 @@ interface DataView {
                         is Constructor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
                         is GetAccessor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
                         is SetAccessor -> m.body?.let { walkForUnusedLabels(it.statements, source, fileName) }
+                        is PropertyDeclaration -> m.initializer?.let { walkExprForUnusedLabels(it, source, fileName) }
+                        is ClassStaticBlockDeclaration -> walkForUnusedLabels(m.body.statements, source, fileName)
                         else -> {}
                     }
                 }
             }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForUnusedLabels(it.statements, source, fileName) }
             is ExpressionStatement -> walkExprForUnusedLabels(stmt.expression, source, fileName)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
@@ -41047,6 +41050,8 @@ interface DataView {
                 }
             }
             is ReturnStatement -> stmt.expression?.let { walkExprForUnusedLabels(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkExprForUnusedLabels(it, source, fileName) }
+            is ExportAssignment -> walkExprForUnusedLabels(stmt.expression, source, fileName)
             else -> {}
         }
     }
