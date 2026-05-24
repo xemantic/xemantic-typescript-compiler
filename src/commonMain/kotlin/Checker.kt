@@ -3577,9 +3577,51 @@ class Checker(
             is InterfaceDeclaration -> {
                 for (m in stmt.members) when (m) {
                     is PropertyDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
-                    is MethodDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        for (p in m.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    }
+                    is IndexSignature -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
                     else -> {}
                 }
+            }
+            is ClassDeclaration -> {
+                for (m in stmt.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        for (p in m.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        m.body?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+                    }
+                    is GetAccessor -> {
+                        m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        m.body?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+                    }
+                    is SetAccessor -> {
+                        for (p in m.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        m.body?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+                    }
+                    is Constructor -> {
+                        for (p in m.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        m.body?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> {
+                stmt.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                for (p in stmt.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                stmt.body?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+            }
+            is VariableStatement -> {
+                for (decl in stmt.declarationList.declarations) {
+                    decl.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                }
+            }
+            is Block -> walkUnusedInferInStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkUnusedInferInStmts(listOf(stmt.thenStatement), source, fileName)
+                stmt.elseStatement?.let { walkUnusedInferInStmts(listOf(it), source, fileName) }
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 walkUnusedInferInStmts(it.statements, source, fileName)
@@ -3638,6 +3680,24 @@ class Checker(
                 type.parameters.forEach { p -> p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) } }
                 walkUnusedInferInTypeNode(type.type, source, fileName)
             }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) } }
+                walkUnusedInferInTypeNode(type.type, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (m in type.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                        for (p in m.parameters) p.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    }
+                    is IndexSignature -> m.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is MappedType -> type.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+            is RestType -> walkUnusedInferInTypeNode(type.type, source, fileName)
+            is OptionalType -> walkUnusedInferInTypeNode(type.type, source, fileName)
             is TypeReference -> type.typeArguments?.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
             else -> {}
         }
