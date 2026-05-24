@@ -1856,13 +1856,28 @@ class Parser(
                 if (scanner.getToken() == SyntaxKind.Question) scanner.scan() // skip optional ?
                 scanner.getToken() == SyntaxKind.Colon
             }
+            // Detect index signature with accessibility modifier — emit TS2369 + TS1018.
+            // `[public x: T]` etc.
+            val isIndexSigWithAccessMod = !isIndexSig && scanner.lookAhead {
+                scanner.scan() // skip [
+                val mod = scanner.getToken()
+                if (mod != SyntaxKind.PublicKeyword && mod != SyntaxKind.PrivateKeyword &&
+                    mod != SyntaxKind.ProtectedKeyword) return@lookAhead false
+                scanner.scan() // skip modifier
+                if (scanner.getToken() != SyntaxKind.Identifier) return@lookAhead false
+                scanner.scan() // skip name
+                if (scanner.getToken() == SyntaxKind.Question) scanner.scan()
+                scanner.getToken() == SyntaxKind.Colon
+            }
             // Detect rest parameter index signature: [...identifier...] — TS1017
-            val isRestIndexSig = !isIndexSig && scanner.lookAhead {
+            val isRestIndexSig = !isIndexSig && !isIndexSigWithAccessMod && scanner.lookAhead {
                 scanner.scan() // skip [
                 scanner.getToken() == SyntaxKind.DotDotDot
             }
-            if (isIndexSig || isRestIndexSig) {
+            if (isIndexSig || isRestIndexSig || isIndexSigWithAccessMod) {
                 parseExpected(SyntaxKind.OpenBracket)
+                val accessModPos = if (isIndexSigWithAccessMod) getPos() else -1
+                if (accessModPos >= 0) nextToken() // consume modifier
                 val dotDotDotPos = if (token == SyntaxKind.DotDotDot) getPos() else -1
                 if (dotDotDotPos >= 0) nextToken() // consume ...
                 val paramName = parseIdentifier()
@@ -1894,7 +1909,27 @@ class Parser(
                 parseExpected(SyntaxKind.CloseBracket)
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 parseSemicolon()
-                if (dotDotDotPos >= 0) {
+                if (accessModPos >= 0) {
+                    // TS2369 + TS1018 for `[public x: T]`-style index sigs.
+                    // TS2369 squiggle covers `public x: T` — use prevTokenEnd (end of `T`
+                    // text before the next-token scan past `]`).
+                    val ts2369End = if (paramType != null) {
+                        // After parseType + closeBracket+colon+returnType+semicolon, scanner
+                        // has advanced way past `T`. Use paramName.end + paramType length.
+                        // paramType.end overshoots — instead compute via source-text scan
+                        // from accessModPos for the modifier+space+name+colon+space+type.
+                        // Simpler: scan source forward for `]` from paramName.pos.
+                        var i = paramName.pos
+                        while (i < source.length && source[i] != ']') i++
+                        i
+                    } else paramName.end
+                    val ts2369Len = (ts2369End - accessModPos).coerceAtLeast(1)
+                    reportError("A parameter property is only allowed in a constructor implementation.",
+                        code = 2369, overrideStart = accessModPos, overrideLength = ts2369Len)
+                    reportError("An index signature parameter cannot have an accessibility modifier.",
+                        code = 1018, overrideStart = paramName.pos,
+                        overrideLength = paramName.text.length.coerceAtLeast(1))
+                } else if (dotDotDotPos >= 0) {
                     // TS1017: An index signature cannot have a rest parameter.
                     // Suppress TS1021 when TS1017 fires
                     reportError("An index signature cannot have a rest parameter.", code = 1017,
@@ -2471,6 +2506,18 @@ class Parser(
             if (scanner.getToken() == SyntaxKind.Question) scanner.scan() // skip optional ?
             scanner.getToken() == SyntaxKind.Colon
         }
+        // Detect index sig with accessibility modifier — emit TS2369 + TS1018.
+        val isIndexWithAccessMod = !isIndex && scanner.lookAhead {
+            scanner.scan() // skip [
+            val mod = scanner.getToken()
+            if (mod != SyntaxKind.PublicKeyword && mod != SyntaxKind.PrivateKeyword &&
+                mod != SyntaxKind.ProtectedKeyword) return@lookAhead false
+            scanner.scan() // skip modifier
+            if (!isIdentifierToken(scanner.getToken())) return@lookAhead false
+            scanner.scan() // skip name
+            if (scanner.getToken() == SyntaxKind.Question) scanner.scan()
+            scanner.getToken() == SyntaxKind.Colon
+        }
         // Detect empty index signature: [] — TS1096
         val isEmptyIndexSig = scanner.lookAhead {
             scanner.scan() // skip [
@@ -2562,8 +2609,10 @@ class Parser(
             val param = Parameter(name = paramName, type = paramType)
             return IndexSignature(parameters = listOf(param), type = type, modifiers = modifiers, pos = pos, end = getEnd())
         }
-        if (isIndex) {
+        if (isIndex || isIndexWithAccessMod) {
             parseExpected(SyntaxKind.OpenBracket)
+            val accessModPos = if (isIndexWithAccessMod) getPos() else -1
+            if (accessModPos >= 0) nextToken() // consume modifier
             val params = mutableListOf<Parameter>()
             val paramName = parseIdentifier()
             val questionPos = if (token == SyntaxKind.Question) getPos() else -1
@@ -2611,7 +2660,19 @@ class Parser(
             // (TypeScript doesn't double-report TS1021 + TS1268 for the same sig).
             val paramTypeIsInvalidKeyword = paramType is KeywordTypeNode &&
                 paramType.kind !in INDEX_SIG_ALLOWED_PARAM_KEYWORDS
-            if (questionPos >= 0) {
+            if (accessModPos >= 0) {
+                // TS2369 + TS1018 for `[public x: T]`-style index sigs.
+                // Scan forward in source from paramName for `]` to compute span end.
+                var i = paramName.pos
+                while (i < source.length && source[i] != ']') i++
+                val ts2369End = i
+                val ts2369Len = (ts2369End - accessModPos).coerceAtLeast(1)
+                reportError("A parameter property is only allowed in a constructor implementation.",
+                    code = 2369, overrideStart = accessModPos, overrideLength = ts2369Len)
+                reportError("An index signature parameter cannot have an accessibility modifier.",
+                    code = 1018, overrideStart = paramName.pos,
+                    overrideLength = paramName.text.length.coerceAtLeast(1))
+            } else if (questionPos >= 0) {
                 // TS1019: An index signature parameter cannot have a question mark.
                 // Suppress TS1021 when TS1019 fires (TypeScript doesn't emit both)
                 reportError("An index signature parameter cannot have a question mark.", code = 1019,
