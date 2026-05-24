@@ -1,6 +1,40 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 35 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero wrapper/coverage broadenings across 20 walker functions (different walkers than rounds 32/33/34). Pool genuinely empty._
+**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 36 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero wrapper/coverage broadenings across 20 different walker functions. 4 attempted iterations regressed -7 each and were reverted (checkNullUndefinedInExpr, checkExprForCtorParamRefsInStmt, walkExprForUnusedLabels, checkRestParamsInStatements + collectThisPropertyAccesses). Pool genuinely empty._
+
+_Round 36 (2026-05-24, 0 net flips via 20 net-zero correctness + 4 reverts)_:
+- **iter1**: `checkTypeAsValueInExpr` (TS2693/TS2708 type-as-value / namespace-as-value) extended with wrappers (As/TypeAssertion/Satisfies/NonNull), unary (Prefix/Postfix), Spread/Await/Yield/Void/Delete, Template/TaggedTemplate, CommaList.
+- **iter2** _(originally iter3; first iter2 reverted)_: `checkAlwaysTruthyInExpr` (TS2872/TS2873) extended from ~7 kinds to ~24 by adding CallExpression/NewExpression, member access, ArrayLit/ObjectLit (with method+accessor bodies), Template/TaggedTemplate, unary, Spread/Await/Yield/Void/Delete/TypeOf, CommaList, ClassExpression member-body recursion.
+- **iter3**: `walkBigIntExpInExpr` (TS2791 BigInt exponentiation) extended with TaggedTemplate, Spread/Await/Yield/Void/Delete/TypeOf, CommaList, ClassExpression member-body recursion.
+- **iter4**: `walkExprForImplicitReturns` (TS7030/TS2355/TS2366/TS7023) extended with member access (PropertyAccess/ElementAccess), Template/TaggedTemplate (tag + spans), unary (Prefix/Postfix), Await/Yield/Void/Delete/TypeOf, CommaList.
+- **iter5** _(originally iter6; first iter5 reverted)_: `collectThisAccessInExpr` (this.PROP collector for unused-property analysis) extended with ElementAccess (with `this["prop"]` literal-key collection), TaggedTemplate, ObjectLit (PropertyAssignment/SpreadAssignment/method+accessor bodies), Spread/Await/Yield/Void/Delete/TypeOf, CommaList, ClassExpression member-body recursion.
+- **iter6**: `collectPropertyAccessNamesInExpr` (this.X / obj["X"] name collector) extended with SatisfiesExpression, YieldExpression, TaggedTemplate (tag + spans), ClassExpression member-body recursion.
+- **iter7**: `walkExprForObjectLiteralModifiers` (TS1042/TS1184 access-modifier-misuse walker, iterative stack-traversal) extended with VoidExpression/DeleteExpression/TypeOfExpression, ClassExpression, CommaList, PropertyDeclaration initializer; statement kinds ForIn/ForOf/Do/Switch (case+default)/Try (try/catch/finally)/Labeled/Throw/ExportAssignment/ModuleDeclaration.
+- **iter8**: `walkUnusedInfer` (TS6133 unused `infer T` walker) statement-level extended with ClassDeclaration (property/method/accessor/constructor types + bodies), FunctionDeclaration (return type + param types + body), VariableStatement (decl type annotations), Block, IfStatement, IndexSignature in interface members; type-level extended with ConstructorType, TypeLiteral, MappedType, RestType, OptionalType.
+- **iter9**: `walkBigIntExpInStmt` extended with ForIn/ForOf/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter10**: `walkObjLitSuperInStmt` (TS2660 super in obj literal) extended with ForIn/ForOf/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter11**: `walkJSDocVoidCastInStmt` (TS2352 JSDoc void cast walker) extended from 2 kinds to ~17 with full statement-kind coverage (Block/If/For-family/Switch/Try/Labeled/Throw/Function/Class/Module/ExportAssignment/Return).
+- **iter12** _(originally iter13; first iter12 reverted)_: `walkExprForFallthroughCases` extended with GetAccessor/SetAccessor in ObjectLit, ClassExpression PropertyDeclaration init, TaggedTemplate, Void/Delete/TypeOf, CommaList.
+- **iter13**: `walkSuperRebindStmt` (TS2660 super-in-rebinding-scope) extended with ForIn/ForOf/Switch/Try/Labeled/ExportAssignment.
+- **iter14**: `collectVarDeclaredNamesInBlock` (hoisted var collector for ctor-param-shadow) extended with SwitchStatement (case+default) and LabeledStatement.
+- **iter15**: `collectTypeRefsInStatement` (TS6133 unused-type-param detection helper) extended with SwitchStatement (discriminant + case + clauses), LabeledStatement, ThrowStatement, ExportAssignment.
+- **iter16** _(third attempt; first two — checkRestParamsInStatements + collectThisPropertyAccesses — reverted)_: `walkStmtForWithStatements` (TS1101/TS1300/TS2410 `with` statement walker) extended with ReturnStatement, ThrowStatement, ExportAssignment expression recursion.
+- **iter17**: `walkSwitchCaseComparable` (TS2678 case-literal-not-comparable) extended with GetAccessor/SetAccessor bodies in ClassDeclaration, Return/Throw/ExportAssignment.
+- **iter18**: `walkJSDocVoidCastInExpr` extended from 2 kinds to ~22 with full expression-kind coverage (iterative BinaryExpression spine, Conditional/Call/New, member access, ArrayLit/ObjectLit, Arrow/Function bodies, unary, Spread/Await/Yield, wrappers, Template/CommaList).
+- **iter19**: `walkStmtForNamespaceThis` (TS2683/TS7041 `this` in namespace body) extended from 7 kinds to ~17 with For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment. Correctly skips Function/ClassDeclaration to preserve the rebinding-scope semantic.
+- **iter20**: `checkSetterInStatement` (TS1049/TS1054/TS1095/TS2808 accessor-shape) extended with ThrowStatement and ExportAssignment expression recursion.
+
+_Reverted attempts during round 36_:
+- **(iter2 attempt)**: `checkNullUndefinedInExpr` broadening (NewExpression + wrappers + Spread/Await/Yield/Void/Delete/TypeOf + CommaList + TaggedTemplate) regressed -7 via TS2531/TS18050 over-emission. Root cause not isolated.
+- **(iter5 attempt)**: `checkExprForCtorParamRefsInStmt` broadening (loop/switch/try statement kinds) regressed -7 via TS2301/TS2663 over-emission in newly-reached scopes.
+- **(iter12 attempt)**: `walkExprForUnusedLabels` broadening (TaggedTemplate + Void/Delete/TypeOf + GetAccessor/SetAccessor + ClassExpression PropertyDeclaration + CommaList) regressed -7 via TS7028 over-emission.
+- **(iter16 attempts)**: (a) `checkRestParamsInStatements` broadening (many statement kinds) regressed -7 via TS7019 over-emission in nested arrow params. (b) `collectThisPropertyAccesses` broadening (many statement kinds) regressed -7 via TS6133 unused-property over-suppression — collector reaches MORE `this.PROP` references → MORE properties deemed used → LESS TS6133 emission → tests expecting TS6133 fail.
+
+**Key insight** (added to "Walker broadening lessons" section): walkers that affect emission count (either by directly emitting per-node, or by modifying a "used names" set that gates other walkers' emission) are sensitive to broadening — reaching new contexts can cause FP emission OR FN suppression. Pure structure-walking helpers that just visit subtrees without side effects are safest. Collector walkers have inverse risk: more recursion = MORE names collected as "used" = LESS TS6133/TS7028 emission = could miss legitimate diagnostics.
+
+Session-end: 8944 → 8944 / 10078 (0 net, ~88.75%). Strategy: complement rounds 32/33/34/35 by broadening a different set of 20 walkers; reverted attempts isolate which walker categories are sensitive to broadening (collectors that gate emission, emit-walkers reaching new contexts).
+
+
 
 _Round 35 (2026-05-24, 0 net flips via 20 net-zero correctness)_:
 - **iter1**: `checkPropertyInitInExpr` (TS2564 in class expression init) extended from 2 cases to ~25 expression kinds. Adds all four wrappers + Conditional + iterative Binary + Call + New + ArrayLit + ObjectLit (Property/Spread) + Spread + Prefix/Postfix unary + Await/Yield/Void/Delete/TypeOf + Template/TaggedTemplate + CommaList + ClassExpression member-body recursion (into PropertyDeclaration initializers).
