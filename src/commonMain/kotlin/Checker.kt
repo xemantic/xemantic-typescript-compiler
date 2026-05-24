@@ -64196,6 +64196,8 @@ interface DataView {
             is ParenthesizedExpression -> isSimpleLiteral(expr.expression)
             is NonNullExpression -> isSimpleLiteral(expr.expression)
             is SatisfiesExpression -> isSimpleLiteral(expr.expression)
+            is AsExpression -> isSimpleLiteral(expr.expression)
+            is TypeAssertionExpression -> isSimpleLiteral(expr.expression)
             is PrefixUnaryExpression -> expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode
             is BinaryExpression -> expr.operator == SyntaxKind.Equals && isSimpleLiteral(expr.right)
             else -> false
