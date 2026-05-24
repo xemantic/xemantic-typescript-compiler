@@ -52585,6 +52585,34 @@ interface DataView {
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                     checkCircularClassBaseInStatements(it.statements, classDecls, source, fileName)
                 }
+                is FunctionDeclaration -> stmt.body?.let {
+                    checkCircularClassBaseInStatements(it.statements, classDecls, source, fileName)
+                }
+                is Block -> checkCircularClassBaseInStatements(stmt.statements, classDecls, source, fileName)
+                is IfStatement -> {
+                    checkCircularClassBaseInStatements(listOf(stmt.thenStatement), classDecls, source, fileName)
+                    stmt.elseStatement?.let { checkCircularClassBaseInStatements(listOf(it), classDecls, source, fileName) }
+                }
+                is ForStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
+                is ForInStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
+                is ForOfStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
+                is WhileStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
+                is DoStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkCircularClassBaseInStatements(clause.statements, classDecls, source, fileName)
+                            is DefaultClause -> checkCircularClassBaseInStatements(clause.statements, classDecls, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkCircularClassBaseInStatements(stmt.tryBlock.statements, classDecls, source, fileName)
+                    stmt.catchClause?.block?.let { checkCircularClassBaseInStatements(it.statements, classDecls, source, fileName) }
+                    stmt.finallyBlock?.let { checkCircularClassBaseInStatements(it.statements, classDecls, source, fileName) }
+                }
+                is LabeledStatement -> checkCircularClassBaseInStatements(listOf(stmt.statement), classDecls, source, fileName)
                 else -> {}
             }
         }
