@@ -34297,6 +34297,9 @@ interface DataView {
                 when (m) {
                     is MethodDeclaration -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
                     is Constructor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
                     else -> {}
                 }
             }
@@ -34305,6 +34308,8 @@ interface DataView {
                 stmt.elseStatement?.let { checkMultiDefaultsInStatement(it, source, fileName) }
             }
             is ForStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
             is WhileStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
             is DoStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
             is TryStatement -> {
@@ -34312,6 +34317,10 @@ interface DataView {
                 stmt.catchClause?.let { checkMultiDefaultsInStatements(it.block.statements, source, fileName) }
                 stmt.finallyBlock?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
             }
+            is LabeledStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
+            is ExportAssignment -> checkMultiDefaultsInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
             is ExpressionStatement -> checkMultiDefaultsInExpr(stmt.expression, source, fileName)
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
                 d.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
