@@ -53740,7 +53740,16 @@ interface DataView {
         when (stmt) {
             is ClassDeclaration -> {
                 checkImplementsClauses(stmt, source, fileName)
-                // Check nested classes in members (class expressions inside methods are unlikely, but be safe)
+                // Recurse into class member bodies for nested classes
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkImplementsClausesInStatement(s, source, fileName) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkImplementsClausesInStatement(s, source, fileName) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkImplementsClausesInStatement(s, source, fileName) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkImplementsClausesInStatement(s, source, fileName) }
+                        else -> {}
+                    }
+                }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
@@ -53748,6 +53757,32 @@ interface DataView {
                     for (s in body.statements) checkImplementsClausesInStatement(s, source, fileName)
                 }
             }
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkImplementsClausesInStatement(s, source, fileName) }
+            is Block -> for (s in stmt.statements) checkImplementsClausesInStatement(s, source, fileName)
+            is IfStatement -> {
+                checkImplementsClausesInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkImplementsClausesInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (s in clause.statements) checkImplementsClausesInStatement(s, source, fileName)
+                        is DefaultClause -> for (s in clause.statements) checkImplementsClausesInStatement(s, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkImplementsClausesInStatement(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { checkImplementsClausesInStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkImplementsClausesInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkImplementsClausesInStatement(stmt.statement, source, fileName)
             else -> {}
         }
     }
