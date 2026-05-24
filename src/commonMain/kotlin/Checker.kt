@@ -27437,7 +27437,30 @@ interface DataView {
                 checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
                 expr.arguments.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
             }
+            is NewExpression -> {
+                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+                expr.arguments?.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+            }
             is ParenthesizedExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is AsExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is SatisfiesExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is NonNullExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is TypeAssertionExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is PropertyAccessExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is ElementAccessExpression -> {
+                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+                checkConstAssignmentInExpr(expr.argumentExpression, source, fileName, constNames)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> checkConstAssignmentInExpr(prop.initializer, source, fileName, constNames)
+                    is SpreadAssignment -> checkConstAssignmentInExpr(prop.expression, source, fileName, constNames)
+                    else -> {}
+                }
+            }
+            is SpreadElement -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+            is TemplateExpression -> expr.templateSpans.forEach { checkConstAssignmentInExpr(it.expression, source, fileName, constNames) }
             is ConditionalExpression -> {
                 checkConstAssignmentInExpr(expr.condition, source, fileName, constNames)
                 checkConstAssignmentInExpr(expr.whenTrue, source, fileName, constNames)
@@ -27446,7 +27469,8 @@ interface DataView {
             is ArrowFunction -> {
                 when (val body = expr.body) {
                     is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
-                    else -> {} // Arrow with expression body — const from outer scope may or may not apply
+                    is Expression -> checkConstAssignmentInExpr(body, source, fileName, constNames)
+                    else -> {}
                 }
             }
             is FunctionExpression -> {
