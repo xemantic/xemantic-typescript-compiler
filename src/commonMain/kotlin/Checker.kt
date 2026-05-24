@@ -5081,6 +5081,12 @@ class Checker(
             }
             is AsExpression -> checkUnusedInExpr(expr.expression, source, fileName)
             is NonNullExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is VoidExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkUnusedInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { checkUnusedInExpr(it, source, fileName) }
             is PropertyAccessExpression -> checkUnusedInExpr(expr.expression, source, fileName)
             is ElementAccessExpression -> {
                 checkUnusedInExpr(expr.expression, source, fileName)
@@ -38407,6 +38413,10 @@ interface DataView {
                 walkExprForEmptyTypeArgs(expr.whenFalse, source, fileName)
             }
             is PropertyAccessExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+                walkExprForEmptyTypeArgs(expr.argumentExpression, source, fileName)
+            }
             is ArrowFunction -> {
                 when (val body = expr.body) {
                     is Block -> walkForEmptyTypeArgs(body.statements, source, fileName)
@@ -38415,6 +38425,30 @@ interface DataView {
                 }
             }
             is FunctionExpression -> walkForEmptyTypeArgs(expr.body.statements, source, fileName)
+            is AsExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is NonNullExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkExprForEmptyTypeArgs(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkExprForEmptyTypeArgs(expr.operand, source, fileName)
+            is SpreadElement -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is AwaitExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkExprForEmptyTypeArgs(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkExprForEmptyTypeArgs(prop.expression, source, fileName)
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForEmptyTypeArgs(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkExprForEmptyTypeArgs(expr.tag, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { walkExprForEmptyTypeArgs(it.expression, source, fileName) }
+                    else -> {}
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
             else -> {}
         }
     }
