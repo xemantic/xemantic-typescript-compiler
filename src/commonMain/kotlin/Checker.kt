@@ -45824,6 +45824,12 @@ interface DataView {
         // are syntactic noise. Skip synthetic-paren instantiation-expression markers,
         // since those represent a separate semantic op the narrower shouldn't merge.
         is ParenthesizedExpression -> if (expr.instantiationEnd == null) getReferencePath(expr.expression) else null
+        // `x!` non-null assertion preserves the reference; `(x as T)` and `(x satisfies T)`
+        // are pure type-system operations — the runtime reference is unchanged.
+        is NonNullExpression -> getReferencePath(expr.expression)
+        is AsExpression -> getReferencePath(expr.expression)
+        is SatisfiesExpression -> getReferencePath(expr.expression)
+        is TypeAssertionExpression -> getReferencePath(expr.expression)
         else -> null
     }
 
