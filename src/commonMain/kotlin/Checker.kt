@@ -58712,6 +58712,9 @@ interface DataView {
                         is PropertyAssignment -> checkCallTypesInExpr(prop.initializer, source, fileName)
                         is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCallTypesInExpr(it, source, fileName) }
                         is SpreadAssignment -> checkCallTypesInExpr(prop.expression, source, fileName)
+                        is MethodDeclaration -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
                         else -> {}
                     }
                 }
@@ -58733,6 +58736,16 @@ interface DataView {
                     param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                 }
                 expr.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+            }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                    else -> {}
+                }
             }
             is TemplateExpression -> {
                 for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
