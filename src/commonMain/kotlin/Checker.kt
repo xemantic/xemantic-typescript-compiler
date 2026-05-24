@@ -42000,7 +42000,12 @@ interface DataView {
                     checkTPNRForCallable(m.parameters, m.type, source, fileName)
                     m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
                 }
-                is GetAccessor -> checkTPNRForCallable(emptyList(), m.type, source, fileName)
+                is Constructor -> m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
+                is GetAccessor -> {
+                    checkTPNRForCallable(emptyList(), m.type, source, fileName)
+                    m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
+                }
+                is SetAccessor -> m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
                 else -> {}
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkTPNRStmts(it.statements, source, fileName) }
@@ -42015,6 +42020,13 @@ interface DataView {
             is ForOfStatement -> walkTPNRStmt(stmt.statement, source, fileName)
             is WhileStatement -> walkTPNRStmt(stmt.statement, source, fileName)
             is DoStatement -> walkTPNRStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> walkTPNRStmts(c.statements, source, fileName)
+                    is DefaultClause -> walkTPNRStmts(c.statements, source, fileName)
+                    else -> {}
+                }
+            }
             is TryStatement -> {
                 walkTPNRStmts(stmt.tryBlock.statements, source, fileName)
                 stmt.catchClause?.let { walkTPNRStmts(it.block.statements, source, fileName) }
