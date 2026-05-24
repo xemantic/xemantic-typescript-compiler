@@ -51349,6 +51349,31 @@ interface DataView {
                     checkOverloadsInStatements(it.statements, source, fileName)
                 }
                 is InterfaceDeclaration -> checkInterfaceMemberOptionalOverloads(stmt.members, source, fileName)
+                is FunctionDeclaration -> stmt.body?.let { checkOverloadsInStatements(it.statements, source, fileName) }
+                is IfStatement -> {
+                    checkOverloadsInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkOverloadsInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkOverloadsInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkOverloadsInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkOverloadsInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkOverloadsInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkOverloadsInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
