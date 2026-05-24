@@ -21994,6 +21994,10 @@ interface DataView {
                 value != 0.0 && !value.isNaN()
             }
             is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
+            is AsExpression -> isAlwaysTruthyExpr(expr.expression)
+            is TypeAssertionExpression -> isAlwaysTruthyExpr(expr.expression)
+            is SatisfiesExpression -> isAlwaysTruthyExpr(expr.expression)
+            is NonNullExpression -> isAlwaysTruthyExpr(expr.expression)
             is ArrowFunction -> true
             is FunctionExpression -> true
             is ObjectLiteralExpression -> true
@@ -22012,6 +22016,10 @@ interface DataView {
     private fun isAlwaysTruthyForOrExpr(expr: Expression): Boolean {
         return when (expr) {
             is ParenthesizedExpression -> isAlwaysTruthyForOrExpr(expr.expression)
+            is AsExpression -> isAlwaysTruthyForOrExpr(expr.expression)
+            is TypeAssertionExpression -> isAlwaysTruthyForOrExpr(expr.expression)
+            is SatisfiesExpression -> isAlwaysTruthyForOrExpr(expr.expression)
+            is NonNullExpression -> isAlwaysTruthyForOrExpr(expr.expression)
             is ArrowFunction -> true
             is FunctionExpression -> true
             is ObjectLiteralExpression -> true
