@@ -6611,10 +6611,14 @@ class Parser(
         ) {
             val questionEnd = scanner.getPos()
             nextToken()
-            if (inTypeArgsDepth > 0 && inTupleTypeDepth == 0) {
+            if (inTupleTypeDepth == 0) {
                 val typeText = source.substring(type.pos, typeProperEnd)
+                val suggestion = when (typeText) {
+                    "any", "unknown", "never", "void", "undefined" -> typeText
+                    else -> "$typeText | undefined"
+                }
                 reportError(
-                    message = "'?' at the end of a type is not valid TypeScript syntax. Did you mean to write '$typeText | undefined'?",
+                    message = "'?' at the end of a type is not valid TypeScript syntax. Did you mean to write '$suggestion'?",
                     code = 17019,
                     overrideStart = type.pos,
                     overrideLength = questionEnd - type.pos,
@@ -6622,11 +6626,15 @@ class Parser(
             }
         }
 
-        if (leadingQuestionPos >= 0 && inTypeArgsDepth > 0) {
+        if (leadingQuestionPos >= 0) {
             val combinedEnd = scanner.getPrevTokenEnd()
             val typeText = source.substring(type.pos, typeProperEnd)
+            val suggestion = when (typeText) {
+                "any", "unknown", "never", "void", "undefined" -> typeText
+                else -> "$typeText | null | undefined"
+            }
             reportError(
-                message = "'?' at the start of a type is not valid TypeScript syntax. Did you mean to write '$typeText | null | undefined'?",
+                message = "'?' at the start of a type is not valid TypeScript syntax. Did you mean to write '$suggestion'?",
                 code = 17020,
                 overrideStart = leadingQuestionPos,
                 overrideLength = combinedEnd - leadingQuestionPos,
