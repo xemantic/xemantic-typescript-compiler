@@ -34011,6 +34011,8 @@ interface DataView {
                         }
                         is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
                         is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
+                        is GetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
+                        is SetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
                         else -> {}
                     }
                 }
@@ -34083,11 +34085,18 @@ interface DataView {
             is NonNullExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is AsExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is TypeAssertionExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is SatisfiesExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is YieldExpression -> expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            is TaggedTemplateExpression -> checkAwaitInExpr(expr.tag, source, fileName, isAsync, enclosingFunc)
+            is TaggedTemplateExpression -> {
+                checkAwaitInExpr(expr.tag, source, fileName, isAsync, enclosingFunc)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkAwaitInExpr(it.expression, source, fileName, isAsync, enclosingFunc)
+                }
+            }
             is VoidExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is DeleteExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
             is TypeOfExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
+            is CommaListExpression -> for (el in expr.elements) checkAwaitInExpr(el, source, fileName, isAsync, enclosingFunc)
             else -> {}
         }
     }
