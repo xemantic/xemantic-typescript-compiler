@@ -14047,6 +14047,11 @@ class Checker(
             is FunctionExpression -> walkBigIntExpInStmts(expr.body.statements, source, fileName)
             is PrefixUnaryExpression -> walkBigIntExpInExpr(expr.operand, source, fileName)
             is PostfixUnaryExpression -> walkBigIntExpInExpr(expr.operand, source, fileName)
+            is AsExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkBigIntExpInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> expr.templateSpans.forEach { walkBigIntExpInExpr(it.expression, source, fileName) }
             else -> {}
         }
     }
@@ -21915,6 +21920,10 @@ interface DataView {
                 checkAlwaysTruthyInExpr(current, source, fileName)
             }
             is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
                 if (isAlwaysFalsyExpr(expr.condition)) {
                     emitTS2873(expr.condition, source, fileName)
