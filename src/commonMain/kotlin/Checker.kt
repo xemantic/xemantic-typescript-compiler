@@ -22158,9 +22158,15 @@ interface DataView {
     private fun isAlwaysTruthyExpr(expr: Expression): Boolean {
         return when (expr) {
             is StringLiteralNode -> expr.text.isNotEmpty()
+            is NoSubstitutionTemplateLiteralNode -> expr.text.isNotEmpty()
             is NumericLiteralNode -> {
                 val value = expr.text.toDoubleOrNull() ?: return false
                 value != 0.0 && !value.isNaN()
+            }
+            is BigIntLiteralNode -> {
+                // `1n`, `2n`, ... — truthy; `0n` — falsy.
+                val raw = expr.text.removeSuffix("n")
+                raw.toLongOrNull()?.let { it != 0L } ?: false
             }
             is ParenthesizedExpression -> isAlwaysTruthyExpr(expr.expression)
             is AsExpression -> isAlwaysTruthyExpr(expr.expression)
@@ -32421,6 +32427,9 @@ interface DataView {
         is TypeOfExpression -> expressionTrueEnd(expr.expression)
         is VoidExpression -> expressionTrueEnd(expr.expression)
         is AwaitExpression -> expressionTrueEnd(expr.expression)
+        is DeleteExpression -> expressionTrueEnd(expr.expression)
+        is YieldExpression -> expr.expression?.let { expressionTrueEnd(it) } ?: (expr.pos + 5) // "yield"
+        is SpreadElement -> expressionTrueEnd(expr.expression)
         is TypeAssertionExpression -> expressionTrueEnd(expr.expression)
         // For `as`, the end is after the type annotation; expr.end may overshoot
         // by one token, so prefer `type.end` when available, else fallback.
@@ -53215,8 +53224,18 @@ interface DataView {
             if (stmt is ReturnStatement) {
                 val rawExpr = stmt.expression ?: continue
                 // Unwrap parens — `return (1)` should infer same as `return 1`.
+                // Also unwrap value-preserving wrappers: `return x!`, `return x satisfies T`.
+                // Note: `return x as T` is NOT unwrapped — the asserted type should
+                // be the return type (handled by getTypeOfExpression's AsExpression branch).
                 var expr = rawExpr
-                while (expr is ParenthesizedExpression) expr = expr.expression
+                while (true) {
+                    expr = when (expr) {
+                        is ParenthesizedExpression -> expr.expression
+                        is NonNullExpression -> expr.expression
+                        is SatisfiesExpression -> expr.expression
+                        else -> break
+                    }
+                }
                 return when (expr) {
                     is StringLiteralNode -> stringType
                     is NoSubstitutionTemplateLiteralNode -> stringType
