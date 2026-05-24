@@ -19052,9 +19052,30 @@ class Checker(
                 }
             }
             is CallExpression -> {
+                checkJumpInExpr(expr.expression, source, fileName)
                 expr.arguments.forEach { checkJumpInExpr(it, source, fileName) }
             }
+            is NewExpression -> {
+                checkJumpInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkJumpInExpr(it, source, fileName) }
+            }
             is ParenthesizedExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is PropertyAccessExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkJumpInExpr(expr.expression, source, fileName)
+                checkJumpInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkJumpInExpr(expr.condition, source, fileName)
+                checkJumpInExpr(expr.whenTrue, source, fileName)
+                checkJumpInExpr(expr.whenFalse, source, fileName)
+            }
+            is PrefixUnaryExpression -> checkJumpInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkJumpInExpr(expr.operand, source, fileName)
             is BinaryExpression -> {
                 var current: Expression = expr
                 while (current is BinaryExpression) {
@@ -19063,6 +19084,27 @@ class Checker(
                 }
                 checkJumpInExpr(current, source, fileName)
             }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkJumpInExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> checkJumpInExpr(prop.initializer, source, fileName)
+                is SpreadAssignment -> checkJumpInExpr(prop.expression, source, fileName)
+                else -> {}
+            }
+            is SpreadElement -> checkJumpInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkJumpInExpr(it, source, fileName) }
+            is DeleteExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is VoidExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkJumpInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> expr.templateSpans.forEach { checkJumpInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                checkJumpInExpr(expr.tag, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { checkJumpInExpr(it.expression, source, fileName) }
+                    else -> {}
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkJumpInExpr(it, source, fileName) }
             else -> {}
         }
     }
