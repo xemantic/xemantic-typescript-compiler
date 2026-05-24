@@ -66976,8 +66976,14 @@ interface DataView {
                 stmt.incrementor?.let { checkArithmeticInExpr(it, source, fileName) }
                 checkArithmeticInStatement(stmt.statement, source, fileName)
             }
-            is ForInStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> {
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+                checkArithmeticInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkArithmeticInExpr(stmt.expression, source, fileName)
+                checkArithmeticInStatement(stmt.statement, source, fileName)
+            }
             is WhileStatement -> {
                 checkArithmeticInExpr(stmt.expression, source, fileName)
                 checkArithmeticInStatement(stmt.statement, source, fileName)
@@ -67055,6 +67061,7 @@ interface DataView {
             }
             is ThrowStatement -> stmt.expression?.let { checkArithmeticInExpr(it, source, fileName) }
             is LabeledStatement -> checkArithmeticInStatement(stmt.statement, source, fileName)
+            is ExportAssignment -> checkArithmeticInExpr(stmt.expression, source, fileName)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 checkArithmeticInStatements(it.statements, source, fileName)
             }
