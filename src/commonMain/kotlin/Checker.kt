@@ -34796,6 +34796,15 @@ interface DataView {
                 stmt.elseStatement?.let { checkAwaitInStatement(it, source, fileName, isAsync, enclosingFunc) }
             }
             is ForStatement -> {
+                stmt.initializer?.let { init ->
+                    when (init) {
+                        is VariableDeclarationList -> for (d in init.declarations) {
+                            d.initializer?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
+                        }
+                        is Expression -> checkAwaitInExpr(init, source, fileName, isAsync, enclosingFunc)
+                        else -> {}
+                    }
+                }
                 stmt.condition?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
                 stmt.incrementor?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
                 checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
@@ -34855,6 +34864,7 @@ interface DataView {
             }
             is ThrowStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
             is LabeledStatement -> checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
+            is ExportAssignment -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync, enclosingFunc) }
             else -> {}
         }
