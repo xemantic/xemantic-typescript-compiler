@@ -8053,13 +8053,74 @@ class Checker(
     }
 
     private fun checkPropertyInitInExpr(expr: Expression?, source: String, fileName: String) {
+        if (expr == null) return
         when (expr) {
             is ClassExpression -> {
                 if (ModifierFlag.Abstract !in expr.modifiers) {
                     checkClassPropertyInit(expr.members, source, fileName)
                 }
+                // Also recurse into member bodies which may contain ClassExpression in field initializers / method bodies
+                for (m in expr.members) {
+                    when (m) {
+                        is PropertyDeclaration -> checkPropertyInitInExpr(m.initializer, source, fileName)
+                        else -> {}
+                    }
+                }
             }
             is ParenthesizedExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkPropertyInitInExpr(expr.whenTrue, source, fileName)
+                checkPropertyInitInExpr(expr.whenFalse, source, fileName)
+            }
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    checkPropertyInitInExpr(cur.right, source, fileName)
+                    cur = cur.left
+                }
+                checkPropertyInitInExpr(cur, source, fileName)
+            }
+            is CallExpression -> {
+                checkPropertyInitInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { checkPropertyInitInExpr(it, source, fileName) }
+            }
+            is NewExpression -> {
+                checkPropertyInitInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkPropertyInitInExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkPropertyInitInExpr(it, source, fileName) }
+            is SpreadElement -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkPropertyInitInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkPropertyInitInExpr(expr.operand, source, fileName)
+            is AwaitExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
+            is VoidExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> expr.templateSpans.forEach { checkPropertyInitInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                checkPropertyInitInExpr(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkPropertyInitInExpr(it.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkPropertyInitInExpr(it, source, fileName) }
+            is PropertyAccessExpression -> checkPropertyInitInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkPropertyInitInExpr(expr.expression, source, fileName)
+                checkPropertyInitInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> checkPropertyInitInExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> checkPropertyInitInExpr(p.expression, source, fileName)
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
