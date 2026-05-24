@@ -7754,7 +7754,12 @@ class Checker(
     }
 
     private fun isUndefinedRef(expr: Expression): Boolean {
-        return (unwrapParensExpr(expr) as? Identifier)?.text == "undefined"
+        val unwrapped = unwrapParensExpr(expr)
+        if ((unwrapped as? Identifier)?.text == "undefined") return true
+        // `void 0` / `void X` evaluates to `undefined` at runtime — treat as
+        // equivalent to `undefined` for narrowing comparisons.
+        if (unwrapped is VoidExpression) return true
+        return false
     }
 
     private fun isNullRef(expr: Expression): Boolean {
