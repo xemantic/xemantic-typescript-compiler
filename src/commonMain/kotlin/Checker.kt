@@ -41037,6 +41037,8 @@ interface DataView {
                 when (m) {
                     is MethodDeclaration -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
                     is Constructor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
                     is PropertyDeclaration -> m.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
                     else -> {}
                 }
@@ -41048,6 +41050,53 @@ interface DataView {
                 stmt.elseStatement?.let { walkStmtForEmptyTypeArgs(it, source, fileName) }
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> for (d in init.declarations) d.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+                    is Expression -> walkExprForEmptyTypeArgs(init, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+                stmt.incrementor?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkExprForEmptyTypeArgs(clause.expression, source, fileName)
+                            walkForEmptyTypeArgs(clause.statements, source, fileName)
+                        }
+                        is DefaultClause -> walkForEmptyTypeArgs(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkForEmptyTypeArgs(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
+            is ExportAssignment -> walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
             else -> {}
         }
     }
