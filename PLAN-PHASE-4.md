@@ -978,6 +978,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-24 (round 38 of /goal — 21 iterations, 0 net flip, 0 reverts).** /goal session after round 37. `find_candidates.py --fresh` returned 0/0/0 at start (consistent with rounds 32-37 surgical-pool exhaustion). Per established pattern (structural broadening when surgical pool is empty), targeted 21 walker functions whose statement/expression coverage was shallower than the recently-broadened corpus from rounds 32-37.
+
+  Iterations landed (21 commits, all net-zero on suite — pure structure-walking expansions):
+  - iter1-9: Statement-level walkers `walkParameterDecoratorChecks`, `walkTs2719Assignments`, `checkNonConstructorExtendsInStatements`, `checkPropertyOverrideInStatement`, `checkPropertyInitInStatements`, `checkMultiBaseInStatement`, `checkImplementsClausesInStatement`, `checkInterfaceExtendsInStatement`, `checkObjectClassNameInStatements`.
+  - iter10-14: Statement-level walkers `checkNonArrayRestInStatements`, `checkAbstractAccessorInStatements`, `checkAccessorModifierInStatements`, `checkOverloadsInStatements`, `walkForNestedImports`.
+  - iter15-17: `walkBigIntExpInStmt` For-init, `checkCircularAliasInStmts`, `walkStmtForDupLabels` Get/SetAccessor.
+  - iter18-21: `walkStmtForEmptyTypeArgs`, `checkCircularTypeAliasInStatements`, `checkCircularInterfaceBasesInStatements`, `checkCircularClassBaseInStatements` — all gain FunctionDeclaration/Class member/Block/For/ForIn/ForOf/While/Do/Switch/Try/Labeled coverage.
+
+  Session-end: 8944 → 8944 / 10078 (0 net, ~88.75%). 21 commits + status/plan doc commit. Strategy was identical to rounds 32-37: pure structural broadening since `find_candidates.py --fresh` returned 0/0/0. All emission gates were narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts — zero regressions across all 21 iterations. Future flips become more likely when paired with new diagnostic infrastructure that fires through these now-uniformly-broad walkers.
+
+  Per CLAUDE.md anti-loop rule: 7+ consecutive rounds (32-38) of 0-flip structural broadening represent diminishing returns. Next session should commit to one of the architectural blockers per CLAUDE.md's "Known architectural blockers" section (Blocker #1 control-flow narrowing ~60-100 tests, Blocker #2 generic inference ~20-40, Blocker #3 per-file scope ~30+).
+
+  ---
+
   **Session 2026-05-23 (round 31 of /goal — 10 iterations, +1 net flip via array literal element checks).** /goal session after round 30. `find_candidates.py --fresh` returned 0/0/0 throughout. Stale skip-log audit found only 3 entries (`anyAsGenericFunctionCall_ts`, `functionTypeArgumentArityErrors_ts`, `moduleKeywordRepeatError_ts`), all already struck through. Per anti-loop rule attempted targeted reading of currently-failing tests' diff lines + correctness improvements similar to round 30 iter9/iter10 pattern.
 
   **Iterations landed (10 commits):**
