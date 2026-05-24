@@ -54215,6 +54215,43 @@ interface DataView {
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName)
             }
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkInterfaceExtendsInStatement(s, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> for (s in stmt.statements) checkInterfaceExtendsInStatement(s, source, fileName)
+            is IfStatement -> {
+                checkInterfaceExtendsInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkInterfaceExtendsInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (s in clause.statements) checkInterfaceExtendsInStatement(s, source, fileName)
+                        is DefaultClause -> for (s in clause.statements) checkInterfaceExtendsInStatement(s, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkInterfaceExtendsInStatement(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { checkInterfaceExtendsInStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkInterfaceExtendsInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkInterfaceExtendsInStatement(stmt.statement, source, fileName)
             else -> {}
         }
     }
