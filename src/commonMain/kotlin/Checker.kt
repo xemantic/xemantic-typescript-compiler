@@ -5535,12 +5535,31 @@ class Checker(
             is AsExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is NonNullExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is TypeAssertionExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is SatisfiesExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is AwaitExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
+            is YieldExpression -> expr.expression?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
             is SpreadElement -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is DeleteExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is VoidExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is TypeOfExpression -> collectPropertyAccessNamesInExpr(expr.expression, names, paramLiterals)
             is CommaListExpression -> expr.elements.forEach { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
+            is TaggedTemplateExpression -> {
+                collectPropertyAccessNamesInExpr(expr.tag, names, paramLiterals)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) collectPropertyAccessNamesInExpr(span.expression, names, paramLiterals)
+                }
+            }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { for (s in it.statements) collectPropertyAccessNamesInStmt(s, names, paramLiterals) }
+                    is Constructor -> m.body?.let { for (s in it.statements) collectPropertyAccessNamesInStmt(s, names, paramLiterals) }
+                    is GetAccessor -> m.body?.let { for (s in it.statements) collectPropertyAccessNamesInStmt(s, names, paramLiterals) }
+                    is SetAccessor -> m.body?.let { for (s in it.statements) collectPropertyAccessNamesInStmt(s, names, paramLiterals) }
+                    is PropertyDeclaration -> m.initializer?.let { collectPropertyAccessNamesInExpr(it, names, paramLiterals) }
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
