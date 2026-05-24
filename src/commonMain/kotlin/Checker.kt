@@ -33582,6 +33582,26 @@ interface DataView {
                 checkAmbientInStatement(stmt.thenStatement, source, fileName, isAmbient)
                 stmt.elseStatement?.let { checkAmbientInStatement(it, source, fileName, isAmbient) }
             }
+            is ForStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is ForInStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is ForOfStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is WhileStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is DoStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkAmbientInStatements(c.statements, source, fileName, isAmbient)
+                    is DefaultClause -> checkAmbientInStatements(c.statements, source, fileName, isAmbient)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                checkAmbientInStatements(stmt.tryBlock.statements, source, fileName, isAmbient)
+                stmt.catchClause?.let { checkAmbientInStatements(it.block.statements, source, fileName, isAmbient) }
+                stmt.finallyBlock?.let { checkAmbientInStatements(it.statements, source, fileName, isAmbient) }
+            }
+            is LabeledStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
+            is ThrowStatement -> stmt.expression?.let { checkAmbientInExpr(it, source, fileName) }
+            is ExportAssignment -> checkAmbientInExpr(stmt.expression, source, fileName)
             is VariableStatement -> {
                 for (d in stmt.declarationList.declarations) {
                     d.initializer?.let { checkAmbientInExpr(it, source, fileName) }
