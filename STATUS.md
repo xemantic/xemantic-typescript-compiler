@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 34 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero wrapper/coverage broadenings across 20 walker functions. Pool genuinely empty._
+**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 35 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero wrapper/coverage broadenings across 20 walker functions (different walkers than rounds 32/33/34). Pool genuinely empty._
+
+_Round 35 (2026-05-24, 0 net flips via 20 net-zero correctness)_:
+- **iter1**: `checkPropertyInitInExpr` (TS2564 in class expression init) extended from 2 cases to ~25 expression kinds. Adds all four wrappers + Conditional + iterative Binary + Call + New + ArrayLit + ObjectLit (Property/Spread) + Spread + Prefix/Postfix unary + Await/Yield/Void/Delete/TypeOf + Template/TaggedTemplate + CommaList + ClassExpression member-body recursion (into PropertyDeclaration initializers).
+- **iter2**: `checkConstructorParamInInitializersInExpr` (TS2301/TS2663 ctor-param-shadow) extended from 1 case to ~25 expression kinds with same broad pattern as iter1.
+- **iter3**: `checkAwaitInExpr` (TS1308 await-outside-async) ClassExpression member coverage adds GetAccessor / SetAccessor. TaggedTemplateExpression now recurses into template spans. Adds SatisfiesExpression + CommaListExpression.
+- **iter4**: `checkThisInExpr` (TS2683 unbound-this / TS7041 global-this) adds TypeAssertionExpression + SatisfiesExpression alongside AsExpression / NonNullExpression wrappers.
+- **iter5**: `checkArgsCollisionInExpr` (TS2396/TS1215 arguments collision) extended from ~5 cases to ~25 expression kinds. ArrowFunction Expression-body recurses. ClassExpression member adds Get/SetAccessor / PropertyDeclaration initializer. ObjectLit adds Get/SetAccessor / PropertyAssignment / SpreadAssignment recursion.
+- **iter6**: `checkCrossFileUBDInExpr` (TS2448 cross-file UBD) extended from 3 cases to ~25 expression kinds. _(Previous iter6 attempt to broaden `checkTypeAsValueInExpr` reverted: ObjectLit MethodDeclaration recursion FP'd on parameter binding pattern `{ a: string }` — needs param-scope handling.)_
+- **iter7**: `checkUBDForwardInExpr` (TS2448/TS2449/TS2450/TS2729) adds SatisfiesExpression + YieldExpression + TaggedTemplateExpression (tag + template spans) + CommaListExpression.
+- **iter8**: `checkUBDInExprForNested` (UBD nested-scope recursion) extended from 3 cases to ~25 expression kinds. ClassExpression coverage adds GetAccessor / SetAccessor / PropertyDeclaration. ObjectLit recurses into Property/Spread/Method/Get/SetAccessor bodies.
+- **iter9**: `walkNodeForObjectLiterals` (TS1117 duplicate-object-literal-property) adds ElementAccess + TaggedTemplate + Satisfies + NonNull + Prefix/Postfix unary + Await/Yield/Void/Delete/TypeOf + CommaList + ClassExpression member-body recursion + ThrowStatement.
+- **iter10**: `checkArgCountInExprCore` (TS2554/TS2555) adds SatisfiesExpression + CommaListExpression + ClassExpression member-body recursion.
+- **iter11**: `checkCallTypesInExpr` (TS2345/TS2769) ClassExpression member-body recursion (Method/Ctor/Get/Set + PropertyDeclaration init). ObjectLiteralExpression now recurses into Method/Get/SetAccessor bodies.
+- **iter12**: `walkUncalledChecksInExpression` (TS2774) ObjectLit recurses into SpreadAssignment / Method / Get/SetAccessor bodies. Adds Void/Delete/TypeOf + TaggedTemplate (tag + template spans) + ClassExpression member-body recursion.
+- **iter13**: `walkExprForFlowTS2454` (TS2454 flow-graph) TaggedTemplateExpression now recurses into template substitution spans.
+- **iter14**: `walkExprForNestedClasses` (TS2715 abstract-property nested-classes recursion) extended from ~10 cases to ~24 expression kinds. Adds member-access subjects + array/object literal elements + unary operands + template substitutions + comma sequences.
+- **iter15**: `walkExprForAbstractContext` (TS1244/TS1253/TS7008) mirror of iter14 broadening.
+- **iter16**: `walkClassesForAbstractAccess` (statement-level) adds ForStatement / ForInStatement / ForOfStatement / WhileStatement / DoStatement / SwitchStatement (case+default) / TryStatement (try/catch/finally) / LabeledStatement / ThrowStatement / ExportAssignment.
+- **iter17**: `walkClassesForAbstractContext` (statement-level) mirror of iter16.
+- **iter18**: `walkForReservedWords` (TS1359 statement-level) adds If/For/ForIn/ForOf/While/Do/Switch (case expression + clause stmts)/Try (try+catch+finally)/Labeled/Throw/Return/ExportAssignment.
+- **iter19**: `walkForOptionalParamsInStmt` (TS1015 statement-level) adds For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter20**: `walkStmtForUnusedLabels` (TS7028) ClassDeclaration recurses into PropertyDeclaration initializers + ClassStaticBlockDeclaration body. Adds ModuleDeclaration + ThrowStatement + ExportAssignment.
+
+Session-end: 8944 → 8944 / 10078 (0 net, ~88.75%). Strategy: complement rounds 32/33/34 by broadening a different set of 20 walkers (mostly InExpr/InStmt walkers that hadn't been touched yet). `find_candidates.py --fresh` returned 0/0/0 at start; only 1 SWAP candidate (`libMembers_ts`) remained unfiltered but is gated on lib-file-naming infrastructure. One regressing attempt during iter6 was caught and reverted (checkTypeAsValueInExpr expansion needed param-scope handling for ObjectLit MethodDeclaration recursion).
+
+
 
 _Round 34 (2026-05-24, 0 net flips via 20 net-zero correctness)_:
 - **iter1**: `walkObjLitSuperInExpr` adds AsExpression / TypeAssertionExpression / SatisfiesExpression / NonNullExpression / PrefixUnary / PostfixUnary / SpreadElement / AwaitExpression / YieldExpression / VoidExpression / DeleteExpression / TypeOfExpression / TemplateExpression / TaggedTemplateExpression / CommaListExpression.
