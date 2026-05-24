@@ -9266,7 +9266,11 @@ class Checker(
             }
             is ArrowFunction -> {
                 checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, source, fileName)
-                (expr.body as? Block)?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                when (val body = expr.body) {
+                    is Block -> walkJSDocParamTagsInStmts(body.statements, source, fileName)
+                    is Expression -> walkJSDocParamTagsInExpr(body, source, fileName)
+                    else -> {}
+                }
             }
             is BinaryExpression -> {
                 val rightStack = ArrayDeque<Expression>()
@@ -9279,7 +9283,45 @@ class Checker(
                 walkJSDocParamTagsInExpr(expr.expression, source, fileName)
                 expr.arguments.forEach { walkJSDocParamTagsInExpr(it, source, fileName) }
             }
+            is NewExpression -> {
+                walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkJSDocParamTagsInExpr(it, source, fileName) }
+            }
             is ParenthesizedExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkJSDocParamTagsInExpr(expr.condition, source, fileName)
+                walkJSDocParamTagsInExpr(expr.whenTrue, source, fileName)
+                walkJSDocParamTagsInExpr(expr.whenFalse, source, fileName)
+            }
+            is PropertyAccessExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+                walkJSDocParamTagsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkJSDocParamTagsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkJSDocParamTagsInExpr(expr.operand, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { walkJSDocParamTagsInExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkJSDocParamTagsInExpr(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkJSDocParamTagsInExpr(prop.expression, source, fileName)
+                else -> {}
+            }
+            is SpreadElement -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkJSDocParamTagsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+            is TemplateExpression -> expr.templateSpans.forEach { walkJSDocParamTagsInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkJSDocParamTagsInExpr(expr.tag, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { walkJSDocParamTagsInExpr(it.expression, source, fileName) }
+                    else -> {}
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { walkJSDocParamTagsInExpr(it, source, fileName) }
             else -> {}
         }
     }
@@ -46560,7 +46602,8 @@ interface DataView {
         // 17.34b: path-based comparison so `'k' in A._a` matches when name="A._a".
         if (getReferencePath(expr.right) != name) return t
         // LHS (left of `in`) must be a literal property name we can statically resolve.
-        val propName: String = when (val left = expr.left) {
+        // Unwrap parens so `("k") in obj` narrows identically to `"k" in obj`.
+        val propName: String = when (val left = unwrapParensExpr(expr.left)) {
             is StringLiteralNode -> left.text
             is NoSubstitutionTemplateLiteralNode -> left.text
             is NumericLiteralNode -> left.text
