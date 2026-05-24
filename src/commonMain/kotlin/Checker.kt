@@ -3491,6 +3491,19 @@ class Checker(
             }
             is FunctionExpression -> collectThisPropertyAccesses(expr.body.statements, result)
             is ParenthesizedExpression -> collectThisAccessInExpr(expr.expression, result)
+            is AsExpression -> collectThisAccessInExpr(expr.expression, result)
+            is SatisfiesExpression -> collectThisAccessInExpr(expr.expression, result)
+            is NonNullExpression -> collectThisAccessInExpr(expr.expression, result)
+            is TypeAssertionExpression -> collectThisAccessInExpr(expr.expression, result)
+            is PrefixUnaryExpression -> collectThisAccessInExpr(expr.operand, result)
+            is PostfixUnaryExpression -> collectThisAccessInExpr(expr.operand, result)
+            is ConditionalExpression -> {
+                collectThisAccessInExpr(expr.condition, result)
+                collectThisAccessInExpr(expr.whenTrue, result)
+                collectThisAccessInExpr(expr.whenFalse, result)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { collectThisAccessInExpr(it, result) }
+            is TemplateExpression -> expr.templateSpans.forEach { collectThisAccessInExpr(it.expression, result) }
             else -> {}
         }
     }
