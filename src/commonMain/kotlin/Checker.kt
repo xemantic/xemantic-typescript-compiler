@@ -29901,6 +29901,30 @@ interface DataView {
                     if (body is ModuleBlock) walkClassesForAbstractContext(body.statements, source, fileName, nowAmbient)
                 }
                 is ReturnStatement -> stmt.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+                is ForStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is ForInStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is ForOfStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is WhileStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is DoStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is SwitchStatement -> {
+                    walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
+                    for (clause in stmt.caseBlock) {
+                        val clauseStmts = when (clause) {
+                            is CaseClause -> clause.statements
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        walkClassesForAbstractContext(clauseStmts, source, fileName, inAmbient)
+                    }
+                }
+                is TryStatement -> {
+                    walkClassesForAbstractContext(stmt.tryBlock.statements, source, fileName, inAmbient)
+                    stmt.catchClause?.let { walkClassesForAbstractContext(it.block.statements, source, fileName, inAmbient) }
+                    stmt.finallyBlock?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
+                }
+                is LabeledStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
+                is ThrowStatement -> stmt.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+                is ExportAssignment -> walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
                 else -> {}
             }
         }
