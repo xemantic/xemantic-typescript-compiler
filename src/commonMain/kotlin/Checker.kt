@@ -14793,6 +14793,11 @@ class Checker(
                 stmt.elseStatement?.let { walkBigIntExpInStmt(it, source, fileName) }
             }
             is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> for (d in init.declarations) d.initializer?.let { walkBigIntExpInExpr(it, source, fileName) }
+                    is Expression -> walkBigIntExpInExpr(init, source, fileName)
+                    else -> {}
+                }
                 stmt.condition?.let { walkBigIntExpInExpr(it, source, fileName) }
                 stmt.incrementor?.let { walkBigIntExpInExpr(it, source, fileName) }
                 walkBigIntExpInStmt(stmt.statement, source, fileName)
