@@ -28827,6 +28827,15 @@ interface DataView {
                 walkExprForNestedClasses(expr.expression, source, fileName, classMap)
                 expr.arguments?.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
             }
+            is AsExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is TypeAssertionExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is SatisfiesExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is NonNullExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is ConditionalExpression -> {
+                walkExprForNestedClasses(expr.condition, source, fileName, classMap)
+                walkExprForNestedClasses(expr.whenTrue, source, fileName, classMap)
+                walkExprForNestedClasses(expr.whenFalse, source, fileName, classMap)
+            }
             else -> {}
         }
     }
@@ -29213,6 +29222,15 @@ interface DataView {
             is NewExpression -> {
                 walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
                 expr.arguments?.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            }
+            is AsExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is TypeAssertionExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is SatisfiesExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is NonNullExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
+            is ConditionalExpression -> {
+                walkExprForAbstractContext(expr.condition, source, fileName, inAmbient)
+                walkExprForAbstractContext(expr.whenTrue, source, fileName, inAmbient)
+                walkExprForAbstractContext(expr.whenFalse, source, fileName, inAmbient)
             }
             else -> {}
         }
