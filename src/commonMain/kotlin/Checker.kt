@@ -46436,7 +46436,19 @@ interface DataView {
     private fun narrowByCallPredicate(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
-        val callee = expr.expression
+        // Unwrap value-preserving wrappers around the callee so `(isFoo)(x)`,
+        // `isFoo!(x)`, `(isFoo as F)(x)` narrow identically to `isFoo(x)`.
+        var callee: Expression = expr.expression
+        while (true) {
+            callee = when (callee) {
+                is ParenthesizedExpression -> if ((callee as ParenthesizedExpression).instantiationEnd == null) (callee as ParenthesizedExpression).expression else return t
+                is NonNullExpression -> (callee as NonNullExpression).expression
+                is AsExpression -> (callee as AsExpression).expression
+                is TypeAssertionExpression -> (callee as TypeAssertionExpression).expression
+                is SatisfiesExpression -> (callee as SatisfiesExpression).expression
+                else -> break
+            }
+        }
         if (callee !is Identifier) return t
         val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return t
         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return t
@@ -46672,11 +46684,11 @@ interface DataView {
         val literalSide: Expression
         when {
             isDiscriminantAccessOf(expr.left, name) -> {
-                propAccess = expr.left as PropertyAccessExpression
+                propAccess = unwrapParensExpr(expr.left) as PropertyAccessExpression
                 literalSide = expr.right
             }
             isDiscriminantAccessOf(expr.right, name) -> {
-                propAccess = expr.right as PropertyAccessExpression
+                propAccess = unwrapParensExpr(expr.right) as PropertyAccessExpression
                 literalSide = expr.left
             }
             else -> return null
@@ -46699,9 +46711,10 @@ interface DataView {
     }
 
     private fun isDiscriminantAccessOf(expr: Expression, name: String): Boolean {
-        if (expr !is PropertyAccessExpression) return false
+        val unwrapped = unwrapParensExpr(expr)
+        if (unwrapped !is PropertyAccessExpression) return false
         // 17.34b: path-based comparison so `A._a.kind === ...` matches when name="A._a".
-        return getReferencePath(expr.expression) == name && expr.name is Identifier
+        return getReferencePath(unwrapped.expression) == name && unwrapped.name is Identifier
     }
 
     private fun isLiteralKindForDiscriminant(t: Type): Boolean =
@@ -46755,17 +46768,18 @@ interface DataView {
     }
 
     private fun isConstructorAccessOf(expr: Expression, name: String): Boolean {
+        val unwrapped = unwrapParensExpr(expr)
         val obj: Expression
         val isProp: Boolean
-        when (expr) {
+        when (unwrapped) {
             is PropertyAccessExpression -> {
-                obj = expr.expression
-                val propName = expr.name
+                obj = unwrapped.expression
+                val propName = unwrapped.name
                 isProp = propName is Identifier && propName.text == "constructor"
             }
             is ElementAccessExpression -> {
-                obj = expr.expression
-                val arg = expr.argumentExpression
+                obj = unwrapped.expression
+                val arg = unwrapParensExpr(unwrapped.argumentExpression)
                 isProp = (arg is StringLiteralNode && arg.text == "constructor") ||
                         (arg is NoSubstitutionTemplateLiteralNode && arg.text == "constructor")
             }
