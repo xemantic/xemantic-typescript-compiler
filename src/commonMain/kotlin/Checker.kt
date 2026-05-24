@@ -29499,6 +29499,35 @@ interface DataView {
                 walkExprForNestedClasses(expr.whenTrue, source, fileName, classMap)
                 walkExprForNestedClasses(expr.whenFalse, source, fileName, classMap)
             }
+            is PropertyAccessExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is ElementAccessExpression -> {
+                walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+                walkExprForNestedClasses(expr.argumentExpression, source, fileName, classMap)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> walkExprForNestedClasses(prop.initializer, source, fileName, classMap)
+                    is SpreadAssignment -> walkExprForNestedClasses(prop.expression, source, fileName, classMap)
+                    else -> {}
+                }
+            }
+            is SpreadElement -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is PrefixUnaryExpression -> walkExprForNestedClasses(expr.operand, source, fileName, classMap)
+            is PostfixUnaryExpression -> walkExprForNestedClasses(expr.operand, source, fileName, classMap)
+            is AwaitExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is YieldExpression -> expr.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+            is VoidExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is DeleteExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is TypeOfExpression -> walkExprForNestedClasses(expr.expression, source, fileName, classMap)
+            is TemplateExpression -> expr.templateSpans.forEach { walkExprForNestedClasses(it.expression, source, fileName, classMap) }
+            is TaggedTemplateExpression -> {
+                walkExprForNestedClasses(expr.tag, source, fileName, classMap)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkExprForNestedClasses(it.expression, source, fileName, classMap)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
             else -> {}
         }
     }
