@@ -33077,13 +33077,25 @@ interface DataView {
                 stmt.elseStatement?.let { checkRestLastInStatement(it, source, fileName) }
             }
             is ForStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
             is WhileStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
             is DoStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkRestLastInStatements(c.statements, source, fileName)
+                    is DefaultClause -> checkRestLastInStatements(c.statements, source, fileName)
+                    else -> {}
+                }
+            }
             is TryStatement -> {
                 checkRestLastInStatements(stmt.tryBlock.statements, source, fileName)
                 stmt.catchClause?.let { checkRestLastInStatements(it.block.statements, source, fileName) }
                 stmt.finallyBlock?.let { checkRestLastInStatements(it.statements, source, fileName) }
             }
+            is LabeledStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkRestLastInExpr(it, source, fileName) }
+            is ExportAssignment -> checkRestLastInExpr(stmt.expression, source, fileName)
             is InterfaceDeclaration -> for (m in stmt.members) {
                 when (m) {
                     is MethodDeclaration -> checkRestLastInParams(m.parameters, source, fileName)
