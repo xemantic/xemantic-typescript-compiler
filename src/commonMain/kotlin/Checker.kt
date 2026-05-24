@@ -42786,7 +42786,13 @@ interface DataView {
                             }
                         }
                     }
-                    val displaySource = typeToString(sourceType)
+                    // Widen literal source for display when target type doesn't contain
+                    // literal members (mirrors B69.7 in checkVarDeclAssignability).
+                    // `return true` against return type `string` displays as
+                    // `Type 'boolean' is not assignable to type 'string'`, not `'true'`.
+                    val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
+                        else getWidenedLiteralType(sourceType)
+                    val displaySource = typeToString(displaySourceType)
                     val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val returnKeywordLength = 6
                     val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
