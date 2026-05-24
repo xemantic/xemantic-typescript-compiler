@@ -29715,6 +29715,11 @@ interface DataView {
                 if (ModifierFlag.Async in expr.modifiers) {
                     checkAwaitParams(expr.parameters, source, fileName)
                 }
+                when (val body = expr.body) {
+                    is Block -> walkForReservedWords(body.statements, source, fileName)
+                    is Expression -> walkForReservedWordsInExpr(body, source, fileName)
+                    else -> {}
+                }
             }
             is FunctionExpression -> {
                 if (ModifierFlag.Async in expr.modifiers) {
@@ -29722,19 +29727,75 @@ interface DataView {
                 }
                 walkForReservedWords(expr.body.statements, source, fileName)
             }
+            is ClassExpression -> for (member in expr.members) when (member) {
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Async in member.modifiers) checkAwaitParams(member.parameters, source, fileName)
+                    member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                }
+                is Constructor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                is GetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                is SetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                is PropertyDeclaration -> member.initializer?.let { walkForReservedWordsInExpr(it, source, fileName) }
+                else -> {}
+            }
             is BinaryExpression -> {
                 var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkForReservedWordsInExpr(current.right, source, fileName)
-                    current = current.left
-                }
+                val rightStack = ArrayDeque<Expression>()
+                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
                 walkForReservedWordsInExpr(current, source, fileName)
+                while (rightStack.isNotEmpty()) walkForReservedWordsInExpr(rightStack.removeLast(), source, fileName)
             }
             is ParenthesizedExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkForReservedWordsInExpr(expr.condition, source, fileName)
+                walkForReservedWordsInExpr(expr.whenTrue, source, fileName)
+                walkForReservedWordsInExpr(expr.whenFalse, source, fileName)
+            }
             is CallExpression -> {
                 walkForReservedWordsInExpr(expr.expression, source, fileName)
                 expr.arguments.forEach { walkForReservedWordsInExpr(it, source, fileName) }
             }
+            is NewExpression -> {
+                walkForReservedWordsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkForReservedWordsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkForReservedWordsInExpr(expr.expression, source, fileName)
+                walkForReservedWordsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkForReservedWordsInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkForReservedWordsInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkForReservedWordsInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Async in p.modifiers) checkAwaitParams(p.parameters, source, fileName)
+                    p.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                }
+                is GetAccessor -> p.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { walkForReservedWords(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
+            is VoidExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkForReservedWordsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkForReservedWordsInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkForReservedWordsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkForReservedWordsInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkForReservedWordsInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkForReservedWordsInExpr(e, source, fileName)
             else -> {}
         }
     }
