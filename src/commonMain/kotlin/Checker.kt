@@ -64465,6 +64465,20 @@ interface DataView {
                 checkArithmeticInExpr(expr.expression, source, fileName)
                 checkArithmeticInExpr(expr.argumentExpression, source, fileName)
             }
+            is SpreadElement -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkArithmeticInExpr(it, source, fileName) }
+            is DeleteExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is VoidExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkArithmeticInExpr(expr.tag, source, fileName)
+                when (val templ = expr.template) {
+                    is TemplateExpression -> templ.templateSpans.forEach { checkArithmeticInExpr(it.expression, source, fileName) }
+                    else -> {}
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkArithmeticInExpr(it, source, fileName) }
             else -> {}
         }
     }
