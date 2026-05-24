@@ -1,6 +1,26 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,939 / 10,078 tests passing (~88.70%). _Round 31 (2026-05-23): /goal session — 10 commits, +1 net via array literal element checks._
+**Phase 4 — Checker buildout.** 8,943 / 10,078 tests passing (~88.74%). _Round 32 (2026-05-24): /goal session — 16+ commits in progress, +4 net flips via diagnostic-shape extensions + 10+ wrapper-unwrap correctness._
+
+_Round 32 (2026-05-24, +4 net via 4 feature commits + 12 net-zero correctness)_:
+- **iter1 (+1)**: TS1025 trailing comma in index signatures. `[key: T,]: V` in classes, type literals, interfaces now emits TS1025 instead of silently swallowing the comma or cascading errors. Two parallel emission sites (parseClassMember + parseIndexSignatureOrProperty). Flips `indexSignatureWithTrailingComma_ts`.
+- **iter2 (+1)**: TS2447 for bitwise compound assign on booleans. `a ^= a` / `c &= c` / `e |= e` where both operands are boolean now emits TS2447 (with op-specific suggestion `!==`/`&&`/`||`) instead of TS2362/TS2363. Squiggle covers entire binary expression. Flips `bitwiseCompoundAssignmentOperators_ts`.
+- **iter3 (+1)**: TS1100+TS2630 for prefix/postfix ++/-- on eval/arguments. `++eval`, `eval--`, `++arguments`, etc. in strict mode now emit TS1100; eval variants also emit TS2630. Extends `checkStrictModeInExpr` with PrefixUnary/PostfixUnary branches. Flips `unaryOperatorsInStrictMode_ts`.
+- **iter4 (+1)**: TS2369+TS1018 for accessibility modifier on index sig. `[public x: T]` in interface/type-literal/class bodies now emits both diagnostics. Two new `isIndexSigWithAccessMod` lookaheads extend index-sig detection. Flips `indexSignatureWithAccessibilityModifier_ts`.
+- **iter5 (net-zero)**: TS17019/TS17020 broadened to all type-annotation positions (was only `<...>` type-args). Per-target suggestion text for `any`/`unknown`/`never`/`void`/`undefined`.
+- **iter6 (net-zero)**: Widen literal source in return-type TS2322 display. `return true` against return type `string` now displays as `Type 'boolean' is not assignable to type 'string'`, mirroring B69.7's var-decl widening.
+- **iter7 (net-zero)**: `isAlwaysTruthyExpr` / `isAlwaysTruthyForOrExpr` wrapper-unwrap for AsExpression / TypeAssertionExpression / SatisfiesExpression / NonNullExpression.
+- **iter8 (net-zero)**: `inferReturnTypeFromBody` handles more expression kinds (`!x`/`~x`/`++x`/`x++` → primitive, TypeOfExpression → string, VoidExpression → undefined, DeleteExpression → boolean). `getCalleeType` recognizes ElementAccessExpression + NewExpression callees.
+- **iter9 (net-zero)**: `inferSimpleExprType` recognizes VoidExpression / DeleteExpression / BigIntLiteralNode / NonNullExpression / SatisfiesExpression. `expressionTrueEnd` handles BigIntLiteralNode + PostfixUnaryExpression.
+- **iter10 (net-zero)**: `isSimpleLiteral` handles BigInt + NonNullExpression/SatisfiesExpression wrappers.
+- **iter11 (net-zero)**: `isAlwaysTrue`/`isAlwaysFalse` (reachability/unreachable-code analysis) gain wrapper-unwrap for As/Satisfies/NonNull/TypeAssertion.
+- **iter12 (net-zero)**: `collectThisAccessInExpr` broadened to recurse through wrappers + unary + ConditionalExpression + ArrayLiteralExpression + TemplateExpression spans.
+- **iter13 (net-zero)**: `walkBigIntExpInExpr` (TS2791) + `checkAlwaysTruthyInExpr` (TS2872/TS2873) gain wrapper recursion.
+- **iter14 (net-zero)**: `checkArithmeticInExpr` gains SatisfiesExpression. `checkInvalidAssignInExpr` (TS2364) gains As/Satisfies/NonNull/TypeAssertion/PropertyAccess/ElementAccess/NewExpression recursion.
+- **iter15 (net-zero)**: `checkExprForCtorParamRefs` (TS2663/TS2301) gains SatisfiesExpression alongside existing TypeAssertion/As/NonNull.
+- **iter16 (net-zero)**: `checkConstAssignmentInExpr` broadened to recurse through wrappers + member access + NewExpression + ArrayLiteralExpression/ObjectLiteralExpression members + TemplateExpression spans + ArrowFunction expression body.
+
+Session running 8939 → 8943 / 10078 (+4 net, ~88.74%). Strategy: target test-by-test reading of failing tests (4 flips from narrow diagnostic-shape extensions in Parser/Checker) + systematic wrapper-unwrap improvements across narrowing/walker helpers (12 net-zero foundational improvements).
 
 _Round 31 (2026-05-23, +1 net via iter1+iter2 + 8 net-zero correctness)_:
 - **iter1 (net-zero correctness)**: `checkArrayLiteralElementExcessProps` recurses into nested ArrayLiteralExpression elements when the expected element type is itself Array<X>. Widens literal types in TS2322 displays (1 → number). Handles `number[][][] = [[1, 2]]` shape.
