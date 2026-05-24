@@ -53336,9 +53336,16 @@ interface DataView {
                 stmt.finallyBlock?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
             }
             is ThrowStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-            is ForInStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            is ForOfStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            is ForInStatement -> {
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            }
+            is ForOfStatement -> {
+                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            }
             is LabeledStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
+            is ExportAssignment -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
             else -> {}
         }
