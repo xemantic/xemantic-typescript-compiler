@@ -69142,6 +69142,16 @@ interface DataView {
         for (stmt in stmts) {
             when (stmt) {
                 is ClassDeclaration -> {
+                    // Recurse into class member bodies for nested classes
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                            is Constructor -> member.body?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                            is GetAccessor -> member.body?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                            is SetAccessor -> member.body?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                            else -> {}
+                        }
+                    }
                     val name = stmt.name
                     if (name != null && name.text == "Object") {
                         val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
@@ -69163,6 +69173,32 @@ interface DataView {
                         checkObjectClassNameInStatements(body.statements, source, fileName, moduleName)
                     }
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                is Block -> checkObjectClassNameInStatements(stmt.statements, source, fileName, moduleName)
+                is IfStatement -> {
+                    checkObjectClassNameInStatements(listOf(stmt.thenStatement), source, fileName, moduleName)
+                    stmt.elseStatement?.let { checkObjectClassNameInStatements(listOf(it), source, fileName, moduleName) }
+                }
+                is ForStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
+                is ForInStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
+                is ForOfStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
+                is WhileStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
+                is DoStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkObjectClassNameInStatements(clause.statements, source, fileName, moduleName)
+                            is DefaultClause -> checkObjectClassNameInStatements(clause.statements, source, fileName, moduleName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkObjectClassNameInStatements(stmt.tryBlock.statements, source, fileName, moduleName)
+                    stmt.catchClause?.block?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                    stmt.finallyBlock?.let { checkObjectClassNameInStatements(it.statements, source, fileName, moduleName) }
+                }
+                is LabeledStatement -> checkObjectClassNameInStatements(listOf(stmt.statement), source, fileName, moduleName)
                 else -> {}
             }
         }
