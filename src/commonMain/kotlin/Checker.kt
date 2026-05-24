@@ -67977,6 +67977,13 @@ interface DataView {
                             for (param in member.parameters) checkTypeRefForNamespace(param.type, source, fileName)
                             checkTypeRefForNamespace(member.type, source, fileName)
                         }
+                        is Constructor -> {
+                            for (param in member.parameters) checkTypeRefForNamespace(param.type, source, fileName)
+                        }
+                        is GetAccessor -> checkTypeRefForNamespace(member.type, source, fileName)
+                        is SetAccessor -> {
+                            for (param in member.parameters) checkTypeRefForNamespace(param.type, source, fileName)
+                        }
                         else -> {}
                     }
                 }
@@ -67998,6 +68005,26 @@ interface DataView {
                 checkNamespaceAsTypeInStmt(stmt.thenStatement, source, fileName)
                 stmt.elseStatement?.let { checkNamespaceAsTypeInStmt(it, source, fileName) }
             }
+            is ForStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is ForInStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is WhileStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is DoStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> c.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+                    is DefaultClause -> c.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> checkNamespaceAsTypeInStmt(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkTypeRefsInExpr(it, source, fileName) }
+            is ExportAssignment -> checkTypeRefsInExpr(stmt.expression, source, fileName)
             is Block -> stmt.statements.forEach { checkNamespaceAsTypeInStmt(it, source, fileName) }
             else -> {}
         }
