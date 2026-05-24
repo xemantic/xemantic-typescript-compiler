@@ -39599,6 +39599,7 @@ interface DataView {
             is AsExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             is TypeAssertionExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             is NonNullExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             else -> {}
         }
     }
