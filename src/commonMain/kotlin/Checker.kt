@@ -8388,10 +8388,72 @@ class Checker(
         source: String,
         fileName: String,
     ) {
+        if (expr == null) return
         when (expr) {
             is ClassExpression -> {
                 if (ModifierFlag.Declare !in expr.modifiers) {
                     checkConstructorParamInClassMembers(expr.members, source, fileName)
+                }
+                // Recurse into member bodies (field initializers can contain nested ClassExpressions)
+                for (m in expr.members) {
+                    when (m) {
+                        is PropertyDeclaration -> checkConstructorParamInInitializersInExpr(m.initializer, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is ParenthesizedExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                checkConstructorParamInInitializersInExpr(expr.whenTrue, source, fileName)
+                checkConstructorParamInInitializersInExpr(expr.whenFalse, source, fileName)
+            }
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    checkConstructorParamInInitializersInExpr(cur.right, source, fileName)
+                    cur = cur.left
+                }
+                checkConstructorParamInInitializersInExpr(cur, source, fileName)
+            }
+            is CallExpression -> {
+                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+            }
+            is NewExpression -> {
+                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+            is SpreadElement -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkConstructorParamInInitializersInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkConstructorParamInInitializersInExpr(expr.operand, source, fileName)
+            is AwaitExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+            is VoidExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> expr.templateSpans.forEach { checkConstructorParamInInitializersInExpr(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                checkConstructorParamInInitializersInExpr(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkConstructorParamInInitializersInExpr(it.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+            is PropertyAccessExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
+                checkConstructorParamInInitializersInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> checkConstructorParamInInitializersInExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> checkConstructorParamInInitializersInExpr(p.expression, source, fileName)
+                    else -> {}
                 }
             }
             else -> {}
