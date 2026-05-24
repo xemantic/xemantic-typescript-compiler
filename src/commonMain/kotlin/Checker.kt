@@ -9797,21 +9797,32 @@ class Checker(
             when (stmt) {
                 is ClassDeclaration -> {
                     val classAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
-                    if (classAmbient) continue
+                    if (!classAmbient) {
+                        for (m in stmt.members) {
+                            if (m is PropertyDeclaration && ModifierFlag.Accessor in m.modifiers) {
+                                val nameNode = m.name as? Identifier ?: continue
+                                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 18045,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameNode.pos,
+                                    length = nameNode.text.length,
+                                ))
+                            }
+                        }
+                    }
+                    // Recurse into member bodies for nested classes regardless of ambient
                     for (m in stmt.members) {
-                        if (m is PropertyDeclaration && ModifierFlag.Accessor in m.modifiers) {
-                            val nameNode = m.name as? Identifier ?: continue
-                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
-                                category = DiagnosticCategory.Error,
-                                code = 18045,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameNode.pos,
-                                length = nameNode.text.length,
-                            ))
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
+                            is Constructor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
+                            is GetAccessor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
+                            is SetAccessor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
+                            else -> {}
                         }
                     }
                 }
@@ -9820,6 +9831,31 @@ class Checker(
                     (stmt.body as? ModuleBlock)?.let { checkAccessorModifierInStatements(it.statements, source, fileName, modAmbient) }
                 }
                 is Block -> checkAccessorModifierInStatements(stmt.statements, source, fileName, inAmbient)
+                is FunctionDeclaration -> stmt.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
+                is IfStatement -> {
+                    checkAccessorModifierInStatements(listOf(stmt.thenStatement), source, fileName, inAmbient)
+                    stmt.elseStatement?.let { checkAccessorModifierInStatements(listOf(it), source, fileName, inAmbient) }
+                }
+                is ForStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
+                is ForInStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
+                is ForOfStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
+                is WhileStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
+                is DoStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkAccessorModifierInStatements(clause.statements, source, fileName, inAmbient)
+                            is DefaultClause -> checkAccessorModifierInStatements(clause.statements, source, fileName, inAmbient)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkAccessorModifierInStatements(stmt.tryBlock.statements, source, fileName, inAmbient)
+                    stmt.catchClause?.block?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
+                    stmt.finallyBlock?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
+                }
+                is LabeledStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
                 else -> {}
             }
         }
