@@ -9265,6 +9265,8 @@ class Checker(
                 for (member in stmt.members) when (member) {
                     is MethodDeclaration -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
                     is Constructor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is GetAccessor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is SetAccessor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
                     else -> {}
                 }
             }
@@ -9273,6 +9275,13 @@ class Checker(
                 walkForOfNonIterable(stmt.tryBlock.statements, source, fileName)
                 stmt.catchClause?.block?.statements?.let { walkForOfNonIterable(it, source, fileName) }
                 stmt.finallyBlock?.statements?.let { walkForOfNonIterable(it, source, fileName) }
+            }
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> walkForOfNonIterable(c.statements, source, fileName)
+                    is DefaultClause -> walkForOfNonIterable(c.statements, source, fileName)
+                    else -> {}
+                }
             }
             is LabeledStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
             else -> {}
