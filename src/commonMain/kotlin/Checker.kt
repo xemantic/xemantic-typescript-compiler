@@ -33773,13 +33773,25 @@ interface DataView {
                 stmt.elseStatement?.let { checkArgsCollisionInStatement(it, source, fileName, isModule) }
             }
             is ForStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is ForInStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is ForOfStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
             is WhileStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
             is DoStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> checkArgsCollisionInStatements(c.statements, source, fileName, isModule)
+                    is DefaultClause -> checkArgsCollisionInStatements(c.statements, source, fileName, isModule)
+                    else -> {}
+                }
+            }
             is TryStatement -> {
                 checkArgsCollisionInStatements(stmt.tryBlock.statements, source, fileName, isModule)
                 stmt.catchClause?.let { checkArgsCollisionInStatements(it.block.statements, source, fileName, isModule) }
                 stmt.finallyBlock?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
             }
+            is LabeledStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
+            is ThrowStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            is ExportAssignment -> checkArgsCollisionInExpr(stmt.expression, source, fileName, isModule)
             is ModuleDeclaration -> {
                 if (ModifierFlag.Declare !in stmt.modifiers) {
                     (stmt.body as? ModuleBlock)?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
