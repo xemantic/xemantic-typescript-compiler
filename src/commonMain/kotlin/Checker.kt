@@ -1061,6 +1061,8 @@ class Checker(
                         when (member) {
                             is MethodDeclaration -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
                             is Constructor -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
                             else -> {}
                         }
                     }
@@ -1068,6 +1070,30 @@ class Checker(
                 is FunctionDeclaration -> stmt.body?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
                 is Block -> walkParameterDecoratorChecks(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkParameterDecoratorChecks(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkParameterDecoratorChecks(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> walkParameterDecoratorChecks(clause.statements, source, fileName)
+                            is DefaultClause -> walkParameterDecoratorChecks(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    walkParameterDecoratorChecks(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
