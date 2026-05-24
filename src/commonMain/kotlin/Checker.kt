@@ -28392,6 +28392,26 @@ interface DataView {
                     else -> {}
                 }
             }
+            is AsExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is TypeAssertionExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is SatisfiesExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is NonNullExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is PrefixUnaryExpression -> walkObjLitSuperInExpr(expr.operand, source, fileName, superValid)
+            is PostfixUnaryExpression -> walkObjLitSuperInExpr(expr.operand, source, fileName, superValid)
+            is SpreadElement -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is AwaitExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is YieldExpression -> expr.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
+            is VoidExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is DeleteExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is TypeOfExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
+            is TemplateExpression -> for (span in expr.templateSpans) walkObjLitSuperInExpr(span.expression, source, fileName, superValid)
+            is TaggedTemplateExpression -> {
+                walkObjLitSuperInExpr(expr.tag, source, fileName, superValid)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkObjLitSuperInExpr(span.expression, source, fileName, superValid)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkObjLitSuperInExpr(e, source, fileName, superValid)
             else -> {}
         }
     }
