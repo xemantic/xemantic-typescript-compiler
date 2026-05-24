@@ -32154,9 +32154,61 @@ interface DataView {
             }
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> checkAmbientInStatements(body.statements, source, fileName, false)
+                is Expression -> checkAmbientInExpr(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+            is ParenthesizedExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkAmbientInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkAmbientInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkAmbientInExpr(expr.condition, source, fileName)
+                checkAmbientInExpr(expr.whenTrue, source, fileName)
+                checkAmbientInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkAmbientInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) checkAmbientInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                checkAmbientInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkAmbientInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkAmbientInExpr(expr.expression, source, fileName)
+                checkAmbientInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkAmbientInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> checkAmbientInExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> checkAmbientInExpr(p.expression, source, fileName)
+                    is MethodDeclaration -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                    is GetAccessor -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                    is SetAccessor -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                    else -> {}
+                }
+            }
+            is SpreadElement -> checkAmbientInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkAmbientInExpr(it, source, fileName) }
+            is PrefixUnaryExpression -> checkAmbientInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkAmbientInExpr(expr.operand, source, fileName)
+            is VoidExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkAmbientInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkAmbientInExpr(span.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) checkAmbientInExpr(e, source, fileName)
             else -> {}
         }
     }
