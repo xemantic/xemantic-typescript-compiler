@@ -29457,6 +29457,30 @@ interface DataView {
                     if (body is ModuleBlock) walkClassesForAbstractAccess(body.statements, source, fileName, classMap)
                 }
                 is ReturnStatement -> stmt.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                is ForStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is ForInStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is ForOfStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is WhileStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is DoStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is SwitchStatement -> {
+                    walkExprForNestedClasses(stmt.expression, source, fileName, classMap)
+                    for (clause in stmt.caseBlock) {
+                        val clauseStmts = when (clause) {
+                            is CaseClause -> clause.statements
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        walkClassesForAbstractAccess(clauseStmts, source, fileName, classMap)
+                    }
+                }
+                is TryStatement -> {
+                    walkClassesForAbstractAccess(stmt.tryBlock.statements, source, fileName, classMap)
+                    stmt.catchClause?.let { walkClassesForAbstractAccess(it.block.statements, source, fileName, classMap) }
+                    stmt.finallyBlock?.let { walkClassesForAbstractAccess(it.statements, source, fileName, classMap) }
+                }
+                is LabeledStatement -> walkClassesForAbstractAccess(listOf(stmt.statement), source, fileName, classMap)
+                is ThrowStatement -> stmt.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                is ExportAssignment -> walkExprForNestedClasses(stmt.expression, source, fileName, classMap)
                 else -> {}
             }
         }
