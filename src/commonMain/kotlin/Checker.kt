@@ -52190,8 +52190,17 @@ interface DataView {
             is TemplateExpression -> for (span in expr.templateSpans) {
                 checkAbstractInExpr(span.expression, source, fileName, abstractClasses, typeofAbstractVars)
             }
+            is TaggedTemplateExpression -> {
+                checkAbstractInExpr(expr.tag, source, fileName, abstractClasses, typeofAbstractVars)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) {
+                        checkAbstractInExpr(span.expression, source, fileName, abstractClasses, typeofAbstractVars)
+                    }
+                }
+            }
             is AsExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is TypeAssertionExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is SatisfiesExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is PrefixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
             is PostfixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
             is PropertyAccessExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
@@ -52201,10 +52210,20 @@ interface DataView {
             }
             is SpreadElement -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is AwaitExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is YieldExpression -> expr.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
             is VoidExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is DeleteExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is NonNullExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
             is TypeOfExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
+            is CommaListExpression -> for (e in expr.elements) checkAbstractInExpr(e, source, fileName, abstractClasses, typeofAbstractVars)
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
+                is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
+                else -> {}
+            }
             else -> {}
         }
     }
