@@ -32977,6 +32977,7 @@ interface DataView {
                 checkArgsCollisionInParams(expr.parameters, source, fileName, isModule)
                 when (val body = expr.body) {
                     is Block -> checkArgsCollisionInStatements(body.statements, source, fileName, isModule)
+                    is Expression -> checkArgsCollisionInExpr(body, source, fileName, isModule)
                     else -> {}
                 }
             }
@@ -32994,6 +32995,12 @@ interface DataView {
                         checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
                         m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                     }
+                    is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
+                    is SetAccessor -> {
+                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
+                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
+                    }
+                    is PropertyDeclaration -> m.initializer?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
                     else -> {}
                 }
             }
@@ -33003,10 +33010,63 @@ interface DataView {
                         checkArgsCollisionInParams(prop.parameters, source, fileName, isModule)
                         prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
                     }
+                    is GetAccessor -> prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
+                    is SetAccessor -> {
+                        checkArgsCollisionInParams(prop.parameters, source, fileName, isModule)
+                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
+                    }
+                    is PropertyAssignment -> checkArgsCollisionInExpr(prop.initializer, source, fileName, isModule)
+                    is SpreadAssignment -> checkArgsCollisionInExpr(prop.expression, source, fileName, isModule)
                     else -> {}
                 }
             }
             is ParenthesizedExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is AsExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is TypeAssertionExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is SatisfiesExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is NonNullExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    checkArgsCollisionInExpr(cur.right, source, fileName, isModule)
+                    cur = cur.left
+                }
+                checkArgsCollisionInExpr(cur, source, fileName, isModule)
+            }
+            is ConditionalExpression -> {
+                checkArgsCollisionInExpr(expr.whenTrue, source, fileName, isModule)
+                checkArgsCollisionInExpr(expr.whenFalse, source, fileName, isModule)
+            }
+            is CallExpression -> {
+                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+                expr.arguments.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            }
+            is NewExpression -> {
+                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+                expr.arguments?.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            }
+            is PropertyAccessExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is ElementAccessExpression -> {
+                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+                checkArgsCollisionInExpr(expr.argumentExpression, source, fileName, isModule)
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            is SpreadElement -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is PrefixUnaryExpression -> checkArgsCollisionInExpr(expr.operand, source, fileName, isModule)
+            is PostfixUnaryExpression -> checkArgsCollisionInExpr(expr.operand, source, fileName, isModule)
+            is AwaitExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is YieldExpression -> expr.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
+            is VoidExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is DeleteExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is TypeOfExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
+            is TemplateExpression -> expr.templateSpans.forEach { checkArgsCollisionInExpr(it.expression, source, fileName, isModule) }
+            is TaggedTemplateExpression -> {
+                checkArgsCollisionInExpr(expr.tag, source, fileName, isModule)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkArgsCollisionInExpr(it.expression, source, fileName, isModule)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
             else -> {}
         }
     }
