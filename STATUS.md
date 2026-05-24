@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 36 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero wrapper/coverage broadenings across 20 different walker functions. 4 attempted iterations regressed -7 each and were reverted (checkNullUndefinedInExpr, checkExprForCtorParamRefsInStmt, walkExprForUnusedLabels, checkRestParamsInStatements + collectThisPropertyAccesses). Pool genuinely empty._
+**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 37 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero structure-walking broadenings across 20 different statement-level walker functions. No reverts. Surgical pool remains exhausted (find_candidates.py --fresh 0/0/0)._
+
+_Round 37 (2026-05-24, 0 net flips via 20 net-zero statement-level coverage broadenings)_:
+- **iter1**: `walkForOfNonIterableStmt` (TS2495 for-of non-iterable) gains SwitchStatement + ClassDeclaration GetAccessor/SetAccessor body recursion.
+- **iter2**: `checkRestLastInStatement` (TS1014 rest must be last) gains ForIn/ForOf/While/Do/Switch/Labeled/Throw/ExportAssignment.
+- **iter3**: `checkRestElemPropNamesInStatement` (TS2566 rest with property name) gains ClassDeclaration GetAccessor/SetAccessor/PropertyDeclaration init + While/Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter4**: `checkAmbientInStatement` (TS1183 implementation in ambient context) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment (passes isAmbient unchanged).
+- **iter5**: `checkArgsCollisionInStatement` (TS2396 arguments collision) gains ForIn/ForOf/Switch/Labeled/Throw/ExportAssignment.
+- **iter6**: `checkMultiDefaultsInStatement` (TS1066/TS1113 multi-default) gains ClassDeclaration accessors + ForIn/ForOf/Labeled/Throw/ExportAssignment/Return.
+- **iter7**: `walkTypeAssertionsInStmt` (TS1294/TS2352) gains ForIn/ForOf/Labeled/ExportAssignment.
+- **iter8**: `checkAwaitInStatement` (TS1308 await-outside-async) ForStatement initializer (VariableDeclarationList declarations + Expression form) now visits checkAwaitInExpr; ExportAssignment expression added.
+- **iter9**: `walkTPNRStmt` (TS2677 type-predicate-nullable-recovery) gains ClassDeclaration Constructor/SetAccessor body recursion + GetAccessor body (in addition to existing return type check) + SwitchStatement.
+- **iter10**: `findTypeParamRefsInStatement` (TS2302 static reference class type param) gains LabeledStatement + ExportAssignment.
+- **iter11**: `checkAbstractInStmt` (TS2511 cannot instantiate abstract class) ForIn/ForOf now visit source expression; ExportAssignment expression added.
+- **iter12**: `checkPropertyUseBeforeInitInStatement` (TS2729/TS2565) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter13**: `checkNamespaceAsTypeInStmt` (TS2709 namespace-as-type) gains Constructor/GetAccessor/SetAccessor type ref recursion in ClassDeclaration + For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter14**: `checkDownlevelIterationInStmt` (TS2802) gains Do/ForIn/Switch/Try/Labeled/Module + ClassDeclaration accessors.
+- **iter15**: `checkBigIntLiteralsInStmt` (TS2737) gains Do/Switch/Try/Labeled/Throw/ExportAssignment + ClassDeclaration GetAccessor/SetAccessor bodies (ambient flag passed through).
+- **iter16**: `checkInvalidAssignInStatement` (TS2364) ForStatement now visits Expression-initializer; ForIn/ForOf visit source expression; Throw/ExportAssignment/ModuleDeclaration recursion added.
+- **iter17**: `checkArithmeticInStatement` (TS2362/TS2363/TS2365) ForIn/ForOf visit source expression; ExportAssignment expression recursion added.
+- **iter18**: `checkCallTypeArgCountInStmt` (TS2558/TS2743) gains ClassDeclaration accessors + Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter19**: `checkForInLhsInStmt` (TS2405/TS2407) gains ClassDeclaration Method/Constructor/Get/SetAccessor body recursion.
+- **iter20**: `checkConstAssignmentInStatement` (TS2588) ForIn/ForOf visit source expression; ClassDeclaration PropertyDeclaration initializer now visited; Throw/ExportAssignment expression recursion added.
+
+Session-end: 8944 → 8944 / 10078 (0 net, ~88.75%). Strategy: complement rounds 32-36 (which broadened mostly InExpr walkers) by broadening 20 statement-level walkers' Switch/ForIn/ForOf/Try/Labeled/Throw/ExportAssignment coverage. No regressing attempts during this round. All 20 commits pure structure-walking expansions.
+
+_Round 36 (2026-05-24, 0 net flips via 20 net-zero correctness + 4 reverts)_:
 
 _Round 36 (2026-05-24, 0 net flips via 20 net-zero correctness + 4 reverts)_:
 - **iter1**: `checkTypeAsValueInExpr` (TS2693/TS2708 type-as-value / namespace-as-value) extended with wrappers (As/TypeAssertion/Satisfies/NonNull), unary (Prefix/Postfix), Spread/Await/Yield/Void/Delete, Template/TaggedTemplate, CommaList.
