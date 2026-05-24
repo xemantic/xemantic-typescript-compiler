@@ -52973,6 +52973,43 @@ interface DataView {
             is ModuleDeclaration -> {
                 (stmt.body as? ModuleBlock)?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
             }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+            is ClassDeclaration -> {
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        is Constructor -> member.body?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        is GetAccessor -> member.body?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        is SetAccessor -> member.body?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is Block -> stmt.statements.forEach { checkMultiBaseInStatement(it, source, fileName) }
+            is IfStatement -> {
+                checkMultiBaseInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkMultiBaseInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        is DefaultClause -> clause.statements.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkMultiBaseInStatement(stmt.statement, source, fileName)
             else -> {}
         }
     }
