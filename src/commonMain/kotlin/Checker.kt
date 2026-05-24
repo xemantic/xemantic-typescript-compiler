@@ -32090,6 +32090,7 @@ interface DataView {
      */
     private fun expressionTrueEnd(expr: Expression): Int = when (expr) {
         is NumericLiteralNode -> expr.pos + expr.text.length
+        is BigIntLiteralNode -> expr.pos + expr.text.length
         is StringLiteralNode -> {
             val quoteCount = if (expr.isUnterminated) 1 else 2
             val content = expr.rawText ?: expr.text
@@ -32097,6 +32098,7 @@ interface DataView {
         }
         is Identifier -> expr.pos + expr.text.length
         is PrefixUnaryExpression -> expressionTrueEnd(expr.operand)
+        is PostfixUnaryExpression -> expressionTrueEnd(expr.operand) + 2 // +2 for ++/-- chars
         is BinaryExpression -> expressionTrueEnd(expr.right)
         is ParenthesizedExpression -> {
             // Synthetic paren from instantiation expression (`obj.fn<T>`): use the
@@ -63488,12 +63490,19 @@ interface DataView {
                 else -> null // Don't look up variable types — causes FPs with enum/union targets
             }
             is TypeOfExpression -> "string" // typeof always returns string
+            is VoidExpression -> "undefined"
+            is DeleteExpression -> "boolean"
+            is BigIntLiteralNode -> "bigint"
             is PrefixUnaryExpression -> when (expr.operator) {
                 SyntaxKind.Exclamation -> "boolean" // !x is boolean
                 SyntaxKind.Minus, SyntaxKind.Plus, SyntaxKind.Tilde -> "number"
+                SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> "number"
                 else -> null
             }
+            is PostfixUnaryExpression -> "number" // x++ / x-- always produce number
             is ParenthesizedExpression -> inferSimpleExprType(expr.expression, varTypes)
+            is NonNullExpression -> inferSimpleExprType(expr.expression, varTypes)
+            is SatisfiesExpression -> inferSimpleExprType(expr.expression, varTypes)
             is AsExpression -> {
                 // Type assertion: return the asserted type, not the inner expression type
                 val assertedType = resolveSimpleTypeName(expr.type)
