@@ -41671,6 +41671,29 @@ interface DataView {
             is TypeAssertionExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             is NonNullExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
             is SatisfiesExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkExprForImplicitReturns(expr.expression, source, fileName)
+                walkExprForImplicitReturns(expr.argumentExpression, source, fileName)
+            }
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                walkExprForImplicitReturns(span.expression, source, fileName)
+            }
+            is TaggedTemplateExpression -> {
+                walkExprForImplicitReturns(expr.tag, source, fileName)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) walkExprForImplicitReturns(span.expression, source, fileName)
+                }
+            }
+            is PrefixUnaryExpression -> walkExprForImplicitReturns(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkExprForImplicitReturns(expr.operand, source, fileName)
+            is AwaitExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkExprForImplicitReturns(it, source, fileName) }
+            is VoidExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is DeleteExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is TypeOfExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkExprForImplicitReturns(e, source, fileName)
             else -> {}
         }
     }
