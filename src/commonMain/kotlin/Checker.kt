@@ -64244,6 +64244,35 @@ interface DataView {
         }
 
         if (isArithmetic || isCompoundArithmetic) {
+            // TS2447: For bitwise compound (^=, &=, |=) where BOTH operands are
+            // boolean, suggest the logical equivalent instead of emitting
+            // TS2362/TS2363. Maps: ^= → !==, &= → &&, |= → ||.
+            if (isCompoundArithmetic) {
+                val bitOpAlt = when (op) {
+                    SyntaxKind.CaretEquals -> "!=="
+                    SyntaxKind.AmpersandEquals -> "&&"
+                    SyntaxKind.BarEquals -> "||"
+                    else -> null
+                }
+                if (bitOpAlt != null &&
+                    leftType.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral) &&
+                    rightType.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) {
+                    val opText = getOperatorText(op)
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.left.pos)
+                    val length = (expressionTrueEnd(expr.right) - expr.left.pos).coerceAtLeast(1)
+                    diagnostics.add(Diagnostic(
+                        message = "The '$opText' operator is not allowed for boolean types. Consider using '$bitOpAlt' instead.",
+                        category = DiagnosticCategory.Error,
+                        code = 2447,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = expr.left.pos,
+                        length = length,
+                    ))
+                    return
+                }
+            }
             // For strict arithmetic: both sides must be number/bigint/any/enum
             if (!leftOk && !rightOk) {
                 // Both bad — emit TS2362 + TS2363
