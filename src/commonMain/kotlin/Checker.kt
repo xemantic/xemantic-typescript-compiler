@@ -52400,6 +52400,43 @@ interface DataView {
                         checkCircularInterfaceBasesInStatements(it.statements, source, fileName)
                     }
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is Block -> checkCircularInterfaceBasesInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkCircularInterfaceBasesInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkCircularInterfaceBasesInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkCircularInterfaceBasesInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkCircularInterfaceBasesInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkCircularInterfaceBasesInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkCircularInterfaceBasesInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkCircularInterfaceBasesInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
