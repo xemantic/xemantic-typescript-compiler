@@ -8733,6 +8733,78 @@ class Checker(
                 checkRestParamsForImplicitAny(expr.parameters, source, fileName)
                 checkRestParamsInStatements(expr.body.statements, source, fileName)
             }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> {
+                    checkRestParamsForImplicitAny(m.parameters, source, fileName)
+                    m.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    checkRestParamsForImplicitAny(m.parameters, source, fileName)
+                    m.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> m.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { checkRestParamsInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkRestParamsInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkRestParamsInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkRestParamsInExpr(expr.condition, source, fileName)
+                checkRestParamsInExpr(expr.whenTrue, source, fileName)
+                checkRestParamsInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkRestParamsInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) checkRestParamsInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                checkRestParamsInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkRestParamsInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkRestParamsInExpr(expr.expression, source, fileName)
+                checkRestParamsInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkRestParamsInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> checkRestParamsInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> checkRestParamsInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> {
+                    checkRestParamsForImplicitAny(p.parameters, source, fileName)
+                    p.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> p.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { checkRestParamsInStatements(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkRestParamsInExpr(it, source, fileName) }
+            is VoidExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkRestParamsInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkRestParamsInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkRestParamsInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkRestParamsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkRestParamsInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkRestParamsInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkRestParamsInExpr(e, source, fileName)
             else -> {}
         }
     }
@@ -8983,6 +9055,78 @@ class Checker(
                 checkNonArrayRestParams(expr.parameters, source, fileName)
                 checkNonArrayRestInStatements(expr.body.statements, source, fileName)
             }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> {
+                    checkNonArrayRestParams(m.parameters, source, fileName)
+                    m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    checkNonArrayRestParams(m.parameters, source, fileName)
+                    m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                else -> {}
+            }
+            is ParenthesizedExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkNonArrayRestInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) checkNonArrayRestInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                checkNonArrayRestInExpr(expr.condition, source, fileName)
+                checkNonArrayRestInExpr(expr.whenTrue, source, fileName)
+                checkNonArrayRestInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                checkNonArrayRestInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) checkNonArrayRestInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                checkNonArrayRestInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkNonArrayRestInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkNonArrayRestInExpr(expr.expression, source, fileName)
+                checkNonArrayRestInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkNonArrayRestInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> checkNonArrayRestInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> checkNonArrayRestInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> {
+                    checkNonArrayRestParams(p.parameters, source, fileName)
+                    p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                }
+                is GetAccessor -> p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
+            is VoidExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkNonArrayRestInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkNonArrayRestInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkNonArrayRestInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkNonArrayRestInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkNonArrayRestInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkNonArrayRestInExpr(e, source, fileName)
             else -> {}
         }
     }
