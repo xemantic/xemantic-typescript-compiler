@@ -7572,7 +7572,12 @@ class Checker(
                 }
             }
             is TemplateExpression -> expr.templateSpans.forEach { walkExprForFlowTS2454(it.expression, uninitialized, source, fileName, emitted, inUncheckedBody) }
-            is TaggedTemplateExpression -> walkExprForFlowTS2454(expr.tag, uninitialized, source, fileName, emitted, inUncheckedBody)
+            is TaggedTemplateExpression -> {
+                walkExprForFlowTS2454(expr.tag, uninitialized, source, fileName, emitted, inUncheckedBody)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkExprForFlowTS2454(it.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+                }
+            }
             is SpreadElement -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is AwaitExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is YieldExpression -> expr.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
