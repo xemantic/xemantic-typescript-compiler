@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 37 (2026-05-24): /goal session — 20 commits, 0 net flips, 20 net-zero structure-walking broadenings across 20 different statement-level walker functions. No reverts. Surgical pool remains exhausted (find_candidates.py --fresh 0/0/0)._
+**Phase 4 — Checker buildout.** 8,944 / 10,078 tests passing (~88.75%). _Round 38 (2026-05-24): /goal session — 21 commits, 0 net flips, 21 net-zero structure-walking broadenings across 21 different walker functions. No reverts. Surgical pool remains exhausted (find_candidates.py --fresh 0/0/0)._
+
+_Round 38 (2026-05-24, 0 net flips via 21 net-zero structure-walking broadenings)_:
+- **iter1**: `walkParameterDecoratorChecks` (TS1239 parameter decorator signature) gains GetAccessor/SetAccessor bodies in ClassDeclaration + statement kinds If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter2**: `walkTs2719Assignments` (TS2719 same-name TypeParam mismatch) gains ~25 expression kinds (wrappers, Conditional, Call+New, ArrayLit, ObjectLit with method/accessor bodies, ArrowFunction, FunctionExpression, Spread, Await/Yield, unary, Void/Delete/TypeOf, Template/TaggedTemplate, CommaList) + statement-level FunctionDeclaration/ClassDeclaration/ClassExpression/ModuleDeclaration/ExportAssignment.
+- **iter3**: `checkNonConstructorExtendsInStatements` (TS2507 extends-non-constructor) gains FunctionDeclaration body + ClassDeclaration nested member bodies (Method/Constructor/Get/SetAccessor).
+- **iter4**: `checkPropertyOverrideInStatement` (TS2416 incompatible override) gains ClassDeclaration nested member bodies + FunctionDeclaration body + Block/If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter5**: `checkPropertyInitInStatements` (TS2564) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter6**: `checkMultiBaseInStatement` (TS2320 multi-extends conflict) gains FunctionDeclaration body + ClassDeclaration nested member bodies + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter7**: `checkImplementsClausesInStatement` (TS2420/TS2720 implements conflict) gains ClassDeclaration nested member bodies + FunctionDeclaration body + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter8**: `checkInterfaceExtendsInStatement` (TS2840 primitive extends) gains FunctionDeclaration body + ClassDeclaration nested member bodies + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter9**: `checkObjectClassNameInStatements` (TS2725 'Object' class name) gains ClassDeclaration nested member bodies + FunctionDeclaration body + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter10**: `checkNonArrayRestInStatements` (TS2370 non-array rest) gains ClassDeclaration GetAccessor/SetAccessor/PropertyDeclaration init + ForIn/ForOf/While/Do/Switch (with discriminant+clause-expressions)/Try/Labeled/Throw/ExportAssignment + ForStatement initializer (VariableDeclarationList + Expression form) + condition + incrementor.
+- **iter11**: `checkAbstractAccessorInStatements` (TS7033 abstract getter no return type) gains ClassDeclaration nested member bodies + FunctionDeclaration body + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter12**: `checkAccessorModifierInStatements` (TS18045 accessor modifier target) gains ClassDeclaration nested member bodies (threading classAmbient flag) + FunctionDeclaration body + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter13**: `checkOverloadsInStatements` (TS2383/2384/2394 overload group consistency) gains FunctionDeclaration body + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter14**: `walkForNestedImports` (TS1473 import not at top level) gains SwitchStatement (case+default) + LabeledStatement.
+- **iter15**: `walkBigIntExpInStmt` (TS2791 BigInt** under target<ES2016) ForStatement initializer (VariableDeclarationList + Expression form) added.
+- **iter16**: `checkCircularAliasInStmts` (TS2303 circular import-equals alias chain) gains FunctionDeclaration body + ClassDeclaration nested member bodies + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter17**: `walkStmtForDupLabels` (TS1114 duplicate label) ClassDeclaration GetAccessor/SetAccessor body recursion added.
+- **iter18**: `walkStmtForEmptyTypeArgs` (TS1099 empty type-arg list) gains ClassDeclaration GetAccessor/SetAccessor bodies + For (with initializer/condition/incrementor)/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter19**: `checkCircularTypeAliasInStatements` (TS2456 circular type alias) gains FunctionDeclaration body + ClassDeclaration nested member bodies + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter20**: `checkCircularInterfaceBasesInStatements` (TS2310 self-ref interface extends) gains FunctionDeclaration body + ClassDeclaration nested member bodies + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter21**: `checkCircularClassBaseInStatements` (TS2310 default-type-arg indexed-access cycle) gains FunctionDeclaration body + Block + If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+
+Session-end: 8944 → 8944 / 10078 (0 net, ~88.75%). Strategy: complement rounds 32-37 by broadening 21 different walkers whose statement/expression coverage was shallower than the recently-broadened corpus. All commits are pure structure-walking expansions (no emission-logic changes); each emission gate is narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts. No regressing attempts during this round.
 
 _Round 37 (2026-05-24, 0 net flips via 20 net-zero statement-level coverage broadenings)_:
 - **iter1**: `walkForOfNonIterableStmt` (TS2495 for-of non-iterable) gains SwitchStatement + ClassDeclaration GetAccessor/SetAccessor body recursion.
