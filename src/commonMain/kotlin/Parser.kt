@@ -1878,6 +1878,19 @@ class Parser(
                     parseAssignmentExpression()
                     initEndForTs2371 = scanner.getPrevTokenEnd()
                 }
+                // TS1025: trailing comma in index signature like `[key: string,]`.
+                if (token == SyntaxKind.Comma) {
+                    val commaPos = getPos()
+                    val nextIsClose = scanner.lookAhead {
+                        scanner.scan()
+                        scanner.getToken() == SyntaxKind.CloseBracket
+                    }
+                    if (nextIsClose) {
+                        nextToken() // consume trailing ,
+                        reportError("An index signature cannot have a trailing comma.", code = 1025,
+                            overrideStart = commaPos, overrideLength = 1)
+                    }
+                }
                 parseExpected(SyntaxKind.CloseBracket)
                 val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 parseSemicolon()
@@ -2571,9 +2584,17 @@ class Parser(
             params.add(Parameter(name = paramName, type = paramType))
             // Parse any additional parameters (invalid — TS1096 for multi-param index signature)
             var hasExtraParams = false
+            var hasTrailingComma = false
             while (token == SyntaxKind.Comma) {
+                val commaPos = getPos()
                 nextToken() // consume ,
-                if (token == SyntaxKind.CloseBracket || token == SyntaxKind.EndOfFile) break
+                if (token == SyntaxKind.CloseBracket || token == SyntaxKind.EndOfFile) {
+                    // TS1025: An index signature cannot have a trailing comma.
+                    reportError("An index signature cannot have a trailing comma.", code = 1025,
+                        overrideStart = commaPos, overrideLength = 1)
+                    hasTrailingComma = true
+                    break
+                }
                 params.add(parseParameter())
                 hasExtraParams = true
             }
