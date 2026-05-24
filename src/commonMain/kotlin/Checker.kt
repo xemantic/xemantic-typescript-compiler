@@ -9501,6 +9501,9 @@ class Checker(
                                 checkNonArrayRestParams(member.parameters, source, fileName)
                                 member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
                             }
+                            is GetAccessor -> member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                            is PropertyDeclaration -> member.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
                             else -> {}
                         }
                     }
@@ -9521,9 +9524,55 @@ class Checker(
                     checkNonArrayRestInStatements(listOf(stmt.thenStatement), source, fileName)
                     stmt.elseStatement?.let { checkNonArrayRestInStatements(listOf(it), source, fileName) }
                 }
-                is ForStatement -> checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                is ForStatement -> {
+                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                    when (val init = stmt.initializer) {
+                        is VariableDeclarationList -> for (decl in init.declarations) decl.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                        is Expression -> checkNonArrayRestInExpr(init, source, fileName)
+                        else -> {}
+                    }
+                    stmt.condition?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                    stmt.incrementor?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                }
+                is ForInStatement -> {
+                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                }
+                is ForOfStatement -> {
+                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                }
+                is WhileStatement -> {
+                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                }
+                is DoStatement -> {
+                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
+                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                }
+                is SwitchStatement -> {
+                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> {
+                                checkNonArrayRestInExpr(clause.expression, source, fileName)
+                                checkNonArrayRestInStatements(clause.statements, source, fileName)
+                            }
+                            is DefaultClause -> checkNonArrayRestInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkNonArrayRestInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
                 is ReturnStatement -> stmt.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
+                is ThrowStatement -> stmt.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
                 is ExpressionStatement -> checkNonArrayRestInExpr(stmt.expression, source, fileName)
+                is ExportAssignment -> checkNonArrayRestInExpr(stmt.expression, source, fileName)
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         decl.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
