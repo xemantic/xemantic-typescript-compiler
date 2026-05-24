@@ -70310,6 +70310,16 @@ interface DataView {
                 stmt.catchClause?.block?.statements?.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
                 stmt.finallyBlock?.statements?.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
             }
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> clause.statements.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+                        is DefaultClause -> clause.statements.forEach { walkForNestedImports(it, source, fileName, topLevel = false) }
+                        else -> {}
+                    }
+                }
+            }
+            is LabeledStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
             else -> {}
         }
     }
