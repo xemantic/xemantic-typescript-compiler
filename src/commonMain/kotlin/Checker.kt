@@ -64524,11 +64524,18 @@ interface DataView {
     private fun ts2365OperandDisplay(operand: Expression, type: Type): String {
         return when (operand) {
             is NumericLiteralNode -> operand.text
+            is BigIntLiteralNode -> operand.text
             is Identifier -> when (operand.text) {
                 "null" -> "null"
                 "undefined" -> "undefined"
+                "true" -> "true"
+                "false" -> "false"
                 else -> typeToString(type)
             }
+            is ParenthesizedExpression -> ts2365OperandDisplay(operand.expression, type)
+            is NonNullExpression -> ts2365OperandDisplay(operand.expression, type)
+            is AsExpression -> typeToString(type)
+            is SatisfiesExpression -> ts2365OperandDisplay(operand.expression, type)
             else -> typeToString(type)
         }
     }
