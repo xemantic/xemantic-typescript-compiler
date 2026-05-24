@@ -31380,29 +31380,42 @@ interface DataView {
 
     private fun checkSetterInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                if (prop is SetAccessor) {
-                    checkSetterParams(prop.name, prop.parameters, source, fileName)
-                }
-                if (prop is GetAccessor && prop.parameters.isNotEmpty()) {
-                    val nameNode = prop.name
-                    val start = if (nameNode is Identifier) nameNode.pos else prop.pos
-                    val length = if (nameNode is Identifier) nameNode.text.length else 3
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "A 'get' accessor cannot have parameters.",
-                        category = DiagnosticCategory.Error,
-                        code = 1054,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+            is ObjectLiteralExpression -> {
+                for (prop in expr.properties) {
+                    if (prop is SetAccessor) {
+                        checkSetterParams(prop.name, prop.parameters, source, fileName)
+                    }
+                    if (prop is GetAccessor && prop.parameters.isNotEmpty()) {
+                        val nameNode = prop.name
+                        val start = if (nameNode is Identifier) nameNode.pos else prop.pos
+                        val length = if (nameNode is Identifier) nameNode.text.length else 3
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "A 'get' accessor cannot have parameters.",
+                            category = DiagnosticCategory.Error,
+                            code = 1054,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                    // Recurse into property initializers / method bodies so nested object
+                    // literals with setters are checked.
+                    when (prop) {
+                        is PropertyAssignment -> checkSetterInExpr(prop.initializer, source, fileName)
+                        is SpreadAssignment -> checkSetterInExpr(prop.expression, source, fileName)
+                        is MethodDeclaration -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        else -> {}
+                    }
                 }
             }
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> checkSetterInStatements(body.statements, source, fileName)
+                is Expression -> checkSetterInExpr(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> expr.body?.let { checkSetterInStatements(it.statements, source, fileName) }
@@ -31411,18 +31424,30 @@ interface DataView {
                     if (m is SetAccessor) {
                         checkSetterParams(m.name, m.parameters, source, fileName)
                     }
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
+                        is PropertyDeclaration -> m.initializer?.let { checkSetterInExpr(it, source, fileName) }
+                        else -> {}
+                    }
                 }
             }
             is ParenthesizedExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is AsExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkSetterInExpr(expr.expression, source, fileName)
             is BinaryExpression -> {
                 var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkSetterInExpr(current.right, source, fileName)
-                    current = current.left
-                }
+                val rightStack = ArrayDeque<Expression>()
+                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
                 checkSetterInExpr(current, source, fileName)
+                while (rightStack.isNotEmpty()) checkSetterInExpr(rightStack.removeLast(), source, fileName)
             }
             is ConditionalExpression -> {
+                checkSetterInExpr(expr.condition, source, fileName)
                 checkSetterInExpr(expr.whenTrue, source, fileName)
                 checkSetterInExpr(expr.whenFalse, source, fileName)
             }
@@ -31430,6 +31455,32 @@ interface DataView {
                 checkSetterInExpr(expr.expression, source, fileName)
                 for (arg in expr.arguments) checkSetterInExpr(arg, source, fileName)
             }
+            is NewExpression -> {
+                checkSetterInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { checkSetterInExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                checkSetterInExpr(expr.expression, source, fileName)
+                checkSetterInExpr(expr.argumentExpression, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkSetterInExpr(e, source, fileName)
+            is SpreadElement -> checkSetterInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> checkSetterInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> checkSetterInExpr(expr.operand, source, fileName)
+            is AwaitExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkSetterInExpr(it, source, fileName) }
+            is VoidExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkSetterInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkSetterInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkSetterInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkSetterInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) checkSetterInExpr(e, source, fileName)
             else -> {}
         }
     }
