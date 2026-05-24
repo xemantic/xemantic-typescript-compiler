@@ -33662,11 +33662,10 @@ interface DataView {
             }
             is BinaryExpression -> {
                 var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    walkB94InExpr(cur.right, source, fileName)
-                    cur = cur.left
-                }
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
                 walkB94InExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkB94InExpr(rightStack.removeLast(), source, fileName)
             }
             is CallExpression -> {
                 walkB94InExpr(expr.expression, source, fileName)
@@ -33680,16 +33679,51 @@ interface DataView {
             is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
                 is PropertyAssignment -> walkB94InExpr(prop.initializer, source, fileName)
                 is SpreadAssignment -> walkB94InExpr(prop.expression, source, fileName)
+                is MethodDeclaration -> {
+                    emitB94ForFnLikeParams(prop.parameters, source, fileName)
+                    prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                }
+                is GetAccessor -> prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    emitB94ForFnLikeParams(prop.parameters, source, fileName)
+                    prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+            is ClassExpression -> for (member in expr.members) when (member) {
+                is MethodDeclaration -> {
+                    emitB94ForFnLikeParams(member.parameters, source, fileName)
+                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                }
+                is Constructor -> {
+                    emitB94ForFnLikeParams(member.parameters, source, fileName)
+                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                }
+                is PropertyDeclaration -> member.initializer?.let { walkB94InExpr(it, source, fileName) }
+                is GetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                is SetAccessor -> {
+                    emitB94ForFnLikeParams(member.parameters, source, fileName)
+                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
+                }
                 else -> {}
             }
             is AsExpression -> walkB94InExpr(expr.expression, source, fileName)
             is NonNullExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkB94InExpr(expr.expression, source, fileName)
             is CommaListExpression -> expr.elements.forEach { walkB94InExpr(it, source, fileName) }
             is TemplateExpression -> for (span in expr.templateSpans) walkB94InExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> walkB94InExpr(expr.tag, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkB94InExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkB94InExpr(span.expression, source, fileName)
+                }
+            }
             is SpreadElement -> walkB94InExpr(expr.expression, source, fileName)
-            is AwaitExpression -> expr.expression?.let { walkB94InExpr(it, source, fileName) }
+            is AwaitExpression -> walkB94InExpr(expr.expression, source, fileName)
             is YieldExpression -> expr.expression?.let { walkB94InExpr(it, source, fileName) }
+            is VoidExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkB94InExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkB94InExpr(expr.expression, source, fileName)
             is PrefixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
             is PostfixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
             is PropertyAccessExpression -> walkB94InExpr(expr.expression, source, fileName)
