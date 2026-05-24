@@ -39939,6 +39939,9 @@ interface DataView {
                     decl.initializer?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
                 }
             }
+            is ReturnStatement -> stmt.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
+            is ThrowStatement -> stmt.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
+            is ExportAssignment -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict, isInWith)
             else -> {}
         }
     }
