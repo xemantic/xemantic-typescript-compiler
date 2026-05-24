@@ -36744,6 +36744,49 @@ interface DataView {
                 walkForOptionalParamsInStmt(stmt.thenStatement, source, fileName)
                 stmt.elseStatement?.let { walkForOptionalParamsInStmt(it, source, fileName) }
             }
+            is ForStatement -> {
+                stmt.condition?.let { walkForOptionalParamsInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkForOptionalParamsInExpr(it, source, fileName) }
+                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> {
+                            walkForOptionalParamsInExpr(clause.expression, source, fileName)
+                            clause.statements
+                        }
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    walkForOptionalParams(clauseStmts, source, fileName)
+                }
+            }
+            is TryStatement -> {
+                walkForOptionalParams(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { walkForOptionalParams(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkForOptionalParams(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkForOptionalParamsInStmt(stmt.statement, source, fileName)
+            is ThrowStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
+            is ExportAssignment -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
             else -> {}
         }
     }
