@@ -54308,6 +54308,24 @@ interface DataView {
                 checkPropertyUseBeforeInitInStatement(stmt.thenStatement, source, fileName)
                 stmt.elseStatement?.let { checkPropertyUseBeforeInitInStatement(it, source, fileName) }
             }
+            is ForStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> for (s in c.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+                    is DefaultClause -> for (s in c.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { checkPropertyUseBeforeInitInStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkPropertyUseBeforeInitInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkPropertyUseBeforeInitInStatement(stmt.statement, source, fileName)
             is Block -> {
                 for (s in stmt.statements) checkPropertyUseBeforeInitInStatement(s, source, fileName)
             }
