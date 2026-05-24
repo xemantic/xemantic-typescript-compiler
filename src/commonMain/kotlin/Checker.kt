@@ -36723,11 +36723,60 @@ interface DataView {
 
     private fun walkJSDocVoidCastInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
-            is ParenthesizedExpression -> emitTS2352IfJSDocVoidCast(expr, source, fileName)
-            is BinaryExpression -> {
-                // Assignment RHS — e.g. `module.exports = /** @type {T} */(void 0)`.
-                walkJSDocVoidCastInExpr(expr.right, source, fileName)
+            is ParenthesizedExpression -> {
+                emitTS2352IfJSDocVoidCast(expr, source, fileName)
+                walkJSDocVoidCastInExpr(expr.expression, source, fileName)
             }
+            is BinaryExpression -> {
+                // Iterative left-spine flatten — handles assignment RHS (e.g.
+                // `module.exports = /** @type {T} */(void 0)`) plus chained binary ops.
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkJSDocVoidCastInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkJSDocVoidCastInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkJSDocVoidCastInExpr(expr.condition, source, fileName)
+                walkJSDocVoidCastInExpr(expr.whenTrue, source, fileName)
+                walkJSDocVoidCastInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+                for (arg in expr.arguments) walkJSDocVoidCastInExpr(arg, source, fileName)
+            }
+            is NewExpression -> {
+                walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkJSDocVoidCastInExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> for (el in expr.elements) walkJSDocVoidCastInExpr(el, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> walkJSDocVoidCastInExpr(prop.initializer, source, fileName)
+                is SpreadAssignment -> walkJSDocVoidCastInExpr(prop.expression, source, fileName)
+                else -> {}
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+                is Expression -> walkJSDocVoidCastInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.statements?.forEach { walkJSDocVoidCastInStmt(it, source, fileName) }
+            is PropertyAccessExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+                walkJSDocVoidCastInExpr(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkJSDocVoidCastInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkJSDocVoidCastInExpr(expr.operand, source, fileName)
+            is SpreadElement -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkJSDocVoidCastInExpr(it, source, fileName) }
+            is AsExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkJSDocVoidCastInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkJSDocVoidCastInExpr(span.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkJSDocVoidCastInExpr(e, source, fileName)
             else -> {}
         }
     }
