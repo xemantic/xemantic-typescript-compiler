@@ -1,8 +1,8 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,943 / 10,078 tests passing (~88.74%). _Round 32 (2026-05-24): /goal session — 16+ commits in progress, +4 net flips via diagnostic-shape extensions + 10+ wrapper-unwrap correctness._
+**Phase 4 — Checker buildout.** 8,943 / 10,078 tests passing (~88.74%). _Round 32 (2026-05-24): /goal session — 20 commits, +4 net flips via diagnostic-shape extensions + 16 wrapper-unwrap correctness improvements._
 
-_Round 32 (2026-05-24, +4 net via 4 feature commits + 12 net-zero correctness)_:
+_Round 32 (2026-05-24, +4 net via 4 feature commits + 16 net-zero correctness)_:
 - **iter1 (+1)**: TS1025 trailing comma in index signatures. `[key: T,]: V` in classes, type literals, interfaces now emits TS1025 instead of silently swallowing the comma or cascading errors. Two parallel emission sites (parseClassMember + parseIndexSignatureOrProperty). Flips `indexSignatureWithTrailingComma_ts`.
 - **iter2 (+1)**: TS2447 for bitwise compound assign on booleans. `a ^= a` / `c &= c` / `e |= e` where both operands are boolean now emits TS2447 (with op-specific suggestion `!==`/`&&`/`||`) instead of TS2362/TS2363. Squiggle covers entire binary expression. Flips `bitwiseCompoundAssignmentOperators_ts`.
 - **iter3 (+1)**: TS1100+TS2630 for prefix/postfix ++/-- on eval/arguments. `++eval`, `eval--`, `++arguments`, etc. in strict mode now emit TS1100; eval variants also emit TS2630. Extends `checkStrictModeInExpr` with PrefixUnary/PostfixUnary branches. Flips `unaryOperatorsInStrictMode_ts`.
@@ -19,8 +19,12 @@ _Round 32 (2026-05-24, +4 net via 4 feature commits + 12 net-zero correctness)_:
 - **iter14 (net-zero)**: `checkArithmeticInExpr` gains SatisfiesExpression. `checkInvalidAssignInExpr` (TS2364) gains As/Satisfies/NonNull/TypeAssertion/PropertyAccess/ElementAccess/NewExpression recursion.
 - **iter15 (net-zero)**: `checkExprForCtorParamRefs` (TS2663/TS2301) gains SatisfiesExpression alongside existing TypeAssertion/As/NonNull.
 - **iter16 (net-zero)**: `checkConstAssignmentInExpr` broadened to recurse through wrappers + member access + NewExpression + ArrayLiteralExpression/ObjectLiteralExpression members + TemplateExpression spans + ArrowFunction expression body.
+- **iter17 (net-zero)**: `getReferencePath` unwraps NonNull/As/Satisfies/TypeAssertion. `(x as T).prop` narrows identically to `x.prop`.
+- **iter18 (net-zero)**: `ts2365OperandDisplay` (TS2365 message) handles BigInt literals, boolean literal identifiers, and wrappers (Parens/NonNull/Satisfies → recurse; As → use type).
+- **iter19 (net-zero)**: `isUndefinedRef` treats VoidExpression as undefined. `x === void 0` narrows identically to `x === undefined`.
+- **iter20 (net-zero)**: `getTypeOfBinaryExpression` handles all compound-assignment operators (was missing %=, **=, bitwise+shift compound assigns, &&=/||=/??=).
 
-Session running 8939 → 8943 / 10078 (+4 net, ~88.74%). Strategy: target test-by-test reading of failing tests (4 flips from narrow diagnostic-shape extensions in Parser/Checker) + systematic wrapper-unwrap improvements across narrowing/walker helpers (12 net-zero foundational improvements).
+Session-end: 8939 → 8943 / 10078 (+4 net, ~88.74%). Strategy: target test-by-test reading of failing tests (4 flips from narrow diagnostic-shape extensions in Parser/Checker) + systematic wrapper-unwrap improvements across narrowing/walker helpers (16 net-zero foundational improvements for future flips when paired with broader infrastructure).
 
 _Round 31 (2026-05-23, +1 net via iter1+iter2 + 8 net-zero correctness)_:
 - **iter1 (net-zero correctness)**: `checkArrayLiteralElementExcessProps` recurses into nested ArrayLiteralExpression elements when the expected element type is itself Array<X>. Widens literal types in TS2322 displays (1 → number). Handles `number[][][] = [[1, 2]]` shape.
