@@ -22928,6 +22928,10 @@ interface DataView {
                 when (p) {
                     is PropertyAssignment -> walkUncalledChecksInExpression(p.initializer, source, fileName)
                     is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+                    is SpreadAssignment -> walkUncalledChecksInExpression(p.expression, source, fileName)
+                    is MethodDeclaration -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
                     else -> {}
                 }
             }
@@ -22937,7 +22941,26 @@ interface DataView {
             is NonNullExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
             is YieldExpression -> expr.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
             is AwaitExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is VoidExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is DeleteExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is TypeOfExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkUncalledChecksInExpression(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkUncalledChecksInExpression(it.expression, source, fileName)
+                }
+            }
             is CommaListExpression -> for (e in expr.elements) walkUncalledChecksInExpression(e, source, fileName)
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
+                    else -> {}
+                }
+            }
             else -> {}
         }
     }
