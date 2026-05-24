@@ -19994,6 +19994,35 @@ class Checker(
                         else -> {}
                     }
                 }
+                is VoidExpression -> stack.addLast(node.expression)
+                is DeleteExpression -> stack.addLast(node.expression)
+                is TypeOfExpression -> stack.addLast(node.expression)
+                is CommaListExpression -> node.elements.forEach { stack.addLast(it) }
+                is ClassExpression -> node.members.forEach { stack.addLast(it) }
+                is PropertyDeclaration -> node.initializer?.let { stack.addLast(it) }
+                // Additional statement kinds for broader top-down coverage
+                is ForInStatement -> stack.addLast(node.statement)
+                is ForOfStatement -> stack.addLast(node.statement)
+                is DoStatement -> stack.addLast(node.statement)
+                is SwitchStatement -> for (clause in node.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            stack.addLast(clause.expression)
+                            clause.statements.forEach { stack.addLast(it) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { stack.addLast(it) }
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    node.tryBlock.statements.forEach { stack.addLast(it) }
+                    node.catchClause?.block?.statements?.forEach { stack.addLast(it) }
+                    node.finallyBlock?.statements?.forEach { stack.addLast(it) }
+                }
+                is LabeledStatement -> stack.addLast(node.statement)
+                is ThrowStatement -> node.expression?.let { stack.addLast(it) }
+                is ExportAssignment -> stack.addLast(node.expression)
+                is ModuleDeclaration -> (node.body as? ModuleBlock)?.statements?.forEach { stack.addLast(it) }
                 else -> {}
             }
         }
