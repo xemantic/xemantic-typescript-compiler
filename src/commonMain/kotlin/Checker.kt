@@ -41588,6 +41588,7 @@ interface DataView {
                 is Constructor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
                 is GetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
                 is SetAccessor -> m.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { walkExprForFallthroughCases(it, source, fileName) }
                 else -> {}
             }
             is ParenthesizedExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
@@ -41621,9 +41622,18 @@ interface DataView {
                 is PropertyAssignment -> walkExprForFallthroughCases(prop.initializer, source, fileName)
                 is SpreadAssignment -> walkExprForFallthroughCases(prop.expression, source, fileName)
                 is MethodDeclaration -> prop.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is GetAccessor -> prop.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
+                is SetAccessor -> prop.body?.let { walkForFallthroughCases(it.statements, source, fileName) }
                 else -> {}
             }
             is TemplateExpression -> expr.templateSpans.forEach { walkExprForFallthroughCases(it.expression, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkExprForFallthroughCases(expr.tag, source, fileName)
+                val t = expr.template
+                if (t is TemplateExpression) {
+                    for (span in t.templateSpans) walkExprForFallthroughCases(span.expression, source, fileName)
+                }
+            }
             is SpreadElement -> walkExprForFallthroughCases(expr.expression, source, fileName)
             is PropertyAccessExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
             is ElementAccessExpression -> {
@@ -41634,6 +41644,10 @@ interface DataView {
             is PostfixUnaryExpression -> walkExprForFallthroughCases(expr.operand, source, fileName)
             is AwaitExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
             is YieldExpression -> expr.expression?.let { walkExprForFallthroughCases(it, source, fileName) }
+            is VoidExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is DeleteExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is TypeOfExpression -> walkExprForFallthroughCases(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { walkExprForFallthroughCases(it, source, fileName) }
             else -> {}
         }
     }
