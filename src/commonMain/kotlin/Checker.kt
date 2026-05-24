@@ -31239,9 +31239,18 @@ interface DataView {
             }
             is AsExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is TypeAssertionExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is SatisfiesExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is VoidExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is DeleteExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
             is AwaitExpression -> checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
+            is YieldExpression -> expr.expression?.let { checkUBDForwardInExpr(it, blockDecls, source, fileName, inStaticInit) }
+            is TaggedTemplateExpression -> {
+                checkUBDForwardInExpr(expr.tag, blockDecls, source, fileName, inStaticInit)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkUBDForwardInExpr(it.expression, blockDecls, source, fileName, inStaticInit)
+                }
+            }
+            is CommaListExpression -> for (el in expr.elements) checkUBDForwardInExpr(el, blockDecls, source, fileName, inStaticInit)
             // Don't recurse into functions/arrows (they capture lazily)
             is ArrowFunction, is FunctionExpression -> {}
             else -> {}
