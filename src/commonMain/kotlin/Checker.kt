@@ -6363,6 +6363,20 @@ class Checker(
                 stmt.catchClause?.block?.statements?.forEach { collectTypeRefsInStatement(it, scope) }
                 stmt.finallyBlock?.statements?.forEach { collectTypeRefsInStatement(it, scope) }
             }
+            is SwitchStatement -> {
+                collectTypeRefsInExpr(stmt.expression, scope)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        collectTypeRefsInExpr(clause.expression, scope)
+                        clause.statements.forEach { collectTypeRefsInStatement(it, scope) }
+                    }
+                    is DefaultClause -> clause.statements.forEach { collectTypeRefsInStatement(it, scope) }
+                    else -> {}
+                }
+            }
+            is LabeledStatement -> collectTypeRefsInStatement(stmt.statement, scope)
+            is ThrowStatement -> stmt.expression?.let { collectTypeRefsInExpr(it, scope) }
+            is ExportAssignment -> collectTypeRefsInExpr(stmt.expression, scope)
             else -> {}
         }
     }
