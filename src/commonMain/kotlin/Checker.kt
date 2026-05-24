@@ -40209,10 +40209,47 @@ interface DataView {
             }
         }
 
-        // Recurse into namespaces
+        // Recurse into namespaces / function bodies / class member bodies / nested blocks
         for (stmt in stmts) {
             when (stmt) {
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is Block -> checkCircularAliasInStmts(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkCircularAliasInStmts(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkCircularAliasInStmts(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkCircularAliasInStmts(clause.statements, source, fileName)
+                            is DefaultClause -> checkCircularAliasInStmts(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkCircularAliasInStmts(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkCircularAliasInStmts(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkCircularAliasInStmts(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
