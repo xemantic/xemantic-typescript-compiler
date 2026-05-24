@@ -8561,6 +8561,8 @@ class Checker(
                 checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
             is NonNullExpression ->
                 checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
+            is SatisfiesExpression ->
+                checkExprForCtorParamRefs(expr.expression, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
             is TaggedTemplateExpression -> {
                 checkExprForCtorParamRefs(expr.tag, memberName, ctorNames, ctorParamPropertyNames, source, fileName)
                 when (val templ = expr.template) {
