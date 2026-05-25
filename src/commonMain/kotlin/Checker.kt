@@ -28344,6 +28344,30 @@ interface DataView {
                     if (body is ModuleBlock) walkForDerivedConstructors(body.statements, source, fileName)
                 }
                 is Block -> walkForDerivedConstructors(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForDerivedConstructors(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForDerivedConstructors(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> walkForDerivedConstructors(clause.statements, source, fileName)
+                            is DefaultClause -> walkForDerivedConstructors(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    walkForDerivedConstructors(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
