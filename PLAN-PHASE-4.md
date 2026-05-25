@@ -978,7 +978,7 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-25 (round 43 of /goal — in progress, architectural focus per user direction).** /goal session after round 42. User confirmed via AskUserQuestion to commit entirely to architectural blocker (Blocker #1 control-flow narrowing). 12 commits landed (10 code, 2 docs), all net-zero on suite.
+  **Session 2026-05-25 (round 43 of /goal — 17 commits landed + 1 revert, **+1 net flip** via iter14).** /goal session after round 42. User confirmed via AskUserQuestion to commit entirely to architectural blocker (Blocker #1 control-flow narrowing). 9 narrowing-infrastructure commits net-zero (iter3-iter11); iter14 broke the 12-round net-zero streak with a class (c) safe broadening discovered while working on narrowing.
 
   Round 43 iterations:
   - **iter1 (net-zero)**: `checkSubsequentVarTypesInStatements` ClassDeclaration branch includes Get/SetAccessor bodies.
@@ -994,8 +994,16 @@ the live plan focused. Quick reference:
   - **iter11 (net-zero, architectural)**: optional-chain receiver narrowing. `if (obj?.x)` narrows `obj` to non-null/undefined on truthy side. New helper `narrowByExcludingNullUndefined`.
   - **iter12 (doc)**: STATUS.md mid-round-43 update.
   - **iter13 (doc)**: This PLAN-PHASE-4.md entry.
+  - **iter14 attempt-A (reverted, -1)**: Array.isArray special-case narrowing in applyConditionNarrowing — over-narrowed, regressed 1 test.
+  - **iter14 attempt-B (+1)**: `checkPropertyInitInExpr` ArrowFunction/FunctionExpression body recursion. Nested ClassExpression in `() => class C { x = 1 }` reaches TS2564. **First flip in 12 rounds (32-43).**
+  - **iter15 (net-zero)**: Mirror iter14's pattern to `checkConstructorParamInInitializersInExpr`.
+  - **iter16 (net-zero)**: Mirror to `walkExprForNestedClasses`.
+  - **iter17 (net-zero)**: Mirror to `walkExprForAbstractContext`.
+  - **iter18 (doc)**: STATUS.md final update.
+  - **iter19 (doc)**: This PLAN-PHASE-4.md final update.
+  - **iter20 (doc)**: Final session-end summary.
 
-  All 10 code commits net-zero on suite. The narrowing infrastructure improvements lay foundation for flips when paired with:
+  All architectural-narrowing infrastructure (iter3-iter11) net-zero — building Blocker #1 foundation. iter14 broke the streak. The narrowing infrastructure improvements lay foundation for flips when paired with:
   - More emission sites consulting narrowing (currently only TS2339 via `checkPropertyAccess` + TS2454 via `walkExprForFlowTS2454`).
   - `getTypeOfIdentifier` consulting narrowing (high-risk — broadcasts narrowing through all type lookups; deferred).
   - Tests exercising the specific patterns (assert calls, switch cases, optional chains) where the underlying type infrastructure is sufficiently complete.
