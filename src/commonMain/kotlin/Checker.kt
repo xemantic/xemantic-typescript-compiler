@@ -32816,6 +32816,8 @@ interface DataView {
             }
             is LabeledStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkUBDInStatements(it.statements, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { checkUBDInExprForNested(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { checkUBDInExprForNested(it, source, fileName) }
             else -> {}
         }
     }
