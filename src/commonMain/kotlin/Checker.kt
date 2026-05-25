@@ -40333,6 +40333,39 @@ interface DataView {
                     stmt.finallyBlock?.let { walkForDerivedSuper(it.statements, source, fileName) }
                 }
                 is LabeledStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassDerivedSuper(expr.heritageClauses, expr.members, source, fileName, expr.name)
+                        is FunctionExpression -> walkForDerivedSuper(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForDerivedSuper(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
+                is ExportAssignment -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassDerivedSuper(expr.heritageClauses, expr.members, source, fileName, expr.name)
+                        is FunctionExpression -> walkForDerivedSuper(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForDerivedSuper(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
+                is ReturnStatement -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassDerivedSuper(expr.heritageClauses, expr.members, source, fileName, expr.name)
+                        is FunctionExpression -> walkForDerivedSuper(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForDerivedSuper(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
                 else -> {}
             }
         }
