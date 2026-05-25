@@ -34859,6 +34859,17 @@ interface DataView {
         // `expr satisfies T` — the satisfies type is the trailing token, so the
         // squiggle should cover through the type-annotation end.
         is SatisfiesExpression -> expr.type.end
+        // round 42 iter3: NoSubstitutionTemplateLiteralNode is a backtick-quoted
+        // string with no spans. End = `pos + text.length + quoteCount` matches
+        // StringLiteralNode's pattern. Conservative: prefer expr.end when text
+        // is empty (rare AST shape).
+        is NoSubstitutionTemplateLiteralNode -> {
+            if (expr.text.isEmpty()) expr.end
+            else {
+                val quoteCount = if (expr.isUnterminated) 1 else 2
+                expr.pos + expr.text.length + quoteCount
+            }
+        }
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
