@@ -39910,6 +39910,8 @@ interface DataView {
                         when (m) {
                             is MethodDeclaration -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
                             is Constructor -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                            is GetAccessor -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                            is SetAccessor -> m.body?.let { walkForDerivedSuper(it.statements, source, fileName) }
                             else -> {}
                         }
                     }
@@ -39928,6 +39930,28 @@ interface DataView {
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForDerivedSuper(it.statements, source, fileName) }
                 is Block -> walkForDerivedSuper(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForDerivedSuper(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForDerivedSuper(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForDerivedSuper(clause.statements, source, fileName)
+                        is DefaultClause -> walkForDerivedSuper(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkForDerivedSuper(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForDerivedSuper(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForDerivedSuper(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForDerivedSuper(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
