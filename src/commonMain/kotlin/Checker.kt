@@ -69833,6 +69833,35 @@ interface DataView {
                         checkIndexedAccessPrivateInStatements(body.statements, source, fileName, outerTpConstraints)
                     }
                 }
+                is FunctionDeclaration -> {
+                    val fnTp = outerTpConstraints + collectTpConstraints(stmt.typeParameters)
+                    stmt.body?.let { checkIndexedAccessPrivateInStatements(it.statements, source, fileName, fnTp) }
+                }
+                is Block -> checkIndexedAccessPrivateInStatements(stmt.statements, source, fileName, outerTpConstraints)
+                is IfStatement -> {
+                    checkIndexedAccessPrivateInStatements(listOf(stmt.thenStatement), source, fileName, outerTpConstraints)
+                    stmt.elseStatement?.let { checkIndexedAccessPrivateInStatements(listOf(it), source, fileName, outerTpConstraints) }
+                }
+                is ForStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
+                is ForInStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
+                is ForOfStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
+                is WhileStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
+                is DoStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkIndexedAccessPrivateInStatements(clause.statements, source, fileName, outerTpConstraints)
+                            is DefaultClause -> checkIndexedAccessPrivateInStatements(clause.statements, source, fileName, outerTpConstraints)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkIndexedAccessPrivateInStatements(stmt.tryBlock.statements, source, fileName, outerTpConstraints)
+                    stmt.catchClause?.block?.let { checkIndexedAccessPrivateInStatements(it.statements, source, fileName, outerTpConstraints) }
+                    stmt.finallyBlock?.let { checkIndexedAccessPrivateInStatements(it.statements, source, fileName, outerTpConstraints) }
+                }
+                is LabeledStatement -> checkIndexedAccessPrivateInStatements(listOf(stmt.statement), source, fileName, outerTpConstraints)
                 else -> {}
             }
         }
