@@ -10032,6 +10032,52 @@ class Checker(
                 stmt.elseStatement?.let { walkJSDocParamTagsInStmt(it, source, fileName) }
             }
             is ReturnStatement -> stmt.expression?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    d.initializer?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                }
+                (stmt.initializer as? Expression)?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                stmt.condition?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+                walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+                walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+                walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+                walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+                walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkJSDocParamTagsInExpr(stmt.expression, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkJSDocParamTagsInExpr(clause.expression, source, fileName)
+                            walkJSDocParamTagsInStmts(clause.statements, source, fileName)
+                        }
+                        is DefaultClause -> walkJSDocParamTagsInStmts(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkJSDocParamTagsInStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkJSDocParamTagsInStmt(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
             is ModuleDeclaration -> {
                 when (val body = stmt.body) {
                     is ModuleBlock -> walkJSDocParamTagsInStmts(body.statements, source, fileName)
