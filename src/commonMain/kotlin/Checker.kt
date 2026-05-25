@@ -50433,8 +50433,16 @@ interface DataView {
             // 17.34: PropertyAccess truthiness narrowing — `if (A._a) { ... A._a ... }`
             // narrows `A._a` from `T | undefined | null` to `T` on the truthy side.
             // Path comparison gates by structural identity of the dotted reference path.
-            is PropertyAccessExpression ->
-                if (getReferencePath(expr) == name) narrowByTruthiness(t, truthy = isTrue) else t
+            is PropertyAccessExpression -> {
+                if (getReferencePath(expr) == name) narrowByTruthiness(t, truthy = isTrue)
+                // round 43 iter11: optional-chain receiver narrowing —
+                // `if (obj?.x) { ... obj ... }` narrows obj to non-null/undefined on
+                // the truthy side. The `?.` short-circuits when obj is null/undefined,
+                // so for the condition to be truthy, obj must NOT be null/undefined.
+                else if (expr.questionDotToken && isTrue && getReferencePath(expr.expression) == name) {
+                    narrowByExcludingNullUndefined(t)
+                } else t
+            }
             else -> t
         }
     }
@@ -50449,6 +50457,25 @@ interface DataView {
      * are kept on both sides — they could be either the empty/zero
      * variant or the non-empty/non-zero variant.
      */
+    /**
+     * round 43 iter11: helper for optional-chain receiver narrowing. Removes
+     * null/undefined/void from a union; returns t unchanged for non-union or
+     * when no nullish members are present. Returns neverType if all members
+     * are nullish (shouldn't normally happen — caller should bail).
+     */
+    private fun narrowByExcludingNullUndefined(t: Type): Type {
+        if (t !is Type.Union) return t
+        val filtered = t.types.filter {
+            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+        }
+        return when {
+            filtered.isEmpty() -> t  // conservative — don't return never
+            filtered.size == t.types.size -> t  // no narrowing
+            filtered.size == 1 -> filtered[0]
+            else -> getUnionType(filtered)
+        }
+    }
+
     private fun narrowByTruthiness(t: Type, truthy: Boolean): Type {
         return if (truthy) {
             when {
