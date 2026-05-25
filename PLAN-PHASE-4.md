@@ -978,7 +978,7 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-25 (round 45 of /goal — in progress).** Continuation — 15+ commits. iter1 narrowUnionByLiteral supertype substitution: positive narrowing of `s: string | null` by `s === "abc"` now returns `"abc"` (was empty/never). New helper `isLiteralAssignableToMember`.
+  **Session 2026-05-25 (round 45 of /goal — in progress).** Continuation — 17+ commits. iter1 narrowUnionByLiteral supertype substitution: positive narrowing of `s: string | null` by `s === "abc"` now returns `"abc"` (was empty/never). New helper `isLiteralAssignableToMember`.
 
   ---
 
