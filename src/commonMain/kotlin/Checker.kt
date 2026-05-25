@@ -48221,6 +48221,57 @@ interface DataView {
                                 return
                             }
                         }
+                        // B71.3: `b = {}` where `b: Boolean` (or other primitive wrapper) —
+                        // empty object literal assignment to a wrapper interface. The
+                        // standard structural compare passes trivially because
+                        // OBJECT_PROTOTYPE_PROPERTIES (toString/valueOf/etc.) are filtered
+                        // out in `propertiesRelatedTo`. TypeScript emits TS2322 with chain:
+                        //   "  The types returned by 'valueOf()' are incompatible between these types."
+                        //   "    Type 'Object' is not assignable to type 'boolean'."
+                        // because source's apparent valueOf returns `Object` but target's
+                        // wrapper interface declares `valueOf(): <primitive>`. Narrow gate:
+                        // (a) RHS is an empty ObjectLiteralExpression `{}`; (b) target is
+                        // a named wrapper interface. Other shapes still go through the
+                        // standard path.
+                        if (expr.right is ObjectLiteralExpression &&
+                            (expr.right as ObjectLiteralExpression).properties.isEmpty() &&
+                            tt is Type.Interface && tt !is Type.Reference
+                        ) {
+                            val targetName = tt.symbol?.name
+                            if (targetName in WRAPPER_INTERFACE_NAMES) {
+                                val primitive = when (targetName) {
+                                    "Boolean" -> "boolean"
+                                    "Number" -> "number"
+                                    "String" -> "string"
+                                    "BigInt" -> "bigint"
+                                    "Symbol" -> "symbol"
+                                    else -> null
+                                }
+                                if (primitive != null) {
+                                    val displaySource = typeToString(sourceType)
+                                    val displayTarget = if (typeAnnotation != null)
+                                        formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt)
+                                        else typeToString(tt)
+                                    val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                    val chain = listOf(
+                                        "  The types returned by 'valueOf()' are incompatible between these types.",
+                                        "    Type 'Object' is not assignable to type '$primitive'.",
+                                    )
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2322,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = target.pos,
+                                        length = target.text.length,
+                                        messageChain = chain,
+                                    ))
+                                    return
+                                }
+                            }
+                        }
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)
