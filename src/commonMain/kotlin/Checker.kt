@@ -15053,6 +15053,9 @@ class Checker(
             is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
                 is PropertyAssignment -> walkBigIntExpInExpr(prop.initializer, source, fileName)
                 is SpreadAssignment -> walkBigIntExpInExpr(prop.expression, source, fileName)
+                is MethodDeclaration -> prop.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is GetAccessor -> prop.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
+                is SetAccessor -> prop.body?.let { walkBigIntExpInStmts(it.statements, source, fileName) }
                 else -> {}
             }
             is ArrowFunction -> when (val body = expr.body) {
