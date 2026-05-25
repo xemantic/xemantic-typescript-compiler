@@ -37531,11 +37531,35 @@ interface DataView {
                 walkTParamDefaultsInStmt(stmt.thenStatement, source, fileName)
                 stmt.elseStatement?.let { walkTParamDefaultsInStmt(it, source, fileName) }
             }
-            is ForStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            is ForInStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            is ForOfStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            is WhileStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            is DoStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> init.declarations.forEach { d ->
+                        d.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+                        d.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+                    }
+                    is Expression -> walkTParamDefaultsInExpr(init, source, fileName)
+                    else -> {}
+                }
+                stmt.condition?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkTParamDefaultsInExpr(it, source, fileName) }
+                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
+                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
+            }
             is TryStatement -> {
                 walkTParamDefaultsInStmts(stmt.tryBlock.statements, source, fileName)
                 stmt.catchClause?.block?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
