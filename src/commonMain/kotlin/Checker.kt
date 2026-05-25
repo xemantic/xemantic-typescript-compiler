@@ -50328,7 +50328,13 @@ interface DataView {
                 // assertion function.
                 narrowByAssertCall(antecedent, flowNode.node, name) ?: antecedent
             }
-            is FlowSwitchClause -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowSwitchClause -> {
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                // round 43 iter5: switch-case discriminant narrowing. When `switch (X) { case <lit>: ... }`
+                // and X's reference path matches [name], narrow [antecedent] (a union)
+                // by filtering to members assignable from the case literal.
+                narrowBySwitchClause(antecedent, flowNode, name) ?: antecedent
+            }
             is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
         }
     }
@@ -50506,6 +50512,54 @@ interface DataView {
      * Identifier matching [name]. `asserts` predicates are skipped — those
      * narrow only on the assertion path, not via the boolean return.
      */
+    /**
+     * round 43 iter5: switch-case discriminant narrowing. When `switch (X) { case <lit>: ... }`
+     * and [name] matches X's reference path, collect all case literals in
+     * [flowNode.clauseStart, flowNode.clauseEnd) range and filter [t] (a union)
+     * to members assignable from any of those literals. Returns null when the
+     * switch subject doesn't match [name] or no usable case literals are found.
+     */
+    private fun narrowBySwitchClause(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
+        if (getReferencePath(flowNode.switchStatement.expression) != name) return null
+        // Collect literal types from cases in the [clauseStart, clauseEnd) range.
+        val literalTypes = mutableListOf<Type>()
+        val clauses = flowNode.switchStatement.caseBlock
+        var idx = 0
+        for (clause in clauses) {
+            if (idx >= flowNode.clauseEnd) break
+            if (idx >= flowNode.clauseStart) {
+                when (clause) {
+                    is CaseClause -> literalTypeOfExpression(clause.expression)?.let { literalTypes.add(it) }
+                    is DefaultClause -> {
+                        // Default clause — no narrowing possible from this clause alone.
+                        // If [clauseStart, clauseEnd) includes default, fall through to
+                        // antecedent (return null).
+                        return null
+                    }
+                    else -> {}
+                }
+            }
+            idx++
+        }
+        if (literalTypes.isEmpty()) return null
+        if (t !is Type.Union) {
+            // For non-union, narrow by intersecting with the case literals.
+            // If t is assignable from any literal, keep t (no narrowing).
+            // Otherwise can't narrow further — return null.
+            return null
+        }
+        // Filter union members: keep those assignable from any of the case literals.
+        val filtered = t.types.filter { member ->
+            literalTypes.any { lit -> checkTypeRelatedTo(lit, member, assignableRelation) }
+        }
+        return when {
+            filtered.isEmpty() -> null
+            filtered.size == 1 -> filtered[0]
+            filtered.size == t.types.size -> null  // no narrowing
+            else -> getUnionType(filtered)
+        }
+    }
+
     /**
      * round 43 iter3: assert-function narrowing after a call returns. For
      * `function assertX(x): asserts x is T` (assertsModifier=true), when the
