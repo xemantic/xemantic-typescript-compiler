@@ -305,6 +305,10 @@ class Checker(
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
 
+    /** B72.1: value-scope tracking for mixin-class TS2545 check —
+     *  maps function parameter names to their TypeParam-typed annotation. */
+    private var mixinValueScope: Map<String, Type.TypeParam>? = null
+
     /** B50.1: Generic type alias arg substitution. When `getTypeFromTypeReference` resolves
      *  a `TypeAlias` symbol with concrete type arguments, the alias's type-parameter names
      *  are pushed into this map, then the alias body is re-resolved fresh via
@@ -626,6 +630,14 @@ class Checker(
         }
         // 7b'''. TS18045: 'accessor' modifier requires target ES2015+.
         checkAccessorModifierTarget()
+        // B72.1: TS2545 — A mixin class must have a constructor with a single rest
+        // parameter of type 'any[]'. NARROW gate: fires only when the
+        // class-extends-TypeParam's constraint's construct signature has a
+        // BROKEN rest parameter (optional `...args?` — already TS2370-flagged
+        // shape). Valid `Constructor<T> = new (...args: any[]) => T` shapes do
+        // NOT trigger TS2545 here (mixin without explicit constructor is OK
+        // for the valid pattern).
+        checkMixinClassConstructor()
         // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
         checkInvalidGlobalAugmentations()
         // 7b''''. TS8024: JSDoc `@param` tag with name not matching any function parameter.
@@ -10217,6 +10229,222 @@ class Checker(
                 else -> {}
             }
         }
+    }
+
+    /**
+     * B72.1: TS2545 — "A mixin class must have a constructor with a single rest
+     * parameter of type 'any[]'." NARROW gate fires for `class extends X { ... }`
+     * (ClassExpression or ClassDeclaration) where:
+     * - X is an Identifier resolving (via [mixinValueScope]) to a function
+     *   parameter whose annotation is a TypeParameter; OR directly to a
+     *   TypeParameter in [currentTypeParamScope];
+     * - The TypeParameter's constraint resolves to a Type whose FIRST construct
+     *   signature has a REST parameter that is INVALID — specifically, the
+     *   rest parameter has `questionToken` set (e.g. `new (...args?: any[]) => T`,
+     *   which is itself TS2370-flagged via the optional-rest restriction).
+     *
+     * Skip when the construct sig's rest param is well-formed (the standard
+     * `new (...args: any[]) => T` mixin pattern is legitimate even without an
+     * explicit subclass constructor).
+     *
+     * Squiggle: the `class` keyword (length 5). Located via `source.indexOf("class",
+     * classPos)` clamped to the heritage clause start.
+     */
+    private fun checkMixinClassConstructor() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkMixinClassInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkMixinClassInStatements(
+        stmts: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    val tps = stmt.typeParameters
+                    if (!tps.isNullOrEmpty()) {
+                        val savedScope = currentTypeParamScope
+                        val savedValueScope = mixinValueScope
+                        val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+                        for (tp in tps) {
+                            val constraint = tp.constraint?.let {
+                                try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                            }
+                            val tpType = Type.TypeParam(constraint = constraint)
+                            tpType.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                            scope[tp.name.text] = tpType
+                        }
+                        val valueScope = mixinValueScope?.toMutableMap() ?: mutableMapOf()
+                        for (param in stmt.parameters) {
+                            val paramName = (param.name as? Identifier)?.text ?: continue
+                            val typeAnno = param.type as? TypeReference ?: continue
+                            val typeName = (typeAnno.typeName as? Identifier)?.text ?: continue
+                            val tpType = scope[typeName] ?: continue
+                            valueScope[paramName] = tpType
+                        }
+                        currentTypeParamScope = scope
+                        mixinValueScope = valueScope
+                        try {
+                            stmt.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                        } finally {
+                            currentTypeParamScope = savedScope
+                            mixinValueScope = savedValueScope
+                        }
+                    } else {
+                        stmt.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                    }
+                }
+                is ClassDeclaration -> {
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            is Constructor -> m.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> m.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> m.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            else -> {}
+                        }
+                    }
+                }
+                is ReturnStatement -> stmt.expression?.let { checkMixinClassInExpr(it, source, fileName) }
+                is ExpressionStatement -> checkMixinClassInExpr(stmt.expression, source, fileName)
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        decl.initializer?.let { checkMixinClassInExpr(it, source, fileName) }
+                    }
+                }
+                is Block -> checkMixinClassInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkMixinClassInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkMixinClassInStatements(listOf(it), source, fileName) }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    checkMixinClassInStatements(it.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkMixinClassInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ClassExpression -> emitTs2545IfBrokenMixin(expr.heritageClauses, expr.pos, source, fileName)
+            is ParenthesizedExpression -> checkMixinClassInExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    /**
+     * NARROW gate: emit TS2545 only when constraint's construct sig has an
+     * OPTIONAL rest param (questionToken on the rest param) — that's a broken
+     * Constructor shape, can't be satisfied by ANY mixin class. Valid mixins
+     * pass through unchanged.
+     */
+    private fun emitTs2545IfBrokenMixin(
+        heritageClauses: List<HeritageClause>?,
+        classPos: Int,
+        source: String,
+        fileName: String,
+    ) {
+        val extendsClause = heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return
+        val baseExpr = extendsClause.types.firstOrNull()?.expression ?: return
+        val baseIdent = baseExpr as? Identifier ?: return
+        val tpType: Type.TypeParam = (mixinValueScope?.get(baseIdent.text)
+            ?: currentTypeParamScope?.get(baseIdent.text)) ?: return
+        // Walk the TypeParam's constraint AST to find the construct signature's
+        // rest parameter directly — avoiding type-resolution caching pitfalls.
+        // The constraint is stored as a Type; we want the underlying AST node.
+        // For B72.1's narrow scope, walk the TypeParameter declaration's
+        // constraint expression: look for FunctionType/ConstructorType, or
+        // TypeReference resolved to a type alias whose RHS is a Function/
+        // ConstructorType with an OPTIONAL rest param.
+        val symName = tpType.symbol?.name ?: return
+        val tpDecl = findTypeParamDeclByName(symName) ?: return
+        val constraintNode = tpDecl.constraint ?: return
+        if (!constraintHasOptionalRestParam(constraintNode)) return
+        // Locate `class` keyword.
+        val searchEnd = (extendsClause.pos).coerceAtLeast(classPos + 100).coerceAtMost(source.length)
+        var keywordStart = -1
+        var i = classPos
+        while (i < searchEnd - 4) {
+            if (source[i] == 'c' && i + 5 <= source.length &&
+                source.substring(i, i + 5) == "class" &&
+                (i + 5 == source.length || (!source[i + 5].isLetterOrDigit() && source[i + 5] != '_'))
+            ) {
+                keywordStart = i
+                break
+            }
+            i++
+        }
+        if (keywordStart < 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, keywordStart)
+        diagnostics.add(Diagnostic(
+            message = "A mixin class must have a constructor with a single rest parameter of type 'any[]'.",
+            category = DiagnosticCategory.Error,
+            code = 2545,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = keywordStart,
+            length = 5,
+        ))
+    }
+
+    /** Find a TypeParameter AST node by name — searches the current file's
+     *  binder results' AST for any FunctionDeclaration whose typeParameters
+     *  contains a match. Returns null if not found. */
+    private fun findTypeParamDeclByName(name: String): TypeParameter? {
+        for (result in binderResults) {
+            val found = findTypeParamInStatements(result.sourceFile.statements, name)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findTypeParamInStatements(stmts: List<Statement>, name: String): TypeParameter? {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    stmt.typeParameters?.firstOrNull { it.name.text == name }?.let { return it }
+                    stmt.body?.let { findTypeParamInStatements(it.statements, name)?.let { tp -> return tp } }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    findTypeParamInStatements(it.statements, name)?.let { tp -> return tp }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /** Walk constraint TypeNode to find a construct signature with optional rest param. */
+    private fun constraintHasOptionalRestParam(node: TypeNode): Boolean {
+        return when (node) {
+            is ConstructorType -> node.parameters.any { it.dotDotDotToken && it.questionToken }
+            is FunctionType -> node.parameters.any { it.dotDotDotToken && it.questionToken }
+            is TypeReference -> {
+                // Resolve type alias and recurse into RHS.
+                val typeName = node.typeName as? Identifier ?: return false
+                val aliasName = typeName.text
+                val aliasDecl = findTypeAliasByName(aliasName) ?: return false
+                constraintHasOptionalRestParam(aliasDecl.type)
+            }
+            else -> false
+        }
+    }
+
+    private fun findTypeAliasByName(name: String): TypeAliasDeclaration? {
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is TypeAliasDeclaration && stmt.name.text == name) return stmt
+            }
+        }
+        return null
     }
 
     /**
