@@ -50320,7 +50320,14 @@ interface DataView {
                 if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
                 else antecedent
             }
-            is FlowCall -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowCall -> {
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                // round 43 iter3: assert-function narrowing — when the call's callee is
+                // `function assertX(x): asserts x is T`, after the call returns, x is
+                // narrowed to T. Pass-through (no narrowing) when the callee isn't an
+                // assertion function.
+                narrowByAssertCall(antecedent, flowNode.node, name) ?: antecedent
+            }
             is FlowSwitchClause -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
             is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
         }
@@ -50499,6 +50506,70 @@ interface DataView {
      * Identifier matching [name]. `asserts` predicates are skipped — those
      * narrow only on the assertion path, not via the boolean return.
      */
+    /**
+     * round 43 iter3: assert-function narrowing after a call returns. For
+     * `function assertX(x): asserts x is T` (assertsModifier=true), when the
+     * call's first matching arg path is [name], narrow [t] to T (target type).
+     * For `asserts x` (no `is T` clause), narrow nullable types by excluding
+     * null/undefined (the assertion proves x is non-null after return). Returns
+     * null when callee isn't an assert function or arg doesn't match.
+     */
+    private fun narrowByAssertCall(t: Type, expr: CallExpression, name: String): Type? {
+        // Unwrap value-preserving wrappers around the callee.
+        var callee: Expression = expr.expression
+        while (true) {
+            callee = when (callee) {
+                is ParenthesizedExpression -> if (callee.instantiationEnd == null) callee.expression else return null
+                is NonNullExpression -> callee.expression
+                is AsExpression -> callee.expression
+                is TypeAssertionExpression -> callee.expression
+                is SatisfiesExpression -> callee.expression
+                else -> break
+            }
+        }
+        if (callee !is Identifier) return null
+        val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
+        val (params, returnTypeNode) = when (decl) {
+            is FunctionDeclaration -> decl.parameters to decl.type
+            is MethodDeclaration -> decl.parameters to decl.type
+            else -> return null
+        }
+        val predicate = returnTypeNode as? TypePredicate ?: return null
+        if (!predicate.assertsModifier) return null
+        val predicateParamName = when (val pn = predicate.parameterName) {
+            is Identifier -> pn.text
+            is TypeReference -> (pn.typeName as? Identifier)?.text
+            else -> null
+        } ?: return null
+        val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
+        if (paramIdx < 0) return null
+        val arg = expr.arguments.getOrNull(paramIdx) ?: return null
+        if (getReferencePath(arg) != name) return null
+        // `asserts x` without `is T` clause — narrow by excluding null/undefined.
+        val targetTypeNode = predicate.type ?: return run {
+            if (t is Type.Union) {
+                val filtered = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+                if (filtered.isEmpty()) neverType
+                else if (filtered.size == 1) filtered[0]
+                else getUnionType(filtered)
+            } else t
+        }
+        val targetType = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return null }
+        if (targetType === errorType || targetType === anyType) return null
+        // After assertion succeeds, narrow to target type.
+        if (t is Type.Union) {
+            val filtered = t.types.filter { checkTypeRelatedTo(it, targetType, assignableRelation) }
+            return when {
+                filtered.isEmpty() -> targetType
+                filtered.size == 1 -> filtered[0]
+                else -> getUnionType(filtered)
+            }
+        }
+        val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
+        return if (matches) t else targetType
+    }
+
     private fun narrowByCallPredicate(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
