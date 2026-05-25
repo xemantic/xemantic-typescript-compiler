@@ -34454,6 +34454,10 @@ interface DataView {
                     when (m) {
                         is MethodDeclaration -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
                         is Constructor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        // round 42 iter8: Get/SetAccessor body recursion + PropertyDeclaration init
+                        is GetAccessor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        is SetAccessor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
+                        is PropertyDeclaration -> m.initializer?.let { checkAmbientInExpr(it, source, fileName) }
                         else -> {}
                     }
                 }
@@ -34514,6 +34518,14 @@ interface DataView {
             is DeleteExpression -> checkAmbientInExpr(expr.expression, source, fileName)
             is TypeOfExpression -> checkAmbientInExpr(expr.expression, source, fileName)
             is TemplateExpression -> for (span in expr.templateSpans) checkAmbientInExpr(span.expression, source, fileName)
+            // round 42 iter8: TaggedTemplateExpression — recurse into tag + template spans
+            is TaggedTemplateExpression -> {
+                checkAmbientInExpr(expr.tag, source, fileName)
+                val template = expr.template
+                if (template is TemplateExpression) {
+                    for (span in template.templateSpans) checkAmbientInExpr(span.expression, source, fileName)
+                }
+            }
             is CommaListExpression -> for (e in expr.elements) checkAmbientInExpr(e, source, fileName)
             else -> {}
         }
