@@ -39635,6 +39635,29 @@ interface DataView {
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
                 }
+                is Block -> checkUndefinedNamesInStmts(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkUndefinedNamesInStmts(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkUndefinedNamesInStmts(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkUndefinedNamesInStmts(clause.statements, source, fileName)
+                        is DefaultClause -> checkUndefinedNamesInStmts(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    checkUndefinedNamesInStmts(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { checkUndefinedNamesInStmts(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
