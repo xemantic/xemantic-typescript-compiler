@@ -20750,6 +20750,34 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 checkClassMembersForTS1210(stmt.members, source, fileName, restricted)
             }
+            // round 42 iter5: recurse into inner control-flow statements so
+            // `if (cond) for (...) { class C {...} }` style nesting reaches the
+            // inner class. Mirror of findClassesInStatements's coverage but for
+            // singular-stmt children.
+            is IfStatement -> {
+                findClassesInStatement(stmt.thenStatement, source, fileName, restricted)
+                stmt.elseStatement?.let { findClassesInStatement(it, source, fileName, restricted) }
+            }
+            is ForStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is ForInStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is ForOfStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is WhileStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is DoStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is LabeledStatement -> findClassesInStatement(stmt.statement, source, fileName, restricted)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> findClassesInStatements(clause.statements, source, fileName, restricted)
+                        is DefaultClause -> findClassesInStatements(clause.statements, source, fileName, restricted)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                findClassesInStatements(stmt.tryBlock.statements, source, fileName, restricted)
+                stmt.catchClause?.block?.let { findClassesInStatements(it.statements, source, fileName, restricted) }
+                stmt.finallyBlock?.let { findClassesInStatements(it.statements, source, fileName, restricted) }
+            }
             else -> {}
         }
     }
