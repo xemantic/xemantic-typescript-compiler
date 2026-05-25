@@ -68524,8 +68524,17 @@ interface DataView {
         params: List<Parameter>, returnTypeNode: TypeNode?,
     ): Signature {
         val sigTypeParams = typeParamDecls?.map { tpDecl ->
-            Type.TypeParam().also { tp ->
-                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            // B59.5: intern by TypeParameter AST position (mirrors B59.1/2 pattern at
+            // FunctionExpression site ~51865 — FunctionType/ConstructorType TypeNodes
+            // are TYPE-position annotations resolved many times during checking;
+            // sharing identity across calls lets downstream caches keyed on Type.id
+            // (e.g. substitutionResultCache) actually hit. Constraints/defaults are
+            // re-resolved per call below (no null guard) to preserve original
+            // per-call constraint-scope semantics — a 'null guard' regressed -1.
+            typeParamInternCache.getOrPut(tpDecl.pos) {
+                Type.TypeParam().also { tp ->
+                    tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                }
             }
         }
         val savedScope = currentTypeParamScope
