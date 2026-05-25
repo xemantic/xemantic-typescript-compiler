@@ -12036,6 +12036,41 @@ class Checker(
                 walkTypeNodeForOwnTPRefs(ty, ownTypeParamNames, source, fileName)
             }
             is ParenthesizedType -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            is FunctionType -> {
+                node.parameters.forEach { p -> p.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) } }
+                walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            }
+            is ConstructorType -> {
+                node.parameters.forEach { p -> p.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) } }
+                walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (m in node.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+                        for (p in m.parameters) p.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+                    }
+                    is IndexSignature -> {
+                        m.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+                        for (p in m.parameters) p.type?.let { walkTypeNodeForOwnTPRefs(it, ownTypeParamNames, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+            is ConditionalType -> {
+                walkTypeNodeForOwnTPRefs(node.checkType, ownTypeParamNames, source, fileName)
+                walkTypeNodeForOwnTPRefs(node.extendsType, ownTypeParamNames, source, fileName)
+                walkTypeNodeForOwnTPRefs(node.trueType, ownTypeParamNames, source, fileName)
+                walkTypeNodeForOwnTPRefs(node.falseType, ownTypeParamNames, source, fileName)
+            }
+            is IndexedAccessType -> {
+                walkTypeNodeForOwnTPRefs(node.objectType, ownTypeParamNames, source, fileName)
+                walkTypeNodeForOwnTPRefs(node.indexType, ownTypeParamNames, source, fileName)
+            }
+            is TypeOperator -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            is RestType -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
+            is OptionalType -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
             else -> {}
         }
     }
