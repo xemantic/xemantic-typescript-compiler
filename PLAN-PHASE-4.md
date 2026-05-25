@@ -118,6 +118,34 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (Round 47 SESSION-END, 20 iterations, +19 net flips: 8947 → 8966 / 10078).** /goal loop session end. Round 47 broke the rounds 32-45 plateau — the longest run of near-zero rounds in this project — by re-opening the surgical pool through two complementary infrastructure tracks:
+
+- **B52.x type-system wiring (iters 2-10, +14 flips):**
+  - iter2 B52.3 (+1): `instantiateType` walks anonymous Type.Object property-bag members, unblocking per-property TS2322+TS6500 elaboration at object-literal arg sites
+  - iter3 B52.4 (+1): contextual typing through `ObjectLiteralExpression` — `b3 = { f: (n) => 0 }` displays source as `{ f: (n: number) => number }` instead of `{ f: (n: any) => any }`
+  - iter4 B52.5 (+1): TS1182 + TS7031 emission for binding-pattern variable declarations without initializer
+  - iter5 B52.6 (+1): TS2802 spread-of-typed-array detection under target<ES2015 (Float32Array/Int8Array/Uint8Array/NodeList/etc.)
+  - iter6 B52.7 (+2): single-root DFS prepass in `topologicalSort` for files with reference-path roots
+  - iter7 B52.8 (+1): String.sub() in lib + lib.es2015.core.d.ts baseline override for deprecated HTML helpers
+  - iter8 B52.8a (+1): TS2305 over TS2616 for `export = X` with named-member shapes (namespace exports OR Type.Object variables)
+  - iter9 B52.9 (+5): gate single-root DFS prepass on root having `///<reference path>` directives (3 JS-emit + 2 errors-baseline flips)
+  - iter10 B52.10 (+1): single-root DFS also fires when root uses `import X = require("...")` CJS form
+- **B70.x display fixes (iters 13-19, +5 flips):**
+  - iter13 B70.1 (+1): literal-singleton alias display — `type U = 1` displays as `1` instead of `U` in TS2322
+  - iter16 B70.1ext + B70.13 (+1): literal widening in chain display + `closeBracePos`-based arrow-block squiggle
+  - iter17 B70.14 (+1): TS2405 emission for `ElementAccessExpression` for-in LHS with nested-array initializer
+  - iter18 B70.15 (+1): bivariant fn-param check at TS2793 gate under `@strict: false`
+  - iter19 B70.16 (+1): static-after-instance ordering + accessor-pair decoration combination in `__decorate` emission
+- **Maintenance iters (no flip):**
+  - iter1: B52.2 closeout (infrastructure already landed in prior round; promoted B52.3 as next decomposition)
+  - iter11-12, iter14: skip-log expansions documenting explored candidates
+  - iter15: MAINT-1 audit — 5 stale skip-log entries struck after recent flips made them obsolete
+  - iter20: this session-end commit (surgical pool dry again — all remaining candidates skip-logged with architectural-blocker root causes)
+
+**Net rate:** ~+1 per iter (best /goal-session result since round 31). B52.x infrastructure (instantiateType property-bag walking, contextual typing propagation through ObjectLit) was the load-bearing piece — it allowed per-property elaboration paths to fire, which had been silent throughout rounds 32-45. The B70.x display-fix track filled in adjacent diagnostic-emission gaps that were unblocked once correct types were reaching emission sites.
+
+**Pool state at session end:** `find_candidates.py --fresh` returns 0/0/0; all candidates in non-fresh view are skip-logged with architectural-blocker reasons (lib-version-aware subsetting for arrayAssignmentTest4, full union elaboration for elaboratedErrorsOnNullableTargets01, multi-file import-resolution for several MISS entries). Next session should consider either (a) an immediate adjacency to B52.x/B70.x if one surfaces from re-running the unfiltered scan, or (b) committing to one of Blockers #1/#2/#3 per the anti-loop rule. The rate-of-flip dynamics here (the B52.x stack landed +14 over 9 iters) suggest there's still room for more type-system surgical work IF a clear infra-extension target presents itself; but plain expansion of the same walkers is unlikely to keep paying off without a new mechanic.
+
 **Session 2026-05-25 (B70.16 round 47 iter19, +1 → 8966 / 10078).** /goal loop iter 19. Found target via JS-emit small-diff scan (sizes 9-14): `sourceMapValidationDecorators_ts__target_es2015__compiles to JavaScript matching baseline[jvm]` (+12 diff lines, 2 intertwined emission issues).
 
 - **Target test diff** had two structural mismatches in `__decorate` block emission:
