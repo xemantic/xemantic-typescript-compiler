@@ -8755,6 +8755,17 @@ class Checker(
                 is ClassDeclaration -> {
                     if (ModifierFlag.Declare in stmt.modifiers) continue
                     checkConstructorParamInClassMembers(stmt.members, source, fileName)
+                    // round 44 iter3: recurse into class member bodies (mirror of iter2 pattern).
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                            is PropertyDeclaration -> member.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                            else -> {}
+                        }
+                    }
                 }
                 is ModuleDeclaration -> {
                     if (ModifierFlag.Declare in stmt.modifiers) continue
