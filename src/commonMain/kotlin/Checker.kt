@@ -30842,6 +30842,26 @@ interface DataView {
                 }
             }
             is CommaListExpression -> expr.elements.forEach { walkExprForNestedClasses(it, source, fileName, classMap) }
+            // round 43 iter16: function-like body recursion so `() => class C {...}` and
+            // `function() { return class C {...} }` reach nested ClassExpression.
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { stmt ->
+                    if (stmt is ExpressionStatement) walkExprForNestedClasses(stmt.expression, source, fileName, classMap)
+                    else if (stmt is ReturnStatement) stmt.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                    else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                    }
+                }
+                is Expression -> walkExprForNestedClasses(body, source, fileName, classMap)
+                else -> {}
+            }
+            is FunctionExpression -> for (stmt in expr.body.statements) {
+                if (stmt is ExpressionStatement) walkExprForNestedClasses(stmt.expression, source, fileName, classMap)
+                else if (stmt is ReturnStatement) stmt.expression?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { walkExprForNestedClasses(it, source, fileName, classMap) }
+                }
+            }
             else -> {}
         }
     }
