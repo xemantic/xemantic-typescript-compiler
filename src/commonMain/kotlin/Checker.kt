@@ -57529,6 +57529,12 @@ interface DataView {
                             SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
                             SyntaxKind.GreaterThanGreaterThanGreaterThan,
                             SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret -> numberType
+                            // Comparison/equality ops always produce boolean.
+                            SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+                            SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+                            SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+                            SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+                            SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
                             else -> null
                         }
                     }
