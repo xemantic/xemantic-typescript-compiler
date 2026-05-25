@@ -34963,6 +34963,17 @@ interface DataView {
                 expr.pos + expr.text.length + quoteCount
             }
         }
+        // round 42 iter19: TaggedTemplateExpression delegates to the template node's
+        // expressionTrueEnd (which handles NoSubstitutionTemplateLiteralNode via iter3).
+        // For TemplateExpression-template, falls back to the template's `.end` (overshoots
+        // slightly but better than the tag's broader expr.end). Type args between tag and
+        // template are part of the template's pos range.
+        is TaggedTemplateExpression -> {
+            when (val t = expr.template) {
+                is Expression -> expressionTrueEnd(t)
+                else -> expr.end
+            }
+        }
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
