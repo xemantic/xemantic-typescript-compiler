@@ -1021,6 +1021,12 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (B52.10 round 47 iter10, +1 → 8961).** Continuation of iter9's B52.9 gate refinement. Targeted `isolatedModulesReExportType_ts` JS-emit (file emission order). The test expects deps emitted in user.ts's import order (exportT, exportEqualsT, exportValue, reExportValueAsTypeOnly) but our @Filename-DFS gives (exportT, exportValue, exportEqualsT, reExportValueAsTypeOnly). B52.7's single-root DFS would fix this, but B52.9 gated B52.7 to fire only when root has `///<reference path>` directives — and `user.ts` uses plain ES imports + `import = require`. Extended B52.7's gate to ALSO fire when the root file contains an `ImportEqualsDeclaration` with `ExternalModuleReference` (CJS-style `import X = require("...")`). Detection: pre-collect `filesWithImportEquals: MutableSet<String>` while extracting deps; pass to `topologicalSort`. Plain ES-import roots (no ref paths, no `import = require`) still use @Filename-order DFS, preserving `exportStarFromEmptyModule_ts` and `declarationsForFileShadowingGlobalNoError_ts`.
+
+  **Flips `isolatedModulesReExportType_ts`** JS-emit test (errors variant remains failing — needs TS1205/TS1269/TS1448 emission). 1118 → 1117 failed.
+
+  ---
+
   **Session 2026-05-25 (B52.3 round 47 iter2, +1 → 8948).** Picked B52.3 from the queue as the next decomposition after B52.2's recon closure.
 
   **Investigation**: The failing test `genericCallWithObjectLiteralArguments1_ts` expected 5 TS2322 diagnostics with TS6500 related info at object-literal property positions; we were emitting only 2 TS2345 at the bare-T `m` arg. Tracing the explicit-typeArg path (`foo<number>({x:3, y:""}, 4)`), I confirmed that `instantiateSignature → instantiateType` was being called but `instantiateType` returned the anonymous `{x:T, y:T}` Type.Object UNCHANGED (CLAUDE.md "instantiateType for Type.Object" gotcha). So the per-property TS2322 logic at Checker.kt:~64261 saw `paramType.members["x"]` typed as `T` (TypeParam), not `number` — and the `isSimpleCheckableType(targetPropType)` gate filtered it out (TypeParam isn't simple). The implicit-typeArg path (`foo({x:3, y:""}, 4)`) additionally suffered from `tryInferSingleTypeParamFromArgs` picking T=`number|string` (union from object literal) over T=`number` (bare-T anchor from m=4) because the obj-lit candidate was added first.

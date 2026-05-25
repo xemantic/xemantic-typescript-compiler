@@ -868,6 +868,11 @@ class TypeScriptCompiler {
             // Fallback deps map without `///<reference>` paths. Used when the full
             // deps form a cycle (TypeScript falls back to input order in that case).
             val importDepsNoRefPath = mutableMapOf<String, List<String>>()
+            // Files that contain at least one `import X = require("...")` (CJS-style
+            // import-equals declaration). When the unique entry-point of the dep
+            // graph uses this form, topologicalSort runs a single-root DFS so deps
+            // are emitted in the order they appear in the entry file (B52.10).
+            val filesWithImportEquals = mutableSetOf<String>()
             // Ordered list of compilable TS file names
             val tsFileNames = mutableListOf<String>()
             // Parsed source files for two-phase bind+transform
@@ -1183,6 +1188,15 @@ class TypeScriptCompiler {
                     tsconfigDir = computedTsconfigDir,
                     rootDirs = options.rootDirs,
                 )
+                // Detect whether this file uses `import X = require("...")` (CJS-style
+                // import-equals). When an entry-point file uses this form, TypeScript
+                // emits its dependencies in the order they appear in the file (single-root
+                // DFS) rather than @Filename input order — see B52.10.
+                if (sourceFile.statements.any { stmt ->
+                    stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference
+                }) {
+                    filesWithImportEquals.add(file.fileName)
+                }
 
                 tsFileNames.add(file.fileName)
             }
@@ -1263,7 +1277,7 @@ class TypeScriptCompiler {
                 else -> importDeps
             }
             val transformOrder = if (options.outFile != null && !options.noResolve) {
-                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath)
+                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals)
             } else tsFileNames
             val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
                 parsedSourceFiles[name]?.let { name to it }
@@ -1388,7 +1402,7 @@ class TypeScriptCompiler {
                 hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
                 else -> importDeps
             }
-            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath)
+            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file.
@@ -1969,6 +1983,7 @@ private fun topologicalSort(
     fileNames: List<String>,
     deps: Map<String, List<String>>,
     depsNoRefPath: Map<String, List<String>>? = null,
+    filesWithImportEquals: Set<String> = emptySet(),
 ): List<String> {
     if (fileNames.size <= 1) return fileNames
 
@@ -2006,7 +2021,15 @@ private fun topologicalSort(
         val root = roots[0]
         val rootHasRefPaths = depsNoRefPath != null &&
             (deps[root] ?: emptyList<String>()) != (depsNoRefPath[root] ?: emptyList<String>())
-        if (rootHasRefPaths) {
+        // B52.10: also fire single-root DFS when the root file contains an
+        // `import X = require("...")` form. TypeScript emits dependencies in
+        // the order they appear in such files (e.g. `user.ts` with
+        // `export import T2 = require("./exportEqualsT")`). Plain ES-import
+        // roots (no ref paths, no `import = require`) still use @Filename-order
+        // DFS — see exportStarFromEmptyModule_ts and
+        // declarationsForFileShadowingGlobalNoError_ts.
+        val rootHasImportEquals = root in filesWithImportEquals
+        if (rootHasRefPaths || rootHasImportEquals) {
             visit(root)
         }
     }
