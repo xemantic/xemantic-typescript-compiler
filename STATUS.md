@@ -1,6 +1,32 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 39 (2026-05-25): /goal session — 19 commits, 0 net flips. 19 structure-walking broadenings of less-touched walkers (iter1-iter19, all net-zero). Continues the round 32-38 pattern of broadening walker coverage when `find_candidates.py --fresh` is empty. Surgical pool genuinely exhausted; further wins require architectural blocker work per CLAUDE.md._
+**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 40 (2026-05-25): /goal session — 20 commits, 0 net flips. 20 structure-walking broadenings of less-touched walkers (iter1-iter20, all net-zero). Continues the round 32-39 pattern of broadening walker coverage when `find_candidates.py --fresh` is empty. Surgical pool genuinely exhausted; further wins require architectural blocker work per CLAUDE.md._
+
+_Round 40 (2026-05-25, 0 net flips via 20 net-zero structure-walking broadenings)_:
+- **iter1**: `checkInterfacePropInit` (TS1246) gains If/For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter2**: `checkComputedPropNameInStmt` (TS1166/TS1169) gains If/For-family/Switch/Try/Labeled/FunctionDeclaration body.
+- **iter3**: `walkForSetAccessorInit` (TS1052) gains If/For-family/Switch/Try/Labeled/FunctionDeclaration body.
+- **iter4**: `walkForSetAccessorRest` (TS1053) gains If/For-family/Switch/Try/Labeled/FunctionDeclaration body.
+- **iter5**: `walkForInLhsType` (TS2404) replaces Block-only-inside-body with direct body recursion; adds Do/Switch/Try/Labeled/Get+SetAccessor.
+- **iter6**: `walkForParamInitNonImpl` (TS2371) gains If/For-family/Switch/Try/Labeled.
+- **iter7**: `walkForParamInitForwardRef` (TS2373/TS2454) gains Get/SetAccessor bodies + Switch/Labeled.
+- **iter8**: `walkForDerivedSuper` (TS2377/TS17005/TS2417) gains If/For-family/Switch/Try/Labeled + Get/SetAccessor bodies.
+- **iter9**: `walkForCtorReturnNull` (TS2322/TS2409) gains If/For-family/Switch/Try/Labeled + Get/SetAccessor bodies.
+- **iter10**: `findSuperCallInStmt` (used for TS2377 missing-super) gains For-family/Switch/Try/Labeled/Return/Throw.
+- **iter11**: `walkTypeQueryForPrivateName` (TS4081) gains FunctionType/ConstructorType/TypeLiteral/ConditionalType/IndexedAccessType.
+- **iter12**: `walkTypeNodeForUndefinedTypeQueryChain` (TS2532 in typeof chain) gains same TypeNode kinds.
+- **iter13**: `walkTypeForIndexedAccess` (TS4105) gains RestType/OptionalType/NamedTupleMember.
+- **iter14**: `walkStmtsForCircularConstraint` (TS2313) gains Block/If/For-family/Switch/Try/Labeled + Ctor/Get/SetAccessor bodies.
+- **iter15**: `checkUndefinedNamesInStmts` (TS2414/TS2427/TS2457 predefined keyword names) gains Block/If/For-family/Switch/Try/Labeled.
+- **iter16**: `checkFunctionTypeParams` (TS2371 in fn type annotations) gains ConstructorType/Array/Tuple/TypeRef/Conditional/IndexedAccess/TypeOperator/Rest/Optional/NamedTuple/TypeLiteral.
+- **iter17**: `checkAmbientInitInStatements` (TS1039/TS1031/TS1254) gains If/For-family/Switch/Try/Labeled.
+- **iter18**: `walkFunctionBodiesInExpr` gains wrappers (As/TypeAssertion/Satisfies/NonNull) + SpreadAssignment + Call/New callee + Conditional condition + member access + unary + Await/Yield/Void/Delete/TypeOf + Template/TaggedTemplate + CommaList.
+- **iter19**: `findClassesForTS2815InStatements` (TS2815) gains For-family/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter20**: `checkTs2719InStatements` (TS2719) gains Class member-body recursion + Function/Block/If/For-family/Switch/Try/Labeled.
+
+Session-end: 8946 → 8946 / 10078 (0 net, ~88.77%). Strategy: complement rounds 32-39 by broadening 20 different walkers whose statement/expression coverage was shallower than the rest of the corpus. All 20 commits pure structure-walking expansions; each emission gate is narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts. No regressing attempts during this round.
+
+Per CLAUDE.md anti-loop rule: 9 consecutive rounds (32-40) of 0-flip structural broadening represent diminishing returns. Next session should commit to one of the architectural blockers per CLAUDE.md's "Known architectural blockers" section.
 
 _Round 39 (2026-05-25, 0 net flips via 19 net-zero structure-walking broadenings)_:
 - **iter1**: `walkUnusedInferInStmts` (TS6133 unused infer) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
