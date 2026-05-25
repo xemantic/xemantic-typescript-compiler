@@ -978,6 +978,29 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (round 42 of /goal — in progress, 9 net-zero code commits + 2 reverts + 1 doc commit + 1 chore).** /goal session after round 41. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-41 surgical-pool exhaustion). Architectural attempts dominated; broadening + foundational helper improvements where pool was empty.
+
+  Iterations landed (commits in order):
+  - **iter1 (net-zero)**: B52.2 — `isAnonymousObjectWithTypeParamMembers` extended to allow mixed Type.Object (at least one TP-typed member, others fully concrete). Foundation for `foo<T>(x: { v: T, name: string })` shape inference. No flips (no matching test shapes; existing 17.38 case `{x:T,y:T}` already covered).
+  - **iter2 (chore)**: Marked B60.11 closed (queue checkbox was stale — implementation landed at Checker.kt:46584-46611 with explicit "B60.11" comment in prior session).
+  - **iter3 (net-zero)**: `expressionTrueEnd` adds `NoSubstitutionTemplateLiteralNode` case (pos + text.length + 2). Mirrors StringLiteralNode pattern.
+  - **iter4 (net-zero)**: `checkComputedPropNameInStmt` ClassDeclaration branch now recurses into Method/Constructor/Get/SetAccessor bodies so nested class/interface declarations are reached for TS1166/TS1169.
+  - **iter5 (net-zero)**: `findClassesInStatement` (singular) recurses through If/For/While/Switch/Try/Labeled for inner-stmt children so deeply-nested classes reach TS1210.
+  - **iter6 (net-zero)**: `checkStmtForPrivateFieldAccess` extended from 5 stmt kinds (ExpressionStatement/Return/Variable/If/Block) to cover For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment for TS2343 (importHelpers private-field detection).
+  - **iter7 (net-zero)**: `checkExprForPrivateFieldAccess` TaggedTemplateExpression case (tag + template spans).
+  - **iter8 (net-zero)**: `checkAmbientInExpr` ClassExpression accessors (Get/Set + PropertyDeclaration) + TaggedTemplateExpression.
+  - **iter9 (net-zero)**: `walkForOfNonIterableInExpr` extended from 9 cases to ~25 expression kinds (BinaryExpression iterative spine, Conditional, Call/New, ArrayLit/ObjectLit, all wrappers, Spread/Await/Yield/Void/Delete/TypeOf, Template/TaggedTemplate, CommaList, member access, ArrowFunction expression-body recursion).
+  - **iter11 (doc)**: STATUS.md round 42 mid-session note.
+  - **iter12 (doc)**: This PLAN-PHASE-4.md entry.
+
+  Reverted attempts:
+  - **iter4+5-combo (-1 regression, reverted)**: `isLiteralLikeExpr` wrapper unwrap (As/TypeAssertion/Satisfies/NonNull) for TS1166/TS1169 computed property names. Making more expressions count as "literal-like" SUPPRESSES TS1166/TS1169, breaking a test expecting it on a wrapper-quoted computed name. Reverted iter5 only; iter4 retained.
+  - **iter10 (-16 regression, reverted)**: `checkTypeAsValueInStatement` broader statement coverage (ForStatement/ForIn/ForOf/While/Do/Switch/Try/LabeledStatement/Throw/ExportAssignment/ModuleDeclaration + Get/SetAccessor). Over-emits TS2693/TS2708 in newly-reached contexts. Per round 36 insight: emission-walkers reaching new contexts cause FP/FN cascade.
+
+  Per CLAUDE.md anti-loop rule: **11 consecutive rounds (32-42) of ~0-flip structural broadening represent severe diminishing returns.** Surgical pool genuinely exhausted; iter10 regression confirms that EVEN structural broadening of emission walkers can regress (a new failure mode beyond rounds 32-41's pure-net-zero broadening). The next session MUST commit ENTIRELY to one architectural blocker per CLAUDE.md's "Known architectural blockers" section: Blocker #1 control-flow narrowing (~60-100 tests), Blocker #2 generic argument inference (~20-40), or Blocker #3 per-file scope construction (~30+).
+
+  ---
+
   **Session 2026-05-25 (round 41 of /goal — 20 iterations, 0 net flips, 0 reverts).** /goal session after round 40. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-40 surgical-pool exhaustion). iter1 was a chore strike of 3 stale skip-log entries that earlier strikethroughs had missed; iter2-iter16 broadened 15 different walkers' statement/expression coverage.
 
   Stale skip-log audit (iter1): struck `arraySigChecking_ts` (flipped round 31 iter1+iter2), `functionTypeArgumentArityErrors_ts` (flipped B70.9 round 29), and the parenthetical `moduleKeywordRepeatError_ts` mention on line 1964 (flipped B66.3 round 22). All 3 were marked as stale in prior session notes but the in-section mentions remained backtick-quoted (and thus picked up by `find_candidates.py`'s skip-set extraction). Now 0 STALE remaining.
