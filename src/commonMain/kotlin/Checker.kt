@@ -28457,8 +28457,14 @@ interface DataView {
                 stmt.incrementor?.let { walkExprForDelete(it, source, fileName, isStrict) }
                 walkStmtForDelete(stmt.statement, source, fileName, isStrict)
             }
-            is ForInStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            is ForOfStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            is ForInStatement -> {
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            }
+            is ForOfStatement -> {
+                walkExprForDelete(stmt.expression, source, fileName, isStrict)
+                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            }
             is WhileStatement -> {
                 walkExprForDelete(stmt.expression, source, fileName, isStrict)
                 walkStmtForDelete(stmt.statement, source, fileName, isStrict)
@@ -28496,6 +28502,8 @@ interface DataView {
                 if (body is ModuleBlock) walkForDeleteOperator(body.statements, source, fileName, isStrict)
             }
             is LabeledStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
+            is ThrowStatement -> stmt.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
+            is ExportAssignment -> stmt.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
             else -> {}
         }
     }
