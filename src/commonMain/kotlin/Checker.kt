@@ -35615,6 +35615,28 @@ interface DataView {
                 for (s in it.statements) checkInterfacePropInit(s, source, fileName)
             }
             is Block -> for (s in stmt.statements) checkInterfacePropInit(s, source, fileName)
+            is IfStatement -> {
+                checkInterfacePropInit(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkInterfacePropInit(it, source, fileName) }
+            }
+            is ForStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
+            is ForInStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
+            is ForOfStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
+            is WhileStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
+            is DoStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                when (clause) {
+                    is CaseClause -> for (s in clause.statements) checkInterfacePropInit(s, source, fileName)
+                    is DefaultClause -> for (s in clause.statements) checkInterfacePropInit(s, source, fileName)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkInterfacePropInit(s, source, fileName)
+                stmt.catchClause?.let { for (s in it.block.statements) checkInterfacePropInit(s, source, fileName) }
+                stmt.finallyBlock?.let { for (s in it.statements) checkInterfacePropInit(s, source, fileName) }
+            }
+            is LabeledStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
             else -> {}
         }
     }
