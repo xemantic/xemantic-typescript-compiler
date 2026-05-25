@@ -10169,6 +10169,14 @@ class Checker(
                         checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
                         member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
                     }
+                    // round 43 iter2: include accessor bodies so JSDoc `@param` inside
+                    // accessor bodies is also walked. GetAccessor takes no params; SetAccessor
+                    // gets its single param checked.
+                    is GetAccessor -> member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                    is SetAccessor -> {
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
+                    }
                     is PropertyDeclaration -> member.initializer?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
                     else -> {}
                 }
