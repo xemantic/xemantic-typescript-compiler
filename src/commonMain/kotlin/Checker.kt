@@ -28741,6 +28741,26 @@ interface DataView {
             is SpreadElement -> walkExprForDelete(expr.expression, source, fileName, isStrict)
             is AwaitExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
             is YieldExpression -> expr.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
+            is VoidExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is TypeOfExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
+            is TaggedTemplateExpression -> {
+                walkExprForDelete(expr.tag, source, fileName, isStrict)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkExprForDelete(it.expression, source, fileName, isStrict)
+                }
+            }
+            is ClassExpression -> {
+                for (member in expr.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is Constructor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is GetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is SetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
+                        is PropertyDeclaration -> member.initializer?.let { walkExprForDelete(it, source, fileName, isStrict) }
+                        else -> {}
+                    }
+                }
+            }
             else -> {}
         }
     }
