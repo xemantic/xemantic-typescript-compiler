@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B52.5, +1, 8949 → 8950). /goal iter4** — TS1182 + TS7031 emission for destructuring variable declarations without initializer. Flips `noImplicitAnyDestructuringVarDeclaration_ts`.
+
+- New `checkDestructuringWithoutInitializer` walker (Checker.kt, modeled after `checkConstWithoutInitializer` at line ~31432). Walks all `VariableStatement` and `ForStatement.initializer` declarations recursively (function bodies, class member bodies, namespace blocks, if/while/do/switch/try). Skips for-of/for-in (their iteration variable doesn't need an initializer). Skips ambient/declare contexts.
+- For each `VariableDeclaration` where `name is ObjectBindingPattern || ArrayBindingPattern` and `initializer == null`, emits TS1182 ("A destructuring declaration must have an initializer.") with span `computeBindingPatternSpan(source, start, pattern)` covering the entire `[...]` or `{...}` block.
+- Same walker also emits TS7031 ("Binding element 'X' implicitly has an 'any' type.") for each binding element when (a) `noImplicitAny || strict`, (b) the decl has no type annotation (`decl.type == null`), (c) the binding element has no default initializer (`elt.initializer == null`). Mirrors TS7031 for function parameters at Checker.kt:~11178.
+
+**Found via wider candidate-finder pass.** The default `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/46/10). Widening the diff-line cutoff to 9 surfaced 17 MISSING-DIAGS candidates not in skip log. `noImplicitAnyDestructuringVarDeclaration_ts` (+9 MISSING) showed 7 TS1182 + 2 TS7031 misses with a clean, surgical implementation path. The single VariableDeclaration that needs TS7008 instead of TS7031 (`var {b3}: { b3 }`) was already correctly handled (different code path triggered by type-literal member-without-type).
+
+**Net result.** 8950/10078 passing (88.81%). One commit. Zero regressions.
+
+---
+
 **Session 2026-05-25 (B52.4, +1, 8948 → 8949). /goal iter3** — contextual typing propagation through `ObjectLiteralExpression`. Three coordinated changes flip `assignmentCompatBug2_ts`:
 
 - **`checkAssignmentExpression`** sets `contextualType = tt` when RHS is `ObjectLiteralExpression` (was only `ArrowFunction` / `FunctionExpression`). Without this, `b3 = { f: (n) => 0 }` had no contextual type plumbing.

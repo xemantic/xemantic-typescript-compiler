@@ -780,6 +780,8 @@ class Checker(
         checkAbstractMemberContext()
         // 28. Check const without initializer (TS1155)
         checkConstWithoutInitializer()
+        // 28b. Check destructuring declaration without initializer (TS1182)
+        checkDestructuringWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
         checkReservedWordIdentifiers()
         // 30. Check outFile with non-AMD/System module (TS6131)
@@ -31536,6 +31538,138 @@ interface DataView {
                 }
                 else -> {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Destructuring declaration without initializer (TS1182)
+    // -----------------------------------------------------------------------
+
+    private fun checkDestructuringWithoutInitializer() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForDestructuringWithoutInit(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForDestructuringWithoutInit(statements: List<Statement>, source: String, fileName: String, isAmbient: Boolean = false) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (isAmbient || ModifierFlag.Declare in stmt.modifiers) continue
+                    for (decl in stmt.declarationList.declarations) {
+                        emitTs1182IfMissingInit(decl, source, fileName)
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is Constructor -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            else -> null
+                        }
+                        body?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
+                    }
+                }
+                is Block -> walkForDestructuringWithoutInit(stmt.statements, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    val childAmbient = isAmbient || ModifierFlag.Declare in stmt.modifiers
+                    if (body is ModuleBlock) walkForDestructuringWithoutInit(body.statements, source, fileName, childAmbient)
+                }
+                is IfStatement -> {
+                    walkForDestructuringWithoutInit(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForDestructuringWithoutInit(listOf(it), source, fileName) }
+                }
+                is ForStatement -> {
+                    // for(var [a]=x;;) — check the variable declarations in init
+                    val init = stmt.initializer
+                    if (init is VariableDeclarationList) {
+                        for (decl in init.declarations) {
+                            emitTs1182IfMissingInit(decl, source, fileName)
+                        }
+                    }
+                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
+                }
+                is ForOfStatement -> {
+                    // for-of's initializer is the iteration variable — TS1182 does NOT apply.
+                    // Only descend into the body.
+                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
+                }
+                is ForInStatement -> {
+                    // for-in's initializer is the iteration variable — TS1182 does NOT apply.
+                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
+                }
+                is WhileStatement -> walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        val stmts = when (clause) {
+                            is CaseClause -> clause.statements
+                            is DefaultClause -> clause.statements
+                            else -> emptyList()
+                        }
+                        walkForDestructuringWithoutInit(stmts, source, fileName)
+                    }
+                }
+                is TryStatement -> {
+                    walkForDestructuringWithoutInit(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun emitTs1182IfMissingInit(decl: VariableDeclaration, source: String, fileName: String) {
+        if (decl.initializer != null) return
+        val name = decl.name
+        if (name !is ObjectBindingPattern && name !is ArrayBindingPattern) return
+        val start = name.pos
+        val length = computeBindingPatternSpan(source, start, name)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "A destructuring declaration must have an initializer.",
+            category = DiagnosticCategory.Error,
+            code = 1182,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        // TS7031: Binding element implicitly has 'any' type — fires only when (a) noImplicitAny/strict,
+        // (b) the VariableDeclaration has no type annotation, (c) the binding element has no default
+        // initializer of its own. Mirrors TS7031 for function parameters at Checker.kt:~11178.
+        if (!(options.noImplicitAny || options.strict)) return
+        if (decl.type != null) return
+        val elements: List<BindingElement> = when (name) {
+            is ArrayBindingPattern -> name.elements.filterIsInstance<BindingElement>()
+            is ObjectBindingPattern -> name.elements
+            else -> emptyList()
+        }
+        for (elt in elements) {
+            if (elt.initializer != null) continue
+            val eltName = elt.name as? Identifier ?: continue
+            if (eltName.text.isEmpty()) continue
+            val s = eltName.pos
+            val (l, c) = getLineAndCharacterOfPosition(source, s)
+            diagnostics.add(Diagnostic(
+                message = "Binding element '${eltName.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7031,
+                fileName = fileName,
+                line = l,
+                character = c,
+                start = s,
+                length = eltName.text.length,
+            ))
         }
     }
 
