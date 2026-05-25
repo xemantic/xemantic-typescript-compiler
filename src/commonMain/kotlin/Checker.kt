@@ -38297,28 +38297,33 @@ interface DataView {
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForInLhsType(it.statements, source, fileName) }
                 is FunctionDeclaration -> stmt.body?.let { walkForInLhsType(it.statements, source, fileName) }
                 is IfStatement -> {
-                    val then = stmt.thenStatement
-                    if (then is Block) walkForInLhsType(then.statements, source, fileName)
-                    val els = stmt.elseStatement
-                    if (els is Block) walkForInLhsType(els.statements, source, fileName)
+                    walkForInLhsType(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForInLhsType(listOf(it), source, fileName) }
                 }
-                is WhileStatement -> {
-                    val body = stmt.statement
-                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
+                is WhileStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
+                is ForStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForInLhsType(clause.statements, source, fileName)
+                        is DefaultClause -> walkForInLhsType(clause.statements, source, fileName)
+                        else -> {}
+                    }
                 }
-                is ForStatement -> {
-                    val body = stmt.statement
-                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
+                is TryStatement -> {
+                    walkForInLhsType(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForInLhsType(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForInLhsType(it.statements, source, fileName) }
                 }
-                is ForOfStatement -> {
-                    val body = stmt.statement
-                    if (body is Block) walkForInLhsType(body.statements, source, fileName)
-                }
+                is LabeledStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
                 is ClassDeclaration -> {
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
                             is Constructor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
                             else -> {}
                         }
                     }
