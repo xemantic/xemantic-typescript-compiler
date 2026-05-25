@@ -10290,6 +10290,25 @@ class Checker(
                     stmt.elseStatement?.let { checkImplicitAnyVarsInStatements(listOf(it), source, fileName) }
                 }
                 is ForStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkImplicitAnyVarsInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkImplicitAnyVarsInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkImplicitAnyVarsInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkImplicitAnyVarsInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkImplicitAnyVarsInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkImplicitAnyVarsInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
