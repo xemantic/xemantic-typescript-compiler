@@ -50536,6 +50536,9 @@ interface DataView {
             }
             is CallExpression -> {
                 // round 44 iter16: Boolean(x) call narrows x identically to direct truthiness.
+                // (Number(x) and String(x) coercion calls do NOT preserve narrowing semantics —
+                // Number("abc") = NaN (falsy), String(undefined) = "undefined" (truthy) — so
+                // they're intentionally excluded.)
                 val callee = unwrapParensExpr(expr.expression)
                 if (callee is Identifier && callee.text == "Boolean" && expr.arguments.size == 1) {
                     val arg = expr.arguments[0]
