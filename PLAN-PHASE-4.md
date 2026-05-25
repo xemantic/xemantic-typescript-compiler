@@ -1719,7 +1719,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `bigintIndex_ts` — needs TS2538 (`bigint cannot be used as index type`) + `keyof any` resolution to `string | number | symbol`. Multi-piece.
 - `qualify_ts` — needs namespace-qualified-type assignability comparison + qualified display (`T.I` vs `I`). Multi-piece.
 - `chainedAssignment3_ts` — partial: B69.3 attempt to narrow null-skip gate on strictNullChecks regressed 1 test, reverted. Test needs both null-property-chained-assignment AND class A→B mismatch detection in outer chained assignment (b = a = new A()).
-- `functionTypeArgumentArityErrors_ts` — needs overloaded-function TS2558/TS2743 emission. Currently isOverloaded check returns early. Multi-piece extension to handle ranges from defaults + multi-overload arity sets.
+- ~~`functionTypeArgumentArityErrors_ts`~~ — needs overloaded-function TS2558/TS2743 emission. Currently isOverloaded check returns early. Multi-piece extension to handle ranges from defaults + multi-overload arity sets. **Flipped B70.9 (round 29).**
 - `functionsWithModifiersInBlocks1_ts` — needs TS1184 ("Modifiers cannot appear here") for declare/export on FunctionDeclarations inside blocks + TS2393 (duplicate function impl) in block scope. Multi-piece walker.
 - `recursiveTypeRelations_ts` — Blocker #2 (generic argument inference for Array.reduce).
 - `shebangError_ts` — needs TS18026 + special parsing for `#!` not at file start.
@@ -1790,7 +1790,7 @@ Tests examined this session and deliberately skipped. Categorized by root cause 
 - `thislessFunctionsNotContextSensitive1_ts` — contextual typing with generics.
 - `transformNestedGeneratorsWithTry_ts` — Promise type from `bluebird.d.ts` module. SWAP TS2355 → TS1055.
 - `umdGlobalAugmentationNoCrash_ts` — `export as namespace React;` + `declare global { const React: typeof import("./module"); }` — register `React` as global from `export as namespace`. Multi-piece.
-- `arraySigChecking_ts` (+5) — TS1268 for invalid index signature param type (e.g. `[index: any]`). We emit TS1021 instead. Plus 4 more MISS TS2322s.
+- ~~`arraySigChecking_ts`~~ (+5) — TS1268 for invalid index signature param type (e.g. `[index: any]`). We emit TS1021 instead. Plus 4 more MISS TS2322s. **Flipped round 31 iter1+iter2.**
 - `assignmentToObjectAndFunction_ts` (+5) — Object/Function structural comparison with detailed display elaboration.
 - `errorElaboration_ts` (+5) — TS2538 vs TS2537 SWAP for index type errors.
 - `interfaceClassMerging_ts` (+5) — TS2322 vs TS2741 at line 39 for `bar = obj`.
@@ -1961,7 +1961,7 @@ All remain in the JS-emit candidate pool but are feature-scale work, not surgica
 - ~~`classMemberWithMissingIdentifier_ts` → SWAP TS1005 `'}' expected.` vs `';' expected.` at `{` in `public {};`. Parser error-recovery path for malformed class member after a modifier.~~ **STALE 2026-05-11: passing — flipped 17.152 (TS1146 + TS1005 emission at class-body `{` after access modifier).**
 - `elaboratedErrorsOnNullableTargets01_ts` → target-type display order (`null | { … } | undefined` vs canonical `{ … } | undefined`) + missing nested property-elaboration chain. Display + elaboration refactor — out of scope.
 - ~~`importedModuleAddToGlobal_ts`~~ → two bugs: (a) TS2503 missing spelling suggestion → TS2833; fix is trivial (add `collectNamespaceNames` + `getSpellingSuggestionFromNames` in the `!scope.has(lname)` branch at Checker.kt:8531). (b) FP TS2322 for `return null` against an unresolvable `b.B` qualified type — we resolve to just `B` instead of bailing to `errorType`. Fixing (a) alone still fails the test because of (b).
-- ~~`typecheckIfCondition_ts`~~ / ~~`moduleKeywordRepeatError_ts`~~ / ~~`parser519458_ts`~~ / `typingsSuggestion1/2_ts` → TS2591 for node-specific identifiers (`module`, `process`, `require`, `Buffer`, …) when @types/node isn't present. (`moduleKeywordRepeatError_ts` flipped B66.3.) Currently these are in `KNOWN_GLOBALS` which silently suppresses TS2304. Would need to move them out of `KNOWN_GLOBALS` and emit TS2591 instead — broad regression risk because many tests today compile code like `module.exports = X` without expecting any diagnostic.
+- ~~`typecheckIfCondition_ts`~~ / ~~`moduleKeywordRepeatError_ts`~~ / ~~`parser519458_ts`~~ / `typingsSuggestion1/2_ts` → TS2591 for node-specific identifiers (`module`, `process`, `require`, `Buffer`, …) when @types/node isn't present. (~~`moduleKeywordRepeatError_ts`~~ flipped B66.3.) Currently these are in `KNOWN_GLOBALS` which silently suppresses TS2304. Would need to move them out of `KNOWN_GLOBALS` and emit TS2591 instead — broad regression risk because many tests today compile code like `module.exports = X` without expecting any diagnostic.
 - ~~`undeclaredModuleError_ts`~~ → TS2591 for node-specific module specifier `require('fs')`. Contained change to `emitTS2307` (well-known-name check before emitting), but the test also needs missing TS2345 for a callback argument — single-sentence fix alone won't flip it.
 
 **Session 2026-04-17 (16.4cm/cn/co) additional explored-but-skipped:**
