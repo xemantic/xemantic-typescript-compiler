@@ -42642,6 +42642,63 @@ interface DataView {
                     decl.initializer?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
                 }
             }
+            // round 42 iter13: broader statement coverage for yield* detection inside
+            // nested control flow within an async generator body.
+            is Block -> for (s in stmt.statements) checkStmtForAsyncDelegator(s, source, fileName, tslibExports)
+            is IfStatement -> {
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+                checkStmtForAsyncDelegator(stmt.thenStatement, source, fileName, tslibExports)
+                stmt.elseStatement?.let { checkStmtForAsyncDelegator(it, source, fileName, tslibExports) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> for (d in init.declarations) {
+                        d.initializer?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
+                    }
+                    is Expression -> checkExprForAsyncDelegator(init, source, fileName, tslibExports)
+                    else -> {}
+                }
+                stmt.condition?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
+                stmt.incrementor?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
+                checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+            }
+            is ForInStatement -> {
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+                checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+            }
+            is ForOfStatement -> {
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+                checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+            }
+            is WhileStatement -> {
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+                checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+            }
+            is DoStatement -> {
+                checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+            }
+            is SwitchStatement -> {
+                checkExprForAsyncDelegator(stmt.expression, source, fileName, tslibExports)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> {
+                            checkExprForAsyncDelegator(clause.expression, source, fileName, tslibExports)
+                            clause.statements
+                        }
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    for (s in clauseStmts) checkStmtForAsyncDelegator(s, source, fileName, tslibExports)
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkStmtForAsyncDelegator(s, source, fileName, tslibExports)
+                stmt.catchClause?.block?.let { for (s in it.statements) checkStmtForAsyncDelegator(s, source, fileName, tslibExports) }
+                stmt.finallyBlock?.let { for (s in it.statements) checkStmtForAsyncDelegator(s, source, fileName, tslibExports) }
+            }
+            is LabeledStatement -> checkStmtForAsyncDelegator(stmt.statement, source, fileName, tslibExports)
+            is ThrowStatement -> stmt.expression?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
             else -> {}
         }
     }
@@ -42665,7 +42722,37 @@ interface DataView {
                         emitTS2343("__asyncValues", yieldPos, yieldLen, source, fileName)
                     }
                 }
+                // round 42 iter13: recurse into yield's expression so `yield*` nested
+                // inside another expression context still fires.
+                expr.expression?.let { checkExprForAsyncDelegator(it, source, fileName, tslibExports) }
             }
+            // round 42 iter13: broader expression coverage so yield* inside conditional /
+            // wrapper / binary contexts is reached.
+            is ParenthesizedExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is AsExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is TypeAssertionExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is SatisfiesExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is NonNullExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                checkExprForAsyncDelegator(cur, source, fileName, tslibExports)
+                while (rightStack.isNotEmpty()) checkExprForAsyncDelegator(rightStack.removeLast(), source, fileName, tslibExports)
+            }
+            is ConditionalExpression -> {
+                checkExprForAsyncDelegator(expr.condition, source, fileName, tslibExports)
+                checkExprForAsyncDelegator(expr.whenTrue, source, fileName, tslibExports)
+                checkExprForAsyncDelegator(expr.whenFalse, source, fileName, tslibExports)
+            }
+            is CallExpression -> {
+                checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+                for (a in expr.arguments) checkExprForAsyncDelegator(a, source, fileName, tslibExports)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) checkExprForAsyncDelegator(e, source, fileName, tslibExports)
+            is SpreadElement -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is AwaitExpression -> checkExprForAsyncDelegator(expr.expression, source, fileName, tslibExports)
+            is CommaListExpression -> for (e in expr.elements) checkExprForAsyncDelegator(e, source, fileName, tslibExports)
             else -> {}
         }
     }
