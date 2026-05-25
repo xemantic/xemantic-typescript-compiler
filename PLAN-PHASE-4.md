@@ -978,6 +978,10 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (round 44 of /goal — in progress, 7 commits, all net-zero).** Continuation of round 43's architectural focus. iter1 checkPropertyOverrideInStatement reaches ClassExpression in arrow/fn bodies; iter2 checkPropertyInitInStatements ClassDeclaration member recursion; iter3 checkConstructorParamInInitializersInStatements ClassDeclaration member recursion; iter4 CLAUDE.md gotcha noting iter14-pattern uniformity; iter5 multi-level optional-chain receiver narrowing; iter6 checkMultiBaseInStatement ClassDeclaration member recursion; iter7 STATUS.md mid-session. Confirms round 43 iter14's +1 was a singleton — uniform pattern application yields no further flips.
+
+  ---
+
   **Session 2026-05-25 (round 43 of /goal — 17 commits landed + 1 revert, **+1 net flip** via iter14).** /goal session after round 42. User confirmed via AskUserQuestion to commit entirely to architectural blocker (Blocker #1 control-flow narrowing). 9 narrowing-infrastructure commits net-zero (iter3-iter11); iter14 broke the 12-round net-zero streak with a class (c) safe broadening discovered while working on narrowing.
 
   Round 43 iterations:
