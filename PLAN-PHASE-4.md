@@ -1032,6 +1032,16 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (B70.1 round 47 iter13, +1 → 8962).** /goal loop iter 13. Iters 11/12 doc-only. Picked `conditionalAnyCheckTypePicksBothBranches_ts` from the find_candidates SWAP list — exp `Type '0' is not assignable to type '1'`, act displays target as `'U'`. Source: `type U = [any] extends [number] ? 1 : 0; let y: U; y = 0;`. Conditional resolves correctly to `Type.NumberLiteral(1)`, but `formatTypeForDisplay(TypeReference U)` returned bare `"U"` (alias name). TypeScript displays the resolved literal when the alias body evaluates to a singleton literal type.
+
+  **Fix**: in `formatTypeForDisplay` (Checker.kt:~69203) bare-TypeReference branch, after the circular-default-typeParams check, resolve the TypeAlias symbol (when typeParameters is empty) via `getDeclaredTypeOfSymbol`. If the resolved type is `Type.NumberLiteral` / `Type.StringLiteral` / `Type.BigIntLiteral`, return the literal display directly (`resolved.toString()`, `"\"${value}\""`, etc.). Otherwise return the alias name as before. `resolveSimpleTypeName` was left unchanged so the string-based `isAssignableTo` path still uses `"@U"` — the change is display-only.
+
+  **Risk assessment**: Gate is narrow (only literal-singleton bodies). Object-shape aliases (`type X = {a: number}`), union aliases, and most others keep the alias name. Other tests with literal-body aliases that PASS (e.g. `fakeInfinity1_ts` `type A = 1e999;`) already have their own display handling at the call site (intrinsic numeric detection); B70.1 only fires when the call site falls back to `formatTypeForDisplay` for the annotation. 1117 → 1116 failed (net +1).
+
+  **Flips `conditionalAnyCheckTypePicksBothBranches_ts`** errors-baseline test.
+
+  ---
+
   **Session 2026-05-25 (B52.10 round 47 iter10, +1 → 8961).** Continuation of iter9's B52.9 gate refinement. Targeted `isolatedModulesReExportType_ts` JS-emit (file emission order). The test expects deps emitted in user.ts's import order (exportT, exportEqualsT, exportValue, reExportValueAsTypeOnly) but our @Filename-DFS gives (exportT, exportValue, exportEqualsT, reExportValueAsTypeOnly). B52.7's single-root DFS would fix this, but B52.9 gated B52.7 to fire only when root has `///<reference path>` directives — and `user.ts` uses plain ES imports + `import = require`. Extended B52.7's gate to ALSO fire when the root file contains an `ImportEqualsDeclaration` with `ExternalModuleReference` (CJS-style `import X = require("...")`). Detection: pre-collect `filesWithImportEquals: MutableSet<String>` while extracting deps; pass to `topologicalSort`. Plain ES-import roots (no ref paths, no `import = require`) still use @Filename-order DFS, preserving `exportStarFromEmptyModule_ts` and `declarationsForFileShadowingGlobalNoError_ts`.
 
   **Flips `isolatedModulesReExportType_ts`** JS-emit test (errors variant remains failing — needs TS1205/TS1269/TS1448 emission). 1118 → 1117 failed.
