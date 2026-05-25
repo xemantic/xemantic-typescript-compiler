@@ -1263,7 +1263,7 @@ class TypeScriptCompiler {
                 else -> importDeps
             }
             val transformOrder = if (options.outFile != null && !options.noResolve) {
-                topologicalSort(tsFileNames, depsForTransformSort)
+                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath)
             } else tsFileNames
             val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
                 parsedSourceFiles[name]?.let { name to it }
@@ -1388,7 +1388,7 @@ class TypeScriptCompiler {
                 hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
                 else -> importDeps
             }
-            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort)
+            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file.
@@ -1968,6 +1968,7 @@ private fun hasCycle(fileNames: List<String>, deps: Map<String, List<String>>): 
 private fun topologicalSort(
     fileNames: List<String>,
     deps: Map<String, List<String>>,
+    depsNoRefPath: Map<String, List<String>>? = null,
 ): List<String> {
     if (fileNames.size <= 1) return fileNames
 
@@ -1986,11 +1987,14 @@ private fun topologicalSort(
     }
 
     // Find files NOT depended on by anyone (graph roots).
-    // When exactly one root exists, visit it first so its deps are emitted in the
-    // order the root's imports/references declare them (matching TypeScript's emit
-    // order for entry-point/aggregator files). With zero roots (cycle present) or
-    // multiple roots (independent files), fall back to input-order DFS — this keeps
-    // simple multi-file tests unaffected.
+    // When exactly one root exists AND it has triple-slash `///<reference path>` directives
+    // (= its deps[] entry differs from depsNoRefPath[] entry), visit it first so its declared
+    // refs are emitted before the other files (matching TypeScript's emit order for
+    // entry-point/aggregator files with explicit reference paths — e.g. the privacy*Import*
+    // family). For roots WITHOUT reference paths (pure ES-imports like
+    // `declarationsForFileShadowingGlobalNoError`/`exportStarFromEmptyModule`), keep the
+    // plain @Filename-order DFS — TypeScript emits non-ref deps in source-input order, not
+    // import-list order. With zero roots (cycle present) or multiple roots, also fall back.
     val referencedByOthers = mutableSetOf<String>()
     for ((src, depList) in deps) {
         for (d in depList) {
@@ -1999,7 +2003,12 @@ private fun topologicalSort(
     }
     val roots = fileNames.filter { it !in referencedByOthers }
     if (roots.size == 1) {
-        visit(roots[0])
+        val root = roots[0]
+        val rootHasRefPaths = depsNoRefPath != null &&
+            (deps[root] ?: emptyList<String>()) != (depsNoRefPath[root] ?: emptyList<String>())
+        if (rootHasRefPaths) {
+            visit(root)
+        }
     }
 
     for (file in fileNames) {
