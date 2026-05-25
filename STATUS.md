@@ -1,6 +1,8 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 45 (2026-05-25): /goal session — **20 iterations total, all net-zero**. iter1 narrowUnionByLiteral supertype substitution (positive narrowing) — `s: string | null` narrowed by `s === "abc"` returns `"abc"` instead of empty/never. iter2+6+10 CLAUDE.md gotchas (supertype-substitution, narrowing-consumer-sites). iter5 Boolean(x) rationale comment. iter3-4+7-20 STATUS+PLAN doc updates._
+**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 46 (2026-05-25, in-progress) — continuing user-directed 20-iteration cycle. Surgical pool exhausted (rounds 32-46 totaling ~15 consecutive near-zero rounds)._
+
+_Round 45 (2026-05-25): /goal session — **20 iterations total, all net-zero**. iter1 narrowUnionByLiteral supertype substitution (positive narrowing) — `s: string | null` narrowed by `s === "abc"` returns `"abc"` instead of empty/never. iter2+6+10 CLAUDE.md gotchas (supertype-substitution, narrowing-consumer-sites). iter5 Boolean(x) rationale comment. iter3-4+7-20 STATUS+PLAN doc updates._
 
 _Rounds 32-45 (~14 consecutive rounds at near-zero flip rate): the surgical pool is genuinely exhausted. Architectural narrowing infrastructure is fully in place (assert-call + switch-clause + multi-level optional-chain + ?? + Boolean(x) + supertype-substitution) but downstream emission-site wiring is the bottleneck for further flips. Future sessions should target either (a) wiring narrowing into `getTypeOfIdentifier` (high-yield/high-risk), (b) Blocker #3 (per-file scope construction), or (c) deeper TS2322/TS2345 elaboration improvements._
 
