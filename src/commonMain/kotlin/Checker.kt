@@ -3649,6 +3649,31 @@ class Checker(
                 walkUnusedInferInStmts(listOf(stmt.thenStatement), source, fileName)
                 stmt.elseStatement?.let { walkUnusedInferInStmts(listOf(it), source, fileName) }
             }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    d.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                }
+                walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
+            }
+            is ForInStatement -> walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
+            is ForOfStatement -> walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
+            is WhileStatement -> walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
+            is DoStatement -> walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkUnusedInferInStmts(clause.statements, source, fileName)
+                        is DefaultClause -> walkUnusedInferInStmts(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkUnusedInferInStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkUnusedInferInStmts(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> walkUnusedInferInStmts(listOf(stmt.statement), source, fileName)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 walkUnusedInferInStmts(it.statements, source, fileName)
             }
