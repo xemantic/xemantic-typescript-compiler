@@ -69186,7 +69186,30 @@ interface DataView {
                     val n = sym?.let { circularDefaultTypeParamCount[it.id] }
                     if (n != null && n > 0) {
                         "$baseName<${List(n) { "any" }.joinToString(", ")}>"
-                    } else baseName
+                    } else {
+                        // B70.1: when the TypeReference resolves to a non-generic TypeAlias
+                        // whose body evaluates to a singleton literal type (NumberLiteral /
+                        // StringLiteral / BigIntLiteral), TypeScript displays the resolved
+                        // literal in TS2322 messages instead of the alias name. Example:
+                        // `type U = [any] extends [number] ? 1 : 0;` → display `'1'`, not `'U'`.
+                        // Conservative gate: only literal singletons; object-shape aliases
+                        // keep the alias name (more readable + matches TS for those).
+                        if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                            val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                            if (decl != null && decl.typeParameters.isNullOrEmpty()) {
+                                try {
+                                    val resolved = getDeclaredTypeOfSymbol(sym)
+                                    when (resolved) {
+                                        is Type.NumberLiteral -> return resolved.toString()
+                                        is Type.StringLiteral -> return "\"${resolved.value}\""
+                                        is Type.BigIntLiteral -> return resolved.toString()
+                                        else -> {}
+                                    }
+                                } catch (_: Throwable) { /* fall through */ }
+                            }
+                        }
+                        baseName
+                    }
                 }
             }
             is ArrayType -> {
