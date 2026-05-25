@@ -35744,11 +35744,25 @@ interface DataView {
                 stmt.elseStatement?.let { walkB94InStmt(it, source, fileName) }
             }
             is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> init.declarations.forEach { d ->
+                        d.initializer?.let { walkB94InExpr(it, source, fileName) }
+                    }
+                    is Expression -> walkB94InExpr(init, source, fileName)
+                    else -> {}
+                }
                 stmt.condition?.let { walkB94InExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkB94InExpr(it, source, fileName) }
                 walkB94InStmt(stmt.statement, source, fileName)
             }
-            is ForInStatement -> walkB94InStmt(stmt.statement, source, fileName)
-            is ForOfStatement -> walkB94InStmt(stmt.statement, source, fileName)
+            is ForInStatement -> {
+                walkB94InExpr(stmt.expression, source, fileName)
+                walkB94InStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkB94InExpr(stmt.expression, source, fileName)
+                walkB94InStmt(stmt.statement, source, fileName)
+            }
             is WhileStatement -> {
                 walkB94InExpr(stmt.expression, source, fileName)
                 walkB94InStmt(stmt.statement, source, fileName)
@@ -35777,6 +35791,7 @@ interface DataView {
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 walkB94InStmts(it.statements, source, fileName)
             }
+            is ThrowStatement -> stmt.expression?.let { walkB94InExpr(it, source, fileName) }
             is ExportAssignment -> walkB94InExpr(stmt.expression, source, fileName)
             else -> {}
         }
