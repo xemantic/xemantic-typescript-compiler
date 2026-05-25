@@ -978,6 +978,32 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (round 43 of /goal — in progress, architectural focus per user direction).** /goal session after round 42. User confirmed via AskUserQuestion to commit entirely to architectural blocker (Blocker #1 control-flow narrowing). 12 commits landed (10 code, 2 docs), all net-zero on suite.
+
+  Round 43 iterations:
+  - **iter1 (net-zero)**: `checkSubsequentVarTypesInStatements` ClassDeclaration branch includes Get/SetAccessor bodies.
+  - **iter2 (net-zero)**: `walkJSDocParamTagsInStmt` ClassDeclaration accessor body recursion.
+  - **iter3 (net-zero, architectural)**: `narrowByAssertCall` helper — flow-graph assert-function narrowing via FlowCall. Handles `asserts x is T` and bare `asserts x` (exclude null/undefined).
+  - **iter4 (net-zero)**: mirror iter3 to `narrowTypeFromFlowFollowLoopEntry`.
+  - **iter5 (net-zero, architectural)**: `narrowBySwitchClause` helper — switch-case discriminant narrowing. `switch (X) { case <lit>: ... }` narrows X by filtering union to assignable-from-literal members.
+  - **iter6 (net-zero)**: mirror iter5 to loop-entry variant.
+  - **iter7 (doc)**: CLAUDE.md gotcha "Flow-graph narrowing infrastructure (Blocker #1, partial)" documenting iter3-iter6.
+  - **iter8 (net-zero)**: `narrowByAssertCall` PropertyAccess callee support (`obj.assertMethod(x)`). New helper `resolvePropertyMethodDecl`.
+  - **iter9 (net-zero)**: `narrowByCallPredicate` PropertyAccess callee support (`obj.isMethod(x)` for `x is T` predicates).
+  - **iter10 (net-zero, architectural)**: switch-clause discriminant-PARENT narrowing. `switch (x.kind)` narrows `x` (not just `x.kind`) by filtering union members whose `kind` property is assignable from case literal.
+  - **iter11 (net-zero, architectural)**: optional-chain receiver narrowing. `if (obj?.x)` narrows `obj` to non-null/undefined on truthy side. New helper `narrowByExcludingNullUndefined`.
+  - **iter12 (doc)**: STATUS.md mid-round-43 update.
+  - **iter13 (doc)**: This PLAN-PHASE-4.md entry.
+
+  All 10 code commits net-zero on suite. The narrowing infrastructure improvements lay foundation for flips when paired with:
+  - More emission sites consulting narrowing (currently only TS2339 via `checkPropertyAccess` + TS2454 via `walkExprForFlowTS2454`).
+  - `getTypeOfIdentifier` consulting narrowing (high-risk — broadcasts narrowing through all type lookups; deferred).
+  - Tests exercising the specific patterns (assert calls, switch cases, optional chains) where the underlying type infrastructure is sufficiently complete.
+
+  Per CLAUDE.md anti-loop rule: round 43 IS the architectural commit the user/protocol asked for. Net-zero IS the expected outcome for infrastructure-only commits — the wins come later when downstream code paths consume the new infrastructure.
+
+  ---
+
   **Session 2026-05-25 (round 42 of /goal — 16 net-zero code commits + 4 doc/chore + 2 reverts, 20 iterations total).** /goal session after round 41. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-41 surgical-pool exhaustion). Architectural attempts dominated; broadening + foundational helper improvements where pool was empty.
 
   Iterations landed (commits in order):
