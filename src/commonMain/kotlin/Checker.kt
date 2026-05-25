@@ -40610,6 +40610,39 @@ interface DataView {
                     stmt.finallyBlock?.let { walkForCtorReturnNull(it.statements, source, fileName) }
                 }
                 is LabeledStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassCtorReturnNull(expr.heritageClauses, expr.members, source, fileName, expr.name?.text)
+                        is FunctionExpression -> walkForCtorReturnNull(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForCtorReturnNull(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
+                is ExportAssignment -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassCtorReturnNull(expr.heritageClauses, expr.members, source, fileName, expr.name?.text)
+                        is FunctionExpression -> walkForCtorReturnNull(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForCtorReturnNull(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
+                is ReturnStatement -> {
+                    when (val expr = stmt.expression) {
+                        is ClassExpression -> checkClassCtorReturnNull(expr.heritageClauses, expr.members, source, fileName, expr.name?.text)
+                        is FunctionExpression -> walkForCtorReturnNull(expr.body.statements, source, fileName)
+                        is ArrowFunction -> when (val body = expr.body) {
+                            is Block -> walkForCtorReturnNull(body.statements, source, fileName)
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                }
                 else -> {}
             }
         }
