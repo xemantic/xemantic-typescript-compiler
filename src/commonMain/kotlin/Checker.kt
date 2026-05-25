@@ -40326,6 +40326,33 @@ interface DataView {
         is ExpressionStatement -> findSuperCallInExpr(stmt.expression)
         is Block -> findSuperCallInStatements(stmt.statements)
         is IfStatement -> findSuperCallInStmt(stmt.thenStatement) ?: stmt.elseStatement?.let { findSuperCallInStmt(it) }
+        is ForStatement -> findSuperCallInStmt(stmt.statement)
+        is ForInStatement -> findSuperCallInStmt(stmt.statement)
+        is ForOfStatement -> findSuperCallInStmt(stmt.statement)
+        is WhileStatement -> findSuperCallInStmt(stmt.statement)
+        is DoStatement -> findSuperCallInStmt(stmt.statement)
+        is SwitchStatement -> {
+            var found: Int? = null
+            for (clause in stmt.caseBlock) {
+                if (found != null) break
+                when (clause) {
+                    is CaseClause -> for (s in clause.statements) {
+                        findSuperCallInStmt(s)?.let { found = it; break }
+                    }
+                    is DefaultClause -> for (s in clause.statements) {
+                        findSuperCallInStmt(s)?.let { found = it; break }
+                    }
+                    else -> {}
+                }
+            }
+            found
+        }
+        is TryStatement -> findSuperCallInStatements(stmt.tryBlock.statements)
+            ?: stmt.catchClause?.block?.statements?.let { findSuperCallInStatements(it) }
+            ?: stmt.finallyBlock?.statements?.let { findSuperCallInStatements(it) }
+        is LabeledStatement -> findSuperCallInStmt(stmt.statement)
+        is ReturnStatement -> stmt.expression?.let { findSuperCallInExpr(it) }
+        is ThrowStatement -> stmt.expression?.let { findSuperCallInExpr(it) }
         else -> null
     }
 
