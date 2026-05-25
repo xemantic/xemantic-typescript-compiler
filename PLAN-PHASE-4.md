@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B52.4, +1, 8948 → 8949). /goal iter3** — contextual typing propagation through `ObjectLiteralExpression`. Three coordinated changes flip `assignmentCompatBug2_ts`:
+
+- **`checkAssignmentExpression`** sets `contextualType = tt` when RHS is `ObjectLiteralExpression` (was only `ArrowFunction` / `FunctionExpression`). Without this, `b3 = { f: (n) => 0 }` had no contextual type plumbing.
+- **`getTypeOfObjectLiteral`** consults the outer `contextualType` (as `Type.Object`) and for each `PropertyAssignment` whose initializer is `ArrowFunction` / `FunctionExpression`, pushes the matching contextual property's type as `contextualType` before calling `getTypeOfExpression(prop.initializer)`. The arrow's own `applyContextualParameterTypes` then sees the per-property contextual call signature and substitutes parameter types.
+- **`getTypeOfArrowFunction`** calls `inferReturnTypeFromBody` for Block bodies (was returning `anyType` unconditionally for "has-return-with-expression" Block bodies). New narrow helper `inferArrowReturnNullLiteral` handles `(a) => { return null; }` → `nullType` so display matches TypeScript's `(a) => null`. Scoped to ArrowFunction only — the broader `inferReturnTypeFromBody` is shared with FunctionDeclaration / MethodDeclaration / GetAccessor where adding `null → nullType` would risk widespread regressions.
+
+**Found via wider candidate-finder pass.** The default `find_candidates.py --fresh` returned 0/0/0 (filtered from 3/47/10). Widening the diff-line cutoff from 3 to 6 surfaced 3 new fresh candidates including `assignmentCompatBug2_ts` (+6 SWAP) — the diff shape was 3 source-type-display swaps (`(n: any) => any` vs `(n: number) => number`), too large for the default finder but tractable via single infrastructure piece (contextual typing propagation through ObjectLiteralExpression).
+
+**Net result.** 8949/10078 passing (88.80%). One commit. Pairs with B52.2 / B52.3's inference work from earlier this round — B52.4 propagates contextual typing in the OTHER direction (FROM annotated target TO un-annotated arrow params in object literals), while B52.2/B52.3 propagated inference FROM call-site arguments TO TypeParam-typed parameter shapes.
+
+---
+
 **Session 2026-05-18 (B49.x, +1 net, 8832 → 8833 in 3 commits). /goal session targeting 15 iterations** — surgical pool truly exhausted at +1 level (post B48.x B49.0 baseline was 8832 passing / 1243 failed / 3 skipped).
 
 - **B49.1 (+1, flips `jsxFactoryIdentifierWithAbsentParameter_ts`)** — `frameElement` was listed only in `DOM_GLOBAL_NAMES` (the side set used by the lib-DOM filter in `checkUnresolvedNames`); the spelling-suggestion candidate pool walks `KNOWN_GLOBALS`. Adding `frameElement` to `KNOWN_GLOBALS` surfaces it as a TS2552 suggestion for `createElement` (distance 5, well within cutoff 6). Single one-line addition. The B48.12 session note "createElement → frameElement requires sub-cost 1 in our weighted distance; current cost 2 keeps distance too high" was actually wrong about the root cause — distance was fine; the candidate just wasn't in the pool.
