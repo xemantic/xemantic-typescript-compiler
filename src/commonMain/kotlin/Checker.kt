@@ -8061,11 +8061,48 @@ class Checker(
     private fun checkTs2719InStatements(statements: List<Statement>, source: String, fileName: String) {
         for (stmt in statements) {
             when (stmt) {
-                is ClassDeclaration -> checkTs2719InClass(stmt, source, fileName)
+                is ClassDeclaration -> {
+                    checkTs2719InClass(stmt, source, fileName)
+                    // Recurse into method bodies for nested classes
+                    for (m in stmt.members) {
+                        val body = when (m) {
+                            is MethodDeclaration -> m.body
+                            is Constructor -> m.body
+                            is GetAccessor -> m.body
+                            is SetAccessor -> m.body
+                            else -> null
+                        }
+                        body?.let { checkTs2719InStatements(it.statements, source, fileName) }
+                    }
+                }
                 is ModuleDeclaration -> {
                     val body = stmt.body
                     if (body is ModuleBlock) checkTs2719InStatements(body.statements, source, fileName)
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkTs2719InStatements(it.statements, source, fileName) }
+                is Block -> checkTs2719InStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkTs2719InStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkTs2719InStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkTs2719InStatements(clause.statements, source, fileName)
+                        is DefaultClause -> checkTs2719InStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    checkTs2719InStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { checkTs2719InStatements(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkTs2719InStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkTs2719InStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
