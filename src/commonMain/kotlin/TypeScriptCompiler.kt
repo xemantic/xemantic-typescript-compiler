@@ -1985,6 +1985,23 @@ private fun topologicalSort(
         result.add(file)
     }
 
+    // Find files NOT depended on by anyone (graph roots).
+    // When exactly one root exists, visit it first so its deps are emitted in the
+    // order the root's imports/references declare them (matching TypeScript's emit
+    // order for entry-point/aggregator files). With zero roots (cycle present) or
+    // multiple roots (independent files), fall back to input-order DFS — this keeps
+    // simple multi-file tests unaffected.
+    val referencedByOthers = mutableSetOf<String>()
+    for ((src, depList) in deps) {
+        for (d in depList) {
+            if (d in fileSet && d != src) referencedByOthers.add(d)
+        }
+    }
+    val roots = fileNames.filter { it !in referencedByOthers }
+    if (roots.size == 1) {
+        visit(roots[0])
+    }
+
     for (file in fileNames) {
         visit(file)
     }
