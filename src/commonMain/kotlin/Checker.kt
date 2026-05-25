@@ -26285,7 +26285,31 @@ interface DataView {
                         checkTS7010InStatements(listOf(body), source, fileName, inAmbientContext = childAmbient)
                     }
                 }
-                is Block -> checkTS7010InStatements(stmt.statements, source, fileName)
+                is Block -> checkTS7010InStatements(stmt.statements, source, fileName, inAmbientContext = inAmbientContext)
+                is IfStatement -> {
+                    checkTS7010InStatements(listOf(stmt.thenStatement), source, fileName, inAmbientContext = inAmbientContext)
+                    stmt.elseStatement?.let { checkTS7010InStatements(listOf(it), source, fileName, inAmbientContext = inAmbientContext) }
+                }
+                is ForStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
+                is ForInStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
+                is ForOfStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
+                is WhileStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
+                is DoStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkTS7010InStatements(clause.statements, source, fileName, inAmbientContext = inAmbientContext)
+                            is DefaultClause -> checkTS7010InStatements(clause.statements, source, fileName, inAmbientContext = inAmbientContext)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkTS7010InStatements(stmt.tryBlock.statements, source, fileName, inAmbientContext = inAmbientContext)
+                    stmt.catchClause?.block?.let { checkTS7010InStatements(it.statements, source, fileName, inAmbientContext = inAmbientContext) }
+                    stmt.finallyBlock?.let { checkTS7010InStatements(it.statements, source, fileName, inAmbientContext = inAmbientContext) }
+                }
+                is LabeledStatement -> checkTS7010InStatements(listOf(stmt.statement), source, fileName, inAmbientContext = inAmbientContext)
                 else -> {}
             }
         }
