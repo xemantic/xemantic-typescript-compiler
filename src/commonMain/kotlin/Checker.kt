@@ -50511,6 +50511,21 @@ interface DataView {
                     val tB = applyConditionNarrowing(t, expr.right, false, name)
                     getUnionType(listOf(tA, tB))
                 }
+                // round 44 iter9: nullish coalescing `a ?? b`. When truthy, EITHER
+                // a is non-null/undefined (and truthy), OR a is null/undefined and b is truthy.
+                // The combined narrowing on the truthy side requires either side to narrow
+                // `name` to non-null/undefined assignability. Simpler: union of both sides'
+                // truthy narrowings (matches `||` semantics for the union direction).
+                SyntaxKind.QuestionQuestion -> if (isTrue) {
+                    val tA = applyConditionNarrowing(t, expr.left, true, name)
+                    val tB = applyConditionNarrowing(t, expr.right, true, name)
+                    getUnionType(listOf(tA, tB))
+                } else {
+                    // `a ?? b` falsy iff a is null/undefined AND b is falsy.
+                    // Narrow `name` to falsy on both sides.
+                    val tA = applyConditionNarrowing(t, expr.left, false, name)
+                    applyConditionNarrowing(tA, expr.right, false, name)
+                }
                 SyntaxKind.EqualsEqualsEquals,
                 SyntaxKind.EqualsEquals -> narrowByEquality(t, expr, equal = isTrue, name)
                 SyntaxKind.ExclamationEqualsEquals,
