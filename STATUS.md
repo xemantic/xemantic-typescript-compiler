@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 46 (2026-05-25, in-progress) — continuing user-directed 20-iteration cycle. Surgical pool exhausted (rounds 32-46 totaling ~15 consecutive near-zero rounds)._
+**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 46 (2026-05-25, **stopped early at iter1 per user direction**). User invoked /goal a 4th time but, when asked via AskUserQuestion, chose "Stop the /goal loop" — acknowledging the futility of continued 20-iteration cycles. Rounds 32-45 totaled 14 consecutive sessions at near-zero net flips (1 flip in round 43 iter14). Architectural narrowing infrastructure is fully in place; **the next productive session needs to either (a) wire narrowing into `getTypeOfIdentifier` (high-yield/high-risk), (b) commit to Blocker #3 (per-file scope construction, ~30+ tests), or (c) accept that Phase 4 may have reached its surgical ceiling at 8947**._
 
 _Round 45 (2026-05-25): /goal session — **20 iterations total, all net-zero**. iter1 narrowUnionByLiteral supertype substitution (positive narrowing) — `s: string | null` narrowed by `s === "abc"` returns `"abc"` instead of empty/never. iter2+6+10 CLAUDE.md gotchas (supertype-substitution, narrowing-consumer-sites). iter5 Boolean(x) rationale comment. iter3-4+7-20 STATUS+PLAN doc updates._
 
