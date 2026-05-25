@@ -23597,6 +23597,7 @@ interface DataView {
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
             is LabeledStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
             is ThrowStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
             else -> {}
         }
     }
