@@ -38389,6 +38389,12 @@ interface DataView {
                             prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
                         }
                         is PropertyAssignment -> walkForOptionalParamsInExpr(prop.initializer, source, fileName)
+                        is SpreadAssignment -> walkForOptionalParamsInExpr(prop.expression, source, fileName)
+                        is GetAccessor -> prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        is SetAccessor -> {
+                            checkParamsForTS1015(prop.parameters, source, fileName)
+                            prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
                         else -> {}
                     }
                 }
@@ -38404,10 +38410,19 @@ interface DataView {
                             checkParamsForTS1015(member.parameters, source, fileName)
                             member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
                         }
+                        is GetAccessor -> member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        is SetAccessor -> {
+                            checkParamsForTS1015(member.parameters, source, fileName)
+                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
+                        }
+                        is PropertyDeclaration -> member.initializer?.let { walkForOptionalParamsInExpr(it, source, fileName) }
                         else -> {}
                     }
                 }
             }
+            is VoidExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
             else -> {}
         }
     }
