@@ -24792,6 +24792,38 @@ interface DataView {
             is ArrayType -> walkTypeQueryForPrivateName(type.elementType, aliasName, topLevel, nested, source, fileName)
             is TupleType -> type.elements.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
             is TypeReference -> type.typeArguments?.forEach { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) } }
+                walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) } }
+                walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
+            }
+            is TypeLiteral -> for (m in type.members) {
+                when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.parameters.forEach { p -> p.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) } }
+                        m.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+                    }
+                    is IndexSignature -> m.type?.let { walkTypeQueryForPrivateName(it, aliasName, topLevel, nested, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ConditionalType -> {
+                walkTypeQueryForPrivateName(type.checkType, aliasName, topLevel, nested, source, fileName)
+                walkTypeQueryForPrivateName(type.extendsType, aliasName, topLevel, nested, source, fileName)
+                walkTypeQueryForPrivateName(type.trueType, aliasName, topLevel, nested, source, fileName)
+                walkTypeQueryForPrivateName(type.falseType, aliasName, topLevel, nested, source, fileName)
+            }
+            is IndexedAccessType -> {
+                walkTypeQueryForPrivateName(type.objectType, aliasName, topLevel, nested, source, fileName)
+                walkTypeQueryForPrivateName(type.indexType, aliasName, topLevel, nested, source, fileName)
+            }
+            is TypeOperator -> walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
+            is RestType -> walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
+            is OptionalType -> walkTypeQueryForPrivateName(type.type, aliasName, topLevel, nested, source, fileName)
             else -> {}
         }
     }
