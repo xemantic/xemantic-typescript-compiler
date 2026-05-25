@@ -53102,12 +53102,48 @@ interface DataView {
                         checkTS2302InClassMember(member, typeParamNames, source, fileName)
                     }
                 }
+                // Recurse into member bodies for nested class declarations
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkTS2302InStatement(s, source, fileName) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkTS2302InStatement(s, source, fileName) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkTS2302InStatement(s, source, fileName) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkTS2302InStatement(s, source, fileName) }
+                        else -> {}
+                    }
+                }
             }
             is ModuleDeclaration -> {
                 (stmt.body as? ModuleBlock)?.let {
                     for (s in it.statements) checkTS2302InStatement(s, source, fileName)
                 }
             }
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkTS2302InStatement(s, source, fileName) }
+            is Block -> for (s in stmt.statements) checkTS2302InStatement(s, source, fileName)
+            is IfStatement -> {
+                checkTS2302InStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkTS2302InStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (s in clause.statements) checkTS2302InStatement(s, source, fileName)
+                        is DefaultClause -> for (s in clause.statements) checkTS2302InStatement(s, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkTS2302InStatement(s, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { checkTS2302InStatement(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { checkTS2302InStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> checkTS2302InStatement(stmt.statement, source, fileName)
             else -> {}
         }
     }
