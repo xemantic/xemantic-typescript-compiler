@@ -32061,6 +32061,17 @@ interface DataView {
             is LabeledStatement -> {
                 checkBlockFuncDeclInStatement(stmt.statement, source, fileName, inClassMethod)
             }
+            is SwitchStatement -> {
+                // Each case/default clause body is effectively a block scope.
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    checkBlockFuncDeclInStatements(clauseStmts, source, fileName, inBlock = true, inClassMethod = inClassMethod)
+                }
+            }
             is FunctionDeclaration -> {
                 // Recurse into function bodies (new scope, reset inBlock = false)
                 stmt.body?.let { checkBlockFuncDeclInStatements(it.statements, source, fileName, inBlock = false, inClassMethod = false) }
