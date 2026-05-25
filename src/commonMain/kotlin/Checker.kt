@@ -50534,7 +50534,19 @@ interface DataView {
      * switch subject doesn't match [name] or no usable case literals are found.
      */
     private fun narrowBySwitchClause(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
-        if (getReferencePath(flowNode.switchStatement.expression) != name) return null
+        val subjectPath = getReferencePath(flowNode.switchStatement.expression) ?: return null
+        // round 43 iter10: discriminant-parent narrowing — `switch (x.kind) { case "a": ... }`
+        // narrows x (the receiver) by filtering union members whose `kind` property is
+        // assignable from the case literal.
+        val (matchesDirectly, discriminantName) = when {
+            subjectPath == name -> true to null
+            subjectPath.startsWith("$name.") && subjectPath.indexOf('.', name.length + 1) < 0 -> {
+                // single-level property access (e.g., "x.kind" when name == "x"); the
+                // discriminant property is the part after "name."
+                false to subjectPath.substring(name.length + 1)
+            }
+            else -> return null
+        }
         // Collect literal types from cases in the [clauseStart, clauseEnd) range.
         val literalTypes = mutableListOf<Type>()
         val clauses = flowNode.switchStatement.caseBlock
@@ -50546,8 +50558,6 @@ interface DataView {
                     is CaseClause -> literalTypeOfExpression(clause.expression)?.let { literalTypes.add(it) }
                     is DefaultClause -> {
                         // Default clause — no narrowing possible from this clause alone.
-                        // If [clauseStart, clauseEnd) includes default, fall through to
-                        // antecedent (return null).
                         return null
                     }
                     else -> {}
@@ -50556,20 +50566,27 @@ interface DataView {
             idx++
         }
         if (literalTypes.isEmpty()) return null
-        if (t !is Type.Union) {
-            // For non-union, narrow by intersecting with the case literals.
-            // If t is assignable from any literal, keep t (no narrowing).
-            // Otherwise can't narrow further — return null.
-            return null
-        }
-        // Filter union members: keep those assignable from any of the case literals.
-        val filtered = t.types.filter { member ->
-            literalTypes.any { lit -> checkTypeRelatedTo(lit, member, assignableRelation) }
+        if (t !is Type.Union) return null
+        val filtered = if (matchesDirectly) {
+            // Direct path: filter by member-assignable-from-literal.
+            t.types.filter { member ->
+                literalTypes.any { lit -> checkTypeRelatedTo(lit, member, assignableRelation) }
+            }
+        } else {
+            // Discriminant-property path: filter by member's [discriminantName] property
+            // being assignable from any case literal.
+            val discriminant = discriminantName ?: return null
+            t.types.filter { member ->
+                val propSym = getPropertyOfType(member, discriminant) ?: return@filter true
+                val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return@filter true }
+                if (propType === anyType || propType === errorType) true
+                else literalTypes.any { lit -> checkTypeRelatedTo(lit, propType, assignableRelation) }
+            }
         }
         return when {
             filtered.isEmpty() -> null
             filtered.size == 1 -> filtered[0]
-            filtered.size == t.types.size -> null  // no narrowing
+            filtered.size == t.types.size -> null
             else -> getUnionType(filtered)
         }
     }
