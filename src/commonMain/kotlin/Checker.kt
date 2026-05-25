@@ -48256,6 +48256,77 @@ interface DataView {
                 }
             }
             if (target is Identifier) {
+                // B73.1: cross-file `typeof import("X")` display for module-alias
+                // assignments. Two narrow shapes:
+                //   (1) target was initialized from a module alias (`var x = moduleA`)
+                //       and RHS is a primitive → emit TS2322 with module target display
+                //   (2) target has primitive type (`var y = 1`) and RHS is a module
+                //       alias (`y = moduleA`) → emit TS2322 with module source display
+                try {
+                    val rhsModuleName = tryGetModuleImportNameForExpr(expr.right)
+                    val targetSym = currentFileLocals?.get(target.text) ?: globals[target.text]
+                    val targetInitModuleName = run {
+                        val initExpr = (targetSym?.valueDeclaration as? VariableDeclaration)
+                            ?.takeIf { it.type == null }
+                            ?.initializer ?: return@run null
+                        tryGetModuleImportNameForExpr(initExpr)
+                    }
+                    if (targetInitModuleName != null && rhsModuleName == null) {
+                        // Shape (1): target is `typeof import("X")`, RHS is something else.
+                        // Emit only when RHS is a simple primitive literal — conservative.
+                        val rhsType = try { getTypeOfExpression(expr.right) } catch (_: Throwable) { null }
+                        if (rhsType != null && rhsType !== anyType && rhsType !== errorType &&
+                            isSimpleCheckableType(rhsType)) {
+                            val displaySource = typeToString(getWidenedLiteralType(rhsType))
+                            val displayTarget = "typeof import(\"$targetInitModuleName\")"
+                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = target.pos,
+                                length = target.text.length,
+                            ))
+                            return
+                        }
+                    } else if (rhsModuleName != null && targetInitModuleName == null) {
+                        // Shape (2): RHS is `typeof import("X")`. Check if target has a
+                        // primitive type from currentLocalTypes / annotation.
+                        var targetTypeForCheck: Type? = null
+                        val tDecl = targetSym?.valueDeclaration ?: targetSym?.declarations?.firstOrNull()
+                        val tAnno = (tDecl as? VariableDeclaration)?.type
+                            ?: (tDecl as? Parameter)?.type
+                            ?: (tDecl as? PropertyDeclaration)?.type
+                        if (tAnno != null) {
+                            targetTypeForCheck = try { getTypeFromTypeNode(tAnno) } catch (_: Throwable) { null }
+                        }
+                        if (targetTypeForCheck == null || targetTypeForCheck === anyType || targetTypeForCheck === errorType) {
+                            currentLocalTypes[target.text]?.let { lt ->
+                                if (lt !== anyType && lt !== errorType) targetTypeForCheck = lt
+                            }
+                        }
+                        if (targetTypeForCheck != null && targetTypeForCheck !== anyType && targetTypeForCheck !== errorType &&
+                            isSimpleCheckableType(targetTypeForCheck!!)) {
+                            val displaySource = "typeof import(\"$rhsModuleName\")"
+                            val displayTarget = typeToString(targetTypeForCheck!!)
+                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = target.pos,
+                                length = target.text.length,
+                            ))
+                            return
+                        }
+                    }
+                } catch (_: StackOverflowError) { /* circular */ }
                 // Try new Type-based engine for file-level and local variables
                 try {
                     var targetType: Type? = null
@@ -70403,6 +70474,46 @@ interface DataView {
                 val base = br.sourceFile.fileName
                     .substringAfterLast('/').substringAfterLast('\\')
                 return base.substringBeforeLast('.')
+            }
+        }
+        return null
+    }
+
+    /**
+     * B73.1: Return the module basename (no path, no extension) if [expr] is an
+     *  Identifier whose symbol is an import alias targeting another file via
+     *  `import X = require("./Y")` or `import * as X from "./Y"`. Used to render
+     *  `typeof import("X")` displays in TS2322 diagnostics for cross-file module
+     *  references. Returns null when the alias doesn't resolve to a file-targeted
+     *  module reference (e.g. namespace alias `import X = M.N`).
+     */
+    private fun tryGetModuleImportNameForExpr(expr: Expression): String? {
+        if (expr !is Identifier) return null
+        val name = expr.text
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Alias)) return null
+        for (decl in sym.declarations) {
+            when (decl) {
+                is ImportEqualsDeclaration -> {
+                    val ref = decl.moduleReference
+                    if (ref is ExternalModuleReference) {
+                        val specifier = (ref.expression as? StringLiteralNode)?.text ?: continue
+                        val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+                        val base = targetFile.substringAfterLast('/').substringAfterLast('\\')
+                        return base.substringBeforeLast('.')
+                    }
+                }
+                is ImportDeclaration -> {
+                    // `import * as X from "./Y"` — namespace import
+                    val namedBindings = decl.importClause?.namedBindings
+                    if (namedBindings is NamespaceImport && namedBindings.name.text == name) {
+                        val specifier = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+                        val base = targetFile.substringAfterLast('/').substringAfterLast('\\')
+                        return base.substringBeforeLast('.')
+                    }
+                }
+                else -> {}
             }
         }
         return null
