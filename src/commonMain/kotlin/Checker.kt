@@ -9522,6 +9522,120 @@ class Checker(
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             checkNonArrayRestInStatements(result.sourceFile.statements, source, fileName)
+            // B71.2: also walk type-position FunctionType/ConstructorType
+            // parameters (in type alias bodies, var/param annotations, etc.).
+            // Optional-rest (`...args?: any[]`) emits TS2370 even when the
+            // annotation is an array — `?` widens with `| undefined`.
+            checkNonArrayRestInTypeContexts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkNonArrayRestInTypeContexts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is TypeAliasDeclaration -> walkTypeNodeForRestParams(stmt.type, source, fileName)
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                decl.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+            }
+            is FunctionDeclaration -> {
+                for (p in stmt.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                stmt.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+            }
+            is InterfaceDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> {
+                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                }
+                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                else -> {}
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> {
+                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                }
+                is Constructor -> for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkNonArrayRestInTypeContexts(it.statements, source, fileName) }
+            is Block -> checkNonArrayRestInTypeContexts(stmt.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun walkTypeNodeForRestParams(typeNode: TypeNode, source: String, fileName: String) {
+        when (typeNode) {
+            is FunctionType -> {
+                checkOptionalRestParamsForTS2370(typeNode.parameters, source, fileName)
+                for (p in typeNode.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            }
+            is ConstructorType -> {
+                checkOptionalRestParamsForTS2370(typeNode.parameters, source, fileName)
+                for (p in typeNode.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            }
+            is UnionType -> for (t in typeNode.types) walkTypeNodeForRestParams(t, source, fileName)
+            is IntersectionType -> for (t in typeNode.types) walkTypeNodeForRestParams(t, source, fileName)
+            is ParenthesizedType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            is ArrayType -> walkTypeNodeForRestParams(typeNode.elementType, source, fileName)
+            is TupleType -> for (t in typeNode.elements) walkTypeNodeForRestParams(t, source, fileName)
+            is RestType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            is OptionalType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            is NamedTupleMember -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
+            is TypeLiteral -> for (m in typeNode.members) when (m) {
+                is MethodDeclaration -> {
+                    checkOptionalRestParamsForTS2370(m.parameters, source, fileName)
+                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                }
+                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * B71.2: TS2370 for OPTIONAL rest parameters in type-position FunctionType/
+     * ConstructorType (e.g. `type T = (...args?: any[]) => void`). The `?` widens
+     * the param type with `| undefined`, making it no longer "of an array type."
+     * Pairs with parser-side TS1047 ("rest parameter cannot be optional").
+     *
+     * NARROW gate: only fires on `dotDotDotToken && questionToken`. The keyword-type
+     * case (`...args: number`) is NOT checked here, because TypeScript intentionally
+     * allows `...args: any/never` as the "match-all functions" supertype pattern
+     * in type-position FunctionType (the value-position walker only sees runtime
+     * function declarations where the keyword check is still appropriate).
+     */
+    private fun checkOptionalRestParamsForTS2370(parameters: List<Parameter>, source: String, fileName: String) {
+        for (param in parameters) {
+            if (!param.dotDotDotToken) continue
+            if (!param.questionToken) continue
+            if (param.isCommentPlaceholder) continue
+            val typeNode = param.type ?: continue
+            val name = param.name
+            if (name !is Identifier) continue
+            val start = name.pos - 3  // position of `...`
+            var trueEnd = typeNode.end
+            while (trueEnd > start && source.getOrNull(trueEnd - 1)?.let {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ',' || it == ')' || it == ';'
+                } == true) {
+                trueEnd--
+            }
+            val length = trueEnd - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "A rest parameter must be of an array type.",
+                category = DiagnosticCategory.Error,
+                code = 2370,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 
