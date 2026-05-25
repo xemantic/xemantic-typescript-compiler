@@ -5253,6 +5253,9 @@ class Checker(
             }
             is TaggedTemplateExpression -> {
                 checkUnusedInExpr(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkUnusedInExpr(it.expression, source, fileName)
+                }
             }
             is AwaitExpression -> checkUnusedInExpr(expr.expression, source, fileName)
             is YieldExpression -> expr.expression?.let { checkUnusedInExpr(it, source, fileName) }
