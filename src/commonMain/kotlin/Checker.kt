@@ -38644,9 +38644,36 @@ interface DataView {
     private fun checkFunctionTypeParams(type: TypeNode?, source: String, fileName: String) {
         when (type) {
             is FunctionType -> reportTS2371ForParams(type.parameters, source, fileName)
+            is ConstructorType -> reportTS2371ForParams(type.parameters, source, fileName)
             is ParenthesizedType -> checkFunctionTypeParams(type.type, source, fileName)
             is UnionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
             is IntersectionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
+            is ArrayType -> checkFunctionTypeParams(type.elementType, source, fileName)
+            is TupleType -> for (el in type.elements) checkFunctionTypeParams(el, source, fileName)
+            is TypeReference -> type.typeArguments?.forEach { checkFunctionTypeParams(it, source, fileName) }
+            is ConditionalType -> {
+                checkFunctionTypeParams(type.checkType, source, fileName)
+                checkFunctionTypeParams(type.extendsType, source, fileName)
+                checkFunctionTypeParams(type.trueType, source, fileName)
+                checkFunctionTypeParams(type.falseType, source, fileName)
+            }
+            is IndexedAccessType -> {
+                checkFunctionTypeParams(type.objectType, source, fileName)
+                checkFunctionTypeParams(type.indexType, source, fileName)
+            }
+            is TypeOperator -> checkFunctionTypeParams(type.type, source, fileName)
+            is RestType -> checkFunctionTypeParams(type.type, source, fileName)
+            is OptionalType -> checkFunctionTypeParams(type.type, source, fileName)
+            is NamedTupleMember -> checkFunctionTypeParams(type.type, source, fileName)
+            is TypeLiteral -> for (m in type.members) when (m) {
+                is PropertyDeclaration -> checkFunctionTypeParams(m.type, source, fileName)
+                is MethodDeclaration -> {
+                    for (p in m.parameters) checkFunctionTypeParams(p.type, source, fileName)
+                    checkFunctionTypeParams(m.type, source, fileName)
+                }
+                is IndexSignature -> checkFunctionTypeParams(m.type, source, fileName)
+                else -> {}
+            }
             else -> {}
         }
     }
