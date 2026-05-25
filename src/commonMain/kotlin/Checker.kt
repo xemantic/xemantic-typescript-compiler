@@ -50534,7 +50534,15 @@ interface DataView {
                 SyntaxKind.InKeyword -> narrowByInOperator(t, expr, hasProp = isTrue, name)
                 else -> t
             }
-            is CallExpression -> narrowByCallPredicate(t, expr, isMatch = isTrue, name)
+            is CallExpression -> {
+                // round 44 iter16: Boolean(x) call narrows x identically to direct truthiness.
+                val callee = unwrapParensExpr(expr.expression)
+                if (callee is Identifier && callee.text == "Boolean" && expr.arguments.size == 1) {
+                    val arg = expr.arguments[0]
+                    if (getReferencePath(arg) == name) return narrowByTruthiness(t, truthy = isTrue)
+                }
+                narrowByCallPredicate(t, expr, isMatch = isTrue, name)
+            }
             is Identifier -> if (expr.text == name) narrowByTruthiness(t, truthy = isTrue) else t
             // 17.34: PropertyAccess truthiness narrowing — `if (A._a) { ... A._a ... }`
             // narrows `A._a` from `T | undefined | null` to `T` on the truthy side.
