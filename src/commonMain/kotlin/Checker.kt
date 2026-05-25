@@ -8333,6 +8333,19 @@ class Checker(
                     if (ModifierFlag.Declare in stmt.modifiers) continue
                     // Abstract classes still need TS2564 for non-abstract properties
                     checkClassPropertyInit(stmt.members, source, fileName)
+                    // round 44 iter2: recurse into class member bodies so nested ClassDeclaration
+                    // inside method/constructor/accessor bodies and PropertyDeclaration initializers
+                    // also reach TS2564 check.
+                    for (member in stmt.members) {
+                        when (member) {
+                            is MethodDeclaration -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                            is Constructor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> member.body?.let { checkPropertyInitInStatements(it.statements, source, fileName) }
+                            is PropertyDeclaration -> member.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
+                            else -> {}
+                        }
+                    }
                 }
                 is ModuleDeclaration -> {
                     // Skip declare (ambient) namespaces — classes inside are ambient
