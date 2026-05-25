@@ -118,6 +118,13 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B70.15 round 47 iter18, +1 → 8965 / 10078).** /goal loop iter 18. Found target via tiny-diff scan: `overloadOnConstNoAnyImplementation2_ts` (1-line diff, missing 1 TS2793 related-info). Test marked `[SKIP]` in `find_candidates.py` output but the underlying issue was a narrow gate refinement — not a multi-piece blocker.
+
+- **Target test diff**: missing `!!! related TS2793 ...:7:5: The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible.` on TS2345 emitted for `c.x1(1, (x: 'bye') => { return 1; });` against overload `x1(a: number, callback: (x: 'hi') => number);` (impl `(x: string) => number`).
+- **Root cause**: under `// @strict: false`, TypeScript checks method parameters BIVARIANTLY (strictFunctionTypes is off). Our TS2793 gate (`allArgumentsMatch(args, implSig)`) was using contravariant-only `signatureRelatedTo`, so `(x: 'bye') => number` vs impl param `(x: string) => number` failed (string not assignable to 'bye'). Bivariance accepts because 'bye' IS assignable to string going the other way.
+- **B70.15 fix (Checker.kt:~64319 + 4 call sites)**: added optional `bivariantFnParams: Boolean = false` parameter to `allArgumentsMatch`. When true AND `options.strictExplicitlyFalse`, the per-arg loop tries a reverse-direction assignability check for function-vs-function mismatches (both source and target are anonymous Type.Object with non-empty callSignatures, neither is a Reference/Interface). Wired through the 4 TS2793 gates: typed-args generic path (Checker.kt:~63105), single-signature path (~63129), arityMatches.size==1 overload path (~63904), and multi-overload TS2769 path (~64004). Overload-resolution match (~63912) keeps the default contravariant behavior to avoid incorrect overload selection.
+- **Net result**: 1114 → 1113 failed (8964 → 8965). Zero regressions across the suite. The bivariant fallback gate is conservative — only fires for anonymous function-typed pairs under explicit strict:false, so the broader test corpus (strict-by-default, non-function-arg overloads, generic overloads) is unaffected.
+
 **Session 2026-05-25 (B70.14 round 47 iter17, +1 → 8964 / 10078).** /goal loop iter 17. Found target via `--fresh` MISSING-DIAGS at single-error tests: `noImplicitAnyForIn_ts` missing 1 TS2405 at line 30 for `for (n[idx++] in m);`.
 
 - **Target test diff** had only 1 missing diagnostic: TS2405 "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'." Squiggle 8 chars over the entire ElementAccessExpression `n[idx++]`.
