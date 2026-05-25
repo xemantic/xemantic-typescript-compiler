@@ -35992,16 +35992,6 @@ interface DataView {
                             "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
                     }
                 }
-                // round 42 iter4: recurse into nested member bodies so nested
-                // Class/Interface declarations inside method/constructor/accessor
-                // bodies are also covered.
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is Constructor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is GetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is SetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    else -> {}
-                }
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName)
@@ -36052,12 +36042,6 @@ interface DataView {
             is PrefixUnaryExpression -> expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode
             is PropertyAccessExpression -> true // Symbol.iterator, NS.x etc. — accept conservatively
             is ParenthesizedExpression -> isLiteralLikeExpr(expr.expression)
-            // round 42 iter5: wrapper unwrap — `("x" as const)`, `<T>"x"`, `"x"!`, `"x" satisfies T`
-            // are all literal-like after stripping the wrapper.
-            is AsExpression -> isLiteralLikeExpr(expr.expression)
-            is TypeAssertionExpression -> isLiteralLikeExpr(expr.expression)
-            is NonNullExpression -> isLiteralLikeExpr(expr.expression)
-            is SatisfiesExpression -> isLiteralLikeExpr(expr.expression)
             is BinaryExpression -> false
             is CallExpression -> false
             is ObjectLiteralExpression -> false
