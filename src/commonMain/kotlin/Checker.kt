@@ -42406,6 +42406,10 @@ interface DataView {
                     decl.initializer?.let { walkExprForFallthroughCases(it, source, fileName) }
                 }
             }
+            is ReturnStatement -> stmt.expression?.let { walkExprForFallthroughCases(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkExprForFallthroughCases(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { walkExprForFallthroughCases(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForFallthroughCases(it.statements, source, fileName) }
             else -> {}
         }
     }
