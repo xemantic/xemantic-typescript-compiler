@@ -38556,6 +38556,28 @@ interface DataView {
                     (stmt.body as? ModuleBlock)?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
                 }
                 is Block -> walkForParamInitNonImpl(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForParamInitNonImpl(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForParamInitNonImpl(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForParamInitNonImpl(clause.statements, source, fileName)
+                        is DefaultClause -> walkForParamInitNonImpl(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkForParamInitNonImpl(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForParamInitNonImpl(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
