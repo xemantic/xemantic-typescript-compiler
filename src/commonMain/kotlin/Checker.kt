@@ -65164,7 +65164,28 @@ interface DataView {
                     }
                 if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowChainObjObj) continue
             }
-            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+            // B71.1: Strict-only void→undefined fn-return mismatch. Argument is a NAMED
+            // FunctionDeclaration (source.symbol carries the function's symbol — arrow
+            // functions and function expressions do NOT set fnType.symbol) whose return
+            // type infers to `void` (no explicit return). Target param's return type is
+            // `undefined`. Under strictNullChecks, this is incompatible — even though
+            // `isSimpleTypeRelatedTo` treats void→undefined as assignable globally.
+            // Force a relation failure so TS2345 emits with the standard chain.
+            val forceVoidUndefinedFail = strictNullChecks &&
+                argType is Type.Object && argType.symbol != null &&
+                argType.symbol!!.declarations.any { it is FunctionDeclaration } &&
+                paramType is Type.Object &&
+                !argType.callSignatures.isNullOrEmpty() &&
+                !paramType.callSignatures.isNullOrEmpty() && run {
+                    val aSig = argType.callSignatures!!.first()
+                    val pSig = paramType.callSignatures!!.first()
+                    aSig.parameters.isEmpty() && pSig.parameters.isEmpty() &&
+                        aSig.resolvedReturnType === voidType &&
+                        pSig.resolvedReturnType != null &&
+                        pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Undefined) &&
+                        !pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Void)
+                }
+            if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
                 val argTypeStr = typeToString(argType)
                 val paramTypeStr = typeToString(paramType)
@@ -67151,6 +67172,17 @@ interface DataView {
         // Check return type mismatch
         val sourceReturn = sourceSig.resolvedReturnType ?: anyType
         val targetReturn = targetSig.resolvedReturnType ?: anyType
+        // B71.1: Mirror the arg-level strict void→undefined gate. Source's return is
+        // `void` (e.g. implicit-void FunctionDeclaration); target's return is `undefined`.
+        // Emit the chain "Type 'void' is not assignable to type 'undefined'." so the
+        // caller's TS2345 displays a proper elaboration.
+        if (strictNullChecks &&
+            sourceReturn === voidType &&
+            targetReturn.flags.hasAny(TypeFlags.Undefined) &&
+            !targetReturn.flags.hasAny(TypeFlags.Void)
+        ) {
+            return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
+        }
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
             // 17.11a: When target's return type is one of target's own type

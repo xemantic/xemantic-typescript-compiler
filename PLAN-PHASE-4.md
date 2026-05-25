@@ -1111,6 +1111,20 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (B71.1 round 48 iter5, +1 → 8967 / 10078).** /goal loop iter5. Pivot after 4 consecutive B59.x interning iterations all net-zero. Per recommended targets, evaluated option A (B57.3 mapped-type/conditional TS2589 — `recursivelyExpandingUnionNoStackoverflow_ts`, `awaitedType_ts`, `recursiveMappedTypes_ts` all multi-error feature scale; out of scope). Evaluated option D candidates from `find_candidates.py` non-fresh list:
+  - `noStrictGenericChecks_ts` — multi-line elaboration with TS2208 TypeParam-vs-TypeParam (out of scope).
+  - `aliasUsageInOrExpression_ts` — needs cross-file `typeof import("...")` qualified display (out of scope).
+  - `arrayconcat_ts` — needs TS18048 emission for optional-property access (new diagnostic, out of scope).
+  - `functionsMissingReturnStatementsAndExpressionsStrictNullChecks_ts` — single missing TS2345 at `f(h1)` where `h1` returns void implicitly, target param is `() => undefined`. Tractable.
+
+  **Fix**: In `checkArgumentsAgainstSignature` (Checker.kt:~65167), added narrow gate `forceVoidUndefinedFail` BEFORE the standard `checkTypeRelatedTo` call. Fires when: (a) `strictNullChecks`; (b) `argType is Type.Object && argType.symbol != null && argType.symbol.declarations.any { it is FunctionDeclaration }` — i.e. argument resolves to a NAMED FunctionDeclaration (arrow functions and function expressions have `fnType.symbol = null` via `getTypeOfArrowFunction` / `getTypeOfFunctionExpression`); (c) source's first call signature has 0 params + voidType return; (d) target's first call signature has 0 params + `TypeFlags.Undefined` return without `TypeFlags.Void`. Forces relation engine to fail despite `isSimpleTypeRelatedTo` line 65571's global `void → undefined` permissive rule. Mirror gate added to `getFunctionMismatchElaboration` (Checker.kt:~67163) so the chain `"  Type 'void' is not assignable to type 'undefined'."` appears.
+
+  **Why the narrow gate**: First attempted a broader gate in `signatureRelatedTo` line 66961 (failing on ANY void source / undefined target return mismatch under strict). Regressed `f(() => { })` and `f((): undefined => { })` and assignment cases like `const f20: () => undefined = () => {}` — TypeScript's contextual typing makes arrow's empty body type as `undefined` (matching contextual target), so these should NOT fail. Restricting via `argType.symbol != null && declarations.any { is FunctionDeclaration }` cleanly distinguishes the named-function case (no contextual typing) from arrow/fn-expr cases (always contextually typed at call sites). Out of scope: extending to assignment positions (`const x: () => undefined = h1`) since that requires similar contextual-vs-not distinction at var-decl/assignment sites.
+
+  **Net result.** 8967 / 10078 passing (+1). Test count delta: 1112 → 1111 failed.
+
+  ---
+
   **Session 2026-05-25 (B59.5 round 48 iter4, net-zero, 8966/10078).** /goal loop iter4. `find_candidates.py` (non-fresh) still shows architectural-only candidates. Per priorities, continued B59.x interning. Picked site 68527 (`buildSignatureForFunctionLikeTypeNode`) — the FunctionType/ConstructorType TypeNode helper. Exact shape match with already-interned FunctionExpression site at 51866. First attempt added the canonical `if (tp.constraint == null)` guard pattern → regressed 1 test (1113 failed). Reverted, kept interning-only (constraints/defaults re-resolved per call). Net-zero. Coverage 6 of 10 sites. Remaining: 48540 (deliberate fresh per call), 49495 (already cached by declaredTypes), 49525 (eager scan), 49766, 50064 (per-MethodDecl, risky), 60119 (`pushFunctionTypeParamsScope`, many callers — risky), 68612 (parallel shape to 68527, low-risk follow-up). Lesson recorded: constraint null-guard isn't always safe even when AST-position interning is — type-context-sensitive resolution can differ per call. Next session candidates: try 68612 (parallel-shape low-risk) or pivot to a different blocker.
 
   ---
