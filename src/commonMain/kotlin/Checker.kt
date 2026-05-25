@@ -47724,9 +47724,13 @@ interface DataView {
                                 }
                             }
                         }
-                        // Set contextual type for function expression parameter inference
+                        // Set contextual type for function expression parameter inference.
+                        // B52.4 extends to ObjectLiteralExpression so per-property contextual
+                        // typing flows into nested arrow function parameters via
+                        // getTypeOfObjectLiteral's per-property contextualType push.
                         val savedContextual = contextualType
-                        if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression)) {
+                        if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression ||
+                                expr.right is ObjectLiteralExpression)) {
                             contextualType = tt
                         }
                         // 17.66: contextual literal preservation for assignment RHS — when
@@ -51359,6 +51363,15 @@ interface DataView {
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
         val members = symbolTable()
         val properties = mutableListOf<Symbol>()
+        // B52.4: When the outer assignment / arg position provides a contextual type
+        // (set in checkAssignmentExpression / checkVarDecl / call-arg paths), propagate
+        // each matching property type into the property initializer so nested arrow
+        // function parameters get inferred from the contextual call signature.
+        // Without this, `b3 = { f: (n) => 0 }` displays the source as `{ f: (n: any) => any }`
+        // instead of `{ f: (n: number) => number }`.
+        val ctxObj = (contextualType as? Type.Object)?.also {
+            try { resolveStructuredTypeMembers(it) } catch (_: StackOverflowError) {}
+        }
         for (prop in expr.properties) {
             when (prop) {
                 is PropertyAssignment -> {
@@ -51368,7 +51381,18 @@ interface DataView {
                         is NumericLiteralNode -> n.text
                         else -> continue
                     }
-                    val propType = getTypeOfExpression(prop.initializer)
+                    val propCtx = ctxObj?.members?.get(name)?.let { sym ->
+                        try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                    }
+                    val savedCtx = contextualType
+                    val useCtx = propCtx != null && propCtx !== anyType && propCtx !== errorType &&
+                        (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression)
+                    if (useCtx) contextualType = propCtx
+                    val propType = try {
+                        getTypeOfExpression(prop.initializer)
+                    } finally {
+                        if (useCtx) contextualType = savedCtx
+                    }
                     val sym = Symbol(SymbolFlags.Property, name)
                     sym.declarations.add(prop)
                     sym.valueDeclaration = prop
@@ -51483,13 +51507,38 @@ interface DataView {
         return getArrayType(elementType)
     }
 
+    /** B52.4: Narrow helper — return `nullType` only when the block body's first
+     * `return` statement returns the `null` literal. Used as a final fallback for
+     * arrow-function return-type inference so `(a) => { return null; }` displays
+     * as `(a: any) => null` to match TypeScript's contextual-typing baselines
+     * (e.g. `assignmentCompatBug2_ts`). Scoped to ArrowFunction only — the broader
+     * `inferReturnTypeFromBody` is shared with FunctionDeclaration / MethodDeclaration
+     * / GetAccessor where adding `null` would risk widespread regressions. */
+    private fun inferArrowReturnNullLiteral(body: Block): Type? {
+        for (stmt in body.statements) {
+            if (stmt is ReturnStatement) {
+                val e = stmt.expression ?: continue
+                return if (e is Identifier && e.text == "null") nullType else null
+            }
+        }
+        return null
+    }
+
     /** Get the type of an arrow function expression. */
     private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
         val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: run {
             val body = expr.body
             when {
                 body is Block && !hasReturnWithExpression(body) -> voidType
-                body is Block -> anyType // has return with expression, can't infer without analysis
+                // B52.4: Infer return type from simple `return <literal>` patterns so an
+                // un-annotated arrow `(n) => { return 0; }` in an object literal whose
+                // target is `{ f(n: number): number }` displays as `(n: number) => number`
+                // instead of `(n: any) => any`. Falls back to a narrow `return null;`
+                // check to handle the wrapper-target case (TS displays `() => null` for
+                // an arrow whose only return is the null literal).
+                body is Block -> inferReturnTypeFromBody(body)
+                    ?: inferArrowReturnNullLiteral(body)
+                    ?: anyType
                 // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
                 body is Identifier && body.text == "undefined" -> anyType
                 body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
