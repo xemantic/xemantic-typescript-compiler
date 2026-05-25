@@ -8872,6 +8872,25 @@ class Checker(
                     else -> {}
                 }
             }
+            // round 43 iter15: function-like body recursion (mirror of iter14's pattern).
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { stmt ->
+                    if (stmt is ExpressionStatement) checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
+                    else if (stmt is ReturnStatement) stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                    else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                    }
+                }
+                is Expression -> checkConstructorParamInInitializersInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> for (stmt in expr.body.statements) {
+                if (stmt is ExpressionStatement) checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
+                else if (stmt is ReturnStatement) stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                }
+            }
             else -> {}
         }
     }
