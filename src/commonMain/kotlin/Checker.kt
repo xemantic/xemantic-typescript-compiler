@@ -21620,6 +21620,17 @@ class Checker(
          *  interface's required non-method properties. */
         private val FUNCTION_RUNTIME_PROPERTIES = setOf("prototype", "arguments", "caller")
 
+        /** Deprecated HTML-helper methods on String.prototype (sub, sup, big, small,
+         *  bold, italics, fixed, blink, strike, anchor, link, fontcolor, fontsize).
+         *  TypeScript declares these in `lib.es5.d.ts.deprecated.d.ts` (or formerly
+         *  `lib.es2015.core.d.ts`), and error baselines render the TS2728 "declared
+         *  here" related info with file name `lib.es2015.core.d.ts:--:--`. Used by
+         *  the TS2551 emission site to override the resolved lib file name to match. */
+        private val DEPRECATED_STRING_HTML_HELPERS = setOf(
+            "sub", "sup", "big", "small", "bold", "italics", "fixed",
+            "blink", "strike", "anchor", "link", "fontcolor", "fontsize",
+        )
+
         /** Primitive intrinsic-name set used by B64.1's TS2339-on-call-result branch to
          *  decide whether a CallExpression's return type can be checked via its wrapper
          *  apparent type (Number/String/Boolean/BigInt). Symbol/null/undefined/etc. are
@@ -22067,6 +22078,7 @@ interface String {
     slice(start?: number, end?: number): string;
     split(separator: string, limit?: number): string[];
     substring(start: number, end?: number): string;
+    sub(): string;
     toLowerCase(): string;
     toLocaleLowerCase(): string;
     toUpperCase(): string;
@@ -61471,11 +61483,17 @@ interface DataView {
                         val p = getLineAndCharacterOfPosition(resolvedSource, declPos)
                         Pair(p.first, p.second)
                     }
+                    // TypeScript's deprecated HTML helper methods on String (sub, sup, big,
+                    // small, bold, italics, etc.) are declared in lib.es5.d.ts.deprecated.d.ts,
+                    // but TS error baselines render them as lib.es2015.core.d.ts. Override
+                    // the file name for these specific suggestions to match baseline format.
+                    val baselineFile = if (isLib && suggestion in DEPRECATED_STRING_HTML_HELPERS)
+                        "lib.es2015.core.d.ts" else resolvedFile
                     listOf(Diagnostic(
                         message = "'$suggestion' is declared here.",
                         category = DiagnosticCategory.Message,
                         code = 2728,
-                        fileName = resolvedFile,
+                        fileName = baselineFile,
                         line = declLine,
                         character = declChar,
                         start = declPos,
