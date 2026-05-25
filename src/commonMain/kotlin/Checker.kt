@@ -68885,6 +68885,14 @@ interface DataView {
                 }
             }
             is CommaListExpression -> expr.elements.forEach { checkArithmeticInExpr(it, source, fileName) }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
+                else -> {}
+            }
             else -> {}
         }
     }
