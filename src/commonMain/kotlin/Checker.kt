@@ -70372,6 +70372,33 @@ interface DataView {
             is FunctionExpression -> expr.body.let {
                 checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false)
             }
+            is AsExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is PostfixUnaryExpression -> checkBigIntLiteralsInExpr(expr.operand, source, fileName)
+            is SpreadElement -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+            is VoidExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) checkBigIntLiteralsInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                checkBigIntLiteralsInExpr(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    checkBigIntLiteralsInExpr(it.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (el in expr.elements) checkBigIntLiteralsInExpr(el, source, fileName)
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false) }
+                is Constructor -> m.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false) }
+                is GetAccessor -> m.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false) }
+                is SetAccessor -> m.body?.let { checkBigIntLiteralsInStmts(it.statements, source, fileName, ambient = false) }
+                is PropertyDeclaration -> m.initializer?.let { checkBigIntLiteralsInExpr(it, source, fileName) }
+                else -> {}
+            }
             else -> {}
         }
     }
