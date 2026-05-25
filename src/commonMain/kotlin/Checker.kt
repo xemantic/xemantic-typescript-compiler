@@ -19169,6 +19169,103 @@ class Checker(
      * to use 'import X from ...' instead?" — fires when a named import specifier
      * doesn't exist in the module's exports but the module does have a default export.
      */
+    /**
+     * B52.8: Returns the set of named members accessible via a `export = X` target,
+     * or null when the export = target has no discoverable named-member shape (and so
+     * the legacy TS2616 "must use require" diagnostic should fire instead).
+     *
+     * Returns non-null in these cases:
+     *  - `export = NS` where NS is a namespace symbol → NS.exports keys
+     *  - `export = x` where x is a variable whose type resolves to a Type.Object with
+     *    members, or a Type.Union of Type.Objects with at least one common property.
+     *    The returned set contains the COMMON property names (those present in ALL
+     *    union constituents, mirroring TypeScript's named-import-on-union semantics).
+     *
+     * Returns null in these cases (TS2616 fallback):
+     *  - `export = X` where X is a primitive value, class, function, etc.
+     *  - Type resolution fails or produces an opaque type (anyType, errorType, etc.).
+     */
+    private fun getExportEqualsMemberNames(
+        targetFile: SourceFile,
+        targetResult: BinderResult,
+    ): Set<String>? {
+        val exportEqStmt = targetFile.statements.firstOrNull {
+            it is ExportAssignment && it.isExportEquals
+        } as? ExportAssignment ?: return null
+        val exportEqExpr = exportEqStmt.expression as? Identifier ?: return null
+        val exportedSym = targetResult.locals[exportEqExpr.text] ?: return null
+
+        // Case 1: namespace export. `export = NS` → NS.exports keys (only non-type members).
+        if (exportedSym.flags.hasAny(SymbolFlags.Module)) {
+            val exports = exportedSym.exports ?: return null
+            // Only include value-position members (skip pure-type aliases / interfaces).
+            // Conservative: include everything but obvious type-only entries.
+            val nonValueOnly = SymbolFlags.Interface or SymbolFlags.TypeAlias
+            return exports.entries.asSequence()
+                .filter { (_, sym) ->
+                    // Include if has value flags OR has Module/Class/Function/Variable/Enum
+                    sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Class or
+                        SymbolFlags.Function or SymbolFlags.Variable or SymbolFlags.Enum) ||
+                    sym.flags.hasNone(nonValueOnly)
+                }
+                .map { it.key }
+                .toSet()
+        }
+
+        // Case 2: variable export. Only fire when the variable has a TYPE ANNOTATION
+        // that resolves to a Type.Object with members or a Type.Union of objects.
+        // We require an annotation (not an initializer-inferred type) to keep the
+        // analysis tractable and avoid resolving complex initializer types.
+        if (exportedSym.flags.hasAny(SymbolFlags.Variable)) {
+            val varDecl = exportedSym.declarations
+                .filterIsInstance<VariableDeclaration>()
+                .firstOrNull { it.type != null } ?: return null
+            val typeNode = varDecl.type ?: return null
+            val type = try {
+                getTypeFromTypeNode(typeNode)
+            } catch (_: StackOverflowError) {
+                return null
+            }
+            return collectCommonObjectMemberNames(type)
+        }
+
+        return null
+    }
+
+    /**
+     * Helper for B52.8: returns the set of property names common to all constituents
+     * of a type that is "object-like" (Type.Object or Type.Union/Intersection of objects).
+     * Returns null when the type is not object-like (primitive, errorType, etc.).
+     * Empty set is a valid return (object with no members → no common names → all imports
+     * would fail TS2305, no fall-through to TS2616).
+     */
+    private fun collectCommonObjectMemberNames(type: Type): Set<String>? {
+        return when (type) {
+            is Type.Object -> {
+                resolveStructuredTypeMembers(type)
+                val mems = type.members ?: return null
+                mems.keys.toSet()
+            }
+            is Type.Union -> {
+                // Property exists on a union if it exists in EVERY constituent.
+                val perConstituent = type.types.map { c ->
+                    collectCommonObjectMemberNames(c) ?: return null
+                }
+                if (perConstituent.isEmpty()) return null
+                perConstituent.reduce { acc, set -> acc.intersect(set) }
+            }
+            is Type.Intersection -> {
+                // Property exists on an intersection if it exists in ANY constituent.
+                val perConstituent = type.types.map { c ->
+                    collectCommonObjectMemberNames(c) ?: return null
+                }
+                if (perConstituent.isEmpty()) return null
+                perConstituent.reduce { acc, set -> acc.union(set) }
+            }
+            else -> null
+        }
+    }
+
     private fun checkDefaultImports() {
         // allowSyntheticDefaultImports suppresses TS1192 check.
         // Explicit false overrides all implicit true conditions.
@@ -19348,13 +19445,33 @@ class Checker(
                 // of esModuleInterop setting; the TS2617 branch below handles the different
                 // failure mode when esModuleInterop is explicitly false AND the exported
                 // value is namespace-like.
+                //
+                // B52.8 refinement: when the exported value's type has discoverable named
+                // members (union of object types with common props, intersection, indexable
+                // shape), TypeScript emits TS2305 for missing names instead of TS2616 — and
+                // valid names (member exists in all union constituents) get no error. The
+                // `getExportEqualsMemberNames` helper returns a non-null set when such a
+                // shape is detected; null falls through to the TS2616 fallback.
+                // Also handles `export = NS` where NS is a namespace — TS2305 for non-members.
                 val namedBindingsExp = importClause.namedBindings
                 if (hasExportEquals && namedBindingsExp is NamedImports) {
+                    val exportEqMembers = getExportEqualsMemberNames(targetFile, targetResult)
                     val exportEqStmt = targetFile.statements.firstOrNull {
                         it is ExportAssignment && it.isExportEquals
                     } as? ExportAssignment
                     val exportEqExpr = exportEqStmt?.expression
-                    if (exportEqExpr is Identifier) {
+                    if (exportEqMembers != null) {
+                        // Named-member shape detected — emit TS2305 for missing names.
+                        for (importSpecifier in namedBindingsExp.elements) {
+                            if (importSpecifier.isTypeOnly) continue
+                            val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                            val importedName = nameNode.text
+                            if (importedName == "default") continue
+                            if (importedName !in exportEqMembers) {
+                                emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                            }
+                        }
+                    } else if (exportEqExpr is Identifier) {
                         val exportedSym = targetResult.locals[exportEqExpr.text]
                         val nonValueLikeFlags = SymbolFlags.Class or SymbolFlags.Interface or
                             SymbolFlags.Module or SymbolFlags.Function or
