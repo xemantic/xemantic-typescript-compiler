@@ -1111,6 +1111,21 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (B71.2 round 48 iter6, net-zero infrastructure, 8967 / 10078).** /goal loop iter6 after B71.1 (+1). Adjacency-hunt continuation. Surveyed `find_candidates.py` non-fresh single-diff candidates — all skip-logged as architectural/feature-scale (Blocker #1 narrowing, Blocker #2 generic inference, Blocker #3 per-file scope, lib-version-aware subsetting, `typeof import("X")` cross-file display).
+
+  Selected `noCrashOnMixin2_ts` (+2 missing diffs: TS2370 + TS2545 mixin). TS2370 at `type Constructor<T = {}> = new (...args?: any[]) => T;` looked tractable as a narrow type-position FunctionType/ConstructorType walker — `nonArrayKeywordText` already handled keyword cases for value-position rest params, but type-alias bodies and other type contexts were not visited by the existing `checkNonArrayRestInStatements`.
+
+  **Fix (B71.2)**: New walker pair in `Checker.kt` (~9520+):
+  - `checkNonArrayRestInTypeContexts(stmts, source, fileName)` — visits TypeAliasDeclaration, VariableStatement (var decl type annotations), FunctionDeclaration param/return types, InterfaceDeclaration / ClassDeclaration member type annotations, ModuleDeclaration ModuleBlock recursion.
+  - `walkTypeNodeForRestParams(typeNode, source, fileName)` — recurses into FunctionType / ConstructorType (checks params, recurses into nested types), UnionType, IntersectionType, ParenthesizedType, ArrayType, TupleType, RestType, OptionalType, NamedTupleMember, TypeLiteral (with MethodDeclaration / PropertyDeclaration members).
+  - `checkOptionalRestParamsForTS2370(parameters, source, fileName)` — NARROW gate: only fires when `dotDotDotToken && questionToken`. Squiggle covers `...` through trimmed `typeNode.end`. The keyword-type case (`...args: number`) is EXCLUDED — TypeScript intentionally allows `(...args: any)` / `(...args: never)` as the "match-all functions" supertype pattern in type-position FunctionType (verified by `strictSubtypeAndNarrowing_ts` lines 35-39, which would FP without the optional-only restriction).
+
+  **First-attempt regression revert**: Initial broader gate (also firing for keyword types in type-position) regressed `strictSubtypeAndNarrowing_ts` via `type C = (...args: never) => unknown` FP. Restricted to optional-only via `questionToken` check; net-zero confirmed.
+
+  **Net result**: 8967 / 10078 passing (no flip — `noCrashOnMixin2_ts` still fails on missing TS2545 mixin diagnostic, a separate `class extends T where T is Constructor-constrained TypeParam` check that requires generic-constraint resolution + mixin-shape verification, out of scope as a single commit). TS2370 emission is now infrastructure available for any future mixin-class checking work. No FPs introduced (verified by full suite run).
+
+  ---
+
   **Session 2026-05-25 (B71.1 round 48 iter5, +1 → 8967 / 10078).** /goal loop iter5. Pivot after 4 consecutive B59.x interning iterations all net-zero. Per recommended targets, evaluated option A (B57.3 mapped-type/conditional TS2589 — `recursivelyExpandingUnionNoStackoverflow_ts`, `awaitedType_ts`, `recursiveMappedTypes_ts` all multi-error feature scale; out of scope). Evaluated option D candidates from `find_candidates.py` non-fresh list:
   - `noStrictGenericChecks_ts` — multi-line elaboration with TS2208 TypeParam-vs-TypeParam (out of scope).
   - `aliasUsageInOrExpression_ts` — needs cross-file `typeof import("...")` qualified display (out of scope).
