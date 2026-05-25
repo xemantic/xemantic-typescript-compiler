@@ -43040,10 +43040,20 @@ interface DataView {
                                 emitTS2343("__assign", spreadPos, spanLen.coerceAtLeast(1), source, fileName)
                             }
                         }
+                        // round 42 iter17: recurse into PropertyAssignment values so nested
+                        // ObjectLiteral with `...` spread inside `{ a: { ...o } }` is reached.
+                        is PropertyAssignment -> checkExprForMissingHelper(prop.initializer, source, fileName, tslibExports, isEs5Target)
                         else -> {}
                     }
                 }
             }
+            // round 42 iter17: wrapper unwrap so `({...o})` / `(...) as T` etc. still
+            // trigger the TaggedTemplate / SpreadAssignment helper detection.
+            is ParenthesizedExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
+            is AsExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
+            is TypeAssertionExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
+            is SatisfiesExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
+            is NonNullExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
             else -> {}
         }
     }
