@@ -40189,6 +40189,8 @@ interface DataView {
                         when (m) {
                             is MethodDeclaration -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
                             is Constructor -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                            is GetAccessor -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                            is SetAccessor -> m.body?.let { walkForCtorReturnNull(it.statements, source, fileName) }
                             else -> {}
                         }
                     }
@@ -40205,6 +40207,28 @@ interface DataView {
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForCtorReturnNull(it.statements, source, fileName) }
                 is Block -> walkForCtorReturnNull(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForCtorReturnNull(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForCtorReturnNull(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForCtorReturnNull(clause.statements, source, fileName)
+                        is DefaultClause -> walkForCtorReturnNull(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkForCtorReturnNull(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForCtorReturnNull(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForCtorReturnNull(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForCtorReturnNull(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
