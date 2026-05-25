@@ -15694,12 +15694,17 @@ class Checker(
                         val body = when (member) {
                             is Constructor -> member.body
                             is MethodDeclaration -> member.body
+                            // round 43 iter1: include accessor bodies — `class C { get f() { var a, a: string; } }`
+                            // should also catch duplicate-var-with-different-types errors.
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
                             else -> null
                         }
                         if (body != null) {
                             val params = when (member) {
                                 is Constructor -> member.parameters
                                 is MethodDeclaration -> member.parameters
+                                is SetAccessor -> member.parameters
                                 else -> emptyList()
                             }
                             val localVars = mutableMapOf<String, MutableList<VariableDeclaration>>()
