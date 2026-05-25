@@ -38717,6 +38717,13 @@ interface DataView {
                                 checkForwardRefsInParams(member.parameters, source, fileName, body)
                                 walkForParamInitForwardRef(body.statements, source, fileName)
                             }
+                            is GetAccessor -> member.body?.let { body ->
+                                walkForParamInitForwardRef(body.statements, source, fileName)
+                            }
+                            is SetAccessor -> member.body?.let { body ->
+                                checkForwardRefsInParams(member.parameters, source, fileName, body)
+                                walkForParamInitForwardRef(body.statements, source, fileName)
+                            }
                             else -> {}
                         }
                     }
@@ -38732,11 +38739,19 @@ interface DataView {
                 is ForOfStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
                 is WhileStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
                 is DoStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForParamInitForwardRef(clause.statements, source, fileName)
+                        is DefaultClause -> walkForParamInitForwardRef(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
                 is TryStatement -> {
                     walkForParamInitForwardRef(stmt.tryBlock.statements, source, fileName)
                     stmt.catchClause?.block?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
                     stmt.finallyBlock?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
                 }
+                is LabeledStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
