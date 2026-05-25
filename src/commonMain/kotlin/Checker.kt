@@ -35992,6 +35992,15 @@ interface DataView {
                             "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
                     }
                 }
+                // round 42 iter4: recurse into nested member bodies so nested
+                // Class/Interface declarations inside member bodies are also covered.
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+                    is Constructor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+                    is GetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+                    is SetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+                    else -> {}
+                }
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                 for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName)
