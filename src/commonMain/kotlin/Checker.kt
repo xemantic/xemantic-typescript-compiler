@@ -42655,6 +42655,59 @@ interface DataView {
                 stmt.elseStatement?.let { checkStmtForPrivateFieldAccess(it, source, fileName, tslibExports) }
             }
             is Block -> checkBlockForPrivateFieldAccess(stmt, source, fileName, tslibExports)
+            // round 42 iter6: broaden statement coverage so private-field access
+            // (#field) inside For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/
+            // ExportAssignment also triggers TS2343 when tslib helpers are missing.
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> for (d in init.declarations) {
+                        d.initializer?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+                    }
+                    is Expression -> checkExprForPrivateFieldAccess(init, source, fileName, tslibExports, false)
+                    else -> {}
+                }
+                stmt.condition?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+                stmt.incrementor?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+                checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+            }
+            is ForInStatement -> {
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+                checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+            }
+            is ForOfStatement -> {
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+                checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+            }
+            is WhileStatement -> {
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+                checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+            }
+            is DoStatement -> {
+                checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+            }
+            is SwitchStatement -> {
+                checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
+                for (clause in stmt.caseBlock) {
+                    val clauseStmts = when (clause) {
+                        is CaseClause -> {
+                            checkExprForPrivateFieldAccess(clause.expression, source, fileName, tslibExports, false)
+                            clause.statements
+                        }
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    for (s in clauseStmts) checkStmtForPrivateFieldAccess(s, source, fileName, tslibExports)
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkStmtForPrivateFieldAccess(s, source, fileName, tslibExports)
+                stmt.catchClause?.block?.let { for (s in it.statements) checkStmtForPrivateFieldAccess(s, source, fileName, tslibExports) }
+                stmt.finallyBlock?.let { for (s in it.statements) checkStmtForPrivateFieldAccess(s, source, fileName, tslibExports) }
+            }
+            is LabeledStatement -> checkStmtForPrivateFieldAccess(stmt.statement, source, fileName, tslibExports)
+            is ThrowStatement -> stmt.expression?.let { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
+            is ExportAssignment -> checkExprForPrivateFieldAccess(stmt.expression, source, fileName, tslibExports, false)
             else -> {}
         }
     }
