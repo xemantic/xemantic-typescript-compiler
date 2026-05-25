@@ -31911,7 +31911,23 @@ interface DataView {
     private fun checkPrivateIdentifiersInStatements(statements: List<Statement>, source: String, fileName: String) {
         for (stmt in statements) {
             when (stmt) {
-                is ClassDeclaration -> checkPrivateIdentifiersInClass(stmt.members, source, fileName)
+                is ClassDeclaration -> {
+                    checkPrivateIdentifiersInClass(stmt.members, source, fileName)
+                    // Recurse into class member bodies for nested classes
+                    for (m in stmt.members) {
+                        when (m) {
+                            is MethodDeclaration -> m.body?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                            is Constructor -> m.body?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                            is GetAccessor -> m.body?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                            is SetAccessor -> m.body?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                            is PropertyDeclaration -> {
+                                val init = m.initializer
+                                if (init is ClassExpression) checkPrivateIdentifiersInClass(init.members, source, fileName)
+                            }
+                            else -> {}
+                        }
+                    }
+                }
                 is ExpressionStatement -> {
                     val expr = stmt.expression
                     if (expr is ClassExpression) checkPrivateIdentifiersInClass(expr.members, source, fileName)
@@ -31927,6 +31943,31 @@ interface DataView {
                     val body = stmt.body
                     if (body is ModuleBlock) checkPrivateIdentifiersInStatements(body.statements, source, fileName)
                 }
+                is FunctionDeclaration -> stmt.body?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                is IfStatement -> {
+                    checkPrivateIdentifiersInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkPrivateIdentifiersInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkPrivateIdentifiersInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkPrivateIdentifiersInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkPrivateIdentifiersInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkPrivateIdentifiersInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkPrivateIdentifiersInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
