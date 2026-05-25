@@ -54842,6 +54842,21 @@ interface DataView {
     }
 
     private fun checkMultiBaseInStatement(stmt: Statement, source: String, fileName: String) {
+        // round 44 iter6: recurse into ClassDeclaration member bodies so nested
+        // InterfaceDeclaration inside class method/accessor/constructor bodies is
+        // reached for TS2320 multi-extends-conflict check.
+        if (stmt is ClassDeclaration) {
+            for (member in stmt.members) {
+                when (member) {
+                    is MethodDeclaration -> member.body?.let { for (s in it.statements) checkMultiBaseInStatement(s, source, fileName) }
+                    is Constructor -> member.body?.let { for (s in it.statements) checkMultiBaseInStatement(s, source, fileName) }
+                    is GetAccessor -> member.body?.let { for (s in it.statements) checkMultiBaseInStatement(s, source, fileName) }
+                    is SetAccessor -> member.body?.let { for (s in it.statements) checkMultiBaseInStatement(s, source, fileName) }
+                    else -> {}
+                }
+            }
+            return
+        }
         when (stmt) {
             is InterfaceDeclaration -> {
                 val extendsClauses = stmt.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword } ?: return
