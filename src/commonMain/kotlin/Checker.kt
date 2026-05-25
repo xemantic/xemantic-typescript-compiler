@@ -70851,6 +70851,34 @@ interface DataView {
                             ))
                         }
                     }
+                } else if (lhs is ElementAccessExpression) {
+                    // n[i] for-in LHS: element type must be string/any. Narrow surgical detection:
+                    // when base is an Identifier whose initializer is an ArrayLiteralExpression
+                    // (possibly through ||/??), and at least one of those array literals contains
+                    // an array/object literal element, the element type is object/array → TS2405.
+                    val base = lhs.expression
+                    if (base is Identifier) {
+                        val sym = locals[base.text]
+                        val decl = sym?.valueDeclaration
+                        if (decl is VariableDeclaration && decl.type == null) {
+                            val init = decl.initializer
+                            if (init != null && initializerHasNestedArrayOrObjectElement(init)) {
+                                val start = lhs.pos
+                                val length = (expressionTrueEnd(lhs) - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2405,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
                 }
                 // TS2407: RHS must be 'any', an object type, or a type parameter.
                 // Skip in ambient contexts (TypeScript only emits TS1036 for those).
@@ -70953,6 +70981,37 @@ interface DataView {
             }
             else -> null
         }
+    }
+
+    /**
+     * Returns true if [init] is (recursively through `||`/`??` BinaryExpression) an
+     * `ArrayLiteralExpression`, where at least one branch's array has at least one
+     * element that is itself an `ArrayLiteralExpression` or `ObjectLiteralExpression`.
+     * Used to detect that `var x = init; x[i]` yields an object/array element type
+     * (not string/any), which would make `x[i]` an invalid for-in LHS (TS2405).
+     */
+    private fun initializerHasNestedArrayOrObjectElement(init: Expression): Boolean {
+        var allArrayLiterals = true
+        var hasNested = false
+        fun walk(e: Expression) {
+            when (e) {
+                is ArrayLiteralExpression -> {
+                    if (e.elements.any { it is ArrayLiteralExpression || it is ObjectLiteralExpression }) {
+                        hasNested = true
+                    }
+                }
+                is BinaryExpression -> if (e.operator == SyntaxKind.BarBar || e.operator == SyntaxKind.QuestionQuestion) {
+                    walk(e.left)
+                    walk(e.right)
+                } else {
+                    allArrayLiterals = false
+                }
+                is ParenthesizedExpression -> walk(e.expression)
+                else -> allArrayLiterals = false
+            }
+        }
+        walk(init)
+        return allArrayLiterals && hasNested
     }
 
     /** Returns true if the annotated type can appear on the LHS of `for..in`: string/any/unknown. */
