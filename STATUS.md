@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 41 (2026-05-25): /goal session — 16 commits, 0 net flips. iter1 was a chore strike of 3 stale skip-log entries; iter2-iter16 broadened 15 different walkers' statement/expression coverage. All commits net-zero on the suite — pure structural broadening. 10 consecutive rounds (32-41) at 0 net flips per CLAUDE.md anti-loop rule; next session MUST commit to an architectural blocker._
+**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 41 (2026-05-25): /goal session — 20 commits + 1 doc update, 0 net flips. iter1 chore-struck 3 stale skip-log entries; iter2-iter16 and iter18-iter20 broadened 18 different walkers' statement/expression coverage; iter17 was the STATUS+PLAN doc update. All code commits net-zero on the suite — pure structural broadening. 10 consecutive rounds (32-41) at 0 net flips per CLAUDE.md anti-loop rule; next session MUST commit to an architectural blocker._
 
 _Round 41 (2026-05-25, 0 net flips via 16 commits)_:
 - **iter1**: Chore strike of 3 stale skip-log entries (`arraySigChecking_ts`, `functionTypeArgumentArityErrors_ts`, parenthetical `moduleKeywordRepeatError_ts`). All 3 underlying tests now pass but earlier `~~strikethrough~~` was incomplete; full skip-log audit now shows 0 STALE remaining.
@@ -19,8 +19,12 @@ _Round 41 (2026-05-25, 0 net flips via 16 commits)_:
 - **iter14**: `checkArithmeticInExpr` (TS2362/TS2363/TS2365) gains ClassExpression member-body recursion (Method/Ctor/Get+SetAccessor bodies + PropertyDeclaration init).
 - **iter15**: `walkForCtorReturnNull` (TS2322/TS2409 derived-class ctor returning null) gains ThrowStatement / ExportAssignment / ReturnStatement ClassExpression/FunctionExpression/ArrowFunction wrapper recursion.
 - **iter16**: `walkForDerivedSuper` (TS2377/TS17005/TS2417) gains same Throw/Export/Return wrapper recursion as iter15.
+- **iter17**: Doc-only update of STATUS.md + PLAN-PHASE-4.md round-41 session note.
+- **iter18**: `walkForOptionalParamsInExpr` (TS1015) gains Void/Delete/TypeOf + ObjectLit Spread/Get/SetAccessor + ClassExpression Get/SetAccessor/PropertyDeclaration.
+- **iter19**: `walkExprForImplicitReturns` (TS7030/TS2355/TS2366/TS7023) ClassExpression case gains GetAccessor + PropertyDeclaration init; ObjectLit case gains SpreadAssignment.
+- **iter20**: `checkBigIntLiteralsInExpr` (TS2737) gains wrappers (As/TypeAssertion/Satisfies/NonNull) + Postfix/Spread/Await/Yield/Void/Delete/TypeOf + Template/TaggedTemplate spans + CommaList + ClassExpression member-body recursion.
 
-Session-end: 8946 → 8946 / 10078 (0 net, ~88.77%). 16 commits + status/plan doc commit. Pool empty throughout. All 15 structural broadenings are pure subtree-visiting expansions; each emission gate is narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts.
+Session-end: 8946 → 8946 / 10078 (0 net, ~88.77%). 20 commits + 1 status/plan doc commit (iter17). Pool empty throughout. All 15 structural broadenings are pure subtree-visiting expansions; each emission gate is narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts.
 
 Per CLAUDE.md anti-loop rule: 10 consecutive rounds (32-41) of 0-flip structural broadening represent SEVERE diminishing returns. **The next session MUST commit to one of the architectural blockers** per CLAUDE.md's "Known architectural blockers" section: Blocker #1 control-flow narrowing (~60-100 tests), Blocker #2 generic inference (~20-40), or Blocker #3 per-file scope (~30+). Continuing structural broadening is an anti-pattern.
 
