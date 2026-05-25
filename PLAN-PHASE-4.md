@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B52.7, +2, 8951 → 8953). /goal iter6** — single-root DFS prepass in `topologicalSort` matches TypeScript's emit ordering for entry-point/aggregator files. Flips `privacyTopLevelAmbientExternalModuleImportWithoutExport_ts` + `privacyTopLevelAmbientExternalModuleImportWithExport_ts` JS-emit.
+
+- New 8-line prepass in `topologicalSort` (TypeScriptCompiler.kt:1986-2002): compute set of files that are referenced (in any other file's deps list, excluding self-deps). The complement (files NOT referenced by others) are the graph's "roots". When exactly one root exists, DFS-visit it FIRST so its dependencies are emitted in the order the root's imports/references declare them, before any subsequent input-order visits. With zero roots (cycle present) or multiple roots (independent files), skip the prepass — current input-order DFS handles those correctly.
+- The flipped tests have a 5-file structure with one aggregator file (`_core.ts`) that imports/references the other 4. Expected emit order is `_require2, _require3, _require, _require1, _core` (dependencies in the order `_core` declares them: 2 `///<reference>` directives then 2 `import =` statements). Without the prepass, our DFS visited files in @Filename order so output was `_require, _require1, _require2, _require3, _core`.
+- Did NOT flip `emitMemberAccessExpression_ts` (0 roots due to file3↔file1+file2 cycle via `///<reference>`) or `isolatedModulesReExportType_ts` (errors-baseline test independently fails on architectural issue — JS-emit test DOES newly pass but only the errors-baseline test was counted in the failure delta).
+
+**Found via wider candidate-finder pass.** The default `find_candidates.py --fresh` returned 0/0/0. Widening to find all JS-emit body-diff tests with ≤6 diff lines surfaced 3 multi-file file-ordering candidates. All 3 share the same root cause: deps DFS visiting in input order vs. import-list order. The fix is scoped narrowly to the single-root case where the difference matters and the algorithm has a clear "right answer"; cycles and multi-root cases unchanged.
+
+**Net result.** 8953/10078 passing (~88.84%). One commit. Zero regressions.
+
+---
+
 **Session 2026-05-25 (B52.5, +1, 8949 → 8950). /goal iter4** — TS1182 + TS7031 emission for destructuring variable declarations without initializer. Flips `noImplicitAnyDestructuringVarDeclaration_ts`.
 
 - New `checkDestructuringWithoutInitializer` walker (Checker.kt, modeled after `checkConstWithoutInitializer` at line ~31432). Walks all `VariableStatement` and `ForStatement.initializer` declarations recursively (function bodies, class member bodies, namespace blocks, if/while/do/switch/try). Skips for-of/for-in (their iteration variable doesn't need an initializer). Skips ambient/declare contexts.
