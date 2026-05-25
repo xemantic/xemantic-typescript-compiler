@@ -51297,12 +51297,44 @@ interface DataView {
             // (e.g., `s: string` and `s !== "x"` doesn't change `s`'s type).
             return t
         }
-        val filtered = if (keep) {
-            t.types.filter { areLiteralTypesEquivalent(it, literalType) }
+        return if (keep) {
+            // round 45 iter1: positive narrowing — for each member, if it exactly matches
+            // the literal, keep it; if it's a SUPERTYPE of the literal (e.g., `string`
+            // supertype of `"abc"`), replace with the literal; otherwise remove.
+            // Without supertype substitution, `s: string | null` narrowed by `s === "abc"`
+            // would filter to empty → neverType, losing precision.
+            val kept = mutableListOf<Type>()
+            for (member in t.types) {
+                when {
+                    areLiteralTypesEquivalent(member, literalType) -> kept.add(member)
+                    isLiteralAssignableToMember(literalType, member) -> kept.add(literalType)
+                    // else: remove (not assignable, not equal)
+                }
+            }
+            if (kept.isEmpty()) t else getUnionType(kept)
         } else {
-            t.types.filter { !areLiteralTypesEquivalent(it, literalType) }
+            getUnionType(t.types.filter { !areLiteralTypesEquivalent(it, literalType) })
         }
-        return getUnionType(filtered)
+    }
+
+    /**
+     * round 45 iter1 helper: true when [literal] is assignable to [member]. Used for
+     * positive-narrowing supertype substitution. Recognizes:
+     * - string literal → stringType
+     * - number literal → numberType
+     * - bigint literal → bigintType
+     * - trueType/falseType → booleanType
+     * - nullType / undefinedType → any/unknown
+     */
+    private fun isLiteralAssignableToMember(literal: Type, member: Type): Boolean {
+        return when {
+            literal is Type.StringLiteral && member === stringType -> true
+            literal is Type.NumberLiteral && member === numberType -> true
+            literal is Type.BigIntLiteral && member === bigintType -> true
+            (literal === trueType || literal === falseType) && member === booleanType -> true
+            member === anyType || member === unknownType -> true
+            else -> false
+        }
     }
 
     /**
