@@ -22976,6 +22976,8 @@ interface DataView {
                 when (m) {
                     is MethodDeclaration -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
                     is Constructor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
                     is PropertyDeclaration -> m.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
                     else -> {}
                 }
@@ -22984,6 +22986,8 @@ interface DataView {
                 stmt.condition?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
                 checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             }
+            is ForInStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is WhileStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is DoStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is SwitchStatement -> for (c in stmt.caseBlock) {
@@ -22995,6 +22999,9 @@ interface DataView {
                 stmt.catchClause?.let { checkAlwaysTruthyInStatements(it.block.statements, source, fileName) }
                 stmt.finallyBlock?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             }
+            is LabeledStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             else -> {}
         }
