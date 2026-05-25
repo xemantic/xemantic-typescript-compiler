@@ -23610,8 +23610,14 @@ interface DataView {
                     if (classThisType != null) uncalledThisTypeStack.removeLast()
                 }
             }
-            is ForInStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> {
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+                walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                walkUncalledChecksInExpression(stmt.expression, source, fileName)
+                walkUncalledChecksInStatement(stmt.statement, source, fileName)
+            }
             is SwitchStatement -> for (c in stmt.caseBlock) {
                 val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
                 walkUncalledChecksInStatements(clauseStmts, source, fileName)
