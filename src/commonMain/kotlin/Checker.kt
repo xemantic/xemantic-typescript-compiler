@@ -8489,6 +8489,27 @@ class Checker(
                     else -> {}
                 }
             }
+            // round 43 iter14: function-like body recursion so `() => class C { x = 1 }`
+            // and `function() { return class C { x = 1 } }` reach nested ClassExpression
+            // for TS2564 property-init check.
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { stmt ->
+                    if (stmt is ExpressionStatement) checkPropertyInitInExpr(stmt.expression, source, fileName)
+                    else if (stmt is ReturnStatement) stmt.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
+                    else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
+                    }
+                }
+                is Expression -> checkPropertyInitInExpr(body, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> for (stmt in expr.body.statements) {
+                if (stmt is ExpressionStatement) checkPropertyInitInExpr(stmt.expression, source, fileName)
+                else if (stmt is ReturnStatement) stmt.expression?.let { checkPropertyInitInExpr(it, source, fileName) }
+                else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { checkPropertyInitInExpr(it, source, fileName) }
+                }
+            }
             else -> {}
         }
     }
