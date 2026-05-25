@@ -978,6 +978,27 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (round 40 of /goal — 20 iterations, 0 net flips, 0 reverts).** /goal session after round 39. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-39 surgical-pool exhaustion). Per established pattern (structural broadening when surgical pool is empty), targeted 20 walker functions whose statement/expression/TypeNode coverage was shallower than the recently-broadened corpus from rounds 32-39.
+
+  Iterations landed (20 commits, all net-zero on suite — pure structure-walking expansions):
+  - **iter1-4**: Statement-level walkers `checkInterfacePropInit` (TS1246), `checkComputedPropNameInStmt` (TS1166/TS1169), `walkForSetAccessorInit` (TS1052), `walkForSetAccessorRest` (TS1053) — all gain If/For-family/Switch/Try/Labeled coverage. iter2-4 also gain FunctionDeclaration body recursion.
+  - **iter5-9**: `walkForInLhsType` (TS2404) replaces Block-only recursion with direct body + Do/Switch/Try/Labeled/Get+SetAccessor. `walkForParamInitNonImpl` (TS2371), `walkForParamInitForwardRef` (TS2373/TS2454, adds Get/SetAccessor), `walkForDerivedSuper` (TS2377/TS17005/TS2417), `walkForCtorReturnNull` (TS2322/TS2409) — all gain If/For-family/Switch/Try/Labeled + Get/SetAccessor bodies.
+  - **iter10**: `findSuperCallInStmt` gains For-family/Switch/Try/Labeled/Return/Throw (used for finding first super() position in derived ctors for TS2377).
+  - **iter11-13**: TypeNode walkers. `walkTypeQueryForPrivateName` (TS4081) + `walkTypeNodeForUndefinedTypeQueryChain` (TS2532 in typeof chain) gain FunctionType/ConstructorType/TypeLiteral/ConditionalType/IndexedAccessType. `walkTypeForIndexedAccess` (TS4105) gains RestType/OptionalType/NamedTupleMember.
+  - **iter14**: `walkStmtsForCircularConstraint` (TS2313) gains Block/If/For-family/Switch/Try/Labeled + Ctor/Get/SetAccessor bodies.
+  - **iter15**: `checkUndefinedNamesInStmts` (TS2414/TS2427/TS2457 predefined keyword names) gains Block/If/For-family/Switch/Try/Labeled.
+  - **iter16**: `checkFunctionTypeParams` (TS2371 in fn type annotations) gains ConstructorType/Array/Tuple/TypeRef/Conditional/IndexedAccess/TypeOperator/Rest/Optional/NamedTuple/TypeLiteral.
+  - **iter17**: `checkAmbientInitInStatements` (TS1039/TS1031/TS1254) gains If/For-family/Switch/Try/Labeled.
+  - **iter18**: `walkFunctionBodiesInExpr` gains wrappers (As/TypeAssertion/Satisfies/NonNull) + SpreadAssignment + Call/New callee + Conditional condition + member access + unary + Await/Yield/Void/Delete/TypeOf + Template/TaggedTemplate + CommaList.
+  - **iter19**: `findClassesForTS2815InStatements` (TS2815) gains For-family/Switch/Try/Labeled/Throw/ExportAssignment.
+  - **iter20**: `checkTs2719InStatements` (TS2719) gains Class member-body recursion + Function/Block/If/For-family/Switch/Try/Labeled.
+
+  Session-end: 8946 → 8946 / 10078 (0 net, ~88.77%). 20 commits + status/plan doc commit. Strategy was identical to rounds 32-39: pure structural broadening since `find_candidates.py --fresh` returned 0/0/0. All emission gates were narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts — zero regressions across all 20 iterations.
+
+  Per CLAUDE.md anti-loop rule: 9 consecutive rounds (32-40) of 0-flip structural broadening represent diminishing returns. Next session should commit to one of the architectural blockers per CLAUDE.md's "Known architectural blockers" section (Blocker #1 control-flow narrowing ~60-100 tests, Blocker #2 generic inference ~20-40, Blocker #3 per-file scope ~30+).
+
+  ---
+
   **Session 2026-05-24 (round 38 of /goal — 21 iterations, 0 net flip, 0 reverts).** /goal session after round 37. `find_candidates.py --fresh` returned 0/0/0 at start (consistent with rounds 32-37 surgical-pool exhaustion). Per established pattern (structural broadening when surgical pool is empty), targeted 21 walker functions whose statement/expression coverage was shallower than the recently-broadened corpus from rounds 32-37.
 
   Iterations landed (21 commits, all net-zero on suite — pure structure-walking expansions):
