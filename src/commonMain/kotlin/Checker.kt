@@ -16272,6 +16272,8 @@ class Checker(
                     checkDuplicateExportSpecifiers(exportClause.elements, source, fileName)
                 }
             }
+            is ThrowStatement -> stmt.expression?.let { checkDuplicatesInExpr(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { checkDuplicatesInExpr(it, source, fileName) }
             else -> {}
         }
     }
