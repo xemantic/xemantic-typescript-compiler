@@ -41205,6 +41205,26 @@ interface DataView {
                     stmt.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
                 }
                 is ExpressionStatement -> findClassesForTS2815InExpr(stmt.expression, source, fileName)
+                is ForStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> findClassesForTS2815InStatements(clause.statements, source, fileName)
+                        is DefaultClause -> findClassesForTS2815InStatements(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    findClassesForTS2815InStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { findClassesForTS2815InStatements(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> stmt.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
+                is ExportAssignment -> findClassesForTS2815InExpr(stmt.expression, source, fileName)
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         decl.initializer?.let { findClassesForTS2815InExpr(it, source, fileName) }
