@@ -70343,6 +70343,9 @@ interface DataView {
                 type.nameType?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
             }
             is TypeLiteral -> for (m in type.members) walkMemberForIndexedAccess(m, tpConstraints, source, fileName)
+            is RestType -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
+            is OptionalType -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
+            is NamedTupleMember -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
             else -> {}
         }
     }
