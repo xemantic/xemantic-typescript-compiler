@@ -118,6 +118,17 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B73.1 round 48 iter10, +1 → 8970 / 10078).** Single-iteration goal session: cross-file `typeof import("X")` display for module-alias assignments. Target `aliasAssignments_ts` — diff showed two missing TS2322 diagnostics for assignments between a module-aliased var (`var x = moduleA`) and a number literal.
+
+- **Helper**: `tryGetModuleImportNameForExpr(expr: Expression): String?` (Checker.kt ~70410) returns the target file's basename (no path, no ext) when `expr` is an Identifier whose symbol is an import alias declared via `import X = require("./Y")` (ImportEqualsDeclaration + ExternalModuleReference) or `import * as X from "./Y"` (ImportDeclaration + NamespaceImport). Walks the alias's declarations directly rather than calling `resolveAlias` — avoids the cross-file LinkStore mutation side effects and lets us return the SOURCE file the alias targets (vs the symbol it ultimately resolves to).
+- **Emission paths in `checkAssignmentExpression` (Identifier target)** — both inserted BEFORE the standard Type-engine path:
+  - Shape (1): `var x = moduleA; x = <primitive>` — target was initialized from a module-alias Identifier (no annotation). RHS is a `isSimpleCheckableType` non-any. Emit TS2322 with target display `typeof import("modA")`, source display the widened RHS.
+  - Shape (2): `var y = 1; y = moduleA` — target type is a simple primitive (from annotation or `currentLocalTypes`), RHS is a module-alias Identifier. Emit TS2322 with source display `typeof import("modA")`, target display the primitive type.
+- **Narrow gates**: both shapes require ONE side to be the module-alias and the OTHER side to be a simple primitive. Module-vs-module assignments (`y2 = ext` where both are modules from different files) are NOT covered — that needs proper structural compare of module shapes (out of scope for surgical work, see `typeofAmbientExternalModules_ts` which has the more complex shape).
+- **Squiggle**: lands at `target.pos` with length `target.text.length` — matches the tsc baseline for the `x` / `y` squiggle (column 1, length 1).
+- **Net result**: 1109 → 1108 failed (8969 → 8970). Zero regressions. The narrow primitive-on-the-other-side gate prevents the helper from firing in module-augmentation-style assignments (where both sides could plausibly be module types via `import * as` aliases).
+- **What's NOT unblocked by B73.1**: `aliasUsageInOrExpression_ts` (needs `i || moduleA` → union type infrastructure for TS2322 chain message), `typeofAmbientExternalModules_ts` (needs module-vs-module structural compare to emit TS2741 with `typeof import("X")` qualifications on both sides). Both would require considerably more infrastructure than the binary "primitive vs module alias" shape addressed here.
+
 **Session 2026-05-25 (Round 47 SESSION-END, 20 iterations, +19 net flips: 8947 → 8966 / 10078).** /goal loop session end. Round 47 broke the rounds 32-45 plateau — the longest run of near-zero rounds in this project — by re-opening the surgical pool through two complementary infrastructure tracks:
 
 - **B52.x type-system wiring (iters 2-10, +14 flips):**
