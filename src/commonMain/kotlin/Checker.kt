@@ -51480,12 +51480,16 @@ interface DataView {
     }
 
     /**
-     * 17.38 helper: true when [type] is an anonymous Type.Object whose every
-     * member is a bare reference to some TypeParam in [tps]. Used to gate
-     * `foo<T>(f: { x: T; y: T })` style inference where T is gathered from the
-     * matching arg's property values via [tryInferSingleTypeParamFromArgs]'s
-     * isObjLitOfT branch. Excludes Type.Interface / Type.Reference (named
-     * types) and Type.Object with call/construct sigs (function-shaped).
+     * 17.38 / B52.2 helper: true when [type] is an anonymous Type.Object where
+     * AT LEAST ONE member is a bare reference to some TypeParam in [tps], and
+     * every OTHER member is fully concrete (mentions NO TP in [tps]). Used to
+     * gate `foo<T>(f: { x: T; y: T })` style inference (17.38, all-TP form) AND
+     * the mixed `foo<T>(f: { v: T; name: string })` form (B52.2). T is gathered
+     * from the matching arg's property values via [tryInferSingleTypeParamFromArgs]'s
+     * isObjLitOfT branch — concrete members are skipped during gathering. Excludes
+     * Type.Interface / Type.Reference (named types) and Type.Object with
+     * call/construct sigs (function-shaped). Members whose type MENTIONS a TP
+     * indirectly (e.g. `{ v: Array<T> }`) bail to avoid complex inference shapes.
      */
     private fun isAnonymousObjectWithTypeParamMembers(type: Type, tps: Set<Type.TypeParam>): Boolean {
         if (type !is Type.Object) return false
@@ -51497,10 +51501,18 @@ interface DataView {
         if (type.stringIndexInfo != null || type.numberIndexInfo != null) return false
         val members = type.members ?: return false
         if (members.isEmpty()) return false
-        return members.values.all { sym ->
+        var hasTpMember = false
+        for (sym in members.values) {
             val mt = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { return false }
-            mt is Type.TypeParam && mt in tps
+            if (mt is Type.TypeParam && mt in tps) {
+                hasTpMember = true
+            } else if (tps.any { typeMentionsTypeParam(mt, it) }) {
+                // Member mentions a TP but isn't a bare TP — too complex for this helper.
+                return false
+            }
+            // else: concrete member (no TP mention) — OK, will be skipped during gathering.
         }
+        return hasTpMember
     }
 
     /**
