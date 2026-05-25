@@ -34692,6 +34692,28 @@ interface DataView {
                 }
                 is Block -> checkAmbientInitInStatements(stmt.statements, source, fileName, isAmbient)
                 is FunctionDeclaration -> stmt.body?.let { checkAmbientInitInStatements(it.statements, source, fileName, false) }
+                is IfStatement -> {
+                    checkAmbientInitInStatements(listOf(stmt.thenStatement), source, fileName, isAmbient)
+                    stmt.elseStatement?.let { checkAmbientInitInStatements(listOf(it), source, fileName, isAmbient) }
+                }
+                is ForStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
+                is ForInStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
+                is ForOfStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
+                is WhileStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
+                is DoStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> checkAmbientInitInStatements(clause.statements, source, fileName, isAmbient)
+                        is DefaultClause -> checkAmbientInitInStatements(clause.statements, source, fileName, isAmbient)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    checkAmbientInitInStatements(stmt.tryBlock.statements, source, fileName, isAmbient)
+                    stmt.catchClause?.let { checkAmbientInitInStatements(it.block.statements, source, fileName, isAmbient) }
+                    stmt.finallyBlock?.let { checkAmbientInitInStatements(it.statements, source, fileName, isAmbient) }
+                }
+                is LabeledStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
                 else -> {}
             }
             // Also walk VariableStatement initializers for ClassExpressions (not ambient).
