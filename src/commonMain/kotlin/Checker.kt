@@ -59108,10 +59108,24 @@ interface DataView {
             } ?: continue
             if (typeParamNodes.isEmpty()) continue
             return typeParamNodes.map { tp ->
-                val param = Type.TypeParam()
-                param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
-                tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                // B59.3: intern by AST position so this TypeParam shares identity with
+                // other interning sites (B59.1+B59.2 at Checker.kt ~37183 / ~37214 /
+                // ~37247 / ~37573 / ~37724 / ~46475 / ~51854 / ~58215 / ~58562 / ~58909).
+                // Callers of getTypeParametersOfSymbol only check emptiness, not identity,
+                // so identity is invariant for the existing TS2315 consumers — but shared
+                // identity reduces churn for any future identity-sensitive consumer.
+                val param = typeParamInternCache.getOrPut(tp.pos) {
+                    val p = Type.TypeParam()
+                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    p
+                }
+                // Guard against clobbering already-set constraint/default from another site.
+                if (param.constraint == null) {
+                    tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
+                }
+                if (param.default == null) {
+                    tp.default?.let { param.default = getTypeFromTypeNode(it) }
+                }
                 param
             }
         }
