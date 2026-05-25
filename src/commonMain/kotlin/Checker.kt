@@ -26381,8 +26381,14 @@ interface DataView {
                 stmt.incrementor?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
                 checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
             }
-            is ForInStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-            is ForOfStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            is ForInStatement -> {
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            }
+            is ForOfStatement -> {
+                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
+                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            }
             is WhileStatement -> {
                 checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
                 checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
@@ -26452,6 +26458,12 @@ interface DataView {
                 stmt.finallyBlock?.let {
                     checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
                 }
+            }
+            is LabeledStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+            is ThrowStatement -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
             }
             else -> {}
         }
