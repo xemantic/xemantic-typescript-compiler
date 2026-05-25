@@ -49885,9 +49885,23 @@ interface DataView {
                 if (target != null && target !== symbol) getDeclaredTypeOfSymbol(target) else anyType
             }
             flags.hasAny(SymbolFlags.TypeParameter) -> {
-                val typeParam = Type.TypeParam()
-                typeParam.symbol = symbol
-                typeParam
+                // B59.6: intern by AST position of the TypeParameter declaration so
+                // that repeated symbol-based lookups return the SAME Type.TypeParam
+                // instance — matching `getTypeParametersOfSymbol` (B59.3) and other
+                // interned sites. Without interning, downstream id-based caches
+                // (`substitutionResultCache`, `referenceCache`) miss across calls.
+                val tpDecl = symbol.declarations.firstOrNull { it is TypeParameter } as? TypeParameter
+                if (tpDecl != null) {
+                    typeParamInternCache.getOrPut(tpDecl.pos) {
+                        val tp = Type.TypeParam()
+                        tp.symbol = symbol
+                        tp
+                    }
+                } else {
+                    val typeParam = Type.TypeParam()
+                    typeParam.symbol = symbol
+                    typeParam
+                }
             }
             else -> anyType
         }
