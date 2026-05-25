@@ -24445,6 +24445,15 @@ interface DataView {
             is DeleteExpression -> checkCommaInExpr(expr.expression, source, fileName)
             is TypeOfExpression -> checkCommaInExpr(expr.expression, source, fileName)
             is SatisfiesExpression -> checkCommaInExpr(expr.expression, source, fileName)
+            is CommaListExpression -> for (el in expr.elements) checkCommaInExpr(el, source, fileName)
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { checkCommaInExpr(it, source, fileName) }
+                else -> {}
+            }
             else -> {}
         }
     }
