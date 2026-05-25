@@ -118,6 +118,18 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B70.16 round 47 iter19, +1 → 8966 / 10078).** /goal loop iter 19. Found target via JS-emit small-diff scan (sizes 9-14): `sourceMapValidationDecorators_ts__target_es2015__compiles to JavaScript matching baseline[jvm]` (+12 diff lines, 2 intertwined emission issues).
+
+- **Target test diff** had two structural mismatches in `__decorate` block emission:
+  - Static field `x1`'s `__decorate` block was emitted in source-order position (between instance field `x` and method `fn`), but TypeScript places all static-side decorations AFTER all instance-side decorations.
+  - Accessor pair `get greetings() / set greetings(...)` — TypeScript combines the leading accessor's decorators with the paired accessor's parameter decorators into ONE `__decorate` call. Our impl was emitting only the getter's own decorators (no `__param` for setter's param decorators) — the setter's param decorators were lost entirely because the SetAccessor branch in `generateMemberDecorateStatements` hardcoded `paramDecorators = emptyList()`.
+- **B70.16 fix (Transformer.kt:~9960)**:
+  - Added a pre-loop reorder: `members.filter { static? false } + members.filter { static? true }`. Source order preserved within each group. This places static-side `__decorate` calls at the end of the member-decoration sequence, matching TypeScript's emit ordering.
+  - GetAccessor branch: when a paired (same-name + same-static-ness) SetAccessor exists AND appears LATER in source order, pull its parameter decorators into the getter's `paramDecorators` list. The `hasParamDecorators` check then triggers `__param(idx, dec)` emission within the getter's `__decorate` block.
+  - SetAccessor branch: when a paired GetAccessor exists AND appears EARLIER in source order, `continue` the iteration (skip this setter's own `__decorate` — already covered by the getter). Otherwise (setter-first or setter-only), populate `paramDecorators` from `member.parameters` (was previously hardcoded to empty — also a bug for setter-only or setter-first cases).
+- **Net result**: 1113 → 1112 failed (8965 → 8966). Zero regressions. Other accessor / decorator tests unaffected — the new ordering and accessor-pair merging match what existing tests already expected (their accessor pairs simply happened to not exercise this combined-decoration shape).
+- **CLAUDE.md gotcha added** (under Transformer gotchas): accessor-pair decorator emission semantics — get/set pair share one `__decorate` call at the leading accessor's position; setter's param decorators merge via `__param` entries; non-static `__decorate` calls precede static ones in the generated output.
+
 **Session 2026-05-25 (B70.15 round 47 iter18, +1 → 8965 / 10078).** /goal loop iter 18. Found target via tiny-diff scan: `overloadOnConstNoAnyImplementation2_ts` (1-line diff, missing 1 TS2793 related-info). Test marked `[SKIP]` in `find_candidates.py` output but the underlying issue was a narrow gate refinement — not a multi-piece blocker.
 
 - **Target test diff**: missing `!!! related TS2793 ...:7:5: The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible.` on TS2345 emitted for `c.x1(1, (x: 'bye') => { return 1; });` against overload `x1(a: number, callback: (x: 'hi') => number);` (impl `(x: string) => number`).

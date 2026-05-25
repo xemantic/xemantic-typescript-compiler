@@ -9958,7 +9958,28 @@ class Transformer(
     /** Generate `__decorate([...], ClassName.prototype, "memberName", null/void 0)` for each decorated member. */
     private fun generateMemberDecorateStatements(className: String, members: List<ClassElement>, classTypeParams: Set<String> = emptySet()): List<Statement> {
         val stmts = mutableListOf<Statement>()
-        for (member in members) {
+        // B70.16: TypeScript emits instance-member __decorate calls BEFORE static-member ones.
+        // Within each group, source order is preserved. Iterate non-static first, then static.
+        val ordered = members.filter {
+            val mods = when (it) {
+                is PropertyDeclaration -> it.modifiers
+                is MethodDeclaration -> it.modifiers
+                is GetAccessor -> it.modifiers
+                is SetAccessor -> it.modifiers
+                else -> emptySet()
+            }
+            ModifierFlag.Static !in mods
+        } + members.filter {
+            val mods = when (it) {
+                is PropertyDeclaration -> it.modifiers
+                is MethodDeclaration -> it.modifiers
+                is GetAccessor -> it.modifiers
+                is SetAccessor -> it.modifiers
+                else -> emptySet()
+            }
+            ModifierFlag.Static in mods
+        }
+        for (member in ordered) {
             val decorators: List<Decorator>?
             val memberName: String?
             val isStatic: Boolean
@@ -10018,12 +10039,20 @@ class Transformer(
                     isStatic = ModifierFlag.Static in member.modifiers
                     isProperty = false
                     isAccessor = true
-                    paramDecorators = emptyList()
                     // accessor "paramtypes" = setter's params, if a paired setter exists
                     val pairedSetter = members.firstOrNull {
                         it is SetAccessor && getMemberNameText(it.name) == name
                             && (ModifierFlag.Static in it.modifiers) == isStatic
                     } as? SetAccessor
+                    // B70.16: For accessor pairs, the get/set accessors share a single
+                    // __decorate emission site (the first-occurring accessor in source order).
+                    // When the getter comes first, the setter's param decorators get
+                    // merged into the getter's __decorate call via __param entries.
+                    paramDecorators = if (pairedSetter != null && members.indexOf(member) < members.indexOf(pairedSetter)) {
+                        pairedSetter.parameters.mapIndexedNotNull { idx, param ->
+                            if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
+                        }
+                    } else emptyList()
                     // accessor "property type" = getter's return type if annotated,
                     // else fall back to the paired setter's first param type (TypeScript
                     // uses the setter's annotation to infer the property shape when the
@@ -10034,13 +10063,26 @@ class Transformer(
                     methodIsAsync = false
                 }
                 is SetAccessor -> {
-                    decorators = member.decorators
                     val name = getMemberNameText(member.name)
+                    val isStaticSet = ModifierFlag.Static in member.modifiers
+                    // B70.16: If this setter has a paired getter that appears EARLIER in the
+                    // source, the getter's __decorate already covers this setter's param
+                    // decorators (merged via __param). Skip the setter's own __decorate.
+                    val pairedGetter = members.firstOrNull {
+                        it is GetAccessor && getMemberNameText(it.name) == name
+                            && (ModifierFlag.Static in it.modifiers) == isStaticSet
+                    } as? GetAccessor
+                    if (pairedGetter != null && members.indexOf(pairedGetter) < members.indexOf(member)) {
+                        continue
+                    }
+                    decorators = member.decorators
                     memberName = name
-                    isStatic = ModifierFlag.Static in member.modifiers
+                    isStatic = isStaticSet
                     isProperty = false
                     isAccessor = true
-                    paramDecorators = emptyList()
+                    paramDecorators = member.parameters.mapIndexedNotNull { idx, param ->
+                        if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
+                    }
                     // accessor "property type" = setter's first param type
                     propertyTypeNode = member.parameters.firstOrNull()?.type
                     methodReturnTypeNode = null
