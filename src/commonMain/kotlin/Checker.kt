@@ -57548,6 +57548,24 @@ interface DataView {
                             else -> null
                         }
                     }
+                    // round 42 iter18: when both branches of a conditional are simple
+                    // literals of the same primitive kind, infer that primitive as the
+                    // return type. Conservative — bails when either branch is non-literal.
+                    is ConditionalExpression -> {
+                        fun litKind(e: Expression): Type? = when (e) {
+                            is StringLiteralNode, is NoSubstitutionTemplateLiteralNode -> stringType
+                            is NumericLiteralNode -> numberType
+                            is BigIntLiteralNode -> bigintType
+                            is Identifier -> when (e.text) {
+                                "true", "false" -> booleanType
+                                else -> null
+                            }
+                            else -> null
+                        }
+                        val t = litKind(expr.whenTrue)
+                        val f = litKind(expr.whenFalse)
+                        if (t != null && t === f) t else null
+                    }
                     else -> null
                 }
             }
