@@ -38151,6 +38151,29 @@ interface DataView {
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorInit(it.statements, source, fileName) }
                 is Block -> walkForSetAccessorInit(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForSetAccessorInit(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForSetAccessorInit(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForSetAccessorInit(clause.statements, source, fileName)
+                        is DefaultClause -> walkForSetAccessorInit(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkForSetAccessorInit(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForSetAccessorInit(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForSetAccessorInit(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
+                is FunctionDeclaration -> stmt.body?.let { walkForSetAccessorInit(it.statements, source, fileName) }
                 else -> {}
             }
         }
