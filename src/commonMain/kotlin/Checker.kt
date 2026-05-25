@@ -58872,6 +58872,38 @@ interface DataView {
                 walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
             is NamedTupleMember ->
                 walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) } }
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) } }
+                walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
+            }
+            is TypeLiteral -> for (m in type.members) {
+                when (m) {
+                    is PropertyDeclaration -> m.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) }
+                    is MethodDeclaration -> {
+                        m.parameters.forEach { p -> p.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) } }
+                        m.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) }
+                    }
+                    is IndexSignature -> m.type?.let { walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode) }
+                    else -> {}
+                }
+            }
+            is ConditionalType -> {
+                walkTypeNodeForUndefinedTypeQueryChain(type.checkType, source, fileName, atNode)
+                walkTypeNodeForUndefinedTypeQueryChain(type.extendsType, source, fileName, atNode)
+                walkTypeNodeForUndefinedTypeQueryChain(type.trueType, source, fileName, atNode)
+                walkTypeNodeForUndefinedTypeQueryChain(type.falseType, source, fileName, atNode)
+            }
+            is IndexedAccessType -> {
+                walkTypeNodeForUndefinedTypeQueryChain(type.objectType, source, fileName, atNode)
+                walkTypeNodeForUndefinedTypeQueryChain(type.indexType, source, fileName, atNode)
+            }
+            is TypeReference -> type.typeArguments?.forEach {
+                walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
+            }
             else -> { /* leaf or unsupported shape */ }
         }
     }
