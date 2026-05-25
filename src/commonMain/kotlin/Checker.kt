@@ -45543,10 +45543,15 @@ interface DataView {
             is ObjectLiteralExpression -> expr.properties.forEach { prop ->
                 when (prop) {
                     is PropertyAssignment -> walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams)
+                    is SpreadAssignment -> walkFunctionBodiesInExpr(prop.expression, source, fileName, varTypes, typeParams)
                     else -> {}
                 }
             }
             is ParenthesizedExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is AsExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is TypeAssertionExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is SatisfiesExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is NonNullExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
             is BinaryExpression -> {
                 val rightStack = ArrayDeque<Expression>()
                 var cur: Expression = expr
@@ -45554,17 +45559,48 @@ interface DataView {
                 walkFunctionBodiesInExpr(cur, source, fileName, varTypes, typeParams)
                 while (rightStack.isNotEmpty()) walkFunctionBodiesInExpr(rightStack.removeLast(), source, fileName, varTypes, typeParams)
             }
-            is CallExpression -> expr.arguments.forEach {
-                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            is CallExpression -> {
+                walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+                expr.arguments.forEach {
+                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                }
             }
-            is NewExpression -> expr.arguments?.forEach {
-                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            is NewExpression -> {
+                walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+                expr.arguments?.forEach {
+                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                }
             }
             is ConditionalExpression -> {
+                walkFunctionBodiesInExpr(expr.condition, source, fileName, varTypes, typeParams)
                 walkFunctionBodiesInExpr(expr.whenTrue, source, fileName, varTypes, typeParams)
                 walkFunctionBodiesInExpr(expr.whenFalse, source, fileName, varTypes, typeParams)
             }
             is SpreadElement -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is AwaitExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is YieldExpression -> expr.expression?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) }
+            is VoidExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is DeleteExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is TypeOfExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is PropertyAccessExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is ElementAccessExpression -> {
+                walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+                walkFunctionBodiesInExpr(expr.argumentExpression, source, fileName, varTypes, typeParams)
+            }
+            is PrefixUnaryExpression -> walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams)
+            is PostfixUnaryExpression -> walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams)
+            is TemplateExpression -> expr.templateSpans.forEach {
+                walkFunctionBodiesInExpr(it.expression, source, fileName, varTypes, typeParams)
+            }
+            is TaggedTemplateExpression -> {
+                walkFunctionBodiesInExpr(expr.tag, source, fileName, varTypes, typeParams)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
+                    walkFunctionBodiesInExpr(it.expression, source, fileName, varTypes, typeParams)
+                }
+            }
+            is CommaListExpression -> expr.elements.forEach {
+                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            }
             else -> {}
         }
     }
