@@ -978,6 +978,10 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
+  **Session 2026-05-25 (round 45 of /goal — in progress).** Continuation. iter1 narrowUnionByLiteral supertype substitution: positive narrowing of `s: string | null` by `s === "abc"` now returns `"abc"` (was empty/never). New helper `isLiteralAssignableToMember`.
+
+  ---
+
   **Session 2026-05-25 (round 44 of /goal — 18+ commits, all net-zero — completing the 20-iteration goal).** Continuation of round 43's architectural focus. iter1 checkPropertyOverrideInStatement reaches ClassExpression in arrow/fn bodies; iter2 checkPropertyInitInStatements ClassDeclaration member recursion; iter3 checkConstructorParamInInitializersInStatements ClassDeclaration member recursion; iter4 CLAUDE.md gotcha noting iter14-pattern uniformity; iter5 multi-level optional-chain receiver narrowing; iter6 checkMultiBaseInStatement ClassDeclaration member recursion; iter7 STATUS.md mid-session; iter8 PLAN-PHASE-4.md round 44 entry; iter9 nullish coalescing (`??`) narrowing in applyConditionNarrowing; iter10 CLAUDE.md gotcha iter9; iter11 CLAUDE.md gotcha iter5; iter12 STATUS.md update. Confirms round 43 iter14's +1 was a singleton — uniform pattern application yields no further flips.
 
   ---
