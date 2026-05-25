@@ -42808,6 +42808,15 @@ interface DataView {
             is VoidExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
             is TypeOfExpression -> checkExprForPrivateFieldAccess(expr.expression, source, fileName, tslibExports, false)
             is TemplateExpression -> expr.templateSpans.forEach { checkExprForPrivateFieldAccess(it.expression, source, fileName, tslibExports, false) }
+            // round 42 iter7: TaggedTemplateExpression — recurse into tag + template spans
+            // so `tag`...${this.#x}...`` triggers TS2343 on the private-field access.
+            is TaggedTemplateExpression -> {
+                checkExprForPrivateFieldAccess(expr.tag, source, fileName, tslibExports, false)
+                val template = expr.template
+                if (template is TemplateExpression) {
+                    template.templateSpans.forEach { checkExprForPrivateFieldAccess(it.expression, source, fileName, tslibExports, false) }
+                }
+            }
             is CommaListExpression -> expr.elements.forEach { checkExprForPrivateFieldAccess(it, source, fileName, tslibExports, false) }
             else -> {}
         }
