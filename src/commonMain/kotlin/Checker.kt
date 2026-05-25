@@ -9533,6 +9533,39 @@ class Checker(
                 }
             }
             is LabeledStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
+            is ExpressionStatement -> walkForOfNonIterableInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkForOfNonIterableInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkForOfNonIterable(body.statements, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> walkForOfNonIterable(expr.body.statements, source, fileName)
+            is ClassExpression -> {
+                for (m in expr.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ParenthesizedExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is AsExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
             else -> {}
         }
     }
