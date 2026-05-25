@@ -38224,6 +38224,29 @@ interface DataView {
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorRest(it.statements, source, fileName) }
                 is Block -> walkForSetAccessorRest(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkForSetAccessorRest(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkForSetAccessorRest(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkForSetAccessorRest(clause.statements, source, fileName)
+                        is DefaultClause -> walkForSetAccessorRest(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkForSetAccessorRest(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkForSetAccessorRest(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkForSetAccessorRest(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
+                is FunctionDeclaration -> stmt.body?.let { walkForSetAccessorRest(it.statements, source, fileName) }
                 else -> {}
             }
         }
