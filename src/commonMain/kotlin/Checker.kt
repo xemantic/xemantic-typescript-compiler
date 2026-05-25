@@ -50513,6 +50513,20 @@ interface DataView {
      * narrow only on the assertion path, not via the boolean return.
      */
     /**
+     * round 43 iter8: helper for narrowByAssertCall — resolve a PropertyAccess
+     * callee to its method declaration. Returns null when the receiver type
+     * doesn't resolve, the property isn't a method, or the property is not
+     * directly declared on the receiver's interface/class.
+     */
+    private fun resolvePropertyMethodDecl(access: PropertyAccessExpression): Node? {
+        val recvType = try { getTypeOfExpression(access.expression) } catch (_: StackOverflowError) { return null }
+        if (recvType === anyType || recvType === errorType) return null
+        val propName = access.name.text
+        val sym = getPropertyOfType(recvType, propName) ?: return null
+        return sym.valueDeclaration ?: sym.declarations.firstOrNull { it is MethodDeclaration }
+    }
+
+    /**
      * round 43 iter5: switch-case discriminant narrowing. When `switch (X) { case <lit>: ... }`
      * and [name] matches X's reference path, collect all case literals in
      * [flowNode.clauseStart, flowNode.clauseEnd) range and filter [t] (a union)
@@ -50581,9 +50595,16 @@ interface DataView {
                 else -> break
             }
         }
-        if (callee !is Identifier) return null
-        val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null
-        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return null
+        // round 43 iter8: PropertyAccess callee — `obj.assertMethod(x)` where
+        // `obj`'s type has a method `assertMethod` with `asserts x is T` return.
+        val decl: Node? = when (callee) {
+            is Identifier -> {
+                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null
+                symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+            }
+            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
+            else -> return null
+        } ?: return null
         val (params, returnTypeNode) = when (decl) {
             is FunctionDeclaration -> decl.parameters to decl.type
             is MethodDeclaration -> decl.parameters to decl.type
