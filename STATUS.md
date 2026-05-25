@@ -1,6 +1,31 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 38 (2026-05-24): /goal session — 22 commits, +2 net flips. 21 structure-walking broadenings (iter1-iter21, net-zero) + 1 narrow TS7023 emission (iter22, +2 flipping `trivialSubtypeReductionNoStructuralCheck` es5/es2015). The TS7023 fix followed SESSION-PROMPT.md step 9(a) (small new diagnostic items when surgical pool empty)._
+**Phase 4 — Checker buildout.** 8,946 / 10,078 tests passing (~88.77%). _Round 39 (2026-05-25): /goal session — 19 commits, 0 net flips. 19 structure-walking broadenings of less-touched walkers (iter1-iter19, all net-zero). Continues the round 32-38 pattern of broadening walker coverage when `find_candidates.py --fresh` is empty. Surgical pool genuinely exhausted; further wins require architectural blocker work per CLAUDE.md._
+
+_Round 39 (2026-05-25, 0 net flips via 19 net-zero structure-walking broadenings)_:
+- **iter1**: `walkUnusedInferInStmts` (TS6133 unused infer) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter2**: `walkJSDocParamTagsInStmt` (TS8024 JSDoc `@param`) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled/Throw/ExportAssignment. JS-files-only.
+- **iter3**: `walkTypeNodeForOwnTPRefs` (TS2562 base class refs class TP) gains FunctionType/ConstructorType/TypeLiteral/ConditionalType/IndexedAccessType/TypeOperator/RestType/OptionalType.
+- **iter4**: `checkArgCountInStatement` (TS2554/TS2555) gains LabeledStatement/ThrowStatement/ExportAssignment/ModuleDeclaration; ForIn/ForOf expressions added.
+- **iter5**: `findClassesInStatements` (TS1210 class strict-mode names) gains For/ForIn/ForOf/While/Do/Switch/Try/Labeled/FunctionDeclaration body.
+- **iter6**: `checkAlwaysTruthyInStatement` (TS2872/TS2873) gains ForIn/ForOf/Labeled/Throw/ExportAssignment + ClassDeclaration Get/SetAccessor bodies.
+- **iter7**: `checkConstraintsInStatements` (TS2344 generic constraints) gains Block/IfStatement/For/ForIn/ForOf/While/Do/Switch/Try/Labeled with TypeParam scope preserved.
+- **iter8**: `checkImplicitAnyVarsInStatements` (TS7005) gains ForIn/ForOf/While/Do/Switch/Try/Labeled.
+- **iter9**: `walkUncalledChecksInStatement` (TS2774) gains ExportAssignment.
+- **iter10**: `checkIndexedAccessPrivateInStatements` (TS4105) gains FunctionDeclaration body (with TP propagation), Block, IfStatement, For-family, Switch, Try, Labeled.
+- **iter11**: `checkConstructorParamInInitializersInStatements` (TS2301/TS2663) gains Block/IfStatement/For-family/Switch/Try/Labeled/Throw/ExportAssignment.
+- **iter12**: `checkTS2302InStatement` (static-member-ref-class-TP) gains FunctionDeclaration body, Block, IfStatement, For-family, Switch, Try, Labeled, ClassDeclaration nested member bodies.
+- **iter13**: `walkStmtForFallthroughCases` (TS7029) gains ReturnStatement/ThrowStatement/ExportAssignment expr recursion + ModuleDeclaration body.
+- **iter14**: `checkCallTypeArgCountInStmt` (TS2558/TS2743) ForStatement initializer/condition/incrementor + ForIn/ForOf/While/Do loop expressions.
+- **iter15**: `walkB94InStmt` (TS2537 binding-pattern computed index sig) ForStatement initializer/incrementor + ForIn/ForOf/While/Do expressions + ThrowStatement.
+- **iter16**: `walkTParamDefaultsInStmt` (TS2744 type-param-default-refs-later) ForStatement header (with VariableDeclarationList types) + ForIn/ForOf/While/Do loop expressions.
+- **iter17**: `walkUncalledChecksInStatement` (TS2774) ForIn/ForOf expression recursion.
+- **iter18**: `walkStmtForDelete` (TS2790/TS2696/TS2704) ForIn/ForOf expr + Throw/ExportAssignment.
+- **iter19**: `walkBigIntExpInExpr` (TS2791) ObjectLiteralExpression MethodDeclaration/Get/SetAccessor body recursion.
+
+Session-end: 8946 → 8946 / 10078 (0 net, ~88.77%). Strategy: complement rounds 32-38 by broadening 19 different walkers whose statement-kind coverage was shallower than the rest of the corpus. All 19 commits pure structure-walking expansions; each emission gate is narrow enough that broader recursion only finds the same pattern in more deeply-nested contexts. No regressing attempts during this round.
+
+Per CLAUDE.md anti-loop rule: 8 consecutive rounds (32-39) of 0-flip structural broadening represent diminishing returns. Next session should commit to one of the architectural blockers per CLAUDE.md's "Known architectural blockers" section.
 
 _Round 38b (2026-05-24, +2 net via iter22 — TS7023 for self-referential getter)_:
 - **iter22 (+2)**: New TS7023 emission for GetAccessor without return type annotation whose body returns `<expr> as T` AsExpression wrapping ObjectLiteralExpression containing any PropertyAssignment with value bare `this`. Narrow gate matches the exact `trivialSubtypeReductionNoStructuralCheck` cyclic-inference shape. New helper `isAsExprWrappingObjLitWithThis`. Avoids FP on `return this`/`return this.field` (no cycle). Flips both `__target_es5__` and `__target_es2015__` variants.
