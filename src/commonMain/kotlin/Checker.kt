@@ -25773,6 +25773,36 @@ interface DataView {
                 val body = stmt.body as? ModuleBlock ?: return
                 checkUnreachableInStatements(body.statements, source, fileName, binderResult)
             }
+            is ReturnStatement -> when (val expr = stmt.expression) {
+                is ArrowFunction -> when (val body = expr.body) {
+                    is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
+                    else -> {}
+                }
+                is FunctionExpression -> expr.body?.let {
+                    checkUnreachableInStatements(it.statements, source, fileName, binderResult)
+                }
+                else -> {}
+            }
+            is ThrowStatement -> when (val expr = stmt.expression) {
+                is ArrowFunction -> when (val body = expr.body) {
+                    is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
+                    else -> {}
+                }
+                is FunctionExpression -> expr.body?.let {
+                    checkUnreachableInStatements(it.statements, source, fileName, binderResult)
+                }
+                else -> {}
+            }
+            is ExportAssignment -> when (val expr = stmt.expression) {
+                is ArrowFunction -> when (val body = expr.body) {
+                    is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
+                    else -> {}
+                }
+                is FunctionExpression -> expr.body?.let {
+                    checkUnreachableInStatements(it.statements, source, fileName, binderResult)
+                }
+                else -> {}
+            }
             else -> {}
         }
     }
