@@ -31311,6 +31311,13 @@ interface DataView {
                 }
             }
             is CommaListExpression -> expr.elements.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
+            // round 43 iter17: function-like body recursion (mirror of iter14-16 pattern).
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkClassesForAbstractContext(body.statements, source, fileName, inAmbient)
+                is Expression -> walkExprForAbstractContext(body, source, fileName, inAmbient)
+                else -> {}
+            }
+            is FunctionExpression -> walkClassesForAbstractContext(expr.body.statements, source, fileName, inAmbient)
             else -> {}
         }
     }
