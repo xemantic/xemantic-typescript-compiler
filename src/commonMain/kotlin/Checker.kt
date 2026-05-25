@@ -50661,9 +50661,16 @@ interface DataView {
                 else -> break
             }
         }
-        if (callee !is Identifier) return t
-        val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return t
-        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return t
+        // round 43 iter9: PropertyAccess callee — `obj.isMethod(x)` where
+        // `obj`'s type has a method `isMethod` with `x is T` return type.
+        val decl: Node? = when (callee) {
+            is Identifier -> {
+                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return t
+                symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+            }
+            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
+            else -> return t
+        } ?: return t
         val (params, returnTypeNode) = when (decl) {
             is FunctionDeclaration -> decl.parameters to decl.type
             is MethodDeclaration -> decl.parameters to decl.type
