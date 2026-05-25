@@ -118,6 +118,13 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-25 (B70.14 round 47 iter17, +1 → 8964 / 10078).** /goal loop iter 17. Found target via `--fresh` MISSING-DIAGS at single-error tests: `noImplicitAnyForIn_ts` missing 1 TS2405 at line 30 for `for (n[idx++] in m);`.
+
+- **Target test diff** had only 1 missing diagnostic: TS2405 "The left-hand side of a 'for...in' statement must be of type 'string' or 'any'." Squiggle 8 chars over the entire ElementAccessExpression `n[idx++]`.
+- **B70.14 fix (Checker.kt:~70854)**: in `checkForInLhsInStmt`, added an `else if (lhs is ElementAccessExpression)` branch after the existing Identifier branch. Gate: base is an Identifier whose symbol's `valueDeclaration` is a `VariableDeclaration` with `type == null` and an `initializer` matching the new helper `initializerHasNestedArrayOrObjectElement`. Helper walks initializer through `BinaryExpression(BarBar/QuestionQuestion)` and `ParenthesizedExpression` wrappers; bails (returns false) on any non-`ArrayLiteralExpression` leaf; returns true only when all leaves are `ArrayLiteralExpression` AND at least one leaf has at least one element that is itself `ArrayLiteralExpression` or `ObjectLiteralExpression`. Under that gate, the base variable's inferred element type is an object/array — not assignable to string/any → TS2405. Squiggle uses `expressionTrueEnd(lhs) - lhs.pos` for length.
+- **Narrow gate avoids FPs**: `var m = [1,2,3,4,5]; m[i]` has no nested array/object element → no emission (correct: m's element is `number`, not yet matching TS2405 for-in display, but we err safe). `import * as stuff from './f1'; stuff['x']` has base `stuff` with no `valueDeclaration` as VariableDeclaration → no emission. Cases like `var n = ([[]] || [])` (paren-wrapped) work through the helper's `ParenthesizedExpression` unwrap.
+- **Net result**: 1115 → 1114 failed (8963 → 8964). No regressions.
+
 **Session 2026-05-25 (B70.1ext + B70.13 round 47 iter16, +1 → 8963 / 10078).** /goal loop iter 16, last 3 of 5 iters were doc-only. Found surgical target via small-diff-not-in-skip-log scan: `overloadOnConstNoStringImplementation2_ts` (diff=16, 2 intertwined issues).
 
 - **Target test diff** had two distinct issues: (1) chain message `Type '"hi"' is not assignable to type 'number'.` vs expected `Type 'string' is not assignable to type 'number'.` (literal not widened), (2) arrow-function arg squiggle 28 chars vs expected 27 (off-by-one).
