@@ -978,7 +978,7 @@ the live plan focused. Quick reference:
   recent-context. When a new session lands, archive the oldest retained
   session entry to the history file to keep this list at ~10.*
 
-  **Session 2026-05-25 (round 42 of /goal — in progress, 9 net-zero code commits + 2 reverts + 1 doc commit + 1 chore).** /goal session after round 41. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-41 surgical-pool exhaustion). Architectural attempts dominated; broadening + foundational helper improvements where pool was empty.
+  **Session 2026-05-25 (round 42 of /goal — 16 net-zero code commits + 4 doc/chore + 2 reverts, 20 iterations total).** /goal session after round 41. `find_candidates.py --fresh` returned 0/0/0 throughout (consistent with rounds 32-41 surgical-pool exhaustion). Architectural attempts dominated; broadening + foundational helper improvements where pool was empty.
 
   Iterations landed (commits in order):
   - **iter1 (net-zero)**: B52.2 — `isAnonymousObjectWithTypeParamMembers` extended to allow mixed Type.Object (at least one TP-typed member, others fully concrete). Foundation for `foo<T>(x: { v: T, name: string })` shape inference. No flips (no matching test shapes; existing 17.38 case `{x:T,y:T}` already covered).
@@ -992,6 +992,14 @@ the live plan focused. Quick reference:
   - **iter9 (net-zero)**: `walkForOfNonIterableInExpr` extended from 9 cases to ~25 expression kinds (BinaryExpression iterative spine, Conditional, Call/New, ArrayLit/ObjectLit, all wrappers, Spread/Await/Yield/Void/Delete/TypeOf, Template/TaggedTemplate, CommaList, member access, ArrowFunction expression-body recursion).
   - **iter11 (doc)**: STATUS.md round 42 mid-session note.
   - **iter12 (doc)**: This PLAN-PHASE-4.md entry.
+  - **iter13 (net-zero)**: `checkStmtForAsyncDelegator` and `checkExprForAsyncDelegator` broader stmt/expr coverage (Block/If/For-family/Switch/Try/Labeled/Throw + Binary/Conditional/Call/ArrayLit/Spread/Await/CommaList wrappers). yield* inside any control flow / expression context within async generator now triggers TS2343.
+  - **iter14 (doc)**: CLAUDE.md gotcha "walker-broadening direction-of-emission rule" — classifies helpers/walkers by emission semantics (class a: gate helpers FN risk; class b: emit walkers FP risk; class c: pure subtree visitors safe).
+  - **iter15 (net-zero)**: `inferReturnTypeFromBody` BinaryExpression branch adds comparison/equality ops (`<`, `>`, `<=`, `>=`, `==`, `!=`, `===`, `!==`, `instanceof`, `in`) → boolean.
+  - **iter16 (doc)**: STATUS.md update through iter15.
+  - **iter17 (net-zero)**: `checkExprForMissingHelper` wrapper unwrap (Paren/As/TypeAssertion/Satisfies/NonNull) + PropertyAssignment-value recursion so `({...o})` / `({a: {...o}})` reach SpreadAssignment + TaggedTemplate helper detection.
+  - **iter18 (net-zero)**: `inferReturnTypeFromBody` ConditionalExpression branch — when both branches are same-kind primitive literals, infer that primitive.
+  - **iter19 (net-zero)**: `expressionTrueEnd` TaggedTemplateExpression case — delegate to template's `expressionTrueEnd` (with iter3's NoSubstitutionTemplate handling, gives tight squiggle on `tag\`literal\``).
+  - **iter20 (doc)**: This final session-end note + STATUS.md final update.
 
   Reverted attempts:
   - **iter4+5-combo (-1 regression, reverted)**: `isLiteralLikeExpr` wrapper unwrap (As/TypeAssertion/Satisfies/NonNull) for TS1166/TS1169 computed property names. Making more expressions count as "literal-like" SUPPRESSES TS1166/TS1169, breaking a test expecting it on a wrapper-quoted computed name. Reverted iter5 only; iter4 retained.
