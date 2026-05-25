@@ -1,6 +1,6 @@
 # Status
 
-**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 45 (2026-05-25, in-progress) — 16 commits. iter1 narrowUnionByLiteral supertype substitution (positive narrowing); iter2+iter6 CLAUDE.md gotchas; iter3+iter4 STATUS/PLAN updates; iter5 Boolean(x) rationale comment. Net-zero so far._
+**Phase 4 — Checker buildout.** 8,947 / 10,078 tests passing (~88.78%). _Round 45 (2026-05-25, in-progress) — 18 commits. iter1 narrowUnionByLiteral supertype substitution (positive narrowing); iter2+iter6 CLAUDE.md gotchas; iter3+iter4 STATUS/PLAN updates; iter5 Boolean(x) rationale comment. Net-zero so far._
 
 _Round 44 (2026-05-25): /goal session — **20 iterations total, all net-zero**. 11 docs/STATUS+PLAN+CLAUDE updates + 9 code commits. iter1-3+iter6 mirror iter14-pattern (function-like body recursion for class-emitter walkers); iter5 multi-level optional-chain narrowing; iter9 nullish coalescing (`??`) narrowing in applyConditionNarrowing; iter16 Boolean(x) call narrowing. Doc commits add CLAUDE.md gotchas for iter5/iter9 architectural pieces. All net-zero confirming round 43 iter14's flip was a singleton; further iter14-pattern broadenings reach already-correct contexts. **Combined rounds 43-44 (2 of the user-requested 20-iter sessions): 1 flip, ~30 commits, full architectural-narrowing infrastructure landed (assert + switch + multi-level optional-chain + nullish-coalescing).**_
 
