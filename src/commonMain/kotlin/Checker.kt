@@ -51892,7 +51892,7 @@ interface DataView {
         // Build a multi-mapper covering every TP that can be inferred from at
         // least one arg position; return null if any TP has no candidates
         // (uninferable) so the bare-TypeParam continue path keeps firing.
-        data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?)
+        data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?, val fromObjLit: Boolean = false)
         val mapperPairs = mutableListOf<Pair<Type.TypeParam, Type>>()
 
         for (tp in tps) {
@@ -51953,7 +51953,7 @@ interface DataView {
                         val isNamedLike = isNamedLikeAtom(argType) ||
                             (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
                         if (!isNamedLike) return null
-                        candidates.add(Candidate(ai, argType, null))
+                        candidates.add(Candidate(ai, argType, null, fromObjLit = true))
                         continue
                     }
                     // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
@@ -52024,8 +52024,16 @@ interface DataView {
             // fire spurious TS2345 — but TypeScript correctly infers T=number
             // from the second arg. Only when EVERY candidate is never (e.g.
             // `foo([])` single-arg) does the never substitution apply.
-            val effectiveCandidates = candidates.filter { it.widenedType !== neverType }
+            val nonNeverCands = candidates.filter { it.widenedType !== neverType }
                 .ifEmpty { candidates }
+            // B52.3: prioritize non-objLit candidates over object-literal-of-T candidates.
+            // An object literal's per-property contributions form a UNION (e.g. `{x:3, y:""}`
+            // → `number | string`); a bare-T arg with concrete value (e.g. `m: T = 4`) is a
+            // STRONGER anchor. When both shapes contribute, the anchor wins so the union
+            // doesn't subsume the concrete inference, letting per-property TS2322 fire at
+            // the violating property. When only objLit candidates exist (e.g. widenToAny1
+            // `foo1({x: undefined, y: "def"})`), order is unchanged — the union still wins.
+            val effectiveCandidates = nonNeverCands.sortedBy { if (it.fromObjLit) 1 else 0 }
 
             val first = effectiveCandidates[0]
             val firstWidened = first.widenedType
@@ -64259,6 +64267,7 @@ interface DataView {
                         // but at the per-property level (e.g. `test({thunk: (n:number)=>{}})`
                         // vs `test(t: {thunk: (s:string) => void})`).
                         if (argType is Type.Object) {
+                            var perPropEmitted = false
                             for (propNode in arg.properties) {
                                 val (propName, keyPos, keyLen) = when (propNode) {
                                     is PropertyAssignment -> {
@@ -64333,7 +64342,14 @@ interface DataView {
                                     messageChain = chain,
                                     relatedInformation = related,
                                 ))
+                                perPropEmitted = true
                             }
+                            // B52.3: when per-property TS2322 fired for this object-literal
+                            // arg, stop all subsequent arg checks for this call — TypeScript
+                            // emits per-property errors at the literal and SKIPS the bare-T
+                            // arg check (which would otherwise FP-emit TS2345 at e.g. m:T = 4
+                            // when T is bound to mismatched-with-some-prop).
+                            if (perPropEmitted) return
                         }
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
@@ -67433,9 +67449,46 @@ interface DataView {
                 else getOrInternReference(type.target, mapped)
             }
             is Type.Object -> {
-                // For anonymous object types, we'd need to instantiate members
-                // For now, return as-is
-                type
+                // B52.3: For anonymous Type.Object (no Interface/Reference subclass,
+                // no symbol, no call/construct signatures), walk members and substitute
+                // TypeParam-typed property types. This unlocks per-property TS2322 at
+                // object-literal args under explicit type args (e.g. `foo<number>({x:3, y:""})`
+                // against `(n: {x:T, y:T})`). Narrow gate: only PURE PROPERTY-BAG anonymous
+                // objects — function-shaped objects (call/construct sigs) and named types
+                // are still returned as-is to avoid broad regressions (see CLAUDE.md
+                // "instantiateType for Type.Object" gotcha).
+                if (type is Type.Interface || type is Type.Reference) return type
+                if (type.symbol != null) return type
+                if (!type.callSignatures.isNullOrEmpty()) return type
+                if (!type.constructSignatures.isNullOrEmpty()) return type
+                val origMembers = type.members ?: return type
+                if (origMembers.isEmpty()) return type
+                var anyChanged = false
+                val newMembers: SymbolTable = mutableMapOf()
+                val newProps = mutableListOf<Symbol>()
+                for ((name, memberSym) in origMembers) {
+                    val memberType = try { getTypeOfSymbol(memberSym) } catch (_: StackOverflowError) {
+                        return type
+                    }
+                    val instMemberType = instantiateType(memberType, mapper)
+                    if (instMemberType === memberType) {
+                        newMembers[name] = memberSym
+                        newProps.add(memberSym)
+                    } else {
+                        anyChanged = true
+                        val newSym = Symbol(memberSym.flags, memberSym.name)
+                        newSym.declarations.addAll(memberSym.declarations)
+                        newSym.valueDeclaration = memberSym.valueDeclaration
+                        symbolTypes[newSym.id] = instMemberType
+                        newMembers[name] = newSym
+                        newProps.add(newSym)
+                    }
+                }
+                if (!anyChanged) return type
+                val newObj = Type.Object()
+                newObj.members = newMembers
+                newObj.properties = newProps
+                newObj
             }
             // Intrinsic, literal types don't contain type parameters
             else -> type
