@@ -35681,6 +35681,29 @@ interface DataView {
                 for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName)
             }
             is Block -> for (s in stmt.statements) checkComputedPropNameInStmt(s, source, fileName)
+            is IfStatement -> {
+                checkComputedPropNameInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkComputedPropNameInStmt(it, source, fileName) }
+            }
+            is ForStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is ForInStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is WhileStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is DoStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                when (clause) {
+                    is CaseClause -> for (s in clause.statements) checkComputedPropNameInStmt(s, source, fileName)
+                    is DefaultClause -> for (s in clause.statements) checkComputedPropNameInStmt(s, source, fileName)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) checkComputedPropNameInStmt(s, source, fileName)
+                stmt.catchClause?.let { for (s in it.block.statements) checkComputedPropNameInStmt(s, source, fileName) }
+                stmt.finallyBlock?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+            }
+            is LabeledStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
             else -> {}
         }
     }
