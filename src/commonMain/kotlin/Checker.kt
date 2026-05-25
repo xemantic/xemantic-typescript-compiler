@@ -59952,9 +59952,15 @@ interface DataView {
                 if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
                 else antecedent
             }
-            is FlowCall -> narrowTypeFromFlowFollowLoopEntry(
-                declaredType, flowNode.antecedent, name, seen, depth + 1,
-            )
+            is FlowCall -> {
+                val antecedent = narrowTypeFromFlowFollowLoopEntry(
+                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                )
+                // round 43 iter4: assert-function narrowing mirror (see iter3 in
+                // narrowTypeFromFlow's FlowCall branch). Loop-entry variant gets
+                // the same assert-call narrowing applied after the call returns.
+                narrowByAssertCall(antecedent, flowNode.node, name) ?: antecedent
+            }
             is FlowSwitchClause -> narrowTypeFromFlowFollowLoopEntry(
                 declaredType, flowNode.antecedent, name, seen, depth + 1,
             )
