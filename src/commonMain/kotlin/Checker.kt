@@ -24623,6 +24623,21 @@ interface DataView {
                     }
                 }
                 is ThrowStatement -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
+                is ForInStatement -> {
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                }
+                is ForOfStatement -> {
+                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
+                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                }
+                is TryStatement -> {
+                    checkNullUndefinedInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkNullUndefinedInStatement(stmt.statement, source, fileName)
+                is ExportAssignment -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
                 else -> {}
             }
         } finally { checkDepth-- }
