@@ -9551,6 +9551,7 @@ class Checker(
         when (expr) {
             is ArrowFunction -> when (val body = expr.body) {
                 is Block -> walkForOfNonIterable(body.statements, source, fileName)
+                is Expression -> walkForOfNonIterableInExpr(body, source, fileName)
                 else -> {}
             }
             is FunctionExpression -> walkForOfNonIterable(expr.body.statements, source, fileName)
@@ -9569,6 +9570,58 @@ class Checker(
             is TypeAssertionExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
             is SatisfiesExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
             is NonNullExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            // round 42 iter9: broaden to recurse through expressions that may contain
+            // ArrowFunction / FunctionExpression / ClassExpression in their substructure.
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                val rightStack = ArrayDeque<Expression>()
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                walkForOfNonIterableInExpr(cur, source, fileName)
+                while (rightStack.isNotEmpty()) walkForOfNonIterableInExpr(rightStack.removeLast(), source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkForOfNonIterableInExpr(expr.condition, source, fileName)
+                walkForOfNonIterableInExpr(expr.whenTrue, source, fileName)
+                walkForOfNonIterableInExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                walkForOfNonIterableInExpr(expr.expression, source, fileName)
+                for (a in expr.arguments) walkForOfNonIterableInExpr(a, source, fileName)
+            }
+            is NewExpression -> {
+                walkForOfNonIterableInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkForOfNonIterableInExpr(it, source, fileName) }
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkForOfNonIterableInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkForOfNonIterableInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkForOfNonIterableInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                is GetAccessor -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
+            is VoidExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkForOfNonIterableInExpr(span.expression, source, fileName)
+            is TaggedTemplateExpression -> {
+                walkForOfNonIterableInExpr(expr.tag, source, fileName)
+                if (expr.template is TemplateExpression) {
+                    for (span in (expr.template as TemplateExpression).templateSpans) walkForOfNonIterableInExpr(span.expression, source, fileName)
+                }
+            }
+            is CommaListExpression -> for (e in expr.elements) walkForOfNonIterableInExpr(e, source, fileName)
+            is PropertyAccessExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                walkForOfNonIterableInExpr(expr.expression, source, fileName)
+                walkForOfNonIterableInExpr(expr.argumentExpression, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkForOfNonIterableInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkForOfNonIterableInExpr(expr.operand, source, fileName)
             else -> {}
         }
     }
