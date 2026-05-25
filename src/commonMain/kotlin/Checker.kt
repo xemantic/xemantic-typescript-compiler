@@ -63102,7 +63102,7 @@ interface DataView {
                     val implRelatedCandidate = getOverloadImplementationRelated(genericSig, source, fileName)
                     if (implRelatedCandidate != null) {
                         val implSig = getImplementationSignature(genericSig, source, fileName)
-                        if (implSig != null && allArgumentsMatch(expr.arguments, implSig) &&
+                        if (implSig != null && allArgumentsMatch(expr.arguments, implSig, bivariantFnParams = true) &&
                             implTypeArgConstraintsSatisfied(implSig, resolvedTypeArgs)
                         ) {
                             implRelated = implRelatedCandidate
@@ -63126,7 +63126,7 @@ interface DataView {
             val implRelatedCandidate = getOverloadImplementationRelated(signatures[0], source, fileName)
             if (implRelatedCandidate != null) {
                 val implSig = getImplementationSignature(signatures[0], source, fileName)
-                if (implSig != null && allArgumentsMatch(expr.arguments, implSig)) {
+                if (implSig != null && allArgumentsMatch(expr.arguments, implSig, bivariantFnParams = true)) {
                     implRelated = implRelatedCandidate
                 }
             }
@@ -63901,7 +63901,7 @@ interface DataView {
             val implRelatedCandidate = getOverloadImplementationRelated(arityMatches[0], source, fileName)
             if (implRelatedCandidate != null) {
                 val implSig = getImplementationSignature(arityMatches[0], source, fileName)
-                if (implSig != null && allArgumentsMatch(args, implSig)) {
+                if (implSig != null && allArgumentsMatch(args, implSig, bivariantFnParams = true)) {
                     implRelated = implRelatedCandidate
                 }
             }
@@ -64001,7 +64001,7 @@ interface DataView {
                 if (implRelated != null) {
                     // Check if implementation actually accepts these args
                     val implSig = getImplementationSignature(signatures[0], source, fileName)
-                    if (implSig != null && allArgumentsMatch(args, implSig)) {
+                    if (implSig != null && allArgumentsMatch(args, implSig, bivariantFnParams = true)) {
                         related.add(implRelated)
                     }
                 }
@@ -64315,8 +64315,22 @@ interface DataView {
      * Returns true if all args are assignable to their corresponding param types.
      * For overload resolution, we check ALL types (not just simple checkable ones)
      * because we need to determine if any overload matches.
+     *
+     * B70.15: [bivariantFnParams] enables bivariant comparison for function-typed
+     * arg/param pairs — used by TS2793 "would the impl have succeeded" gates under
+     * `@strict: false`. TypeScript treats method parameter checking bivariantly when
+     * `strictFunctionTypes` is off, so e.g. `(x: 'bye') => number` is accepted by
+     * impl param `(x: string) => number`. Only enabled when [bivariantFnParams] is
+     * true AND `strictExplicitlyFalse` is set — otherwise contravariant-only check.
+     * Strict-mode overload resolution (the `allArgumentsMatch(args, sig)` matching
+     * call in `checkArgumentsAgainstOverloads`) keeps the default (contravariant)
+     * to avoid mis-matching overloads.
      */
-    private fun allArgumentsMatch(args: List<Expression>, sig: Signature): Boolean {
+    private fun allArgumentsMatch(
+        args: List<Expression>,
+        sig: Signature,
+        bivariantFnParams: Boolean = false,
+    ): Boolean {
         val params = sig.parameters
         // Check arity: too few arguments
         if (args.size < sig.minArgumentCount) return false
@@ -64325,6 +64339,7 @@ interface DataView {
             lastParam.declarations.any { d -> d is Parameter && d.dotDotDotToken }
         }
         if (args.size > params.size && !hasRestParam) return false
+        val useBivariant = bivariantFnParams && options.strictExplicitlyFalse
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
@@ -64342,7 +64357,22 @@ interface DataView {
             if (paramType is Type.TypeParam) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
-            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // B70.15: Bivariant fallback for function-vs-function under @strict: false.
+                // Also try reverse direction; if param accepts arg's shape going either way,
+                // count as match. Only fires for anonymous function-typed Type.Object pairs
+                // (both have callSignatures) so non-function mismatches still fail.
+                if (useBivariant &&
+                    argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface &&
+                    !argType.callSignatures.isNullOrEmpty() &&
+                    paramType is Type.Object && paramType !is Type.Reference && paramType !is Type.Interface &&
+                    !paramType.callSignatures.isNullOrEmpty() &&
+                    checkTypeRelatedTo(paramType, argType, assignableRelation)
+                ) {
+                    continue
+                }
+                return false
+            }
         }
         return true
     }
