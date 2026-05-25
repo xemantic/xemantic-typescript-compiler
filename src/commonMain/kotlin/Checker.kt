@@ -8706,6 +8706,33 @@ class Checker(
                     checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
                 is ReturnStatement ->
                     checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
+                is Block -> checkConstructorParamInInitializersInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkConstructorParamInInitializersInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkConstructorParamInInitializersInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkConstructorParamInInitializersInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkConstructorParamInInitializersInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkConstructorParamInInitializersInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
+                is ThrowStatement -> stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
+                is ExportAssignment -> checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
                 else -> {}
             }
         }
