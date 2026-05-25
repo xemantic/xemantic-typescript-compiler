@@ -69127,9 +69127,19 @@ interface DataView {
                     // `<Tstring>(a: Tstring): Tstring` resolves the `Tstring`
                     // annotations to our TypeParam (instead of falling through to
                     // global lookup → errorType → display `(a: error) => any`).
+                    // B59.7: intern by TypeParameter AST position (mirrors B59.5 at
+                    // buildSignatureForFunctionLikeTypeNode site ~69044). TypeLiteral
+                    // MethodDeclaration TypeParams are TYPE-position annotations
+                    // resolved many times during checking; identity-stable instances
+                    // let downstream id-keyed caches (substitutionResultCache,
+                    // referenceCache) actually hit. Constraints/defaults are re-resolved
+                    // per call below (no null guard) — matching B59.5's note that the
+                    // null guard regressed there.
                     val sigTypeParams = member.typeParameters?.map { tpDecl ->
-                        Type.TypeParam().also { tp ->
-                            tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                        typeParamInternCache.getOrPut(tpDecl.pos) {
+                            Type.TypeParam().also { tp ->
+                                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+                            }
                         }
                     }
                     val savedScope = currentTypeParamScope
