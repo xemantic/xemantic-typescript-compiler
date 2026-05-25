@@ -56654,6 +56654,36 @@ interface DataView {
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let { checkConstraintsInStatements(it.statements, source, fileName) }
                 }
+                is Block -> checkConstraintsInStatements(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    checkConstraintsInStatements(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { checkConstraintsInStatements(listOf(it), source, fileName) }
+                }
+                is ForStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                        d.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                    }
+                    checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                }
+                is ForInStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                is DoStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> checkConstraintsInStatements(clause.statements, source, fileName)
+                            is DefaultClause -> checkConstraintsInStatements(clause.statements, source, fileName)
+                            else -> {}
+                        }
+                    }
+                }
+                is TryStatement -> {
+                    checkConstraintsInStatements(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { checkConstraintsInStatements(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
