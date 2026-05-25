@@ -43486,6 +43486,8 @@ interface DataView {
                 for (m in expr.members) {
                     when (m) {
                         is MethodDeclaration -> checkMethodForImplicitReturn(m, source, fileName)
+                        is GetAccessor -> checkGetAccessorForImplicitReturn(m, source, fileName)
+                        is PropertyDeclaration -> m.initializer?.let { walkExprForImplicitReturns(it, source, fileName) }
                         else -> {}
                     }
                 }
@@ -43497,6 +43499,7 @@ interface DataView {
                         is MethodDeclaration -> checkMethodForImplicitReturn(prop, source, fileName)
                         is FunctionExpression -> checkFuncExprForImplicitReturn(prop, source, fileName)
                         is PropertyAssignment -> walkExprForImplicitReturns(prop.initializer, source, fileName)
+                        is SpreadAssignment -> walkExprForImplicitReturns(prop.expression, source, fileName)
                         else -> {}
                     }
                 }
