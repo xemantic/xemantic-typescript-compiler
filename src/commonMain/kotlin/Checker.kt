@@ -50532,6 +50532,24 @@ interface DataView {
                 // so for the condition to be truthy, obj must NOT be null/undefined.
                 else if (expr.questionDotToken && isTrue && getReferencePath(expr.expression) == name) {
                     narrowByExcludingNullUndefined(t)
+                }
+                // round 44 iter5: multi-level optional-chain — `if (obj?.x?.y)` truthy
+                // implies the WHOLE chain didn't short-circuit, so any intermediate path
+                // referenced by [name] is non-null. Walk the chain looking for a
+                // questionDotToken intermediate matching [name].
+                else if (isTrue) {
+                    var cur: Expression = expr.expression
+                    while (cur is PropertyAccessExpression) {
+                        if (cur.questionDotToken && getReferencePath(cur.expression) == name) {
+                            return narrowByExcludingNullUndefined(t)
+                        }
+                        if (getReferencePath(cur) == name && expr.questionDotToken) {
+                            // Direct ancestor matches name AND the outer expr is optional-chain
+                            return narrowByExcludingNullUndefined(t)
+                        }
+                        cur = cur.expression
+                    }
+                    t
                 } else t
             }
             else -> t
