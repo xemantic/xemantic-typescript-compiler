@@ -60015,9 +60015,14 @@ interface DataView {
                 // the same assert-call narrowing applied after the call returns.
                 narrowByAssertCall(antecedent, flowNode.node, name) ?: antecedent
             }
-            is FlowSwitchClause -> narrowTypeFromFlowFollowLoopEntry(
-                declaredType, flowNode.antecedent, name, seen, depth + 1,
-            )
+            is FlowSwitchClause -> {
+                val antecedent = narrowTypeFromFlowFollowLoopEntry(
+                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                )
+                // round 43 iter6: mirror iter5's switch-discriminant narrowing into
+                // the loop-aware variant.
+                narrowBySwitchClause(antecedent, flowNode, name) ?: antecedent
+            }
             is FlowArrayMutation -> narrowTypeFromFlowFollowLoopEntry(
                 declaredType, flowNode.antecedent, name, seen, depth + 1,
             )
