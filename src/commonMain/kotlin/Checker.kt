@@ -36663,6 +36663,9 @@ interface DataView {
                                 checkTypeParamsCircular(m.typeParameters, source, fileName)
                                 m.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
                             }
+                            is Constructor -> m.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
+                            is GetAccessor -> m.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
+                            is SetAccessor -> m.body?.statements?.let { walkStmtsForCircularConstraint(it, source, fileName) }
                             else -> {}
                         }
                     }
@@ -36676,6 +36679,29 @@ interface DataView {
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
                     walkStmtsForCircularConstraint(it, source, fileName)
                 }
+                is Block -> walkStmtsForCircularConstraint(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkStmtsForCircularConstraint(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkStmtsForCircularConstraint(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkStmtsForCircularConstraint(clause.statements, source, fileName)
+                        is DefaultClause -> walkStmtsForCircularConstraint(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkStmtsForCircularConstraint(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.let { walkStmtsForCircularConstraint(it.block.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkStmtsForCircularConstraint(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkStmtsForCircularConstraint(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
