@@ -35314,7 +35314,11 @@ interface DataView {
             // Arrow function body end
             val body = expr.body
             when (body) {
-                is Block -> body.end - 1  // end includes next token; -1 for }
+                // Use closeBracePos when available (block.end overshoots by the next
+                // token's pos, which can include trailing whitespace before the next
+                // token — e.g. `(x) => { ... } )` overshoots by the space between
+                // `}` and `)`. `closeBracePos + 1` lands exactly after `}`.
+                is Block -> if (body.closeBracePos >= 0) body.closeBracePos + 1 else body.end - 1
                 is Expression -> expressionTrueEnd(body)
                 else -> expr.end
             }
@@ -64159,6 +64163,29 @@ interface DataView {
     }
 
     /**
+     * B70.1ext: For chain-display rendering: when `literalCandidate` is a literal type
+     * AND `otherSide` is a non-matching primitive (different base), return the widened
+     * form of `literalCandidate` so the chain message reads `'string' is not assignable
+     * to 'number'` instead of `'"hi"' is not assignable to 'number'`. When bases match
+     * (e.g. `'hi'` vs `string`, or `'hi'` vs `'bye'`), return the literal unchanged.
+     */
+    private fun widenLiteralForDifferentBaseDisplay(literalCandidate: Type, otherSide: Type): Type {
+        val widened = getWidenedLiteralType(literalCandidate)
+        if (widened === literalCandidate) return literalCandidate
+        // widened is a primitive base (string/number/boolean/bigint). Only widen for
+        // display when otherSide is a DIFFERENT primitive base (no shared base).
+        val otherBase = getWidenedLiteralType(otherSide)
+        if (otherBase === widened) return literalCandidate  // same base, keep literal
+        // Different base — only widen if otherSide is a recognizable primitive,
+        // not an object/union/intersection.
+        val isOtherPrimitive = otherSide.flags.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
+        ) && otherSide !is Type.StringLiteral && otherSide !is Type.NumberLiteral &&
+            otherSide !is Type.BigIntLiteral && !otherSide.flags.hasAny(TypeFlags.BooleanLiteral)
+        return if (isOtherPrimitive) widened else literalCandidate
+    }
+
+    /**
      * Get the position and length of the first failing argument for a signature.
      * For object literal/array literal arguments, dig into elements to find the
      * specific mismatched value (TypeScript squiggles the inner value, not the whole arg).
@@ -67053,9 +67080,16 @@ interface DataView {
                         ) + propChain.map { "    $it" }
                     }
                 }
+                // B70.1ext: When `targetParamType` is a literal type AND `sourceParamType`
+                // is a primitive of a DIFFERENT base (e.g. `'hi'` (StringLiteral) vs
+                // `number`), TypeScript widens the literal in the chain display:
+                // `Type 'string' is not assignable to type 'number'.`, not
+                // `Type '"hi"' is not assignable to type 'number'.`. Same-base mismatches
+                // (`'hi'` vs `'bye'` — both string literals) keep both literals.
+                val displayTargetParam = widenLiteralForDifferentBaseDisplay(targetParamType, sourceParamType)
                 return listOf(
                     "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
-                    "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(sourceParamType)}'.",
+                    "    Type '${typeToString(displayTargetParam)}' is not assignable to type '${typeToString(sourceParamType)}'.",
                 )
             }
         }
