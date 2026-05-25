@@ -935,7 +935,7 @@ the live plan focused. Quick reference:
 
 - [x] **B58.3+ (CLOSED 2026-05-20 via B60.1)**: The recursive-alias outer-type aliasDisplayMap puzzle. Root cause was checkFunctionBody resolving param annotations without TypeParam scope — substitution gate at Checker.kt:~41755 (`if (resolvedArgs.none { it === errorType })`) skipped, falling to un-substituted alias body. Once B60.1 pushed scope, aliasDisplayMap entries became reachable. Flipped `inferFromNestedSameShapeTuple_ts`.
 
-- [ ] **B60.11+ (NEXT, ~3-5 tests potential): Extend B60.x's TS2208 emission to checkVarDeclAssignability's Type-engine path.** B60.10 mirrored TS2208 into checkReturnAssignability's Type-engine path. The var-decl path (Checker.kt:~39820 area) still emits via emitTS2322 (varTypes path) which has B60.6f, but for cases where canUseTypeEngine fires the Type-engine path runs and emits its own diagnostic without TS2208 related info. Mirror the same `effectivelyUnconstrained` check + TS2208 related info into the var-decl Type-engine path. May unlock several tests where source is TypeParam → primitive var-decl.
+- [x] **B60.11 (CLOSED — already implemented in earlier session, queue checkbox stale): TS2208 emission to checkVarDeclAssignability's Type-engine path.** Implemented at Checker.kt:46584-46611 with comment "B60.11: TS2208 related info for TypeParam source mismatch — mirrors B60.10's checkReturnAssignability extension into the var-decl path." Verified via grep 2026-05-25.
 
 - [x] **B60.12+ (CLOSED 2026-05-20, round 14): TS2349/2351/2339 for TypeParam-typed expressions.** Implemented in round 14 via `checkTypeParamTypedOps` walker. Flipped `typeParameterWithInvalidConstraintType_ts` and `genericUnboundedTypeParamAssignability_ts`.
 
