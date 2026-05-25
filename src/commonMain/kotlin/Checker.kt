@@ -70391,12 +70391,33 @@ interface DataView {
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCallTypeArgCountInStmts(it.statements, source, fileName, locals) }
             is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> init.declarations.forEach { d ->
+                        d.initializer?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+                    }
+                    is Expression -> checkCallTypeArgCountInExpr(init, source, fileName, locals)
+                    else -> {}
+                }
+                stmt.condition?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
+                stmt.incrementor?.let { checkCallTypeArgCountInExpr(it, source, fileName, locals) }
                 checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
             }
-            is ForInStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
-            is ForOfStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
-            is WhileStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
-            is DoStatement -> checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            is ForInStatement -> {
+                checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+                checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            }
+            is ForOfStatement -> {
+                checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+                checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            }
+            is WhileStatement -> {
+                checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+                checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+            }
+            is DoStatement -> {
+                checkCallTypeArgCountInStmt(stmt.statement, source, fileName, locals)
+                checkCallTypeArgCountInExpr(stmt.expression, source, fileName, locals)
+            }
             is SwitchStatement -> {
                 for (c in stmt.caseBlock) when (c) {
                     is CaseClause -> checkCallTypeArgCountInStmts(c.statements, source, fileName, locals)
