@@ -49845,10 +49845,16 @@ interface DataView {
             // 16.4: Create type parameters FIRST, then set currentTypeParamScope
             // so that parameter types (e.g. T[]) resolve T to the same Type.TypeParam
             // objects used in the signature. This enables type argument instantiation.
+            // B59.4: intern by TypeParameter AST position (matches B59.1/B59.2/B59.3
+            // pattern at Checker.kt:~37183/~51854/~59118). Distinct overloads of the
+            // same function get distinct TypeParam instances because their TypeParameter
+            // AST nodes have distinct source positions.
             val typeParams = decl.typeParameters?.map { tp ->
-                val param = Type.TypeParam()
-                param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                param
+                typeParamInternCache.getOrPut(tp.pos) {
+                    val param = Type.TypeParam()
+                    param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    param
+                }
             }
             val savedScope = currentTypeParamScope
             if (typeParams != null && typeParams.isNotEmpty()) {
@@ -49859,9 +49865,14 @@ interface DataView {
                 currentTypeParamScope = scope
             }
             // Resolve constraints AFTER scope is set (constraints may reference other type params)
+            // Guard against clobbering already-set constraint/default from another interning site.
             typeParams?.forEachIndexed { i, tp ->
-                decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
-                decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                if (tp.constraint == null) {
+                    decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                }
+                if (tp.default == null) {
+                    decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                }
             }
             // 17.25: When the function has a body and contains no return statement at all,
             // infer return type as `void`. Mirrors TypeScript's `function f() {}` → `() => void`.
