@@ -53769,8 +53769,17 @@ interface DataView {
         data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?, val fromObjLit: Boolean = false)
         val mapperPairs = mutableListOf<Pair<Type.TypeParam, Type>>()
 
+        // B83.4a (two-pass anchor/callback split): pass-1 gathers candidates from
+        // "easy" anchor positions (bare-T, rest-T[], Array<T>, anonymous-object-of-T
+        // members); pass-2 gathers from callback positions (B83.1 gate (f)
+        // function-typed param shape). Currently both passes contribute to the same
+        // `candidates` list per-TP (preserving net-zero behavior with existing single-
+        // pass logic) and run inline per-TP. Restructure prepares for B83.4b+ where
+        // pass-2 will consult pass-1's partial mapper to back-propagate inferred
+        // anchor TPs into un-annotated lambda param-type inference.
         for (tp in tps) {
             val candidates = mutableListOf<Candidate>()
+            // Pass 1: anchor positions (non-callback).
             for (i in params.indices) {
                 if (i >= args.size) break
                 val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
@@ -53785,11 +53794,7 @@ interface DataView {
                 // values for members typed as the current `tp`.
                 val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
                     isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
-                // B83.1 gate (f): bare `(x: tp) => <concrete>` function-typed param.
-                // Inference candidate comes from arg's `(x: <annotated>) => ...` callback
-                // — specifically the annotated type of the callback's single Identifier param.
-                val isFnTypedOfT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
-                    fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
+                val isFnTypedOfT = false  // B83.4a: pass-1 skips fn-typed (handled in pass-2)
                 if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
@@ -53920,6 +53925,52 @@ interface DataView {
                     val literal = if (isArrayT) null else literalTypeOfExpression(arg)
                     candidates.add(Candidate(ai, argType, literal))
                 }
+            }
+            // Pass 2 (B83.4a): callback (B83.1 gate (f)) positions. Walks the same
+            // params/args but only collects candidates from function-typed param
+            // shapes (anonymous Type.Object with 1 callSig whose single Identifier
+            // param is exactly `tp`). Currently bails at `lp.type ?: continue` for
+            // un-annotated lambdas — B83.4b/c/d will replace that bail with
+            // contextual back-propagation from the partial mapper assembled by
+            // pass-1 across other TPs. Net-zero in isolation: produces the same
+            // candidate set as the pre-restructure single-pass loop for any sig
+            // shape that reaches gate (f).
+            fun isNamedLikeAtom(t: Type): Boolean =
+                t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                    t.flags.hasAny(
+                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                        TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                        TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                    )
+            for (i in params.indices) {
+                if (i >= args.size) break
+                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                if (isRest) continue
+                if (pt === tp) continue
+                if (isArrayOfTypeParam(pt, tp)) continue
+                if (isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
+                val isFnTypedOfT = fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
+                if (!isFnTypedOfT) continue
+                val arg = args[i]
+                if (arg is SpreadElement) continue
+                val argParams = when (arg) {
+                    is ArrowFunction -> arg.parameters
+                    is FunctionExpression -> arg.parameters
+                    else -> null
+                } ?: continue
+                if (argParams.size != 1) continue
+                val lp = argParams[0]
+                if (lp.dotDotDotToken) continue
+                if (lp.name !is Identifier) continue
+                val lpTypeNode = lp.type ?: continue
+                val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
+                if (lpType === anyType || lpType === errorType) return null
+                if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                val widened = widenType(lpType)
+                if (!isNamedLikeAtom(widened) &&
+                    !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                candidates.add(Candidate(i, widened, null))
             }
             if (candidates.isEmpty()) return null
 
