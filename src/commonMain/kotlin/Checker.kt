@@ -3831,7 +3831,11 @@ class Checker(
                     else -> {}
                 }
             }
-            is MappedType -> type.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+            is MappedType -> {
+                type.type?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                type.nameType?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+                type.typeParameter.constraint?.let { walkUnusedInferInTypeNode(it, source, fileName) }
+            }
             is RestType -> walkUnusedInferInTypeNode(type.type, source, fileName)
             is OptionalType -> walkUnusedInferInTypeNode(type.type, source, fileName)
             is TypeReference -> type.typeArguments?.forEach { walkUnusedInferInTypeNode(it, source, fileName) }
@@ -6377,6 +6381,8 @@ class Checker(
             }
             is MappedType -> {
                 type.type?.let { collectTypeRefs(it, scope) }
+                type.nameType?.let { collectTypeRefs(it, scope) }
+                type.typeParameter.constraint?.let { collectTypeRefs(it, scope) }
             }
             is TypeQuery -> {
                 val name = type.exprName
@@ -14096,6 +14102,7 @@ class Checker(
             is MappedType -> {
                 type.type?.let { collectInferTypeNames(it, scope) }
                 type.nameType?.let { collectInferTypeNames(it, scope) }
+                type.typeParameter.constraint?.let { collectInferTypeNames(it, scope) }
             }
             is IndexedAccessType -> {
                 collectInferTypeNames(type.objectType, scope)
@@ -14802,6 +14809,7 @@ class Checker(
             is MappedType -> {
                 type.type?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
                 type.nameType?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
+                type.typeParameter.constraint?.let { if (isNameReferencedInTypeQuery(name, it)) return true }
             }
             is TemplateLiteralType -> type.templateSpans.forEach {
                 if (isNameReferencedInTypeQuery(name, it.type)) return true
@@ -73984,6 +73992,7 @@ interface DataView {
             is MappedType -> {
                 type.type?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
                 type.nameType?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
+                type.typeParameter.constraint?.let { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
             }
             is TypeLiteral -> for (m in type.members) walkMemberForIndexedAccess(m, tpConstraints, source, fileName)
             is RestType -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
