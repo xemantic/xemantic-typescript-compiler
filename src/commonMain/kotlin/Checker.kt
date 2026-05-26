@@ -54242,11 +54242,91 @@ interface DataView {
             val source = result.sourceFile.text
             // Top-level statements: recurse into namespace bodies (still top-level
             // for this purpose), but flag any namespace found via the non-top
-            // recursion path.
-            for (stmt in result.sourceFile.statements) {
-                walkNamespaceTopLevel(stmt, source, fileName, atTopLevel = true)
-            }
+            // recursion path. Use sibling-aware iteration so legacy `module {`
+            // / `declare module {` anonymous-namespace bodies are skipped.
+            walkSiblingsForTopLevel(result.sourceFile.statements, source, fileName, atTopLevel = true)
         }
+    }
+
+    private fun isJsLikeFile(fileName: String): Boolean =
+        fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+            fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+
+    /**
+     * Walk a list of sibling statements, recursing into each one with
+     * [walkNamespaceTopLevel] at the given [atTopLevel]. Skips Blocks that
+     * appear immediately after a bare `module` / `namespace` / `declare`
+     * identifier expression statement (legacy anonymous-namespace syntax
+     * `module { ... }` / `declare module { ... }` — these are NOT real
+     * statement blocks; TypeScript treats their body content as ambient
+     * namespace contents and does not emit TS1231/1232/1233/1234/1258/1184
+     * inside them).
+     */
+    private fun walkSiblingsForTopLevel(stmts: List<Statement>, source: String, fileName: String, atTopLevel: Boolean) {
+        var i = 0
+        while (i < stmts.size) {
+            val stmt = stmts[i]
+            val isLegacyAnonModuleBlock = stmt is Block &&
+                i > 0 &&
+                isBareModuleLikeIdentExprStmt(stmts[i - 1])
+            if (!isLegacyAnonModuleBlock) {
+                walkNamespaceTopLevel(stmt, source, fileName, atTopLevel)
+            }
+            i++
+        }
+    }
+
+    private fun isBareModuleLikeIdentExprStmt(stmt: Statement): Boolean {
+        if (stmt !is ExpressionStatement) return false
+        val ident = stmt.expression as? Identifier ?: return false
+        return ident.text == "module" || ident.text == "namespace" || ident.text == "declare"
+    }
+
+    /**
+     * Find the source offset of a specific keyword (`export`, `import`, `declare`,
+     * `namespace`, `module`) starting at or after [startPos]. Only matches as a
+     * word boundary (preceded by non-letter, followed by non-letter). Returns
+     * null if not found within the next 64 chars (defensive cap to avoid
+     * scanning past the statement end in pathological cases).
+     */
+    private fun findKeywordPos(source: String, startPos: Int, keyword: String): Int? {
+        var i = startPos
+        val limit = minOf(source.length, startPos + 64)
+        while (i + keyword.length <= limit) {
+            if (source.regionMatches(i, keyword, 0, keyword.length)) {
+                val before = if (i == 0) ' ' else source[i - 1]
+                val after = if (i + keyword.length >= source.length) ' ' else source[i + keyword.length]
+                if (!before.isLetterOrDigit() && before != '_' && before != '$' &&
+                    !after.isLetterOrDigit() && after != '_' && after != '$') {
+                    return i
+                }
+            }
+            i++
+        }
+        return null
+    }
+
+    /**
+     * Scan backwards from [startPos] (exclusive) up to 64 chars looking for
+     * [keyword] as a word-boundary match. Used to locate `declare` keyword
+     * before a `ModuleDeclaration.pos` (which points at `module`/`namespace`,
+     * not the leading `declare` consumed in parseDeclareDeclaration).
+     */
+    private fun findKeywordPosBackward(source: String, startPos: Int, keyword: String): Int? {
+        val lowerLimit = maxOf(0, startPos - 64)
+        var i = startPos - keyword.length
+        while (i >= lowerLimit) {
+            if (source.regionMatches(i, keyword, 0, keyword.length)) {
+                val before = if (i == 0) ' ' else source[i - 1]
+                val after = if (i + keyword.length >= source.length) ' ' else source[i + keyword.length]
+                if (!before.isLetterOrDigit() && before != '_' && before != '$' &&
+                    !after.isLetterOrDigit() && after != '_' && after != '$') {
+                    return i
+                }
+            }
+            i--
+        }
+        return null
     }
 
     private fun walkNamespaceTopLevel(stmt: Statement, source: String, fileName: String, atTopLevel: Boolean) {
@@ -54254,14 +54334,42 @@ interface DataView {
             is ModuleDeclaration -> {
                 // Ambient `declare namespace X { }` is allowed anywhere (e.g.
                 // module augmentations and ambient blocks may nest). Skip when
-                // declare modifier is present.
+                // declare modifier is present (but NOT for string-named modules
+                // — those get TS1234 instead).
                 val isAmbient = ModifierFlag.Declare in stmt.modifiers ||
                     stmt.body == null
                 // String-literal-named modules (`declare module "X" { }`) are
-                // ambient and handled separately — skip.
+                // ambient module declarations — TS1234 if non-top-level.
                 val isStringModule = stmt.name is StringLiteralNode
-                if (!atTopLevel && !isAmbient && !isStringModule) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                if (!atTopLevel && isStringModule) {
+                    // B76.2: TS1234 — ambient module declaration only allowed
+                    // at top level of a file. Squiggle at `declare` keyword (length 7).
+                    // ModuleDeclaration.pos is at the `module` keyword (parseDeclareDeclaration
+                    // already consumed `declare` before delegating). Scan backwards to find it.
+                    val declarePos = findKeywordPosBackward(source, stmt.pos, "declare") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, declarePos)
+                    diagnostics.add(Diagnostic(
+                        message = "An ambient module declaration is only allowed at the top level in a file.",
+                        category = DiagnosticCategory.Error,
+                        code = 1234,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = declarePos,
+                        length = 7,
+                    ))
+                } else if (!atTopLevel && !isAmbient && !isStringModule) {
+                    // For `export namespace N`, the squiggle covers `export`
+                    // (length 6) — scan backward from stmt.pos (which points at
+                    // `namespace` since parseExportDeclaration delegated to
+                    // parseModuleDeclaration after consuming `export`). For
+                    // plain `namespace M`, squiggle covers `namespace` (length 9)
+                    // at stmt.pos.
+                    val (start, length) = if (ModifierFlag.Export in stmt.modifiers) {
+                        val exportPos = findKeywordPosBackward(source, stmt.pos, "export") ?: stmt.pos
+                        exportPos to 6
+                    } else stmt.pos to 9
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
                         message = "A namespace declaration is only allowed at the top level of a namespace or module.",
                         category = DiagnosticCategory.Error,
@@ -54269,26 +54377,167 @@ interface DataView {
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = stmt.pos,
-                        length = 9, // "namespace" keyword length (also matches "module" baselines via the deprecated form being length 6 — TS1235 baselines consistently squiggle the keyword; tests in the live corpus all use `namespace`)
+                        start = start,
+                        length = length,
                     ))
                 }
                 // Recurse into body — namespace bodies are "top level" for nested namespaces.
                 (stmt.body as? ModuleBlock)?.let { block ->
-                    for (inner in block.statements) {
-                        walkNamespaceTopLevel(inner, source, fileName, atTopLevel = true)
+                    walkSiblingsForTopLevel(block.statements, source, fileName, atTopLevel = true)
+                }
+            }
+            is ExportAssignment -> {
+                if (!atTopLevel) {
+                    val exportPos = findKeywordPos(source, stmt.pos, "export") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
+                    // B76.2: TS1258 for `export default ...`, TS1231 for `export = ...`.
+                    val isDefault = ModifierFlag.Default in stmt.modifiers && !stmt.isExportEquals
+                    if (isDefault) {
+                        diagnostics.add(Diagnostic(
+                            message = "A default export must be at the top level of a file or module declaration.",
+                            category = DiagnosticCategory.Error,
+                            code = 1258,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = exportPos,
+                            length = 6, // "export"
+                        ))
+                    } else {
+                        diagnostics.add(Diagnostic(
+                            message = "An export assignment must be at the top level of a file or module declaration.",
+                            category = DiagnosticCategory.Error,
+                            code = 1231,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = exportPos,
+                            length = 6, // "export"
+                        ))
                     }
                 }
             }
-            is FunctionDeclaration -> stmt.body?.let { body ->
-                for (inner in body.statements) {
-                    walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+            is ExportDeclaration -> {
+                if (!atTopLevel) {
+                    val exportPos = findKeywordPos(source, stmt.pos, "export") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
+                    diagnostics.add(Diagnostic(
+                        message = "An export declaration can only be used at the top level of a namespace or module.",
+                        category = DiagnosticCategory.Error,
+                        code = 1233,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = exportPos,
+                        length = 6, // "export"
+                    ))
+                }
+            }
+            is ImportDeclaration -> {
+                // TS1232 fires for .ts/.tsx files; .js/.jsx files use TS1473
+                // (emitted by checkImportNotAtTopLevel). Avoid double-emission.
+                if (!atTopLevel && !isJsLikeFile(fileName)) {
+                    val importPos = findKeywordPos(source, stmt.pos, "import") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, importPos)
+                    diagnostics.add(Diagnostic(
+                        message = "An import declaration can only be used at the top level of a namespace or module.",
+                        category = DiagnosticCategory.Error,
+                        code = 1232,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = importPos,
+                        length = 6, // "import"
+                    ))
+                }
+            }
+            is ImportEqualsDeclaration -> {
+                if (!atTopLevel && !isJsLikeFile(fileName)) {
+                    val importPos = findKeywordPos(source, stmt.pos, "import") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, importPos)
+                    diagnostics.add(Diagnostic(
+                        message = "An import declaration can only be used at the top level of a namespace or module.",
+                        category = DiagnosticCategory.Error,
+                        code = 1232,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = importPos,
+                        length = 6, // "import"
+                    ))
+                }
+            }
+            is FunctionDeclaration -> {
+                // B76.2: TS1184 — `export` / `export default` modifiers on
+                // FunctionDeclaration at non-top-level position. Squiggle at
+                // `export` keyword (length 6). FunctionDeclaration.pos is at
+                // `function` (parseExportDeclaration delegated after consuming
+                // `export`), so scan backward to locate the `export`.
+                if (!atTopLevel && ModifierFlag.Export in stmt.modifiers) {
+                    val exportPos = findKeywordPosBackward(source, stmt.pos, "export") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Modifiers cannot appear here.",
+                        category = DiagnosticCategory.Error,
+                        code = 1184,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = exportPos,
+                        length = 6, // "export"
+                    ))
+                }
+                stmt.body?.let { body ->
+                    // Skip recursion when the body is malformed (missing `}` —
+                    // detected by closeBracePos either being -1 or landing
+                    // at/past EOF). The parser already emitted TS1005 and
+                    // TypeScript suppresses further nested-context diagnostics
+                    // (e.g. exportInFunction.ts: only TS1005 expected).
+                    if (body.closeBracePos < 0 || body.closeBracePos >= source.length) return@let
+                    walkSiblingsForTopLevel(body.statements, source, fileName, atTopLevel = false)
+                }
+            }
+            is ClassDeclaration -> {
+                // B76.2: TS1184 — `export` / `export default` modifiers on
+                // ClassDeclaration at non-top-level position. ClassDeclaration.pos
+                // is at `class` (parseExportDeclaration delegated after consuming
+                // `export`), so scan backward to locate the `export`.
+                if (!atTopLevel && ModifierFlag.Export in stmt.modifiers) {
+                    val exportPos = findKeywordPosBackward(source, stmt.pos, "export") ?: stmt.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Modifiers cannot appear here.",
+                        category = DiagnosticCategory.Error,
+                        code = 1184,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = exportPos,
+                        length = 6, // "export"
+                    ))
+                }
+                // Class methods/getters/setters/constructors have function bodies
+                // — namespace declarations inside them are not at the top level.
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.let { b ->
+                            walkSiblingsForTopLevel(b.statements, source, fileName, atTopLevel = false)
+                        }
+                        is Constructor -> member.body?.let { b ->
+                            walkSiblingsForTopLevel(b.statements, source, fileName, atTopLevel = false)
+                        }
+                        is GetAccessor -> member.body?.let { b ->
+                            walkSiblingsForTopLevel(b.statements, source, fileName, atTopLevel = false)
+                        }
+                        is SetAccessor -> member.body?.let { b ->
+                            walkSiblingsForTopLevel(b.statements, source, fileName, atTopLevel = false)
+                        }
+                        else -> {}
+                    }
                 }
             }
             is Block -> {
-                for (inner in stmt.statements) {
-                    walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
-                }
+                walkSiblingsForTopLevel(stmt.statements, source, fileName, atTopLevel = false)
             }
             is IfStatement -> {
                 walkNamespaceTopLevel(stmt.thenStatement, source, fileName, atTopLevel = false)
@@ -54314,27 +54563,6 @@ interface DataView {
                 stmt.finallyBlock?.statements?.forEach { walkNamespaceTopLevel(it, source, fileName, atTopLevel = false) }
             }
             is LabeledStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
-            is ClassDeclaration -> {
-                // Class methods/getters/setters/constructors have function bodies
-                // — namespace declarations inside them are not at the top level.
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.statements?.forEach {
-                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
-                        }
-                        is Constructor -> member.body?.statements?.forEach {
-                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
-                        }
-                        is GetAccessor -> member.body?.statements?.forEach {
-                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
-                        }
-                        is SetAccessor -> member.body?.statements?.forEach {
-                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
-                        }
-                        else -> {}
-                    }
-                }
-            }
             else -> {}
         }
     }
@@ -74130,6 +74358,11 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // B76.2: TS1473 fires only for .js/.jsx files. For .ts/.tsx,
+            // checkNamespaceTopLevelOnly emits TS1232 (correct code for
+            // nested-block imports) at the same positions.
+            if (fileName.endsWith(".ts") || fileName.endsWith(".tsx") ||
+                fileName.endsWith(".mts") || fileName.endsWith(".cts")) continue
             val source = result.sourceFile.text
             // Walk each top-level statement, recursing into non-module-level constructs.
             for (stmt in result.sourceFile.statements) {
