@@ -17198,11 +17198,19 @@ class Checker(
                     }
                 }
                 is VariableStatement -> {
-                    // B81.2 ext: `declare const c1: { get foo(): typeof c1.foo }` —
-                    // accessor inside a TypeLiteral annotation referencing the var name.
                     for (vdecl in stmt.declarationList.declarations) {
                         val varName = (vdecl.name as? Identifier)?.text ?: continue
-                        val typeLit = vdecl.type as? TypeLiteral ?: continue
+                        val typeAnn = vdecl.type ?: continue
+                        // B81.2 ext (iter15): direct `var X: typeof X` — variable's
+                        // type annotation IS a TypeQuery whose entity name is the same
+                        // identifier. Squiggle on var name (length = identifier text).
+                        if (isDirectSelfTypeQuery(typeAnn, varName)) {
+                            emitTs2502AtPosition(vdecl.name.pos, varName, source, fileName)
+                            continue
+                        }
+                        // B81.2 ext: `declare const c1: { get foo(): typeof c1.foo }` —
+                        // accessor inside a TypeLiteral annotation referencing the var name.
+                        val typeLit = typeAnn as? TypeLiteral ?: continue
                         checkAccessorSelfTypeofInTypeLiteralMembers(
                             typeLit.members, containerName = varName, source = source, fileName = fileName)
                     }
@@ -17374,18 +17382,37 @@ class Checker(
         }
         if (!matches) return
         // Emit at the accessor's name position.
-        val namePos = accessorName.pos
-        val nameLen = nameText.length
+        emitTs2502AtPosition(accessorName.pos, nameText, source, fileName)
+    }
+
+    /**
+     * B81.2 iter15: detect `typeof X` (no qualifier, no type args) where `X` is the
+     * specified [varName]. Used to flag direct self-typeof in `var X: typeof X` shape.
+     */
+    private fun isDirectSelfTypeQuery(type: TypeNode, varName: String): Boolean {
+        if (type !is TypeQuery) return false
+        if (type.typeArguments != null) return false
+        val name = type.exprName as? Identifier ?: return false
+        return name.text == varName
+    }
+
+    /** Emit TS2502 at [namePos] with span [name.length] using shared message format. */
+    private fun emitTs2502AtPosition(
+        namePos: Int,
+        name: String,
+        source: String,
+        fileName: String,
+    ) {
         val (line, character) = getLineAndCharacterOfPosition(source, namePos)
         diagnostics.add(Diagnostic(
-            message = "'$nameText' is referenced directly or indirectly in its own type annotation.",
+            message = "'$name' is referenced directly or indirectly in its own type annotation.",
             category = DiagnosticCategory.Error,
             code = 2502,
             fileName = fileName,
             line = line,
             character = character,
             start = namePos,
-            length = nameLen,
+            length = name.length,
         ))
     }
 
