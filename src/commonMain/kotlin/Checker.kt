@@ -62059,6 +62059,13 @@ interface DataView {
         // narrow tag this would over-fire for every `(a?.b).c` style access. ===
         emitTs2532ForOptionalChainInstantiationReceiver(expr, source, fileName)
 
+        // === B81.1c: TS18048 "'X.Y' is possibly 'undefined'." for non-optional access
+        // on a PropertyAccess receiver whose own property is optional (e.g.
+        // `foo.a.b` where `a?` is optional). Consults loop-aware flow narrowing
+        // so reads INSIDE a loop body see narrowing established at loop entry
+        // (e.g. `if (foo.a) { for(...) { foo.a.b ... } }` suppresses). ===
+        emitTs18048ForOptionalPropertyAccessReceiver(expr, source, fileName)
+
         // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
         if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") {
             if (options.target <= ScriptTarget.ES5) {
@@ -62230,6 +62237,72 @@ interface DataView {
             message = "Object is possibly 'undefined'.",
             category = DiagnosticCategory.Error,
             code = 2532,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * B81.1c: Emit TS18048 "'X.Y' is possibly 'undefined'." for non-optional access
+     * `recv.prop` where `recv` is itself a `PropertyAccessExpression` whose property
+     * is OPTIONAL on its declared object type. Uses the loop-aware narrowing helper
+     * (B81.1a) so reads inside a loop body see narrowing established at loop entry.
+     *
+     * Gates (conservative — narrow scope to avoid the iter12 regressions):
+     *  - strictNullChecks enabled (TS18048 follows the strict-mode gate).
+     *  - Outer access is non-optional (`!questionDotToken`) — `recv?.prop` would
+     *    continue the chain, no diagnostic.
+     *  - Receiver is `PropertyAccessExpression` with non-`?.` token (the `?.` form
+     *    means the chain originated optional; falls under TS18047 territory).
+     *  - Receiver's property's owning symbol is optional (`questionToken` on the
+     *    declaration). Looked up via the receiver-of-receiver's apparent type.
+     *  - After flow narrowing (`getNarrowedTypeForReferenceFollowLoopEntry`)
+     *    the receiver type STILL includes `undefined` — suppression via narrowing
+     *    (e.g. `if (foo.a)` truthy branch) avoids the FP.
+     *
+     * Squiggle: receiver's true text span (covers `foo.a` exactly).
+     */
+    private fun emitTs18048ForOptionalPropertyAccessReceiver(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+    ) {
+        if (!strictNullChecks) return
+        if (expr.questionDotToken) return
+        val recv = expr.expression as? PropertyAccessExpression ?: return
+        if (recv.questionDotToken) return
+        // Resolve receiver-of-receiver's apparent type to find the property symbol.
+        val recvOfRecv = recv.expression
+        val recvOfRecvType = try {
+            getTypeOfExpression(recvOfRecv)
+        } catch (_: StackOverflowError) { return }
+        if (recvOfRecvType === anyType || recvOfRecvType === errorType) return
+        val apparent = try { getApparentType(recvOfRecvType) } catch (_: StackOverflowError) { return }
+        val propSym = getPropertyOfType(apparent, recv.name.text) ?: return
+        if (!isOptionalProperty(propSym)) return
+        // Compute the receiver's declared type as `propType | undefined`, then
+        // consult loop-aware flow narrowing. If undefined survives narrowing,
+        // emit the diagnostic.
+        val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return }
+        if (propType === anyType || propType === errorType) return
+        val declaredWithUndef = if (typeIncludesExplicitUndefined(propType)) propType
+            else getUnionType(listOf(propType, undefinedType))
+        val narrowed = try {
+            getNarrowedTypeForReferenceFollowLoopEntry(declaredWithUndef, recv)
+        } catch (_: StackOverflowError) { return }
+        if (!typeIncludesExplicitUndefined(narrowed)) return
+        // Construct the display path for the receiver (e.g. "foo.a").
+        val display = getReferencePath(recv) ?: return
+        val start = recv.pos
+        val end = recv.name.pos + recv.name.text.length
+        val length = end - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'$display' is possibly 'undefined'.",
+            category = DiagnosticCategory.Error,
+            code = 18048,
             fileName = fileName,
             line = line,
             character = character,
