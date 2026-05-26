@@ -61524,6 +61524,30 @@ interface DataView {
                     // Unannotated param: remove any outer binding so property access falls back to `any`
                     currentLocalTypes.remove(pName)
                 }
+                // B81.1b: contextual param inference for un-annotated function-expression
+                // parameters — mirror the ArrowFunction infrastructure above. When the
+                // FunctionExpression appears as an argument to a CallExpression whose
+                // callee has a single call signature, propagate the corresponding param
+                // type into `currentLocalTypes` so property access checks can find
+                // optional members and emit TS18048 etc.
+                val ctxType = contextualType
+                if (ctxType is Type.Object) {
+                    try {
+                        resolveStructuredTypeMembers(ctxType)
+                        val sigs = ctxType.callSignatures
+                        if (sigs != null && sigs.size == 1) {
+                            val sig = sigs[0]
+                            for ((i, param) in expr.parameters.withIndex()) {
+                                if (param.type != null) continue
+                                if (i >= sig.parameters.size) break
+                                val pName = param.name as? Identifier ?: continue
+                                val pType = try { getTypeOfSymbol(sig.parameters[i]) } catch (_: StackOverflowError) { continue }
+                                if (pType === anyType || pType === errorType) continue
+                                currentLocalTypes[pName.text] = pType
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* circular */ }
+                }
                 val savedCtx = contextualType
                 contextualType = null
                 try {
