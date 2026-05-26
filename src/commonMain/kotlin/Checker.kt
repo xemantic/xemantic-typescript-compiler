@@ -53168,9 +53168,23 @@ interface DataView {
         // 16.4: Explicit type arguments on call expression — instantiate the signature
         val typeArgs = expr.typeArguments
         if (typeArgs != null && typeArgs.isNotEmpty()) {
+            // B57.3d (b): mirror substep (a)'s NewExpression wrap. Save/reset
+            // deepInstantiationBailed around explicit-type-arg resolution; on bail,
+            // record the call expression for deferred TS2589 emission via
+            // [flushDeepBailNewExpressionEmits]. Save/restore so the bail flag does
+            // NOT propagate up (which would over-emit at the enclosing annotation).
+            val savedBail = deepInstantiationBailed
+            val savedMappedInfo = mappedTypeCircularInfo
+            deepInstantiationBailed = false
+            mappedTypeCircularInfo = null
             val resolvedTypeArgs = try {
                 typeArgs.map { getTypeFromTypeNode(it) }
             } catch (_: StackOverflowError) { null }
+            if (deepInstantiationBailed) {
+                recordDeepBailExpression(expr)
+            }
+            mappedTypeCircularInfo = savedMappedInfo
+            deepInstantiationBailed = savedBail
             if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
                 // Find a signature with matching type parameter count
                 val matchingSig = sigs.firstOrNull { sig ->
@@ -71462,6 +71476,14 @@ interface DataView {
      *  (matches TypeScript baselines like `circularInlineMappedGenericTupleTypeNoCrash`).
      *  Dedup by (fileName, pos). */
     private fun recordDeepBailNewExpression(expr: NewExpression) {
+        recordDeepBailExpression(expr)
+    }
+
+    /** B57.3d (b): record any Expression whose explicit-type-arg resolution
+     *  triggered [deepInstantiationBailed]. Generalizes [recordDeepBailNewExpression]
+     *  so the same dedup+deferred-emit infrastructure is shared by NewExpression
+     *  and CallExpression call sites (both have `typeArguments`). */
+    private fun recordDeepBailExpression(expr: Expression) {
         val fileName = currentCheckFileName ?: return
         val start = expr.pos
         if (start < 0) return
