@@ -6460,7 +6460,11 @@ class Checker(
                 collectTypeQueryValueRefs(type.trueType, scope)
                 collectTypeQueryValueRefs(type.falseType, scope)
             }
-            is MappedType -> type.type?.let { collectTypeQueryValueRefs(it, scope) }
+            is MappedType -> {
+                type.type?.let { collectTypeQueryValueRefs(it, scope) }
+                type.nameType?.let { collectTypeQueryValueRefs(it, scope) }
+                type.typeParameter.constraint?.let { collectTypeQueryValueRefs(it, scope) }
+            }
             is IndexedAccessType -> {
                 collectTypeQueryValueRefs(type.objectType, scope)
                 collectTypeQueryValueRefs(type.indexType, scope)
