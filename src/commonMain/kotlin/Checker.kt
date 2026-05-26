@@ -53756,6 +53756,12 @@ interface DataView {
             // (mentions NO TP). Narrow gate — multi-param / TP-in-return / multiple
             // callSigs / ctorSigs all bail.
             if (!isRest && fnTypedParamBareTpMatch(pt, tpsSet) != null) continue
+            // (g) B83.3: multi-param `(x: tp_i, y: tp_j, ...) => <concrete>`
+            // callback. Each slot is either bare-TP-from-tps or fully concrete;
+            // at least one slot must be bare TP. Return-type TP-mentions allowed
+            // in the sig-acceptance gate (per-TP gathering applies the narrower
+            // currentTp gate).
+            if (!isRest && fnTypedParamMultiBareTpMatch(pt, tpsSet) != null) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -53951,7 +53957,14 @@ interface DataView {
                 if (isArrayOfTypeParam(pt, tp)) continue
                 if (isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
                 val isFnTypedOfT = fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
-                if (!isFnTypedOfT) continue
+                // B83.3: multi-param callback fallback. Returns slot list with
+                // the current `tp` appearing in at least one slot; null slots
+                // are concrete params we ignore for THIS tp's candidate gathering.
+                val multiSlots = if (!isFnTypedOfT) {
+                    fnTypedParamMultiBareTpMatch(pt, tpsSet, currentTp = tp)
+                        ?.takeIf { slots -> slots.any { it === tp } }
+                } else null
+                if (!isFnTypedOfT && multiSlots == null) continue
                 val arg = args[i]
                 if (arg is SpreadElement) continue
                 val argParams = when (arg) {
@@ -53959,18 +53972,49 @@ interface DataView {
                     is FunctionExpression -> arg.parameters
                     else -> null
                 } ?: continue
-                if (argParams.size != 1) continue
-                val lp = argParams[0]
-                if (lp.dotDotDotToken) continue
-                if (lp.name !is Identifier) continue
-                val lpTypeNode = lp.type ?: continue
-                val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
-                if (lpType === anyType || lpType === errorType) return null
-                if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                val widened = widenType(lpType)
-                if (!isNamedLikeAtom(widened) &&
-                    !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
-                candidates.add(Candidate(i, widened, null))
+                if (isFnTypedOfT) {
+                    // B83.1 single-param case.
+                    if (argParams.size != 1) continue
+                    val lp = argParams[0]
+                    if (lp.dotDotDotToken) continue
+                    if (lp.name !is Identifier) continue
+                    val lpTypeNode = lp.type ?: continue
+                    val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
+                    if (lpType === anyType || lpType === errorType) return null
+                    if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    val widened = widenType(lpType)
+                    if (!isNamedLikeAtom(widened) &&
+                        !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                    candidates.add(Candidate(i, widened, null))
+                } else {
+                    // B83.3 multi-param case. Match lambda's parameter count to
+                    // the callback shape's parameter count exactly. For each slot
+                    // matching `tp`, gather a candidate from the lambda's
+                    // corresponding annotated param. Bail (continue) on
+                    // un-annotated lambda — B83.4 territory.
+                    val slots = multiSlots!!
+                    if (argParams.size != slots.size) continue
+                    var bailed = false
+                    val newCandidates = mutableListOf<Candidate>()
+                    for ((slotIdx, slotTp) in slots.withIndex()) {
+                        if (slotTp !== tp) continue
+                        val lp = argParams[slotIdx]
+                        if (lp.dotDotDotToken) { bailed = true; break }
+                        if (lp.name !is Identifier) { bailed = true; break }
+                        val lpTypeNode = lp.type
+                        if (lpTypeNode == null) { bailed = true; break }
+                        val lpType = try { getTypeFromTypeNode(lpTypeNode) }
+                            catch (_: StackOverflowError) { return null }
+                        if (lpType === anyType || lpType === errorType) return null
+                        if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                        val widened = widenType(lpType)
+                        if (!isNamedLikeAtom(widened) &&
+                            !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                        newCandidates.add(Candidate(i, widened, null))
+                    }
+                    if (bailed) continue
+                    candidates.addAll(newCandidates)
+                }
             }
             if (candidates.isEmpty()) return null
 
@@ -54191,6 +54235,67 @@ interface DataView {
             // currentTp == null: no return-type TP-mention bail (B83.2 relaxation).
         }
         return pt
+    }
+
+    /**
+     * B83.3 helper: multi-param callback recognition for the B83.1 gate-(f) family.
+     * Accepts an anonymous Type.Object with exactly 1 callSig whose parameters are
+     * each EITHER (a) bare-TP-typed (any TP from [tps]) OR (b) fully concrete
+     * (mention NO TP from [tps]). At least one parameter must be a bare TP.
+     *
+     * Return type follows the same per-currentTp gate as [fnTypedParamBareTpMatch]:
+     * when [currentTp] is provided, only that TP's appearance in the return causes
+     * bail; when null, return-type TP-mentions are accepted (sig-acceptance gate).
+     *
+     * Returns a list mapping each callback parameter slot to either the bare TP
+     * occupying that slot, or null for concrete slots. Returns null when the shape
+     * does NOT match (multi-param with all concrete, single-param shape, ctor-sigs,
+     * named function-types, members present, etc.). The single-param shape is
+     * intentionally NOT matched here — [fnTypedParamBareTpMatch] handles that
+     * case and is checked first at call sites.
+     */
+    private fun fnTypedParamMultiBareTpMatch(
+        type: Type,
+        tps: Set<Type.TypeParam>,
+        currentTp: Type.TypeParam? = null,
+    ): List<Type.TypeParam?>? {
+        if (type !is Type.Object) return null
+        if (type is Type.Interface) return null
+        if (type is Type.Reference) return null
+        if (type.symbol != null) return null
+        if (type.constructSignatures?.isNotEmpty() == true) return null
+        if (type.stringIndexInfo != null || type.numberIndexInfo != null) return null
+        if (type.members?.isNotEmpty() == true) return null
+        val sigs = type.callSignatures ?: return null
+        if (sigs.size != 1) return null
+        val sig = sigs[0]
+        if (sig.parameters.size < 2) return null  // single-param handled by fnTypedParamBareTpMatch
+        val slots = mutableListOf<Type.TypeParam?>()
+        var anyBareTp = false
+        for (sp in sig.parameters) {
+            // Rest params disallowed in this gate — bare-TP would conflict with
+            // rest-of-tp[] anchor positions handled separately.
+            if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) return null
+            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { return null }
+            if (spt is Type.TypeParam && spt in tps) {
+                slots.add(spt)
+                anyBareTp = true
+            } else if (tps.any { typeMentionsTypeParam(spt, it) }) {
+                // Param mentions a TP but is NOT a bare TP (e.g. Array<T>, (x:T)=>U).
+                // Too complex for this gate; bail.
+                return null
+            } else {
+                slots.add(null)  // fully concrete slot
+            }
+        }
+        if (!anyBareTp) return null
+        val rt = sig.resolvedReturnType ?: return null
+        if (rt !== voidType) {
+            if (currentTp != null) {
+                if (typeMentionsTypeParam(rt, currentTp)) return null
+            }
+        }
+        return slots
     }
 
     /**
