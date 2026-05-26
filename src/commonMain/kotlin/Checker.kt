@@ -324,6 +324,14 @@ class Checker(
      *  and sets [deepInstantiationBailed] so outer call sites can emit TS2589. */
     private var mappedTypeResolutionDepth: Int = 0
 
+    /** B57.3c: when [getTypeFromMappedType] bails at depth, capture the OUTERMOST
+     *  mapped type's first key + the bailed mapped-type display string (e.g.
+     *  `("M", "{ [P in \"M\"]: any; }")`). Consumers emit TS2615 "Type of property
+     *  'M' circularly references itself in mapped type '{...}'." alongside TS2589.
+     *  The pair is set only at the outermost depth=1 entry and cleared by the
+     *  consumer after emission. */
+    private var mappedTypeCircularInfo: Pair<String, String>? = null
+
     /** B50.2: Alias-name display preservation for B50.1-substituted types. Maps a
      *  freshly-allocated Type's id (from the substitution path's `getTypeFromTypeNode`
      *  call) to the alias name + resolved type args, so [typeToString] can render
@@ -2430,14 +2438,24 @@ class Checker(
                         // unlike generic-alias declarations they have no later "use" to
                         // attribute the diagnostic to.
                         val savedBail = deepInstantiationBailed
+                        val savedMappedInfo = mappedTypeCircularInfo
                         deepInstantiationBailed = false
+                        mappedTypeCircularInfo = null
                         val type = getTypeOfSymbol(symbol)
                         val taDecl = if (symbol.flags.hasAny(SymbolFlags.TypeAlias))
                             symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                             else null
                         if (deepInstantiationBailed && taDecl != null && taDecl.typeParameters.isNullOrEmpty()) {
                             emitTs2589AtTypeNode(taDecl.type, source, fileName)
+                            // B57.3c: pair TS2615 alongside TS2589 when the bail
+                            // originated in a mapped-type recursion that produced
+                            // a "circular self-reference" shape.
+                            val info = mappedTypeCircularInfo
+                            if (info != null) {
+                                emitTs2615AtTypeNode(taDecl.type, info.first, info.second, source, fileName)
+                            }
                         }
+                        mappedTypeCircularInfo = savedMappedInfo
                         deepInstantiationBailed = savedBail
                         if (type !== anyType && type !== errorType) {
                             typeMap[name] = type
@@ -2460,11 +2478,20 @@ class Checker(
                             // Save flag, reset, resolve. If bail fires, emit TS2589 at
                             // annotation position.
                             val savedBail = deepInstantiationBailed
+                            val savedMappedInfo = mappedTypeCircularInfo
                             deepInstantiationBailed = false
+                            mappedTypeCircularInfo = null
                             val type = getTypeOfSymbol(symbol)
                             if (deepInstantiationBailed) {
                                 emitTs2589AtTypeNode(annotation, source, fileName)
+                                // B57.3c: pair TS2615 alongside TS2589 when the bail
+                                // originated in a mapped-type recursion.
+                                val info = mappedTypeCircularInfo
+                                if (info != null) {
+                                    emitTs2615AtTypeNode(annotation, info.first, info.second, source, fileName)
+                                }
                             }
+                            mappedTypeCircularInfo = savedMappedInfo
                             deepInstantiationBailed = savedBail
                             if (type !== anyType && type !== errorType) {
                                 typeMap[name] = type
@@ -70359,6 +70386,11 @@ interface DataView {
             else -> return anyType // Can't enumerate keys for non-literal constraints
         }
         if (keys.isEmpty()) return anyType
+        val isOutermost = mappedTypeResolutionDepth == 0
+        // B57.3c: capture bail-flag transition at the outermost mapped-type call so
+        // we can record TS2615 circular-property info only when the bail actually
+        // originates inside this mapped type's body resolution.
+        val savedBailAtEntry = deepInstantiationBailed
         mappedTypeResolutionDepth++
         try {
             // Build the mapped object type
@@ -70381,6 +70413,22 @@ interface DataView {
             }
             result.members = members
             result.properties = properties
+            // B57.3c: at the outermost mapped-type level, if the bail flag was raised
+            // inside body resolution (and wasn't already set on entry), record info
+            // about THIS mapped type so the alias-body consumer can emit TS2615
+            // ("Type of property 'X' circularly references itself in mapped type '...'.").
+            // Display: `{ [P in "K1" | "K2" | ...]: any; }` — readonly/optional modifiers
+            // are not yet plumbed through; matches the simple test cases like
+            // `recursivelyExpandingUnionNoStackoverflow_ts`.
+            if (isOutermost && deepInstantiationBailed && !savedBailAtEntry &&
+                mappedTypeCircularInfo == null) {
+                val firstKey = keys.first()
+                val paramName = typeParamName
+                val keyDisplay = if (keys.size == 1) "\"${keys[0]}\""
+                    else keys.joinToString(" | ") { "\"$it\"" }
+                val display = "{ [$paramName in $keyDisplay]: any; }"
+                mappedTypeCircularInfo = firstKey to display
+            }
             return result
         } finally {
             mappedTypeResolutionDepth--
@@ -71264,6 +71312,34 @@ interface DataView {
         if (sourceType == "string" && targetType == "object") return false
         // Otherwise, different primitive types are not assignable
         return false
+    }
+
+    /** B57.3c: emit TS2615 "Type of property 'X' circularly references itself in mapped
+     *  type '...'." at the same span as the paired TS2589, using the captured
+     *  [mappedTypeCircularInfo]. Span computed identically to [emitTs2589AtTypeNode]. */
+    private fun emitTs2615AtTypeNode(node: TypeNode, propertyName: String, mappedTypeDisplay: String, source: String, fileName: String) {
+        val startPos = node.pos
+        if (startPos < 0 || startPos >= source.length) return
+        var endPos = node.end.coerceAtMost(source.length)
+        while (endPos > startPos) {
+            val ch = source[endPos - 1]
+            if (ch == '>' || ch == ']') break
+            if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' ||
+                ch == ';' || ch == ',' || ch == ')' || ch == '=') endPos--
+            else break
+        }
+        val length = (endPos - startPos).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+        diagnostics.add(Diagnostic(
+            message = "Type of property '$propertyName' circularly references itself in mapped type '$mappedTypeDisplay'.",
+            category = DiagnosticCategory.Error,
+            code = 2615,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = startPos,
+            length = length,
+        ))
     }
 
     /** B57.1: emit TS2589 "Type instantiation is excessively deep" at a TypeNode's span.
