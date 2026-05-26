@@ -977,6 +977,9 @@ class Checker(
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
         checkOverloadSignatureCompatibility()
+        // 64h2. B76.1: TS1235 — namespace declarations only allowed at the top
+        // level of a namespace or module (not inside function bodies, blocks, etc.).
+        checkNamespaceTopLevelOnly()
         // 64i. Check static members referencing class type parameters (TS2302)
         checkStaticMembersReferenceTypeParams()
         // 65. Check invalid assignment targets (TS2364)
@@ -54216,6 +54219,123 @@ interface DataView {
                 is LabeledStatement -> checkOverloadsInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // B76.1: TS1235 — namespace declaration only allowed at top level
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS1235: "A namespace declaration is only allowed at the top level of a
+     * namespace or module."
+     *
+     * Fires for `namespace X { ... }` (and the deprecated `module X { ... }`
+     * identifier form) when found inside a non-top-level lexical context —
+     * function bodies, blocks, control-flow constructs, etc. The top-level of
+     * a file and the bodies of other namespace declarations are allowed.
+     */
+    private fun checkNamespaceTopLevelOnly() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Top-level statements: recurse into namespace bodies (still top-level
+            // for this purpose), but flag any namespace found via the non-top
+            // recursion path.
+            for (stmt in result.sourceFile.statements) {
+                walkNamespaceTopLevel(stmt, source, fileName, atTopLevel = true)
+            }
+        }
+    }
+
+    private fun walkNamespaceTopLevel(stmt: Statement, source: String, fileName: String, atTopLevel: Boolean) {
+        when (stmt) {
+            is ModuleDeclaration -> {
+                // Ambient `declare namespace X { }` is allowed anywhere (e.g.
+                // module augmentations and ambient blocks may nest). Skip when
+                // declare modifier is present.
+                val isAmbient = ModifierFlag.Declare in stmt.modifiers ||
+                    stmt.body == null
+                // String-literal-named modules (`declare module "X" { }`) are
+                // ambient and handled separately — skip.
+                val isStringModule = stmt.name is StringLiteralNode
+                if (!atTopLevel && !isAmbient && !isStringModule) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "A namespace declaration is only allowed at the top level of a namespace or module.",
+                        category = DiagnosticCategory.Error,
+                        code = 1235,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmt.pos,
+                        length = 9, // "namespace" keyword length (also matches "module" baselines via the deprecated form being length 6 — TS1235 baselines consistently squiggle the keyword; tests in the live corpus all use `namespace`)
+                    ))
+                }
+                // Recurse into body — namespace bodies are "top level" for nested namespaces.
+                (stmt.body as? ModuleBlock)?.let { block ->
+                    for (inner in block.statements) {
+                        walkNamespaceTopLevel(inner, source, fileName, atTopLevel = true)
+                    }
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.let { body ->
+                for (inner in body.statements) {
+                    walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+                }
+            }
+            is Block -> {
+                for (inner in stmt.statements) {
+                    walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+                }
+            }
+            is IfStatement -> {
+                walkNamespaceTopLevel(stmt.thenStatement, source, fileName, atTopLevel = false)
+                stmt.elseStatement?.let { walkNamespaceTopLevel(it, source, fileName, atTopLevel = false) }
+            }
+            is ForStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is ForInStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is ForOfStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is WhileStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is DoStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is SwitchStatement -> {
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> for (inner in clause.statements) walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+                        is DefaultClause -> for (inner in clause.statements) walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                for (inner in stmt.tryBlock.statements) walkNamespaceTopLevel(inner, source, fileName, atTopLevel = false)
+                stmt.catchClause?.block?.statements?.forEach { walkNamespaceTopLevel(it, source, fileName, atTopLevel = false) }
+                stmt.finallyBlock?.statements?.forEach { walkNamespaceTopLevel(it, source, fileName, atTopLevel = false) }
+            }
+            is LabeledStatement -> walkNamespaceTopLevel(stmt.statement, source, fileName, atTopLevel = false)
+            is ClassDeclaration -> {
+                // Class methods/getters/setters/constructors have function bodies
+                // — namespace declarations inside them are not at the top level.
+                for (member in stmt.members) {
+                    when (member) {
+                        is MethodDeclaration -> member.body?.statements?.forEach {
+                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
+                        }
+                        is Constructor -> member.body?.statements?.forEach {
+                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
+                        }
+                        is GetAccessor -> member.body?.statements?.forEach {
+                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
+                        }
+                        is SetAccessor -> member.body?.statements?.forEach {
+                            walkNamespaceTopLevel(it, source, fileName, atTopLevel = false)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            else -> {}
         }
     }
 
