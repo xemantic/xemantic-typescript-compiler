@@ -53750,6 +53750,12 @@ interface DataView {
             if (!isRest && tps.any { isArrayOfTypeParam(pt, it) }) continue
             // (e) 17.38: anonymous Type.Object with all members typed as some tp_i
             if (!isRest && isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
+            // (f) B83.1: bare `(x: tp_i) => <concrete>` function-typed param.
+            // Anonymous Type.Object with exactly 1 callSig, single bare-TP-typed
+            // Identifier param, return type either voidType OR fully concrete
+            // (mentions NO TP). Narrow gate — multi-param / TP-in-return / multiple
+            // callSigs / ctorSigs all bail.
+            if (!isRest && fnTypedParamBareTpMatch(pt, tpsSet) != null) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -53779,7 +53785,12 @@ interface DataView {
                 // values for members typed as the current `tp`.
                 val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
                     isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT) continue
+                // B83.1 gate (f): bare `(x: tp) => <concrete>` function-typed param.
+                // Inference candidate comes from arg's `(x: <annotated>) => ...` callback
+                // — specifically the annotated type of the callback's single Identifier param.
+                val isFnTypedOfT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                    fnTypedParamBareTpMatch(pt, tpsSet) === tp
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -53822,6 +53833,34 @@ interface DataView {
                             (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
                         if (!isNamedLike) return null
                         candidates.add(Candidate(ai, argType, null, fromObjLit = true))
+                        continue
+                    }
+                    // B83.1 gate (f) candidate extraction: arg's callback supplies tp via
+                    // its single Identifier-named parameter's type annotation. Bail when
+                    // arg is not an ArrowFunction/FunctionExpression, when the callback's
+                    // arity or shape doesn't match, when the lambda's param lacks an
+                    // annotation, or when the annotated type fails to resolve cleanly
+                    // (anyType/errorType/null/undefined/void). Skip the standard rawArgType
+                    // path because lambda exprs typically have anonymous Type.Object types
+                    // that the named-like gate below would reject.
+                    if (isFnTypedOfT) {
+                        val argParams = when (arg) {
+                            is ArrowFunction -> arg.parameters
+                            is FunctionExpression -> arg.parameters
+                            else -> null
+                        } ?: continue
+                        if (argParams.size != 1) continue
+                        val lp = argParams[0]
+                        if (lp.dotDotDotToken) continue
+                        if (lp.name !is Identifier) continue
+                        val lpTypeNode = lp.type ?: continue
+                        val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
+                        if (lpType === anyType || lpType === errorType) return null
+                        if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                        val widened = widenType(lpType)
+                        if (!isNamedLikeAtom(widened) &&
+                            !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                        candidates.add(Candidate(ai, widened, null))
                         continue
                     }
                     // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
@@ -54049,6 +54088,42 @@ interface DataView {
             // else: concrete member (no TP mention) — OK, will be skipped during gathering.
         }
         return hasTpMember
+    }
+
+    /**
+     * B83.1 helper: returns the matched `Type.TypeParam` when [type] is an
+     * anonymous function-typed shape `(x: tp_i) => <concrete>` where `tp_i ∈ [tps]`.
+     * Specifically: Type.Object with exactly ONE callSignature, no constructSignatures,
+     * no other members/index sigs/symbol, where the single callSig has exactly ONE
+     * parameter whose type is a bare `Type.TypeParam ∈ tps`, AND the return type
+     * is either `voidType` OR fully concrete (mentions NO TP in [tps]).
+     *
+     * Used by gate (f) of [tryInferSingleTypeParamFromArgs] to allow inference of
+     * `tp_i` from the matching arg's `(x: <annotated>) => ...` callback shape
+     * (the callback's parameter annotation supplies the inference candidate).
+     *
+     * Returns null when shape doesn't match — narrow gate by design: multi-param
+     * callbacks, TP-in-return, multiple call/construct sigs, named function-type
+     * aliases (Type.Interface / Reference), or callbacks where the inner param
+     * is not a bare TP all fail this gate.
+     */
+    private fun fnTypedParamBareTpMatch(type: Type, tps: Set<Type.TypeParam>): Type.TypeParam? {
+        if (type !is Type.Object) return null
+        if (type is Type.Interface) return null
+        if (type is Type.Reference) return null
+        if (type.symbol != null) return null
+        if (type.constructSignatures?.isNotEmpty() == true) return null
+        if (type.stringIndexInfo != null || type.numberIndexInfo != null) return null
+        if (type.members?.isNotEmpty() == true) return null
+        val sigs = type.callSignatures ?: return null
+        if (sigs.size != 1) return null
+        val sig = sigs[0]
+        if (sig.parameters.size != 1) return null
+        val pt = try { getTypeOfSymbol(sig.parameters[0]) } catch (_: StackOverflowError) { return null }
+        if (pt !is Type.TypeParam || pt !in tps) return null
+        val rt = sig.resolvedReturnType ?: return null
+        if (rt !== voidType && tps.any { typeMentionsTypeParam(rt, it) }) return null
+        return pt
     }
 
     /**
