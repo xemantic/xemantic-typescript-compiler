@@ -3884,6 +3884,41 @@ class Checker(
                 type.parameters.forEach { p -> p.type?.let { collectInferDecls(it, out) } }
                 collectInferDecls(type.type, out)
             }
+            // Iter9 walker parity: mirror sibling walkers (walkUnusedInferInTypeNode,
+            // collectTypeReferenceNames) to cover constructor types, type literals,
+            // mapped types, type operators, rest/optional tuple elements, and
+            // conditional types. Without these branches an `infer X` inside e.g.
+            // `infer R extends new (...args) => infer U` would be missed during
+            // declaration collection, silently dropping TS6133 candidates.
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { collectInferDecls(it, out) } }
+                collectInferDecls(type.type, out)
+            }
+            is TypeLiteral -> {
+                for (m in type.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { collectInferDecls(it, out) }
+                    is MethodDeclaration -> {
+                        m.type?.let { collectInferDecls(it, out) }
+                        for (p in m.parameters) p.type?.let { collectInferDecls(it, out) }
+                    }
+                    is IndexSignature -> m.type?.let { collectInferDecls(it, out) }
+                    else -> {}
+                }
+            }
+            is MappedType -> {
+                type.type?.let { collectInferDecls(it, out) }
+                type.nameType?.let { collectInferDecls(it, out) }
+                type.typeParameter.constraint?.let { collectInferDecls(it, out) }
+            }
+            is TypeOperator -> collectInferDecls(type.type, out)
+            is RestType -> collectInferDecls(type.type, out)
+            is OptionalType -> collectInferDecls(type.type, out)
+            // Intentionally NOT walking ConditionalType here: nested conditionals
+            // introduce their own infer-scope (each conditional's extends clause is
+            // an isolated scope). Outer walker handles top-level conditional via
+            // [walkUnusedInferInTypeNode]; if a nested conditional appears inside an
+            // extendsType, its own `infer X` declarations belong to that inner
+            // conditional, not the outer one we're collecting for.
             else -> {}
         }
     }
@@ -3920,6 +3955,28 @@ class Checker(
                 type.nameType?.let { collectTypeReferenceNames(it, out) }
                 type.typeParameter.constraint?.let { collectTypeReferenceNames(it, out) }
             }
+            // Iter9 walker parity: cover constructor types, type literals, rest /
+            // optional tuple elements. Reference-name collection for TS6133 must
+            // see ALL references in the trueType — an `infer R` used inside e.g.
+            // `infer R extends new (...args) => R` or `{ value: R }` would
+            // otherwise be miscounted as unused.
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { collectTypeReferenceNames(it, out) } }
+                collectTypeReferenceNames(type.type, out)
+            }
+            is TypeLiteral -> {
+                for (m in type.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { collectTypeReferenceNames(it, out) }
+                    is MethodDeclaration -> {
+                        m.type?.let { collectTypeReferenceNames(it, out) }
+                        for (p in m.parameters) p.type?.let { collectTypeReferenceNames(it, out) }
+                    }
+                    is IndexSignature -> m.type?.let { collectTypeReferenceNames(it, out) }
+                    else -> {}
+                }
+            }
+            is RestType -> collectTypeReferenceNames(type.type, out)
+            is OptionalType -> collectTypeReferenceNames(type.type, out)
             else -> {}
         }
     }
