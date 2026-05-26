@@ -26742,8 +26742,15 @@ interface DataView {
                 // Constructor overload without body — check if a constructor WITH body follows
                 val hasImpl = members.subList(i + 1, members.size).any { it is Constructor && it.body != null }
                 if (!hasImpl) {
-                    // Emit TS2390 on the "constructor" keyword span
-                    emitTS2390(member, source, fileName)
+                    // TypeScript emits TS2390 ONLY on the LAST constructor in the overload group
+                    // (the implementation would be expected to immediately follow it).
+                    // Skip emission if a subsequent member is another bodyless Constructor.
+                    val isLastBodylessCtor = members.subList(i + 1, members.size)
+                        .none { it is Constructor && it.body == null }
+                    if (isLastBodylessCtor) {
+                        // Emit TS2390 on the "constructor" keyword span
+                        emitTS2390(member, source, fileName)
+                    }
                 }
             } else if (member is MethodDeclaration) {
                 val name = when (val n = member.name) {
