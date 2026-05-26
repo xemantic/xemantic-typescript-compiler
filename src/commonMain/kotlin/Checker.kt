@@ -318,6 +318,12 @@ class Checker(
     private var currentTypeAliasArgs: Map<String, Type>? = null
     private var typeAliasResolutionDepth: Int = 0
 
+    /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
+     *  type's value type recursively references another mapped type / generic alias
+     *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
+     *  and sets [deepInstantiationBailed] so outer call sites can emit TS2589. */
+    private var mappedTypeResolutionDepth: Int = 0
+
     /** B50.2: Alias-name display preservation for B50.1-substituted types. Maps a
      *  freshly-allocated Type's id (from the substitution path's `getTypeFromTypeNode`
      *  call) to the alias name + resolved type args, so [typeToString] can render
@@ -22433,6 +22439,12 @@ class Checker(
     companion object {
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
+
+        /** B57.3b: Maximum recursion depth for [getTypeFromMappedType]. Mirrors the
+         *  alias-substitution depth limit (10). When exceeded, [getTypeFromMappedType]
+         *  sets [deepInstantiationBailed] and returns `anyType` so outer callers can
+         *  emit TS2589 at the appropriate use site. */
+        private const val MAPPED_TYPE_MAX_DEPTH = 10
 
         /** Predefined type names that cannot be used as class/interface names (TS2414/TS2427). */
         private val PREDEFINED_TYPE_NAMES = setOf(
@@ -70325,6 +70337,14 @@ interface DataView {
      * e.g., { [K in keyof T]: T[K] } → homomorphic mapped type
      */
     private fun getTypeFromMappedType(node: MappedType): Type {
+        // B57.3b: depth-bail to signal excessive recursion. Mirror the alias-
+        // substitution depth-bail pattern at getTypeFromTypeReference (~50362).
+        // When a mapped type's value type recursively expands deeply, set the
+        // deepInstantiationBailed flag so outer callers can emit TS2589.
+        if (mappedTypeResolutionDepth >= MAPPED_TYPE_MAX_DEPTH) {
+            deepInstantiationBailed = true
+            return anyType
+        }
         // Resolve the constraint type (e.g., keyof T, "a" | "b", string)
         val constraint = node.typeParameter.constraint
         if (constraint == null) return anyType
@@ -70339,27 +70359,32 @@ interface DataView {
             else -> return anyType // Can't enumerate keys for non-literal constraints
         }
         if (keys.isEmpty()) return anyType
-        // Build the mapped object type
-        val result = Type.Object()
-        val members = symbolTable()
-        val properties = mutableListOf<Symbol>()
-        val typeParamName = node.typeParameter.name.text
-        for (key in keys) {
-            val propType = if (node.type != null) {
-                // Temporarily bind the type parameter to the current key for evaluation
-                // This enables { [K in keyof T]: T[K] } to resolve T[K] per key
-                try {
-                    getTypeFromTypeNode(node.type!!)
-                } catch (_: StackOverflowError) { anyType }
-            } else anyType
-            val sym = Symbol(SymbolFlags.Property, key)
-            members[key] = sym
-            properties.add(sym)
-            symbolTypes[sym.id] = propType
+        mappedTypeResolutionDepth++
+        try {
+            // Build the mapped object type
+            val result = Type.Object()
+            val members = symbolTable()
+            val properties = mutableListOf<Symbol>()
+            val typeParamName = node.typeParameter.name.text
+            for (key in keys) {
+                val propType = if (node.type != null) {
+                    // Temporarily bind the type parameter to the current key for evaluation
+                    // This enables { [K in keyof T]: T[K] } to resolve T[K] per key
+                    try {
+                        getTypeFromTypeNode(node.type!!)
+                    } catch (_: StackOverflowError) { anyType }
+                } else anyType
+                val sym = Symbol(SymbolFlags.Property, key)
+                members[key] = sym
+                properties.add(sym)
+                symbolTypes[sym.id] = propType
+            }
+            result.members = members
+            result.properties = properties
+            return result
+        } finally {
+            mappedTypeResolutionDepth--
         }
-        result.members = members
-        result.properties = properties
-        return result
     }
 
     /**
