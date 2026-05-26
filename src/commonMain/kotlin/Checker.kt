@@ -17168,7 +17168,90 @@ class Checker(
             checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
             // B61.6: cross-interface-declaration TS2717 for method-vs-property merge conflict
             checkCrossInterfacePropertyConflict(result.sourceFile.statements, source, fileName)
+            // B81.2: accessor return type `typeof this.<sameName>` is a TS2502
+            // self-referential annotation. Walks class declarations recursively.
+            checkAccessorSelfTypeofInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * B81.2: emit TS2502 for `get foo(): typeof this.foo` (and symmetric
+     * setter parameter) — accessor whose annotation is `typeof this.<same name>`.
+     * Squiggle: accessor name. Pattern is narrow — only matches the exact
+     * `typeof this.X` shape where X equals the accessor name AND the access
+     * has no further qualification or type arguments.
+     *
+     * Covers: `circularGetAccessor.ts` (both noimplicitany variants).
+     */
+    private fun checkAccessorSelfTypeofInStatements(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> checkAccessorSelfTypeofInClass(stmt, source, fileName)
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) {
+                        checkAccessorSelfTypeofInStatements(body.statements, source, fileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkAccessorSelfTypeofInClass(
+        cls: ClassDeclaration,
+        source: String,
+        fileName: String,
+    ) {
+        for (member in cls.members) {
+            when (member) {
+                is GetAccessor -> emitTs2502ForSelfTypeofAccessor(member.name, member.type, source, fileName)
+                is SetAccessor -> {
+                    // Setter param annotation: `set foo(v: typeof this.foo)`.
+                    val paramType = member.parameters.firstOrNull()?.type
+                    emitTs2502ForSelfTypeofAccessor(member.name, paramType, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun emitTs2502ForSelfTypeofAccessor(
+        accessorName: NameNode,
+        type: TypeNode?,
+        source: String,
+        fileName: String,
+    ) {
+        if (type !is TypeQuery) return
+        if (type.typeArguments != null) return
+        val expr = type.exprName
+        if (expr !is QualifiedName) return
+        val left = expr.left
+        if (left !is Identifier || left.text != "this") return
+        val nameText = when (accessorName) {
+            is Identifier -> accessorName.text
+            is StringLiteralNode -> accessorName.text
+            else -> return
+        }
+        if (expr.right.text != nameText) return
+        // Emit at the accessor's name position.
+        val namePos = accessorName.pos
+        val nameLen = nameText.length
+        val (line, character) = getLineAndCharacterOfPosition(source, namePos)
+        diagnostics.add(Diagnostic(
+            message = "'$nameText' is referenced directly or indirectly in its own type annotation.",
+            category = DiagnosticCategory.Error,
+            code = 2502,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = namePos,
+            length = nameLen,
+        ))
     }
 
     /**
