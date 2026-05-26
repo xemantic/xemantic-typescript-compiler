@@ -118,6 +118,27 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-26 (round 49 iter18, recon-only, 8977 / 10078 unchanged).** /goal loop iter18 after B78.2 (+1). Verified baseline 8977 via awk on full-suite XMLs at entry. `find_candidates.py --fresh` returned 0/0/0 (filtered from 2/37/8). Surveyed non-fresh pool methodically:
+
+- **EXTRA DIAGS (2 candidates, both architectural)**:
+  - `moduleAugmentationsImports4_ts`: FP TS2339 for `getB`/`getCls`. Augmentation lives in nested `module "D" { module "a" { interface A { getB(): B; } } }` shape — requires cross-file module-augmentation propagation through nested-module-decl walker. Blocker #3 territory.
+  - `implementArrayInterface_ts`: FP TS2416 for `filter`/`every` + TS2420 for missing modern Array methods (`find`/`findIndex`/`fill`/`copyWithin` etc.). Root cause is the known **lib-version-aware subsetting** gotcha — `@target: es2015` should restrict the Array surface but our embedded lib carries ES2022+ methods. Confirmed-architectural.
+
+- **MISSING DIAGS (37, top spot-checks)**:
+  - `awaitedTypeNoLib_ts`: needs TS2304 for `PromiseLike` (no-lib path doesn't suppress KNOWN_GLOBALS check, but real-issue is line 2 TS2345 with 6-line conditional/distributive chain — both required for flip).
+  - `noStrictGenericChecks_ts`: TS2322 chain "T could be instantiated with arbitrary type..." for callable-Type.Object pairs with distinct TypeParams — strict-generic-checks bivariant check on call-signature comparison. Blocker #2-adjacent.
+  - `varianceAnnotationValidation_ts`: needs `out T`/`in T` variance annotation parsing + TS2636 validator walker — feature scale.
+  - `jsFunctionWithPrototypeNoErrorTruncationNoCrash_ts`: JS prototype-class TS2339 — JSDoc/CheckJS blocker.
+  - `inferFromGenericFunctionReturnTypes1_ts`, `recursiveTypeRelations_ts`, `quickIntersectionCheckCorrectlyCachesErrors_ts`: all generic-inference Blocker #2.
+
+- **CODE SWAPS (8, all architectural)**:
+  - `arrayAssignmentTest4_ts`: SWAP "25 more" → "29 more" — exact lib-version-subsetting gotcha pattern (per CLAUDE.md guidance: skip).
+  - `unionTypeWithRecursiveSubtypeReduction3_ts`: recursive type display loses `{ prop: number }` expansion — recursive-alias display Blocker.
+  - `elaboratedErrorsOnNullableTargets01_ts`: requires (a) target-union normalization to put null/undefined last AND (b) emit second TS2322 for `y = x` reverse direction. Two pieces.
+  - `deeplyNestedAssignabilityErrorsCombined_ts`, `namespaceDisambiguationInUnion_ts`, `newMap_ts`, `relationComplexityError_ts`, `contextualTupleTypeParameterReadonly_ts`: all need infra (typeof-class-value display, namespace-qualified union display, lib Map-constructor overload, TS2859 excessive-complexity, contextual-tuple inference).
+
+**Decision**: pool genuinely dry, all candidates confirmed architectural/feature-scale. No new infra has landed since iter17's audit of the same pool. Per anti-loop rule check: last 10 commits show real feature work (B78.1 +2, B78.2 +1, B76.2 +3, B72.1 +1, B73.1 +1, B71.1 +1, plus infra commits) — no consecutive-empty-pool pattern to break. No Blocker substep ready to promote that hasn't been recently attempted (B57.3 parser-gap blocked, B59.x interning complete to safe limits, B72.x narrow-gate done). Single-commit deliverable: this recon doc so the next agent sees iter18's spot-check results matched iter17's conclusion (no new tractable adjacency emerged across one full iter cycle).
+
 **Session 2026-05-26 (B78.2 TS2454 outer-let leak into nested function bodies, round 49 iter16, +1 → 8977 / 10078).** /goal iter16 with baseline 8976. Hunted adjacency to B78.1 (TS2454 co-emit with TS2448 for unreachable-decl const). Surveyed failing tests with TS2454 in their `<failure>` diffs; selected `unusedLocalsInMethod4_ts` which had 10 MISSING TS2454 emissions all matching the same pattern: `function f() { let x: T; function inner() { ...x...; } }` — TypeScript fires TS2454 for nested-function reads of outer-scope uninitialized `let` vars when no assignment exists anywhere in the outer function's body (including in other sibling nested functions).
 
 - **Root cause**: `checkDefiniteAssignmentInNestedScopes` recurses into nested function bodies but starts each with an empty `uninitialized` set — so nested reads of an outer-scope captured-but-unassigned `let` are never flagged.
