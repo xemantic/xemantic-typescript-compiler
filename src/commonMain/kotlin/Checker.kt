@@ -50240,7 +50240,23 @@ interface DataView {
                 // resolve the property's declared type with the class's type parameters in
                 // scope, then apply the type mapper. This produces the correctly instantiated
                 // prop type (e.g. `T → string` for `new Test1<string>()`).
+                // B82.1-ext (iter8): When receiver is a class instance (Type.Interface,
+                // not Reference) and the resolved property comes from a GENERIC base
+                // (e.g. `class D extends C<string>` writing `d.x = v` where `x` is
+                // declared on `C<T>`), use findInheritedBaseRef + resolveGenericPropertyType
+                // to substitute the base's type args into the property's type. Mirrors
+                // the pattern from getTypeOfPropertyAccess (Checker.kt:~54400).
+                // Gate: prop.parent must differ from objType.symbol (only inherited members).
+                val inheritedResolved: Type? = if (objType is Type.Interface && objType !is Type.Reference) {
+                    val propParent = propSym.parent
+                    if (propParent != null && propParent !== objType.symbol) {
+                        findInheritedBaseRef(objType, propParent)?.let { baseRef ->
+                            resolveGenericPropertyType(baseRef, propSym)
+                        }
+                    } else null
+                } else null
                 val resolved = setterResolvedType?.takeIf { it !== anyType && it !== errorType }
+                    ?: inheritedResolved
                     ?: resolveGenericPropertyType(objType, propSym) ?: getTypeOfSymbol(propSym)
                 if (resolved === anyType || resolved === errorType) return
                 propType = resolved
