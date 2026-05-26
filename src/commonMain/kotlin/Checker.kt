@@ -68010,6 +68010,39 @@ interface DataView {
                 val header = "  Call signature return types '$srcDisp' and '$tgtDisp' are incompatible."
                 return listOf(header) + nested.map { "  $it" }
             }
+            // B75.3: When return types are same-target generic references (e.g. both
+            // `Array<U>` / `ReadonlyArray<U>`) with differing args whose deeper chain
+            // can be elaborated, append the drill-in. Matches TypeScript's `concat(...)`
+            // chain for Array-derived → ReadonlyArray<T> tests, which surfaces the
+            // missing-required-property line at element depth.
+            val srcRefRet = sourceReturn as? Type.Reference
+            val tgtRefRet = targetReturn as? Type.Reference
+            if (srcRefRet != null && tgtRefRet != null &&
+                srcRefRet.target === tgtRefRet.target) {
+                val sArgs = srcRefRet.resolvedTypeArguments
+                val tArgs = tgtRefRet.resolvedTypeArguments
+                if (sArgs != null && tArgs != null && sArgs.size == tArgs.size) {
+                    val header = "  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'."
+                    for (i in sArgs.indices) {
+                        if (!checkTypeRelatedTo(sArgs[i], tArgs[i], assignableRelation)) {
+                            val sa = sArgs[i]
+                            val ta = tArgs[i]
+                            if (sa is Type.Object && ta is Type.Object) {
+                                val deeper = getPropertyElaborationChain(sa, ta, "")
+                                if (deeper != null) {
+                                    val firstTrimmed = deeper.first().trimStart()
+                                    return if (firstTrimmed.startsWith("Property '")) {
+                                        listOf(header) + deeper.map { "  $it" }
+                                    } else {
+                                        listOf(header) + deeper.map { "  $it" }
+                                    }
+                                }
+                            }
+                            return listOf(header)
+                        }
+                    }
+                }
+            }
             return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
         }
         return emptyList()
@@ -68200,6 +68233,52 @@ interface DataView {
         if (pairKey in state.elaborationStack) return null
         state.elaborationStack.add(pairKey)
         try {
+            // B75.3: Plain `Array<U>` source vs `ReadonlyArray<T>` target — elaborate
+            // the ELEMENT pair directly (covariant). Without this, falling through to
+            // `propertiesRelatedTo` produces a misleading `concat` method chain even
+            // though TypeScript correctly reports the element-type mismatch as a
+            // missing-required-property line. Matches the pre-B75.1 behavior where
+            // Array and ReadonlyArray collapsed onto the same target.
+            //
+            // Scope: source.target === globalArrayType (plain Array<U>), NOT subclass
+            // of Array. Subclass-of-Array (e.g. `class C<T> extends Array<T>`) keeps
+            // the structural concat-chain (TypeScript renders that for named subclasses).
+            if (source is Type.Reference && target is Type.Reference &&
+                globalReadonlyArrayType != null &&
+                target.target === globalReadonlyArrayType &&
+                source.target === globalArrayType) {
+                val srcArgs = source.resolvedTypeArguments
+                val tgtArgs = target.resolvedTypeArguments
+                if (srcArgs != null && tgtArgs != null && srcArgs.size == 1 && tgtArgs.size == 1) {
+                    val sa = srcArgs[0]
+                    val ta = tgtArgs[0]
+                    if (!checkTypeRelatedTo(sa, ta, assignableRelation)) {
+                        val argChain = if (sa is Type.Object && ta is Type.Object) {
+                            getPropertyElaborationChain(sa, ta, "")
+                        } else null
+                        return if (path.isEmpty()) {
+                            val header = "  Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'."
+                            if (argChain != null) {
+                                val firstTrimmed = argChain.first().trimStart()
+                                if (firstTrimmed.startsWith("Property '")) {
+                                    argChain
+                                } else {
+                                    listOf(header) + argChain.map { "  $it" }
+                                }
+                            } else {
+                                listOf(header)
+                            }
+                        } else {
+                            val ctx = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(target)}'."
+                            if (argChain != null) {
+                                listOf(ctx) + argChain.map { "  $it" }
+                            } else {
+                                listOf(ctx, "    Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'.")
+                            }
+                        }
+                    }
+                }
+            }
             // Generic ref mismatch: when source and target share a target interface but
             // differ in type arguments (e.g. `Bar<string>` vs `Bar<number>`), elaborate
             // with the first failing arg pair. For top-level (path == "") the main
@@ -68394,12 +68473,17 @@ interface DataView {
             ) {
                 getFunctionMismatchElaboration(srcObjForCollapse, tgtObjForCollapse)
             } else null
-            // Use collapsed "types returned by" form ONLY for pure return-type mismatch:
-            // funcMismatch returns one "  Type 'A' is not assignable to type 'B'." line.
-            // Arity mismatch (Target signature provides too few...) and param mismatch
-            // (Types of parameters...) keep the standard "Types of property" + function-
+            // Use collapsed "types returned by" form for return-type mismatch.
+            // funcMismatch's first line is "  Type 'A' is not assignable to type 'B'.".
+            // Arity mismatch ("Target signature provides too few...") and param mismatch
+            // ("Types of parameters...") keep the standard "Types of property" + function-
             // type-display + funcExtra format.
-            if (funcMismatch != null && funcMismatch.size == 1 &&
+            // B75.3: funcMismatch may now have MULTIPLE lines when the return type
+            // drills deeper into a generic element pair (e.g. `A[]` vs `B[]` →
+            // `Property 'b' is missing...`). The deeper lines are property-drill chains,
+            // not param-mismatch chains, so the collapsed "types returned by" form is
+            // still appropriate. Gate on FIRST line shape only.
+            if (funcMismatch != null && funcMismatch.isNotEmpty() &&
                 funcMismatch[0].trimStart().startsWith("Type '")) {
                 // B75.2: TypeScript renders the method-name suffix as `(...)` when the
                 // target signature has at least one parameter, `()` when it has none.
