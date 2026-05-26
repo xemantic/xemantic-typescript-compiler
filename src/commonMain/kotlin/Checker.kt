@@ -205,6 +205,26 @@ class Checker(
      *  annotation's position. */
     private var deepInstantiationBailed: Boolean = false
 
+    /** B57.3d (a): side list of `new C<...>(...)` expressions whose explicit-type-arg
+     *  resolution triggered [deepInstantiationBailed]. Keyed by "fileName|pos" for
+     *  dedup; values store (fileName, start, length) for the squiggle span. Flushed
+     *  into [diagnostics] by [flushDeepBailNewExpressionEmits] from [getDiagnostics]
+     *  — deferred emission so the diagnostic appears even when
+     *  [getReturnTypeOfNewExpression] is called from a non-emission phase.
+     *
+     *  **Substep (a) verification status (2026-05-26):** the wrap CAPTURES the bail
+     *  flag, but for the speculative target `circularInlineMappedGenericTupleTypeNoCrash_ts`
+     *  the bail does NOT fire from type-arg resolution alone (verified via debug
+     *  println at the call site — `getReturnTypeOfNewExpression` IS reached for the
+     *  test's `new Foo<[...Elements, "abc"]>(...)` but `getTypeFromTypeNode(tupleArg)`
+     *  resolves the tuple without recursing into Foo's mapped-type bodies). The
+     *  test's true bail-fire path would be deep generic-class self-recursion through
+     *  method return types (`add(): Foo<[...Elements, "abc"]>`), which our checker
+     *  does not yet perform. Substep (a) infrastructure is in place; follow-ups
+     *  remain queued. */
+    private val deepBailNewExprPositions: MutableSet<String> = mutableSetOf()
+    private val deepBailNewExprEmits: MutableList<Triple<String, Int, Int>> = mutableListOf()
+
     /** B58.3: intern substitution results by (symbol.id, resolvedArgs-id-fingerprint)
      *  so that subsequent identical substitution calls return the SAME Type instance.
      *  This makes `aliasDisplayMap[result.id]` entries stable across re-resolution,
@@ -1240,6 +1260,10 @@ class Checker(
 
     /** Returns diagnostics produced by the checker, filtered to assigned files if set. */
     fun getDiagnostics(): List<Diagnostic> {
+        // B57.3d (a): flush any deferred TS2589 emissions captured at
+        // `new C<...>(...)` explicit-type-arg resolution sites that triggered
+        // [deepInstantiationBailed]. Done once at first getDiagnostics() call.
+        flushDeepBailNewExpressionEmits()
         if (assignedFileNames == null) return diagnostics.toList()
         return diagnostics.filter { it.fileName == null || it.fileName in assignedFileNames }
     }
@@ -53757,7 +53781,25 @@ interface DataView {
             val typeArgs = expr.typeArguments
             if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
                 try {
+                    // B57.3d (a): save/reset deepInstantiationBailed around the
+                    // explicit type-arg resolution loop. If a bail fires while
+                    // resolving (e.g. mapped-type recursion in a generic-class
+                    // type-arg shape), capture the expression position via
+                    // [recordDeepBailNewExpression]; the diagnostic is emitted
+                    // later by [flushDeepBailNewExpressionEmits] (from
+                    // [getDiagnostics]). Save/restore so the bail flag does NOT
+                    // propagate up to outer callers (which would over-emit
+                    // TS2589 at the enclosing alias/var/property annotation).
+                    val savedBail = deepInstantiationBailed
+                    val savedMappedInfo = mappedTypeCircularInfo
+                    deepInstantiationBailed = false
+                    mappedTypeCircularInfo = null
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                    if (deepInstantiationBailed) {
+                        recordDeepBailNewExpression(expr)
+                    }
+                    mappedTypeCircularInfo = savedMappedInfo
+                    deepInstantiationBailed = savedBail
                     if (resolvedArgs.none { it === errorType }) {
                         return getOrInternReference(calleeType, resolvedArgs)
                     }
@@ -71356,6 +71398,44 @@ interface DataView {
             start = startPos,
             length = length,
         ))
+    }
+
+    /** B57.3d (a): record a `new C<...>(...)` whose explicit-type-arg resolution
+     *  triggered [deepInstantiationBailed]. Span covers the full `new` expression
+     *  (matches TypeScript baselines like `circularInlineMappedGenericTupleTypeNoCrash`).
+     *  Dedup by (fileName, pos). */
+    private fun recordDeepBailNewExpression(expr: NewExpression) {
+        val fileName = currentCheckFileName ?: return
+        val start = expr.pos
+        if (start < 0) return
+        val key = "$fileName|$start"
+        if (!deepBailNewExprPositions.add(key)) return
+        val end = expressionTrueEnd(expr)
+        val length = (end - start).coerceAtLeast(1)
+        deepBailNewExprEmits.add(Triple(fileName, start, length))
+    }
+
+    /** B57.3d (a): flush queued TS2589 emissions into [diagnostics]. */
+    private fun flushDeepBailNewExpressionEmits() {
+        if (deepBailNewExprEmits.isEmpty()) return
+        for ((fileName, start, length) in deepBailNewExprEmits) {
+            val source = binderResults.find { it.sourceFile.fileName == fileName }?.sourceFile?.text
+                ?: continue
+            if (start >= source.length) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type instantiation is excessively deep and possibly infinite.",
+                category = DiagnosticCategory.Error,
+                code = 2589,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+        deepBailNewExprEmits.clear()
+        deepBailNewExprPositions.clear()
     }
 
     /** B57.1: emit TS2589 "Type instantiation is excessively deep" at a TypeNode's span.
