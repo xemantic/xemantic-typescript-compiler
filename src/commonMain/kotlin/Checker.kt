@@ -62299,16 +62299,46 @@ interface DataView {
     ) {
         if (!strictNullChecks) return
         if (expr.questionDotToken) return
-        val recv = expr.expression as? PropertyAccessExpression ?: return
-        if (recv.questionDotToken) return
+        val recvExpr = expr.expression
+        // Resolve receiver shape: PropertyAccess `foo.a` (original B81.1c) or
+        // ElementAccess `foo["a"]` with a string-literal index (B81.1c-EAext).
+        // Capture receiver-of-receiver, property name, narrowed-path display,
+        // and squiggle span via the local `recvInfo` shape.
+        val info = when (recvExpr) {
+            is PropertyAccessExpression -> {
+                if (recvExpr.questionDotToken) return
+                ReceiverInfo(
+                    recvOfRecv = recvExpr.expression,
+                    propName = recvExpr.name.text,
+                    spanStart = recvExpr.pos,
+                    spanEnd = recvExpr.name.pos + recvExpr.name.text.length,
+                    narrowExpr = recvExpr,
+                )
+            }
+            is ElementAccessExpression -> {
+                if (recvExpr.questionDotToken) return
+                val arg = recvExpr.argumentExpression as? StringLiteralNode ?: return
+                // Span ends at the closing `]` — argumentExpression.end + 1 covers it
+                // (mirrors `expressionTrueEnd`'s ElementAccess branch). Fall back to
+                // recvExpr.end if the argument-end position is unreliable.
+                val span = expressionTrueEnd(recvExpr)
+                ReceiverInfo(
+                    recvOfRecv = recvExpr.expression,
+                    propName = arg.text,
+                    spanStart = recvExpr.pos,
+                    spanEnd = span,
+                    narrowExpr = recvExpr,
+                )
+            }
+            else -> return
+        }
         // Resolve receiver-of-receiver's apparent type to find the property symbol.
-        val recvOfRecv = recv.expression
         val recvOfRecvType = try {
-            getTypeOfExpression(recvOfRecv)
+            getTypeOfExpression(info.recvOfRecv)
         } catch (_: StackOverflowError) { return }
         if (recvOfRecvType === anyType || recvOfRecvType === errorType) return
         val apparent = try { getApparentType(recvOfRecvType) } catch (_: StackOverflowError) { return }
-        val propSym = getPropertyOfType(apparent, recv.name.text) ?: return
+        val propSym = getPropertyOfType(apparent, info.propName) ?: return
         if (!isOptionalProperty(propSym)) return
         // Compute the receiver's declared type as `propType | undefined`, then
         // consult loop-aware flow narrowing. If undefined survives narrowing,
@@ -62318,16 +62348,26 @@ interface DataView {
         val declaredWithUndef = if (typeIncludesExplicitUndefined(propType)) propType
             else getUnionType(listOf(propType, undefinedType))
         val narrowed = try {
-            getNarrowedTypeForReferenceFollowLoopEntry(declaredWithUndef, recv)
+            getNarrowedTypeForReferenceFollowLoopEntry(declaredWithUndef, info.narrowExpr)
         } catch (_: StackOverflowError) { return }
         if (!typeIncludesExplicitUndefined(narrowed)) return
-        // Construct the display path for the receiver (e.g. "foo.a").
-        val display = getReferencePath(recv) ?: return
-        val start = recv.pos
-        val end = recv.name.pos + recv.name.text.length
-        val length = end - start
+        // Construct the display path for the receiver. For PropertyAccess
+        // (`foo.a`), use `getReferencePath` (dotted form). For ElementAccess
+        // (`foo["a"]`), build a bracket-form display by combining the
+        // receiver-of-receiver's path with the literal index.
+        val display = when (recvExpr) {
+            is PropertyAccessExpression -> getReferencePath(recvExpr) ?: return
+            is ElementAccessExpression -> {
+                val basePath = getReferencePath(info.recvOfRecv) ?: return
+                val arg = recvExpr.argumentExpression as StringLiteralNode
+                val q = if (arg.singleQuote) "'" else "\""
+                "$basePath[$q${arg.text}$q]"
+            }
+            else -> return
+        }
+        val length = info.spanEnd - info.spanStart
         if (length <= 0) return
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val (line, character) = getLineAndCharacterOfPosition(source, info.spanStart)
         diagnostics.add(Diagnostic(
             message = "'$display' is possibly 'undefined'.",
             category = DiagnosticCategory.Error,
@@ -62335,10 +62375,19 @@ interface DataView {
             fileName = fileName,
             line = line,
             character = character,
-            start = start,
+            start = info.spanStart,
             length = length,
         ))
     }
+
+    /** Internal carrier for [emitTs18048ForOptionalPropertyAccessReceiver]. */
+    private data class ReceiverInfo(
+        val recvOfRecv: Expression,
+        val propName: String,
+        val spanStart: Int,
+        val spanEnd: Int,
+        val narrowExpr: Expression,
+    )
 
     /**
      * 17.44: Walk a synthetic-paren receiver (or its inner expression) to find the
