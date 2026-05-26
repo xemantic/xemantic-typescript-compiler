@@ -33608,7 +33608,7 @@ interface DataView {
                         decl.isNamespace -> {} // namespaces have a hoisted binding; no TS2448/2449/2450 on the name itself
                         decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
                         decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
-                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer)
+                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer, decl.isUnreachable)
                     }
                 }
             }
@@ -33709,15 +33709,29 @@ interface DataView {
         val enumNode: EnumDeclaration? = null,
         val constInitObjLit: ObjectLiteralExpression? = null,
         val namespaceNode: ModuleDeclaration? = null,
+        /** B78.1: declaration sits in unreachable code (after a top-level `return`/`throw`
+         * at the same statement-list level). Used to widen TS2454 co-emission for
+         * const-with-initializer: TypeScript fires TS2454 for `const x = init`
+         * used-before-declaration ONLY when the declaration is unreachable (its
+         * initializer will never run in the live flow); reachable const-with-init
+         * just fires TS2448 (matches typeGuardNarrowsIndexedAccessOfKnownProperty10
+         * which expects only TS2448 for `const id = ...` used out-of-order in the
+         * same reachable arrow body). */
+        val isUnreachable: Boolean = false,
     )
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
         val decls = mutableMapOf<String, BlockScopedDecl>()
-        for (stmt in stmts) collectBlockScopedDeclEx(stmt, decls, source)
+        var unreachable = false
+        for (stmt in stmts) {
+            collectBlockScopedDeclEx(stmt, decls, source, unreachable)
+            // B78.1: top-level `return`/`throw` marks all subsequent same-list stmts unreachable.
+            if (stmt is ReturnStatement || stmt is ThrowStatement) unreachable = true
+        }
         return decls
     }
 
-    private fun collectBlockScopedDeclEx(stmt: Statement, decls: MutableMap<String, BlockScopedDecl>, source: String) {
+    private fun collectBlockScopedDeclEx(stmt: Statement, decls: MutableMap<String, BlockScopedDecl>, source: String, unreachable: Boolean = false) {
         when (stmt) {
             is VariableStatement -> {
                 // declare const/let have no temporal dead zone (they're ambient)
@@ -33727,7 +33741,7 @@ interface DataView {
                     val isConstDecl = kind == SyntaxKind.ConstKeyword
                     for (d in stmt.declarationList.declarations) {
                         val objLit = if (isConstDecl) d.initializer as? ObjectLiteralExpression else null
-                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null, constInitObjLit = objLit)
+                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null, constInitObjLit = objLit, isUnreachable = unreachable)
                     }
                 }
             }
@@ -33738,7 +33752,7 @@ interface DataView {
                 // EXCEPT with isolatedModules/verbatimModuleSyntax, where inlining is suppressed
                 val isConst = ModifierFlag.Const in stmt.modifiers
                 if (!isConst || options.isolatedModules || options.verbatimModuleSyntax) {
-                    decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true, enumNode = stmt)
+                    decls[stmt.name.text] = BlockScopedDecl(stmt.name.pos, isEnum = true, enumNode = stmt, isUnreachable = unreachable)
                 }
             }
             is ClassDeclaration -> {
@@ -33746,7 +33760,7 @@ interface DataView {
                 if (ModifierFlag.Declare !in stmt.modifiers) {
                     val name = stmt.name
                     if (name != null) {
-                        decls[name.text] = BlockScopedDecl(name.pos, isClass = true, classNode = stmt)
+                        decls[name.text] = BlockScopedDecl(name.pos, isClass = true, classNode = stmt, isUnreachable = unreachable)
                     }
                 }
             }
@@ -33758,7 +33772,7 @@ interface DataView {
                 if (ModifierFlag.Declare !in stmt.modifiers) {
                     val nameNode = stmt.name
                     if (nameNode is Identifier) {
-                        decls[nameNode.text] = BlockScopedDecl(nameNode.pos, isNamespace = true, namespaceNode = stmt)
+                        decls[nameNode.text] = BlockScopedDecl(nameNode.pos, isNamespace = true, namespaceNode = stmt, isUnreachable = unreachable)
                     }
                 }
             }
@@ -33780,14 +33794,14 @@ interface DataView {
         }
     }
 
-    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false, constInitObjLit: ObjectLiteralExpression? = null) {
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false, constInitObjLit: ObjectLiteralExpression? = null, isUnreachable: Boolean = false) {
         when (name) {
-            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit, constInitObjLit = constInitObjLit)
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit, constInitObjLit = constInitObjLit, isUnreachable = isUnreachable)
             is ObjectBindingPattern -> for (el in name.elements) {
-                collectBindingNamesEx(el.name, decls, isConst, hasInit)
+                collectBindingNamesEx(el.name, decls, isConst, hasInit, isUnreachable = isUnreachable)
             }
             is ArrayBindingPattern -> for (el in name.elements) {
-                if (el is BindingElement) collectBindingNamesEx(el.name, decls, isConst, hasInit)
+                if (el is BindingElement) collectBindingNamesEx(el.name, decls, isConst, hasInit, isUnreachable = isUnreachable)
             }
             else -> {}
         }
@@ -34066,7 +34080,7 @@ interface DataView {
         }
     }
 
-    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false, hasInitializer: Boolean = false) {
+    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false, hasInitializer: Boolean = false, isUnreachableDecl: Boolean = false) {
         val start = useNode.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -34094,9 +34108,15 @@ interface DataView {
         // Co-emit TS2454: "Variable 'x' is used before being assigned."
         // TypeScript emits both TS2448 and TS2454 at the same position when the declaration
         // has an initializer (the variable WILL be assigned, but the use is before that point).
-        // Only for `let` (not `const`) — const is always initialized at declaration.
-        // Only when the declaration has an initializer — uninitialized `let x;` doesn't co-emit.
-        if (strictNullChecks && !isConst && hasInitializer) {
+        // For `let`: any forward use of an initialized `let x = init` co-emits TS2454.
+        // For `const`: only when the declaration is in unreachable code (e.g. after a top-level
+        // `return`/`throw`) — TypeScript treats the const's initializer as never running, so the
+        // forward use is effectively "used before being assigned". Reachable `const x = init`
+        // used out-of-order in the same scope (e.g. typeGuardNarrowsIndexedAccessOfKnownProperty10)
+        // fires only TS2448 because the const WILL be assigned by the time the live program
+        // reaches that use site at runtime (TDZ runtime error, but not a use-before-assigned
+        // flow analysis result). B78.1.
+        if (strictNullChecks && hasInitializer && (!isConst || isUnreachableDecl)) {
             diagnostics.add(Diagnostic(
                 message = "Variable '$name' is used before being assigned.",
                 category = DiagnosticCategory.Error,
