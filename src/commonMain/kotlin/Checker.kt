@@ -367,6 +367,11 @@ class Checker(
         it.symbol = Symbol(SymbolFlags.Interface, "Array")
     }
 
+    /** Global ReadonlyArray interface — used as target for `Type.Reference` in `readonly T[]`
+     *  / `ReadonlyArray<T>` annotations. Wired lazily in init; falls back to globalArrayType
+     *  if the lib didn't define ReadonlyArray (legacy compatibility). */
+    private var globalReadonlyArrayType: Type.Interface? = null
+
     /** Maximum recursion depth for AST walking to prevent StackOverflow. */
     private val maxCheckDepth = 200
     private val maxRelationDepth = 100
@@ -550,6 +555,18 @@ class Checker(
             if (arraySym.flags.hasAny(SymbolFlags.Interface)) {
                 val arrayType = getDeclaredTypeOfClassOrInterface(arraySym)
                 globalArrayType = arrayType
+            }
+        }
+        // 0c. Wire globalReadonlyArrayType analogously so `ReadonlyArray<T>` / `readonly T[]`
+        // annotations resolve to a Type.Reference whose target's members reflect the
+        // read-only surface (no `push`/`pop`/`shift`/`splice`/etc.). Without this, the
+        // `getTypeFromTypeReference("ReadonlyArray")` branch collapses ReadonlyArray to
+        // Array — incorrectly exposing mutating methods to `propertiesRelatedTo` /
+        // `getPropertyElaborationChain` comparisons (FP TS2322 + wrong `push`/`pop` chain).
+        globals["ReadonlyArray"]?.let { roArraySym ->
+            if (roArraySym.flags.hasAny(SymbolFlags.Interface)) {
+                val roType = getDeclaredTypeOfClassOrInterface(roArraySym)
+                if (roType is Type.Interface) globalReadonlyArrayType = roType
             }
         }
         // 1. Merge file-level symbols into globals
@@ -49949,10 +49966,18 @@ interface DataView {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
         when (name) {
-            "Array", "ReadonlyArray" -> {
+            "Array" -> {
                 val typeArgs = node.typeArguments
                 if (typeArgs != null && typeArgs.size == 1) {
                     return getArrayType(getTypeFromTypeNode(typeArgs[0]))
+                }
+            }
+            "ReadonlyArray" -> {
+                val typeArgs = node.typeArguments
+                if (typeArgs != null && typeArgs.size == 1) {
+                    val elt = getTypeFromTypeNode(typeArgs[0])
+                    val roTarget = globalReadonlyArrayType ?: globalArrayType
+                    return getOrInternReference(roTarget, listOf(elt))
                 }
             }
         }
@@ -53908,6 +53933,12 @@ interface DataView {
                     // Parenthesize union/intersection element types: (A | B)[] not A | B[]
                     if (args[0] is Type.Union || args[0] is Type.Intersection) "($elemStr)[]"
                     else "$elemStr[]"
+                } else if (globalReadonlyArrayType != null &&
+                    type.target === globalReadonlyArrayType && args != null && args.size == 1) {
+                    // ReadonlyArray<T> displays as `readonly T[]` (shorthand) to match TypeScript.
+                    val elemStr = typeToString(args[0])
+                    if (args[0] is Type.Union || args[0] is Type.Intersection) "readonly ($elemStr)[]"
+                    else "readonly $elemStr[]"
                 } else {
                     val target = type.target.symbol?.name ?: "Object"
                     if (args != null && args.isNotEmpty()) {
@@ -69467,7 +69498,20 @@ interface DataView {
         return when (node.operator) {
             SyntaxKind.KeyOfKeyword -> getKeyofType(getTypeFromTypeNode(node.type))
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
-            SyntaxKind.ReadonlyKeyword -> getTypeFromTypeNode(node.type) // readonly just adds modifier
+            SyntaxKind.ReadonlyKeyword -> {
+                // `readonly T[]` shorthand: route to globalReadonlyArrayType so the
+                // resulting Type.Reference exposes ReadonlyArray's read-only surface
+                // (no `push`/`pop`/etc.) — pairs with the `ReadonlyArray<T>` branch in
+                // `getTypeFromTypeReference`. For other shapes (e.g. `readonly [T, U]`
+                // tuple) the readonly modifier is a no-op at the type level (TS only
+                // surfaces it via narrower assignment rules we don't yet model).
+                val inner = node.type
+                if (inner is ArrayType && globalReadonlyArrayType != null) {
+                    val elt = getTypeFromTypeNode(inner.elementType)
+                    return getOrInternReference(globalReadonlyArrayType!!, listOf(elt))
+                }
+                getTypeFromTypeNode(node.type)
+            }
             else -> anyType
         }
     }
