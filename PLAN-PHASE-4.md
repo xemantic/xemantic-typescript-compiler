@@ -118,6 +118,32 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-05-26 (B78.1 TS2454 co-emit for unreachable-decl const-with-init, round 49 iter14, +2 → 8979 / 10078).** /goal iter14 after iter13's STATUS drift fix. XML re-verification at entry showed baseline 8977 (not the 8974 claim) — drift accumulated again from iter12's B77.1 + iter13 reconciliation. `find_candidates.py --fresh` returned 0/0/0 (filtered from 2/39/8). Selected `unreachableDeclarations_ts__preserveconstenums_{false,true}__has expected errors matching baseline` from the non-fresh MISSING-DIAGS pool — each had ONLY 1 missing diagnostic: `TS2454 @ (64,14): Variable 'blah' is used before being assigned.` Same root cause for both variants (preserveConstEnums controls a different aspect).
+
+- **Target source** (`unreachableDeclarations.ts:65-90`): `function func5() { aFunc(); console.log(Bar.A); console.log(blah.prop); console.log(new Foo()); console.log(Baz.value); return; function aFunc() {...} const blah = { prop: 1234 }; enum Bar { A } class Foo {...} namespace Baz {...} }`. The `const blah` declaration sits in unreachable code (post-return). TypeScript fires BOTH TS2448 ("Block-scoped variable 'blah' used before its declaration") AND TS2454 ("used before being assigned") at line 69's `console.log(blah.prop)`. Our existing TS2448 fires correctly but TS2454 was gated `!isConst && hasInitializer`, suppressing for const.
+
+- **Root cause investigation**: cross-referenced TypeScript baselines to confirm the rule:
+  - `constDeclarations-useBeforeDefinition.ts` (`@strict: false`) — `const c1 = 0` used before decl → ONLY TS2448. Not affected (strictNullChecks gate suppresses TS2454).
+  - `letDeclarations-useBeforeDefinition.ts` — `let v1 = 0` used before decl → BOTH TS2448 + TS2454 (matches existing `!isConst && hasInitializer` gate).
+  - `typeGuardNarrowsIndexedAccessOfKnownProperty10.ts` (`@strict: true`) — `const id = foo.bar` used at line 8 before decl at line 9 in REACHABLE arrow body → ONLY TS2448. Decision-critical FP-risk test.
+  - `decoratorUsedBeforeDeclaration.ts` (`@strict: false`-implicit) — `const lambda = (...args)` used as decorator before decl → TS2448 + TS2454 at FIRST use only. (Currently failing on root cause — no diagnostics emitted at all.)
+  - `unreachableDeclarations.ts` — `const blah = {...}` declaration is UNREACHABLE (post-return) → BOTH TS2448 + TS2454.
+
+- **Inferred rule**: TS2454 fires for `const x = init` used before decl when the declaration's initializer will never run in live flow — i.e. when the decl sits in unreachable code. Reachable-but-out-of-order `const id = init` fires only TS2448 (the const WILL be assigned at runtime; TDZ is a runtime concern, not a flow-analysis one).
+
+- **B78.1 fix** (3-edit, Checker.kt):
+  - Added `isUnreachable: Boolean = false` field to `BlockScopedDecl` data class (Checker.kt:~33712).
+  - `collectBlockScopedDeclsEx` (Checker.kt:~33714) now tracks `var unreachable = false` flag; after seeing a `ReturnStatement` or `ThrowStatement` at the same statement-list level, flips to true. Subsequent decls collected with `isUnreachable = true`.
+  - `collectBlockScopedDeclEx` and `collectBindingNamesEx` gain `isUnreachable: Boolean` param threaded through to BlockScopedDecl construction.
+  - `emitTS2448` (Checker.kt:~34069) gate widened from `strictNullChecks && !isConst && hasInitializer` to `strictNullChecks && hasInitializer && (!isConst || isUnreachableDecl)`. Comment expanded to document the const-only-when-unreachable rule and cite `typeGuardNarrowsIndexedAccessOfKnownProperty10` as the FP-suppression regression-test guard.
+  - Call site `emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer, decl.isUnreachable)` updated.
+
+- **Heuristic narrowness**: the "top-level return/throw makes subsequent decls unreachable" detection is the simplest correct form. Doesn't handle: (a) returns inside `if`/`while` (partial control flow), (b) returns inside one branch of an unconditional `if/else`, (c) `throw` inside `try`. Those cases would need a real flow-graph reachability analysis. The 2 unreachableDeclarations variants are the only suite tests known to need this; the narrow detection is sufficient.
+
+- **Net result**: 1101 → 1099 failed (8977 → 8979 passing). Zero regressions across full suite. `typeGuardNarrowsIndexedAccessOfKnownProperty10_ts` still passes (verified — its `const id` is in a reachable arrow body so `isUnreachable = false`, gate suppresses correctly).
+
+- **CLAUDE.md gotcha added**: under "Checker diagnostic gotchas (TS2454/TS2564/TS6133)" — record the rule that TS2454 co-emission with TS2448 differs for `let` vs `const`: `let x = init` always co-emits when used before decl in strict mode; `const x = init` only co-emits when decl is in unreachable code.
+
 **Session 2026-05-26 (B75.4 narrower isReentry gate — investigated and REVERTED, /goal iter8, 8971 unchanged).** Continuation of B75 thread. Per iter8 prompt, attempted to find a narrower `isReentry` predicate at `structuredTypeRelatedTo`'s same-target arg-shortcut (Checker.kt ~66459) that would flip `arrayOfSubtypeIsAssignableToReadonlyArray_ts` (line 20 `rrb = cra` emits a TOO-DEEP "Types of parameters / The types returned by 'concat(...)' / ..." chain instead of expected collapsed `concat(...)` return-chain) WITHOUT regressing `recursiveTypeComparison_ts` (where TS2322 must NOT fire on `var stuck: Property<number> = p`).
 
 Instrumented the shortcut with debug println for both test cases. **Discovered the relation stacks are structurally identical between the two cases**:
