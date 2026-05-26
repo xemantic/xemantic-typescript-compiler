@@ -13931,6 +13931,10 @@ class Checker(
             is MappedType -> {
                 val mappedScope = scope.child()
                 type.typeParameter?.let { mappedScope.addTypeParam(it.name.text) }
+                // The mapped TP's constraint is checked in the OUTER scope —
+                // the TP being introduced (e.g. `K` in `[K in keyof T]`) is
+                // NOT in scope inside its own constraint.
+                type.typeParameter?.constraint?.let { checkUnresolvedInType(it, scope, source, fileName) }
                 type.type?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
                 type.nameType?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
             }
