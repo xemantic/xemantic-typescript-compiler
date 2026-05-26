@@ -58496,6 +58496,102 @@ interface DataView {
                     }
                 }
 
+                // B82.1b: For `class D extends C<X> implements C<Y>` (or similar class-implements-class
+                // with different generic args), compare each method's substituted return type from the
+                // implements-target against the same method's substituted type from the class's extends-
+                // base. If incompatible → emit TS2720 with "The types returned by 'name()' are incompatible"
+                // chain. Narrow gate: only fires when (a) target is a CLASS (not interface),
+                // (b) implements typeExpr has type args (resolves to Type.Reference), and (c) the class
+                // EXTENDS the same class symbol with DIFFERENT type args (the `D extends C<X> implements
+                // C<Y>` shape that motivates this diagnostic). Anything broader risks FP cascading.
+                if (isClassTarget && !typeExpr.typeArguments.isNullOrEmpty()) {
+                    val implTargetRef = getTypeFromBaseTypeExpression(typeExpr) as? Type.Reference
+                    val classSym = globals[classNameRaw]
+                    val classDeclaredType = classSym?.let { getDeclaredTypeOfSymbol(it) } as? Type.Interface
+                    if (implTargetRef != null && classDeclaredType != null) {
+                        // Find the class's extends-base ref for the same target symbol.
+                        // findInheritedBaseRef walks baseTypes BFS so multi-level (E extends D extends C<X>)
+                        // is supported. The gate requires DIFFERENT type args between extends and implements
+                        // — if args match, the implements is trivially satisfied via the extends chain.
+                        val extendsBaseRef = findInheritedBaseRef(classDeclaredType, ifaceSymbol)
+                        val argsDiffer = extendsBaseRef != null &&
+                            implTargetRef.resolvedTypeArguments != extendsBaseRef.resolvedTypeArguments
+                        if (extendsBaseRef != null && argsDiffer) {
+                            // Walk iface properties, find first mismatch, emit TS2720 with chain.
+                            var emitted = false
+                            propLoop@ for (ifaceProp in ifaceProps) {
+                                if (emitted) break
+                                if (ifaceProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+                                if (isOptionalProperty(ifaceProp)) continue
+                                if (isStaticOnlyProperty(ifaceProp)) continue
+                                val expectedType = resolveGenericPropertyType(implTargetRef, ifaceProp) ?: continue
+                                val actualType = resolveGenericPropertyType(extendsBaseRef, ifaceProp) ?: continue
+                                if (expectedType === errorType || actualType === errorType) continue
+                                if (expectedType === anyType || actualType === anyType) continue
+                                // For methods (function-typed properties with call signatures), compare
+                                // return types directly; this gives the "types returned by 'X()' are
+                                // incompatible" chain format. For non-method properties, fall through to
+                                // the standard property-incompatibility chain.
+                                val expectedSig = (expectedType as? Type.Object)?.callSignatures?.firstOrNull()
+                                val actualSig = (actualType as? Type.Object)?.callSignatures?.firstOrNull()
+                                if (expectedSig != null && actualSig != null) {
+                                    val expectedRet = expectedSig.resolvedReturnType ?: continue
+                                    val actualRet = actualSig.resolvedReturnType ?: continue
+                                    if (!checkTypeRelatedTo(actualRet, expectedRet, assignableRelation)) {
+                                        val actualStr = typeToString(actualRet)
+                                        val expectedStr = typeToString(expectedRet)
+                                        val classNameNode = classDecl.name ?: continue
+                                        val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                                        val message = "Class '$className' incorrectly implements class '$ifaceName'. Did you mean to extend '$ifaceName' and inherit its members as a subclass?"
+                                        val chain = mutableListOf(
+                                            "  The types returned by '${ifaceProp.name}()' are incompatible between these types.",
+                                            "    Type '$actualStr' is not assignable to type '$expectedStr'."
+                                        )
+                                        diagnostics.add(Diagnostic(
+                                            message = message,
+                                            category = DiagnosticCategory.Error,
+                                            code = 2720,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = classNameNode.pos,
+                                            length = classNameRaw.length,
+                                            messageChain = chain,
+                                        ))
+                                        emitted = true
+                                    }
+                                } else if (expectedSig == null && actualSig == null) {
+                                    // Plain property: compare types directly.
+                                    if (!checkTypeRelatedTo(actualType, expectedType, assignableRelation)) {
+                                        val actualStr = typeToString(actualType)
+                                        val expectedStr = typeToString(expectedType)
+                                        val classNameNode = classDecl.name ?: continue
+                                        val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                                        val message = "Class '$className' incorrectly implements class '$ifaceName'. Did you mean to extend '$ifaceName' and inherit its members as a subclass?"
+                                        val chain = mutableListOf(
+                                            "  Types of property '${ifaceProp.name}' are incompatible.",
+                                            "    Type '$actualStr' is not assignable to type '$expectedStr'."
+                                        )
+                                        diagnostics.add(Diagnostic(
+                                            message = message,
+                                            category = DiagnosticCategory.Error,
+                                            code = 2720,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = classNameNode.pos,
+                                            length = classNameRaw.length,
+                                            messageChain = chain,
+                                        ))
+                                        emitted = true
+                                    }
+                                }
+                            }
+                            if (emitted) continue@typeExprLoop
+                        }
+                    }
+                }
+
                 // Check index signatures
                 val ifaceStringIdx = ifaceType.stringIndexInfo
                 val ifaceNumberIdx = ifaceType.numberIndexInfo
