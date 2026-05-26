@@ -54387,6 +54387,24 @@ interface DataView {
                 if (apparentType is Type.Reference) {
                     resolveGenericPropertyType(apparentType, prop)?.let { return it }
                 }
+                // B82.1: Inherited-method type-substitution. When receiver is a
+                // class instance (Type.Interface, not Reference) and the resolved
+                // property comes from a GENERIC base (e.g. `class D extends C<string>`
+                // calling `d.bar()` where `bar` is declared on `C<T>`), we must
+                // substitute the base's type args into the property's type. Walk
+                // the receiver's baseTypes for a Type.Reference whose target.symbol
+                // matches the prop's parent (declaring class), then delegate to
+                // resolveGenericPropertyType which already handles substitution.
+                // Gate: prop.parent must differ from apparentType.symbol (only fires
+                // for inherited members, not own members).
+                if (apparentType is Type.Interface && apparentType !is Type.Reference) {
+                    val propParent = prop.parent
+                    if (propParent != null && propParent !== apparentType.symbol) {
+                        findInheritedBaseRef(apparentType, propParent)?.let { baseRef ->
+                            resolveGenericPropertyType(baseRef, prop)?.let { return it }
+                        }
+                    }
+                }
                 return getTypeOfSymbol(prop)
             }
         }
@@ -54532,6 +54550,37 @@ interface DataView {
 
             else -> anyType
         }
+    }
+
+    /**
+     * B82.1: Walk a class/interface receiver's base-types chain BFS-style looking
+     * for a [Type.Reference] whose `target.symbol === declaringSymbol`. Used to
+     * find the concrete generic instantiation of an inherited property's
+     * declaring class so [resolveGenericPropertyType] can substitute its type
+     * args into the property's declared type. Returns the first match (most
+     * specific direct base wins). Returns null when no base matches — caller
+     * falls back to raw `getTypeOfSymbol(prop)`.
+     */
+    private fun findInheritedBaseRef(type: Type.Interface, declaringSymbol: Symbol): Type.Reference? {
+        val visited = mutableSetOf<Int>()
+        val queue = ArrayDeque<Type>()
+        type.baseTypes?.forEach { queue.addLast(it) }
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            if (!visited.add(cur.id)) continue
+            if (cur is Type.Reference && cur.target.symbol === declaringSymbol) {
+                return cur
+            }
+            // Walk further up the chain — handles multi-level inheritance like
+            // `class E extends D` where D extends C<string>: E's baseTypes contain
+            // D (Type.Interface, no generic), and D's baseTypes contain C<string>.
+            when (cur) {
+                is Type.Reference -> cur.target.baseTypes?.forEach { queue.addLast(it) }
+                is Type.Interface -> cur.baseTypes?.forEach { queue.addLast(it) }
+                else -> {}
+            }
+        }
+        return null
     }
 
     /**
