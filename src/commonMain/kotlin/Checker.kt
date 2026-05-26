@@ -10963,10 +10963,10 @@ class Checker(
                 is InterfaceDeclaration -> {
                     // Interface method signatures (and call signatures with empty name) get TS7006
                     // for parameters without type annotations. All methods in interfaces are checked
-                    // (interfaces are implicitly ambient).
+                    // (interfaces are implicitly ambient). TYPE-position: type-like param names get TS7051.
                     for (member in stmt.members) {
                         when (member) {
-                            is MethodDeclaration -> checkParamsForImplicitAny(member.parameters, source, fileName)
+                            is MethodDeclaration -> checkParamsForImplicitAny(member.parameters, source, fileName, typePosition = true)
                             is PropertyDeclaration -> {
                                 if (member.type == null && member.initializer == null) {
                                     // TS7008: Member implicitly has an 'any' type
@@ -11099,7 +11099,7 @@ class Checker(
     private fun checkImplicitAnyInTypeAnnotation(type: TypeNode?, source: String, fileName: String) {
         when (type) {
             is FunctionType -> {
-                checkParamsForImplicitAny(type.parameters, source, fileName)
+                checkParamsForImplicitAny(type.parameters, source, fileName, typePosition = true)
                 // Recurse into the return type — may itself be a FunctionType or TypeLiteral.
                 checkImplicitAnyInTypeAnnotation(type.type, source, fileName)
             }
@@ -11148,7 +11148,7 @@ class Checker(
                                 length = length,
                             ))
                         }
-                        checkParamsForImplicitAny(member.parameters, source, fileName)
+                        checkParamsForImplicitAny(member.parameters, source, fileName, typePosition = true)
                     }
                 }
             }
@@ -11508,8 +11508,9 @@ class Checker(
         parameters: List<Parameter>,
         source: String,
         fileName: String,
+        typePosition: Boolean = false,
     ) {
-        for (param in parameters) {
+        for ((paramIndex, param) in parameters.withIndex()) {
             if (param.isCommentPlaceholder) continue
             // Recurse into nested function-type/type-literal annotations even if this
             // param has a type — catches `funcLit: (y2) => number` (y2 gets TS7006) and
@@ -11559,6 +11560,26 @@ class Checker(
             if (param.modifiers.any { isParameterPropertyModifier(it) }) continue
 
             if (param.dotDotDotToken) {
+                // TS7051 vs TS7019: in TYPE positions (function-type, call/method signature
+                // in TypeLiteral/interface), when the parameter name is a TYPE-LIKE name
+                // (predefined type keyword or class/interface/type-alias in scope), emit
+                // TS7051 suggesting `argN: <name>[]` instead of TS7019.
+                if (typePosition && isTypeLikeParamName(name.text)) {
+                    val start = name.pos - 3 // position of `...`
+                    val length = 3 + name.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter has a name but no type. Did you mean 'arg$paramIndex: ${name.text}[]'?",
+                        category = DiagnosticCategory.Error,
+                        code = 7051,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    continue
+                }
                 // TS7019: Rest parameter implicitly has an 'any[]' type
                 val displayName = if (name is Identifier && name.text.isEmpty()) "(Missing)" else (name as Identifier).text
                 // Span covers `...name` (3 chars for `...` + name length)
@@ -11576,6 +11597,24 @@ class Checker(
                     length = length,
                 ))
             } else {
+                // TS7051 vs TS7006: in TYPE positions, when the parameter name is a
+                // TYPE-LIKE name, emit TS7051 suggesting `argN: <name>` instead of TS7006.
+                if (typePosition && isTypeLikeParamName(name.text)) {
+                    val start = name.pos
+                    val length = if (param.questionToken) name.text.length + 1 else name.text.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter has a name but no type. Did you mean 'arg$paramIndex: ${name.text}'?",
+                        category = DiagnosticCategory.Error,
+                        code = 7051,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    continue
+                }
                 // TS7006: Parameter implicitly has an 'any' type
                 val start = name.pos
                 // Include the `?` token in the span if present (e.g., `x?` → length 2)
@@ -11593,6 +11632,31 @@ class Checker(
                 ))
             }
         }
+    }
+
+    /**
+     * In TYPE-position signatures (function-type, call/method signature in
+     * type-literal/interface), TypeScript emits TS7051 ("did you mean
+     * 'argN: <name>'?") instead of TS7006 when the parameter name looks
+     * like a TYPE — i.e., it's a predefined type keyword (`string`,
+     * `number`, etc.) or it resolves to a type entity (class, interface,
+     * type alias) in the current file or global scope. Otherwise the
+     * regular TS7006 fires.
+     */
+    private fun isTypeLikeParamName(name: String): Boolean {
+        if (name.isEmpty()) return false
+        if (name in PREDEFINED_TYPE_NAMES) return true
+        // Local-file scope: class / interface / type-alias / enum symbol.
+        val localSym = currentFileLocals?.get(name)
+        if (localSym != null && localSym.flags.hasAny(SymbolFlags.Type)) {
+            return true
+        }
+        // Globals (built-in `Array`, `Object`, etc., plus user globals from script files).
+        val globalSym = globals[name]
+        if (globalSym != null && globalSym.flags.hasAny(SymbolFlags.Type)) {
+            return true
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
