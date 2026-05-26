@@ -6587,9 +6587,14 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            // B78.2: file-level scope does NOT participate in outer-leak computation.
+            // TypeScript treats file-level `let X` (in script files) as potentially
+            // assigned externally, so reads of `X` inside function bodies don't fire
+            // TS2454. Disable leak at the entry point; nested function bodies enable it.
             checkDefiniteAssignmentInStatements(
                 result.sourceFile.statements, source, fileName,
                 fileLocals = result.locals,
+                enableLeakComputation = false,
             )
         }
     }
@@ -6604,25 +6609,280 @@ class Checker(
         fileName: String,
         preInitialized: Set<String> = emptySet(),
         fileLocals: SymbolTable? = null,
+        outerLeak: Set<String> = emptySet(),
+        enableLeakComputation: Boolean = true,
     ) {
         // Track variables declared with type but no initializer
-        val uninitialized = mutableSetOf<String>()
+        // B78.2: seed with outer-scope leak names — outer-function-scope `let` vars
+        // declared without initializer AND never assigned anywhere in the outer
+        // function body (including its nested function bodies). The leak set is
+        // pre-filtered at the call site so we never leak names that have an
+        // assignment anywhere — that handles the `var x11 = ...; function bar() { x11 = ... }`
+        // sibling-assignment-suppression case without per-stmt tracking.
+        val uninitialized = mutableSetOf<String>().apply { addAll(outerLeak) }
+        // preInitialized (function parameters) shadows leaked outer names — params
+        // are local declarations that take precedence over the outer-scope binding.
+        uninitialized.removeAll(preInitialized)
 
         for (stmt in statements) {
-            // 1. Collect variable declarations that are uninitialized
-            // (but skip any names that are pre-initialized via function parameters)
+            // Collect variable declarations that are uninitialized
             collectUninitializedVars(stmt, uninitialized, preInitialized, fileLocals)
 
-            // 2. Check for uses of uninitialized variables in this statement
+            // Check for uses of uninitialized variables in this statement
             if (uninitialized.isNotEmpty()) {
                 checkUsesOfUninitialized(stmt, uninitialized, source, fileName)
             }
 
-            // 3. Mark variables as assigned if they appear on left side of assignment
+            // Mark variables as assigned if they appear on left side of assignment
             markAssignments(stmt, uninitialized)
 
-            // 4. Recurse into nested scopes
-            checkDefiniteAssignmentInNestedScopes(stmt, source, fileName)
+            // Compute leak set for nested scopes inside this statement:
+            // only `let`-declared outer vars with NO assignment anywhere in any
+            // nested function body of the current scope. This conservative gate
+            // avoids regressions in tests that rely on nested-function reads being
+            // silent (e.g. `let x: T; bar() { x = ... }` patterns).
+            // Skip when leak computation is disabled (file-level scope, see B78.2 entry point).
+            val nestedLeak = if (!enableLeakComputation || uninitialized.isEmpty()) emptySet() else {
+                val letUninitialized = collectLetUninitializedSoFar(statements, uninitialized)
+                if (letUninitialized.isEmpty()) emptySet()
+                else {
+                    val anywhereAssigned = mutableSetOf<String>()
+                    for (other in statements) {
+                        collectAllAssignmentsAnywhere(other, letUninitialized, anywhereAssigned)
+                    }
+                    letUninitialized - anywhereAssigned
+                }
+            }
+
+            // Recurse into nested scopes
+            checkDefiniteAssignmentInNestedScopes(stmt, source, fileName, outerLeak = nestedLeak)
+        }
+    }
+
+    /**
+     * B78.2: filter `uninitialized` (which may include `var` and `const` decls
+     * from prior collection passes) to keep only names declared as `let` in the
+     * current scope's statement list. `const` vars get TS1155, not TS2454, when
+     * read uninitialized; `var` is function-scoped and TypeScript doesn't fire
+     * TS2454 for nested reads of an undeclared-init `var`.
+     */
+    private fun collectLetUninitializedSoFar(
+        statements: List<Statement>,
+        currentUninitialized: Set<String>,
+    ): Set<String> {
+        val letNames = mutableSetOf<String>()
+        for (stmt in statements) {
+            if (stmt !is VariableStatement) continue
+            if (stmt.declarationList.flags != SyntaxKind.LetKeyword) continue
+            if (ModifierFlag.Declare in stmt.modifiers) continue
+            for (decl in stmt.declarationList.declarations) {
+                val n = decl.name
+                if (n is Identifier && n.text in currentUninitialized) {
+                    letNames.add(n.text)
+                }
+            }
+        }
+        return letNames
+    }
+
+    /**
+     * B78.2: walk a statement (including nested function bodies, block-scoped
+     * children, and expression trees) and collect any names from `candidates`
+     * that appear as an assignment target. Covers `x = ...`, destructuring
+     * `[x] = ...` / `{x} = ...`, `for (x in ...) / for (x of ...)`. Used to
+     * suppress outer-leak for names that have ANY assignment anywhere in the
+     * outer scope's body — matching TypeScript's tolerance for nested-function
+     * patterns that initialize captured vars.
+     */
+    private fun collectAllAssignmentsAnywhere(
+        stmt: Statement, candidates: Set<String>, found: MutableSet<String>,
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> collectAssignmentsInExpr(stmt.expression, candidates, found)
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                if (decl.initializer != null) {
+                    val n = decl.name
+                    if (n is Identifier && n.text in candidates) found.add(n.text)
+                }
+                decl.initializer?.let { collectAssignmentsInExpr(it, candidates, found) }
+            }
+            is Block -> stmt.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is IfStatement -> {
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                collectAllAssignmentsAnywhere(stmt.thenStatement, candidates, found)
+                stmt.elseStatement?.let { collectAllAssignmentsAnywhere(it, candidates, found) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> collectAssignmentsInExpr(init, candidates, found)
+                    is VariableDeclarationList -> for (decl in init.declarations) {
+                        decl.initializer?.let { collectAssignmentsInExpr(it, candidates, found) }
+                    }
+                    else -> {}
+                }
+                stmt.condition?.let { collectAssignmentsInExpr(it, candidates, found) }
+                stmt.incrementor?.let { collectAssignmentsInExpr(it, candidates, found) }
+                collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            }
+            is ForInStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> if (init is Identifier && init.text in candidates) found.add(init.text)
+                    else -> {}
+                }
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            }
+            is ForOfStatement -> {
+                when (val init = stmt.initializer) {
+                    is Expression -> if (init is Identifier && init.text in candidates) found.add(init.text)
+                    else -> {}
+                }
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            }
+            is WhileStatement -> {
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            }
+            is DoStatement -> {
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            }
+            is SwitchStatement -> {
+                collectAssignmentsInExpr(stmt.expression, candidates, found)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> clause.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                    is DefaultClause -> clause.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                stmt.catchClause?.block?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                stmt.finallyBlock?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            }
+            is LabeledStatement -> collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is ReturnStatement -> stmt.expression?.let { collectAssignmentsInExpr(it, candidates, found) }
+            is ThrowStatement -> stmt.expression?.let { collectAssignmentsInExpr(it, candidates, found) }
+            else -> {}
+        }
+    }
+
+    private fun collectAssignmentsInExpr(
+        expr: Expression, candidates: Set<String>, found: MutableSet<String>,
+    ) {
+        when (expr) {
+            is BinaryExpression -> {
+                // Only PURE assignments (`=`) suppress the leak — compound assignments
+                // (`+=`, `|=`, etc.) are read-modify-write, so the read still hits the
+                // uninitialized value and TypeScript still emits TS2454. Pre/post inc/dec
+                // are similarly read-modify-write and do NOT count as "first assignment".
+                if (expr.operator == SyntaxKind.Equals) {
+                    val l = expr.left
+                    if (l is Identifier && l.text in candidates) found.add(l.text)
+                    else if (l is ObjectLiteralExpression || l is ArrayLiteralExpression) {
+                        collectDestructuringAssignTargets(l, candidates, found)
+                    }
+                }
+                // Iterative left-spine walk
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    collectAssignmentsInExpr(cur.right, candidates, found)
+                    cur = cur.left
+                }
+                collectAssignmentsInExpr(cur, candidates, found)
+            }
+            is PostfixUnaryExpression -> {
+                // read-modify-write — do NOT mark as suppressing leak (matches TypeScript)
+            }
+            is PrefixUnaryExpression -> {
+                collectAssignmentsInExpr(expr.operand, candidates, found)
+            }
+            is CallExpression -> {
+                collectAssignmentsInExpr(expr.expression, candidates, found)
+                expr.arguments.forEach { collectAssignmentsInExpr(it, candidates, found) }
+            }
+            is NewExpression -> {
+                collectAssignmentsInExpr(expr.expression, candidates, found)
+                expr.arguments?.forEach { collectAssignmentsInExpr(it, candidates, found) }
+            }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> body.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is Expression -> collectAssignmentsInExpr(body, candidates, found)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is ClassExpression -> for (m in expr.members) when (m) {
+                is MethodDeclaration -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is Constructor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is GetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is SetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                else -> {}
+            }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> collectAssignmentsInExpr(p.initializer, candidates, found)
+                is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { collectAssignmentsInExpr(it, candidates, found) }
+                is SpreadAssignment -> collectAssignmentsInExpr(p.expression, candidates, found)
+                is MethodDeclaration -> p.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is GetAccessor -> p.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                is SetAccessor -> p.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+                else -> {}
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { collectAssignmentsInExpr(it, candidates, found) }
+            is ParenthesizedExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is AsExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is TypeAssertionExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is SatisfiesExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is NonNullExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is ConditionalExpression -> {
+                collectAssignmentsInExpr(expr.condition, candidates, found)
+                collectAssignmentsInExpr(expr.whenTrue, candidates, found)
+                collectAssignmentsInExpr(expr.whenFalse, candidates, found)
+            }
+            is PropertyAccessExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is ElementAccessExpression -> {
+                collectAssignmentsInExpr(expr.expression, candidates, found)
+                collectAssignmentsInExpr(expr.argumentExpression, candidates, found)
+            }
+            is SpreadElement -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is AwaitExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is YieldExpression -> expr.expression?.let { collectAssignmentsInExpr(it, candidates, found) }
+            is VoidExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is DeleteExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is TypeOfExpression -> collectAssignmentsInExpr(expr.expression, candidates, found)
+            is TemplateExpression -> for (span in expr.templateSpans) collectAssignmentsInExpr(span.expression, candidates, found)
+            is TaggedTemplateExpression -> {
+                collectAssignmentsInExpr(expr.tag, candidates, found)
+                if (expr.template is TemplateExpression) for (span in (expr.template as TemplateExpression).templateSpans) collectAssignmentsInExpr(span.expression, candidates, found)
+            }
+            is CommaListExpression -> expr.elements.forEach { collectAssignmentsInExpr(it, candidates, found) }
+            else -> {}
+        }
+    }
+
+    private fun collectDestructuringAssignTargets(
+        expr: Expression, candidates: Set<String>, found: MutableSet<String>,
+    ) {
+        when (expr) {
+            is Identifier -> if (expr.text in candidates) found.add(expr.text)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is ShorthandPropertyAssignment -> if (p.name.text in candidates) found.add(p.name.text)
+                is PropertyAssignment -> collectDestructuringAssignTargets(p.initializer, candidates, found)
+                is SpreadAssignment -> collectDestructuringAssignTargets(p.expression, candidates, found)
+                else -> {}
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) when (e) {
+                is SpreadElement -> collectDestructuringAssignTargets(e.expression, candidates, found)
+                is OmittedExpression -> {}
+                else -> collectDestructuringAssignTargets(e, candidates, found)
+            }
+            is BinaryExpression -> if (expr.operator == SyntaxKind.Equals) collectDestructuringAssignTargets(expr.left, candidates, found)
+            is ParenthesizedExpression -> collectDestructuringAssignTargets(expr.expression, candidates, found)
+            is AsExpression -> collectDestructuringAssignTargets(expr.expression, candidates, found)
+            is SatisfiesExpression -> collectDestructuringAssignTargets(expr.expression, candidates, found)
+            is TypeAssertionExpression -> collectDestructuringAssignTargets(expr.expression, candidates, found)
+            else -> {}
         }
     }
 
@@ -7208,11 +7468,17 @@ class Checker(
 
     /**
      * Recurse into function bodies and other nested scopes for TS2454 checking.
+     * B78.2: `outerLeak` carries outer-scope uninitialized vars so nested function
+     * bodies can fire TS2454 for captured-but-unassigned reads. Block-scope
+     * (Block/If/For/While/Try/Switch) recursion propagates the leak through;
+     * function-scope boundaries (FunctionDeclaration/Method/Constructor/Accessor/
+     * ArrowFunction/FunctionExpression) ARE the leak target.
      */
     private fun checkDefiniteAssignmentInNestedScopes(
         stmt: Statement,
         source: String,
         fileName: String,
+        outerLeak: Set<String> = emptySet(),
     ) {
         when (stmt) {
             is FunctionDeclaration -> {
@@ -7221,6 +7487,7 @@ class Checker(
                     checkDefiniteAssignmentInStatements(
                         it.statements, source, fileName,
                         preInitialized = collectParamNames(stmt.parameters),
+                        outerLeak = outerLeak,
                     )
                 }
             }
@@ -7232,24 +7499,28 @@ class Checker(
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is Constructor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is GetAccessor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is SetAccessor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         else -> {}
@@ -7268,6 +7539,13 @@ class Checker(
                     else -> {}
                 }
             }
+            // B78.2: control-flow block bodies (Block / If / For / While / Try / Switch /
+            // Labeled) do NOT propagate outerLeak — they share the outer scope's
+            // `uninitialized` set via the standard recursion, and that set already
+            // emitted TS2454 at the first read. Re-injecting via outerLeak would
+            // cause duplicate emissions at every subsequent read inside the block.
+            // Only true function-scope boundaries (FunctionDeclaration, Method, etc.)
+            // get outerLeak.
             is Block -> checkDefiniteAssignmentInStatements(
                 stmt.statements, source, fileName,
             )
@@ -7308,20 +7586,26 @@ class Checker(
             is VariableStatement -> {
                 // Recurse into class/function expressions in variable initializers
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+                    decl.initializer?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
                 }
             }
-            is ExpressionStatement -> checkDefiniteAssignmentInExprContext(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+            is ExpressionStatement -> checkDefiniteAssignmentInExprContext(stmt.expression, source, fileName, outerLeak)
+            is ReturnStatement -> stmt.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
             else -> {}
         }
     }
 
     /**
      * Walk an expression for nested function/class expressions, recursing into
-     * their bodies to check for TS2454.
+     * their bodies to check for TS2454. B78.2: `outerLeak` carries outer-scope
+     * uninitialized vars so object-literal methods, arrow functions, function
+     * expressions, and class-expression methods can fire TS2454 for
+     * captured-but-unassigned reads (mirrors the FunctionDeclaration handling
+     * in `checkDefiniteAssignmentInNestedScopes`).
      */
-    private fun checkDefiniteAssignmentInExprContext(expr: Expression, source: String, fileName: String) {
+    private fun checkDefiniteAssignmentInExprContext(
+        expr: Expression, source: String, fileName: String, outerLeak: Set<String> = emptySet(),
+    ) {
         when (expr) {
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -7330,28 +7614,32 @@ class Checker(
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is Constructor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is GetAccessor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is SetAccessor -> member.body?.let {
                             checkDefiniteAssignmentInStatements(
                                 it.statements, source, fileName,
                                 preInitialized = collectParamNames(member.parameters),
+                                outerLeak = outerLeak,
                             )
                         }
                         is PropertyDeclaration -> member.initializer?.let {
-                            checkDefiniteAssignmentInExprContext(it, source, fileName)
+                            checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak)
                         }
                         else -> {}
                     }
@@ -7361,6 +7649,7 @@ class Checker(
                 checkDefiniteAssignmentInStatements(
                     it.statements, source, fileName,
                     preInitialized = collectParamNames(expr.parameters),
+                    outerLeak = outerLeak,
                 )
             }
             is ArrowFunction -> {
@@ -7368,82 +7657,86 @@ class Checker(
                     is Block -> checkDefiniteAssignmentInStatements(
                         body.statements, source, fileName,
                         preInitialized = collectParamNames(expr.parameters),
+                        outerLeak = outerLeak,
                     )
-                    is Expression -> checkDefiniteAssignmentInExprContext(body, source, fileName)
+                    is Expression -> checkDefiniteAssignmentInExprContext(body, source, fileName, outerLeak)
                     else -> {}
                 }
             }
             is CallExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-                expr.arguments.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+                expr.arguments.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
             }
             is NewExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName) }
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+                expr.arguments?.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
             }
             is BinaryExpression -> {
                 // Iterative left-spine walk to avoid StackOverflow on deep binary chains
                 var current: Expression = expr
                 val rightStack = ArrayDeque<Expression>()
                 while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
-                checkDefiniteAssignmentInExprContext(current, source, fileName)
-                while (rightStack.isNotEmpty()) checkDefiniteAssignmentInExprContext(rightStack.removeLast(), source, fileName)
+                checkDefiniteAssignmentInExprContext(current, source, fileName, outerLeak)
+                while (rightStack.isNotEmpty()) checkDefiniteAssignmentInExprContext(rightStack.removeLast(), source, fileName, outerLeak)
             }
-            is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is AsExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is NonNullExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is AsExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is TypeAssertionExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is SatisfiesExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is NonNullExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
             is ConditionalExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.condition, source, fileName)
-                checkDefiniteAssignmentInExprContext(expr.whenTrue, source, fileName)
-                checkDefiniteAssignmentInExprContext(expr.whenFalse, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.condition, source, fileName, outerLeak)
+                checkDefiniteAssignmentInExprContext(expr.whenTrue, source, fileName, outerLeak)
+                checkDefiniteAssignmentInExprContext(expr.whenFalse, source, fileName, outerLeak)
             }
-            is PropertyAccessExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
+            is PropertyAccessExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
             is ElementAccessExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-                checkDefiniteAssignmentInExprContext(expr.argumentExpression, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+                checkDefiniteAssignmentInExprContext(expr.argumentExpression, source, fileName, outerLeak)
             }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName)
+            is ArrayLiteralExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName, outerLeak)
             is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> checkDefiniteAssignmentInExprContext(p.initializer, source, fileName)
-                is SpreadAssignment -> checkDefiniteAssignmentInExprContext(p.expression, source, fileName)
+                is PropertyAssignment -> checkDefiniteAssignmentInExprContext(p.initializer, source, fileName, outerLeak)
+                is SpreadAssignment -> checkDefiniteAssignmentInExprContext(p.expression, source, fileName, outerLeak)
                 is MethodDeclaration -> p.body?.let {
                     checkDefiniteAssignmentInStatements(
                         it.statements, source, fileName,
                         preInitialized = collectParamNames(p.parameters),
+                        outerLeak = outerLeak,
                     )
                 }
                 is GetAccessor -> p.body?.let {
                     checkDefiniteAssignmentInStatements(
                         it.statements, source, fileName,
                         preInitialized = collectParamNames(p.parameters),
+                        outerLeak = outerLeak,
                     )
                 }
                 is SetAccessor -> p.body?.let {
                     checkDefiniteAssignmentInStatements(
                         it.statements, source, fileName,
                         preInitialized = collectParamNames(p.parameters),
+                        outerLeak = outerLeak,
                     )
                 }
                 else -> {}
             }
-            is SpreadElement -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is AwaitExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName) }
-            is VoidExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is DeleteExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is TypeOfExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName)
+            is SpreadElement -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is AwaitExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is YieldExpression -> expr.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
+            is VoidExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is DeleteExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is TypeOfExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
+            is PrefixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName, outerLeak)
+            is PostfixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName, outerLeak)
+            is TemplateExpression -> for (span in expr.templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName, outerLeak)
             is TaggedTemplateExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.tag, source, fileName)
+                checkDefiniteAssignmentInExprContext(expr.tag, source, fileName, outerLeak)
                 if (expr.template is TemplateExpression) {
-                    for (span in (expr.template as TemplateExpression).templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName)
+                    for (span in (expr.template as TemplateExpression).templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName, outerLeak)
                 }
             }
-            is CommaListExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName, outerLeak)
             else -> {}
         }
     }
