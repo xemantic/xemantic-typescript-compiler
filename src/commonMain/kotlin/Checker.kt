@@ -66467,6 +66467,56 @@ interface DataView {
                 }
             }
         }
+        // B75.2: Array-derived source → ReadonlyArray<T> target — covariant element shortcut.
+        // TypeScript treats `ReadonlyArray<T>` covariantly in T: any `Array<U>`-derived
+        // value is assignable to `ReadonlyArray<T>` when `U → T`. Without this, both
+        // plain `Array<U>` and SUBCLASS-of-Array (e.g. `class C<T> extends Array<T>`)
+        // vs `ReadonlyArray<A>` fall through to `objectTypeRelatedTo` → spurious
+        // `concat`-method contravariance mismatch (`(...items: U[]) => U[]` vs
+        // `(...items: A[]) => A[]`) because we don't have per-typeparam variance info
+        // to mark `concat`'s element-type position as covariant. Pre-B75.1 this worked
+        // by accident because ReadonlyArray collapsed onto globalArrayType (same target,
+        // covariant arg shortcut applied). Direct extraction via Array's base-type chain
+        // restores the behavior cleanly. Plain `Array<U>` source: directly use source.args.
+        // Subclass-of-Array: walk source's target's baseTypes to find an Array<U>-shaped
+        // ancestor, instantiate with source's args.
+        if (source is Type.Reference && target is Type.Reference &&
+            globalReadonlyArrayType != null && target.target === globalReadonlyArrayType &&
+            source.target !== globalReadonlyArrayType) {
+            val targetArgs = target.resolvedTypeArguments
+            if (targetArgs != null && targetArgs.size == 1) {
+                if (source.target === globalArrayType) {
+                    val srcArgs = source.resolvedTypeArguments
+                    if (srcArgs != null && srcArgs.size == 1) {
+                        if (checkTypeRelatedTo(srcArgs[0], targetArgs[0], relation)) {
+                            return true
+                        }
+                    }
+                } else {
+                    val srcInterface = source.target as? Type.Interface
+                    if (srcInterface != null) {
+                        if (srcInterface.baseTypes == null) resolveBaseTypesLazy(srcInterface)
+                        val srcBaseTypes = srcInterface.baseTypes
+                        val srcTypeParams = srcInterface.typeParameters ?: emptyList()
+                        val srcInstArgs = source.resolvedTypeArguments ?: emptyList()
+                        if (srcBaseTypes != null && srcTypeParams.size == srcInstArgs.size) {
+                            val mapper = createTypeMapper(srcTypeParams, srcInstArgs)
+                            for (baseType in srcBaseTypes) {
+                                val baseRef = baseType as? Type.Reference ?: continue
+                                if (baseRef.target !== globalArrayType &&
+                                    baseRef.target !== globalReadonlyArrayType) continue
+                                val baseArgs = baseRef.resolvedTypeArguments ?: continue
+                                if (baseArgs.size != 1) continue
+                                val instElt = instantiateType(baseArgs[0], mapper)
+                                if (checkTypeRelatedTo(instElt, targetArgs[0], relation)) {
+                                    return true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Object types: structural comparison
         if (source is Type.Object && target is Type.Object) {
             return objectTypeRelatedTo(source, target, relation)
@@ -68351,10 +68401,17 @@ interface DataView {
             // type-display + funcExtra format.
             if (funcMismatch != null && funcMismatch.size == 1 &&
                 funcMismatch[0].trimStart().startsWith("Type '")) {
+                // B75.2: TypeScript renders the method-name suffix as `(...)` when the
+                // target signature has at least one parameter, `()` when it has none.
+                // Mirrors `Type '() => A' is not assignable to type '() => B'.` collapsed
+                // header convention. Use target's first call signature's parameter list
+                // (we already passed the `!callSignatures.isNullOrEmpty()` gate above).
+                val tgtFirstSig = tgtObjForCollapse!!.callSignatures!!.first()
+                val parenSuffix = if (tgtFirstSig.parameters.isNotEmpty()) "(...)" else "()"
                 val collapsedHeader = if (path.isEmpty()) {
-                    "  The types returned by '${chosen.name}()' are incompatible between these types."
+                    "  The types returned by '${chosen.name}$parenSuffix' are incompatible between these types."
                 } else {
-                    "  The types returned by '$propPath()' are incompatible between these types."
+                    "  The types returned by '$propPath$parenSuffix' are incompatible between these types."
                 }
                 return listOf(collapsedHeader) + funcMismatch.map { "  $it" }
             }
