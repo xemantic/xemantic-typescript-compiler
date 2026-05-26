@@ -14629,12 +14629,16 @@ class Checker(
         // Skip keywords that parse as identifiers in our AST
         // Exception: `abstract` used in expression position (e.g. after ASI for
         // `abstract\nclass X {}` at top level) IS reported as TS2304 by TypeScript.
+        // Exception: `declare` used in expression position (e.g. after parser
+        // recovery for `declare module { ... }` anonymous-module syntax → three
+        // statements: `declare;`, `module;`, `{ ... }`) IS reported as TS2304.
         // Exception: node-builtin globals like `module` (contextual keyword for
         // `module X {}` legacy namespace syntax) still get TS2591 when used as
         // bare identifiers because `@types/node` isn't loaded.
-        if (name in KEYWORD_IDENTIFIERS && name != "abstract" &&
+        if (name in KEYWORD_IDENTIFIERS && name != "abstract" && name != "declare" &&
             name !in NODE_BUILTIN_GLOBALS_TS2591) return
         if (name == "abstract" && (inTypePosition || scope.has(name))) return
+        if (name == "declare" && (inTypePosition || scope.has(name))) return
         // TS2583: forward-declarable ES2015+ lib type referenced in type position
         // under `@noLib: true` or `@lib` that excludes es2015+. The KNOWN_GLOBALS set
         // contains these names, so they would otherwise pass via `scope.has` silently.
