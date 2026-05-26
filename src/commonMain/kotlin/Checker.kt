@@ -14195,8 +14195,53 @@ class Checker(
             }
             is TemplateLiteralType -> {
                 type.templateSpans.forEach { collectInferTypeNames(it.type, scope) }
+                // B80.1: TemplateLiteralType parser is shallow — templateSpans is
+                // ALWAYS empty (see CLAUDE.md "TemplateLiteralType parser is
+                // shallow"). The raw source text is preserved in head.rawText.
+                // Extract `infer NAME` names from the raw text so they scope into
+                // the enclosing conditional's trueType (matching TypeScript's
+                // semantics for `S extends ` ${infer R0}` ? Use<R0> : ...`).
+                // Only the names matter for this scope; full type structure is
+                // out of scope (still blocked on proper TemplateLiteralTypeSpan
+                // parsing). Conservative scan: walk rawText for `${`, then look
+                // for `infer` keyword and a following identifier name.
+                extractInferNamesFromRawTemplate(type.head.rawText ?: "", scope)
             }
             else -> {}
+        }
+    }
+
+    /** B80.1: scan a template-literal type's raw source for `infer NAME`
+     *  declarations inside `${...}` placeholders and add them to [scope].
+     *  Tolerates surrounding whitespace and an optional `extends` clause.
+     *  No type parsing — names only. */
+    private fun extractInferNamesFromRawTemplate(raw: String, scope: NameScope) {
+        if (raw.isEmpty()) return
+        var i = 0
+        while (i < raw.length - 1) {
+            if (raw[i] == '$' && raw[i + 1] == '{') {
+                i += 2
+                // Skip whitespace
+                while (i < raw.length && raw[i].isWhitespace()) i++
+                // Look for `infer` keyword followed by whitespace
+                if (i + 6 <= raw.length && raw.substring(i, i + 5) == "infer" &&
+                    (raw[i + 5].isWhitespace() || raw[i + 5] == '(')
+                ) {
+                    i += 5
+                    while (i < raw.length && raw[i].isWhitespace()) i++
+                    // Parse identifier
+                    val nameStart = i
+                    while (i < raw.length && (raw[i].isLetterOrDigit() || raw[i] == '_' || raw[i] == '$')) i++
+                    if (i > nameStart) {
+                        val name = raw.substring(nameStart, i)
+                        if (name.isNotEmpty() && (name[0].isLetter() || name[0] == '_' || name[0] == '$')) {
+                            scope.addTypeParam(name)
+                        }
+                    }
+                }
+            } else {
+                i++
+            }
         }
     }
 
