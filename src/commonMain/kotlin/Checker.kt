@@ -17208,6 +17208,19 @@ class Checker(
                             emitTs2502AtPosition(vdecl.name.pos, varName, source, fileName)
                             continue
                         }
+                        // B81.2 ext (iter19): nested `var X: Name<typeof X>` —
+                        // typeof-X appears inside a TypeReference's typeArguments
+                        // (e.g. `var d: Array<typeof d>`). TypeScript emits TS2502
+                        // because the generic-arg type is required to resolve the
+                        // outer type, creating a circular dependency. Narrow gate:
+                        // ONLY descends into TypeReference typeArguments — does NOT
+                        // descend into FunctionType / ConstructorType (those break the
+                        // cycle, e.g. `var b: () => typeof b` is valid). Recursive
+                        // through nested TypeReferences (e.g. `Promise<Array<typeof X>>`).
+                        if (containsNestedSelfTypeQueryInTypeRef(typeAnn, varName)) {
+                            emitTs2502AtPosition(vdecl.name.pos, varName, source, fileName)
+                            continue
+                        }
                         // B81.2 ext: `declare const c1: { get foo(): typeof c1.foo }` —
                         // accessor inside a TypeLiteral annotation referencing the var name.
                         val typeLit = typeAnn as? TypeLiteral ?: continue
@@ -17394,6 +17407,22 @@ class Checker(
         if (type.typeArguments != null) return false
         val name = type.exprName as? Identifier ?: return false
         return name.text == varName
+    }
+
+    /**
+     * B81.2 iter19: detect `typeof <varName>` nested inside a TypeReference's
+     * typeArguments (e.g. `Array<typeof X>`). Recurses through nested TypeReferences
+     * only — does NOT descend into FunctionType / ConstructorType / TypeLiteral, which
+     * break the circularity (TypeScript does not emit TS2502 for `var b: () => typeof b`).
+     */
+    private fun containsNestedSelfTypeQueryInTypeRef(type: TypeNode, varName: String): Boolean {
+        if (type !is TypeReference) return false
+        val args = type.typeArguments ?: return false
+        for (arg in args) {
+            if (isDirectSelfTypeQuery(arg, varName)) return true
+            if (containsNestedSelfTypeQueryInTypeRef(arg, varName)) return true
+        }
+        return false
     }
 
     /** Emit TS2502 at [namePos] with span [name.length] using shared message format. */
