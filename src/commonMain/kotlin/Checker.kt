@@ -63097,9 +63097,29 @@ interface DataView {
                                     // walking a static method body so re-resolution of `<T>` etc.
                                     // returns errorType, which the new-expression type-arg gate
                                     // uses to skip the 17.20 null-vs-bare-TypeParam emission.
+                                    // B74.5: Static methods that declare their OWN type parameters
+                                    // (e.g. `static MakeHead2<T>()`) MUST still see those — only
+                                    // the class's TPs are out of scope. Mint fresh Type.TypeParam
+                                    // for each method TP (mirrors the pattern at Checker.kt:~49187)
+                                    // and push them onto savedClassScope so explicit `<T>` in
+                                    // `new List<T>(...)` resolves cleanly and the 17.21 re-resolution
+                                    // gate fires for `null` args.
                                     val isStatic = ModifierFlag.Static in member.modifiers
                                     val savedMethodScope = currentTypeParamScope
-                                    if (isStatic) currentTypeParamScope = savedClassScope
+                                    if (isStatic) {
+                                        val methodTpNodes = member.typeParameters
+                                        if (methodTpNodes.isNullOrEmpty()) {
+                                            currentTypeParamScope = savedClassScope
+                                        } else {
+                                            val newScope = (savedClassScope?.toMutableMap() ?: mutableMapOf())
+                                            for (tpNode in methodTpNodes) {
+                                                val tp = Type.TypeParam()
+                                                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpNode.name.text)
+                                                newScope[tpNode.name.text] = tp
+                                            }
+                                            currentTypeParamScope = newScope
+                                        }
+                                    }
                                     try {
                                         populateParameterLocalTypes(member.parameters)
                                         checkCallTypesInStatements(body.statements, source, fileName)
@@ -64498,11 +64518,24 @@ interface DataView {
         // emits TS2302; emitting TS2345 too would double-fault).
         val classTypeParams = (calleeType as? Type.Interface)?.typeParameters
         val hasExplicitTypeArgs = !expr.typeArguments.isNullOrEmpty()
-        val explicitArgsAllResolve = hasExplicitTypeArgs && expr.typeArguments!!.all { tn ->
-            try { getTypeFromTypeNode(tn) !== errorType } catch (_: StackOverflowError) { false }
-        }
+        val resolvedTypeArgs: List<Type>? = if (hasExplicitTypeArgs) {
+            expr.typeArguments!!.map { tn ->
+                try { getTypeFromTypeNode(tn) } catch (_: StackOverflowError) { errorType }
+            }
+        } else null
+        val explicitArgsAllResolve = resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }
         val effectiveSigs: List<Signature> = if (!classTypeParams.isNullOrEmpty() && explicitArgsAllResolve) {
-            signatures.map { sig -> reresolveSigParamsUnderClassScope(sig, classTypeParams) }
+            val reresolved = signatures.map { sig -> reresolveSigParamsUnderClassScope(sig, classTypeParams) }
+            // B74.5: After re-resolving params under class scope, substitute the class
+            // TypeParams with the explicit type arguments. Without this, a static method
+            // `MakeHead3<U>()` calling `new List<U>(...)` displays the param type as the
+            // class's `T` (the un-substituted classT) instead of the supplied `U`. The
+            // class TPs and explicit type args have matching arity (guaranteed by the
+            // type-arg parser/resolver; if mismatched, we'd have emitted TS2558 earlier).
+            if (classTypeParams.size == resolvedTypeArgs!!.size) {
+                val mapper = createTypeMapper(classTypeParams, resolvedTypeArgs)
+                reresolved.map { sig -> instantiateSignature(sig, mapper) }
+            } else reresolved
         } else signatures
         if (effectiveSigs.size == 1) {
             checkArgumentsAgainstSignature(args, effectiveSigs[0], source, fileName)
