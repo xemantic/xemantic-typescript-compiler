@@ -53789,7 +53789,7 @@ interface DataView {
                 // Inference candidate comes from arg's `(x: <annotated>) => ...` callback
                 // — specifically the annotated type of the callback's single Identifier param.
                 val isFnTypedOfT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
-                    fnTypedParamBareTpMatch(pt, tpsSet) === tp
+                    fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
                 if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
@@ -54107,7 +54107,11 @@ interface DataView {
      * aliases (Type.Interface / Reference), or callbacks where the inner param
      * is not a bare TP all fail this gate.
      */
-    private fun fnTypedParamBareTpMatch(type: Type, tps: Set<Type.TypeParam>): Type.TypeParam? {
+    private fun fnTypedParamBareTpMatch(
+        type: Type,
+        tps: Set<Type.TypeParam>,
+        currentTp: Type.TypeParam? = null,
+    ): Type.TypeParam? {
         if (type !is Type.Object) return null
         if (type is Type.Interface) return null
         if (type is Type.Reference) return null
@@ -54122,7 +54126,19 @@ interface DataView {
         val pt = try { getTypeOfSymbol(sig.parameters[0]) } catch (_: StackOverflowError) { return null }
         if (pt !is Type.TypeParam || pt !in tps) return null
         val rt = sig.resolvedReturnType ?: return null
-        if (rt !== voidType && tps.any { typeMentionsTypeParam(rt, it) }) return null
+        // B83.2: when currentTp is provided, only that TP's mention in return type
+        // causes bail (other TPs in `tps` are allowed — they get inferred via their
+        // own per-tp iteration via other arg positions or via gate (f) when their
+        // own callback shape matches). When currentTp is null (param-walk pre-check
+        // at the sig-acceptance gate), accept any function-typed bare-TP-param shape
+        // regardless of return-type TP mentions — sig is acceptable; per-tp gathering
+        // decides which TPs actually get inference from it.
+        if (rt !== voidType) {
+            if (currentTp != null) {
+                if (typeMentionsTypeParam(rt, currentTp)) return null
+            }
+            // currentTp == null: no return-type TP-mention bail (B83.2 relaxation).
+        }
         return pt
     }
 
