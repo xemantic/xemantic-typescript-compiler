@@ -2391,9 +2391,21 @@ class Checker(
                         // (e.g. inferFromNestedSameShapeTuple_ts's `type T1<T> = [number, T1<{x:T}>]`
                         // declaration shouldn't emit TS2589 — only the deep USAGE should).
                         // Save/reset to NOT propagate bail flag upward from type-alias resolutions.
+                        // B57.3 (2026-05-26): exception — for CONCRETE (non-generic) type
+                        // aliases whose body USES a generic alias and triggers the depth
+                        // bail (e.g. `type M = N<number, "M">` where N is recursive), emit
+                        // TS2589 at the alias body. Concrete aliases ARE the usage site;
+                        // unlike generic-alias declarations they have no later "use" to
+                        // attribute the diagnostic to.
                         val savedBail = deepInstantiationBailed
                         deepInstantiationBailed = false
                         val type = getTypeOfSymbol(symbol)
+                        val taDecl = if (symbol.flags.hasAny(SymbolFlags.TypeAlias))
+                            symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                            else null
+                        if (deepInstantiationBailed && taDecl != null && taDecl.typeParameters.isNullOrEmpty()) {
+                            emitTs2589AtTypeNode(taDecl.type, source, fileName)
+                        }
                         deepInstantiationBailed = savedBail
                         if (type !== anyType && type !== errorType) {
                             typeMap[name] = type
