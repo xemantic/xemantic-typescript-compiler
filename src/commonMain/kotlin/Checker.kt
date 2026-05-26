@@ -17197,6 +17197,24 @@ class Checker(
                         checkAccessorSelfTypeofInStatements(body.statements, source, fileName)
                     }
                 }
+                is VariableStatement -> {
+                    // B81.2 ext: `declare const c1: { get foo(): typeof c1.foo }` —
+                    // accessor inside a TypeLiteral annotation referencing the var name.
+                    for (vdecl in stmt.declarationList.declarations) {
+                        val varName = (vdecl.name as? Identifier)?.text ?: continue
+                        val typeLit = vdecl.type as? TypeLiteral ?: continue
+                        checkAccessorSelfTypeofInTypeLiteralMembers(
+                            typeLit.members, containerName = varName, source = source, fileName = fileName)
+                    }
+                }
+                is TypeAliasDeclaration -> {
+                    // B81.2 ext: `type T1 = { get foo(): T1["foo"] }` —
+                    // accessor inside a TypeLiteral alias referencing the alias name.
+                    val aliasName = stmt.name.text
+                    val typeLit = stmt.type as? TypeLiteral ?: continue
+                    checkAccessorSelfTypeofInTypeLiteralMembers(
+                        typeLit.members, containerName = aliasName, source = source, fileName = fileName)
+                }
                 else -> {}
             }
         }
@@ -17220,24 +17238,141 @@ class Checker(
         }
     }
 
+    /**
+     * B81.2 ext: walk TypeLiteral members for `get/set X(...): typeof <containerName>.X`
+     * (variable case) or `: <containerName>["X"]` (type alias case). Emits TS2502 at
+     * the accessor's name position. `containerName` is the var or alias identifier
+     * that the annotation must reference.
+     */
+    private fun checkAccessorSelfTypeofInTypeLiteralMembers(
+        members: List<ClassElement>,
+        containerName: String,
+        source: String,
+        fileName: String,
+    ) {
+        // Pre-collect which accessor names have a paired NON-self-ref annotation
+        // somewhere in the literal (e.g. `get foo(): string; set foo(v: typeof c.foo)`).
+        // When that's true, suppress TS2502 on the self-ref side — TypeScript treats
+        // the pair as resolved through the concrete side.
+        val pairedNonSelfRef = mutableSetOf<String>()
+        for (m in members) {
+            when (m) {
+                is GetAccessor -> {
+                    val n = nameTextOrNull(m.name) ?: continue
+                    if (m.type != null && !isSelfReferentialAnnotation(m.type, containerName, n)) {
+                        pairedNonSelfRef.add(n)
+                    }
+                }
+                is SetAccessor -> {
+                    val n = nameTextOrNull(m.name) ?: continue
+                    val pt = m.parameters.firstOrNull()?.type
+                    if (pt != null && !isSelfReferentialAnnotation(pt, containerName, n)) {
+                        pairedNonSelfRef.add(n)
+                    }
+                }
+                else -> {}
+            }
+        }
+        for (member in members) {
+            when (member) {
+                is GetAccessor -> {
+                    val n = nameTextOrNull(member.name)
+                    if (n != null && n in pairedNonSelfRef) continue
+                    emitTs2502ForSelfTypeofAccessor(
+                        member.name, member.type, source, fileName, container = containerName)
+                }
+                is SetAccessor -> {
+                    val n = nameTextOrNull(member.name)
+                    if (n != null && n in pairedNonSelfRef) continue
+                    val paramType = member.parameters.firstOrNull()?.type
+                    emitTs2502ForSelfTypeofAccessor(
+                        member.name, paramType, source, fileName, container = containerName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun nameTextOrNull(name: NameNode): String? = when (name) {
+        is Identifier -> name.text
+        is StringLiteralNode -> name.text
+        else -> null
+    }
+
+    /** Mirrors the match predicate inside [emitTs2502ForSelfTypeofAccessor]. */
+    private fun isSelfReferentialAnnotation(
+        type: TypeNode,
+        container: String,
+        accessorName: String,
+    ): Boolean = when (type) {
+        is TypeQuery -> {
+            if (type.typeArguments != null) false
+            else {
+                val expr = type.exprName
+                expr is QualifiedName && (expr.left as? Identifier)?.text == container
+                    && expr.right.text == accessorName
+            }
+        }
+        is IndexedAccessType -> {
+            if (container == "this") false
+            else {
+                val obj = type.objectType
+                val idx = type.indexType
+                val objMatches = obj is TypeReference && obj.typeArguments == null
+                    && (obj.typeName as? Identifier)?.text == container
+                val idxMatches = idx is LiteralType
+                    && (idx.literal as? StringLiteralNode)?.text == accessorName
+                objMatches && idxMatches
+            }
+        }
+        else -> false
+    }
+
+    /**
+     * Emit TS2502 when [type] is `typeof <container>.<accessorName>` (default container is "this"
+     * for the class accessor case) or — when [container] != "this" — also matches
+     * `<container>["<accessorName>"]` (IndexedAccessType with string literal index).
+     */
     private fun emitTs2502ForSelfTypeofAccessor(
         accessorName: NameNode,
         type: TypeNode?,
         source: String,
         fileName: String,
+        container: String = "this",
     ) {
-        if (type !is TypeQuery) return
-        if (type.typeArguments != null) return
-        val expr = type.exprName
-        if (expr !is QualifiedName) return
-        val left = expr.left
-        if (left !is Identifier || left.text != "this") return
+        if (type == null) return
         val nameText = when (accessorName) {
             is Identifier -> accessorName.text
             is StringLiteralNode -> accessorName.text
             else -> return
         }
-        if (expr.right.text != nameText) return
+        val matches = when (type) {
+            is TypeQuery -> {
+                if (type.typeArguments != null) return
+                val expr = type.exprName
+                if (expr !is QualifiedName) false
+                else {
+                    val left = expr.left
+                    left is Identifier && left.text == container && expr.right.text == nameText
+                }
+            }
+            is IndexedAccessType -> {
+                // `T1["foo"]` shape: objectType=TypeReference(Identifier(T1)), indexType=LiteralType(StringLiteralNode("foo")).
+                // Only applies to non-`this` containers (the class `this.X` form is always TypeQuery).
+                if (container == "this") false
+                else {
+                    val obj = type.objectType
+                    val idx = type.indexType
+                    val objMatches = obj is TypeReference && obj.typeArguments == null
+                        && (obj.typeName as? Identifier)?.text == container
+                    val idxMatches = idx is LiteralType
+                        && (idx.literal as? StringLiteralNode)?.text == nameText
+                    objMatches && idxMatches
+                }
+            }
+            else -> false
+        }
+        if (!matches) return
         // Emit at the accessor's name position.
         val namePos = accessorName.pos
         val nameLen = nameText.length
