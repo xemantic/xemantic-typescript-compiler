@@ -832,7 +832,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
         "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
         "alwaysstrict", "newline", "noresolve", "moduledetection",
-        "outdir", "allowjs", "ignoredeprecations", "moduleresolution",
+        "outdir", "rootdir", "allowjs", "ignoredeprecations", "moduleresolution",
         // Deprecated/removed options needed for diagnostics
         "charset", "keyofstringsonly", "noimplicitusestrict", "nostrictgenericchecks",
         "suppressexcesspropertyerrors", "suppressimplicitanyindexerrors",
