@@ -52069,6 +52069,31 @@ interface DataView {
     }
 
     /**
+     * B81.1a (2026-05-26): Loop-aware variant of [getNarrowedTypeForReference].
+     *
+     * Uses [narrowTypeFromFlowFollowLoopEntry] instead of [narrowTypeFromFlow]
+     * so reads INSIDE a loop body see the narrowing established at loop entry
+     * (via `antecedents[0]`), rather than the declared type wash-out at
+     * FlowLoopLabel. Suitable for property-path narrowing — see B81.1c (the
+     * TS18048 emitter) for the intended caller.
+     *
+     * Gate: opt-in by NEW callers only. The existing TS2339 / TS2454 / TS2532
+     * paths still call [getNarrowedTypeForReference] to preserve their
+     * conservative semantics. Broader adoption of loop-entry narrowing in
+     * those paths is risky (back-edge property reassignment is not yet
+     * tracked) — see B78.2 / FlowLoopLabel-back-edge gotcha for the
+     * underlying soundness concern.
+     */
+    private fun getNarrowedTypeForReferenceFollowLoopEntry(
+        declaredType: Type, expr: Expression,
+    ): Type {
+        val path = getReferencePath(expr) ?: return declaredType
+        val flow = getFlowAt(expr) ?: return declaredType
+        val seen = mutableSetOf<Int>()
+        return narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
+    }
+
+    /**
      * Serialize a reference expression as a dotted path. Returns null for
      * shapes that can't be encoded (e.g., element access, call expressions).
      * Used by 17.34 PropertyAccess narrowing.
