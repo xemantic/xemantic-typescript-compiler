@@ -6846,6 +6846,17 @@ class Parser(
     private fun parseTypeLiteralOrMappedType(): TypeNode {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
+        // B57.3a: Detect single-mapped-type shape `{ readonly? [K in C as N]?: V }`
+        // and emit a real MappedType AST node instead of the placeholder
+        // PropertyDeclaration-inside-TypeLiteral. Detection requires the OPTIONAL
+        // leading `readonly` / `+readonly` / `-readonly` modifier, then `[`,
+        // Identifier, `in`. After the closing `}`, no further members may follow
+        // (single-entry brace contents). On any non-match, fall through to the
+        // original TypeLiteral path so multi-member braces and non-mapped braces
+        // are unchanged.
+        if (isSingleMappedTypeBraceContents()) {
+            return parseMappedType(pos)
+        }
         val savedInTypeLiteral = inTypeLiteralForErrorWording
         inTypeLiteralForErrorWording = true
         val members = try { parseInterfaceMembers() } finally { inTypeLiteralForErrorWording = savedInTypeLiteral }
@@ -6855,6 +6866,114 @@ class Parser(
             parseExpected(SyntaxKind.CloseBrace)
         }
         return TypeLiteral(members = members, pos = pos, end = getEnd())
+    }
+
+    /**
+     * Lookahead detector for the single-mapped-type brace shape, called RIGHT
+     * AFTER `{` has been consumed. Recognizes:
+     *   - optional `readonly` / `+readonly` / `-readonly`
+     *   - `[` `Identifier` `in`
+     * Restores scanner state. Returns true only when the next non-`{` token
+     * begins a mapped-type entry. Multi-member braces and non-mapped braces
+     * still go through the TypeLiteral path.
+     */
+    private fun isSingleMappedTypeBraceContents(): Boolean {
+        return scanner.lookAhead {
+            var t = scanner.getToken()
+            // Optional leading +/- before readonly
+            if (t == SyntaxKind.Plus || t == SyntaxKind.Minus) {
+                scanner.scan()
+                t = scanner.getToken()
+            }
+            // Optional `readonly` (keyword OR contextual identifier)
+            if (t == SyntaxKind.ReadonlyKeyword ||
+                (isIdentifierToken(t) && scanner.getTokenValue() == "readonly")
+            ) {
+                scanner.scan()
+                t = scanner.getToken()
+            }
+            // Must now see `[` `Identifier` `in`
+            if (t != SyntaxKind.OpenBracket) return@lookAhead false
+            scanner.scan()
+            if (!isIdentifierToken(scanner.getToken())) return@lookAhead false
+            scanner.scan()
+            scanner.getToken() == SyntaxKind.InKeyword
+        }
+    }
+
+    /**
+     * B57.3a: Parse `{ readonly? [K in C as N]?: V }` into a MappedType AST.
+     * `pos` is the position of the opening `{` (already consumed by caller).
+     * Emits TS7039 when the value type is omitted under noImplicitAny.
+     */
+    private fun parseMappedType(pos: Int): TypeNode {
+        // Optional readonly modifier (with optional +/- prefix)
+        var readonlyToken = false
+        if (token == SyntaxKind.Plus || token == SyntaxKind.Minus) {
+            // +readonly / -readonly: consume modifier sign, then readonly
+            nextToken()
+            if (token == SyntaxKind.ReadonlyKeyword ||
+                (isIdentifier() && scanner.getTokenValue() == "readonly")
+            ) {
+                readonlyToken = true
+                nextToken()
+            }
+        } else if (token == SyntaxKind.ReadonlyKeyword ||
+            (isIdentifier() && scanner.getTokenValue() == "readonly")
+        ) {
+            readonlyToken = true
+            nextToken()
+        }
+        parseExpected(SyntaxKind.OpenBracket)
+        val tpPos = getPos()
+        val tpName = parseIdentifier()
+        parseExpected(SyntaxKind.InKeyword)
+        val constraint = parseType()
+        val tp = TypeParameter(name = tpName, constraint = constraint, pos = tpPos, end = getEnd())
+        // Optional `as` clause for key-remapping
+        val nameType = if (parseOptional(SyntaxKind.AsKeyword)) parseType() else null
+        parseExpected(SyntaxKind.CloseBracket)
+        // Optional `?`/`+?`/`-?` after `]`
+        var questionToken = false
+        when (token) {
+            SyntaxKind.Question -> { questionToken = true; nextToken() }
+            SyntaxKind.Plus, SyntaxKind.Minus -> {
+                nextToken()
+                if (token == SyntaxKind.Question) { questionToken = true; nextToken() }
+            }
+            else -> {}
+        }
+        val mappedTypeEnd = scanner.getPrevTokenEnd()
+        val hasValueType = parseOptional(SyntaxKind.Colon)
+        val valueType = if (hasValueType) parseType() else null
+        // TS7039: mapped type without an explicit value type implicitly types
+        // members as `any`. Same emission shape as the placeholder branch in
+        // parseIndexSignatureOrProperty.
+        if (!hasValueType && noImplicitAny) {
+            var braceStart = pos - 1
+            while (braceStart > 0 && source[braceStart] != '{') braceStart--
+            val sqStart = if (braceStart >= 0 && source[braceStart] == '{') braceStart else pos
+            var braceEnd = mappedTypeEnd
+            while (braceEnd < source.length && source[braceEnd] != '}') braceEnd++
+            val sqEnd = if (braceEnd < source.length && source[braceEnd] == '}') braceEnd + 1 else mappedTypeEnd
+            reportError(
+                "Mapped object type implicitly has an 'any' template type.",
+                code = 7039, overrideStart = sqStart, overrideLength = (sqEnd - sqStart).coerceAtLeast(1),
+            )
+        }
+        // Consume optional trailing `;` / `,` (mapped-type entries inside braces
+        // tolerate a single terminator before `}`).
+        parseOptional(SyntaxKind.Semicolon) || parseOptional(SyntaxKind.Comma)
+        parseExpected(SyntaxKind.CloseBrace)
+        return MappedType(
+            typeParameter = tp,
+            nameType = nameType,
+            type = valueType,
+            questionToken = questionToken,
+            readonlyToken = readonlyToken,
+            pos = pos,
+            end = getEnd(),
+        )
     }
 
     private fun parseConstructorType(): TypeNode {
