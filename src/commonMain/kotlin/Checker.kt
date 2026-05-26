@@ -50015,7 +50015,22 @@ interface DataView {
                                 sym.valueDeclaration = p
                                 val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
                                 val paramType = if (rawParamType === errorType) anyType
-                                                else instantiateType(rawParamType, mapper)
+                                                else if (rawParamType is Type.Object
+                                                    && rawParamType !is Type.Reference
+                                                    && rawParamType !is Type.Interface
+                                                    && (!rawParamType.callSignatures.isNullOrEmpty()
+                                                        || !rawParamType.constructSignatures.isNullOrEmpty())) {
+                                                    // B81.1d: function-typed parameter (e.g.
+                                                    // `compareFn?: (a: T, b: T) => number`). Plain
+                                                    // instantiateType is a no-op for function-shaped
+                                                    // Type.Object (see CLAUDE.md instantiateType
+                                                    // gotcha). Use the in-place sig walker so callers
+                                                    // resolving the method's param type for contextual
+                                                    // inference (B81.1b FunctionExpression branch) see
+                                                    // the substituted inner sig.
+                                                    substituteOuterTypeArgsInGenericFnObject(rawParamType, mapper)
+                                                    rawParamType
+                                                } else instantiateType(rawParamType, mapper)
                                 symbolTypes[sym.id] = paramType
                                 sym
                             }
@@ -54281,6 +54296,52 @@ interface DataView {
         val sigs = calleeType.constructSignatures
         if (sigs.isNullOrEmpty()) return anyType
         return sigs[0].resolvedReturnType ?: anyType
+    }
+
+    /**
+     * B81.1d: Resolve a callee expression of the form `this.a.b.c` using the
+     * [enclosingClassType] as the head type (rather than `getTypeOfIdentifier`
+     * which returns `anyType` for `this`). Returns null when:
+     * - chain head is not bare `this`
+     * - [enclosingClassType] is null
+     * - any segment fails to resolve
+     * - the final type is `anyType` / `errorType`
+     *
+     * Mirrors [resolveUncalledOperandType] in spirit but uses the callee's
+     * enclosingClassType passed through `checkPropertyAccessInExpr`. Narrow
+     * scope by design — only the contextual-argument-type computation for
+     * CallExpression callees consults this; broader use risks regressions.
+     */
+    private fun resolveCalleeChainWithThis(
+        callee: PropertyAccessExpression, enclosingClassType: Type?,
+    ): Type? {
+        if (enclosingClassType == null) return null
+        // Collect path segments [head, p1, p2, ...]
+        val rev = mutableListOf<String>()
+        var cur: Expression = callee
+        while (cur is PropertyAccessExpression) {
+            rev.add(cur.name.text)
+            cur = cur.expression
+            while (cur is ParenthesizedExpression) cur = cur.expression
+        }
+        if (cur !is Identifier || cur.text != "this") return null
+        val segs = rev.reversed()
+        // Walk segments starting from enclosingClassType
+        var t: Type = enclosingClassType
+        for (seg in segs) {
+            if (t === anyType || t === errorType) return null
+            val app = try { getApparentType(t) } catch (_: Throwable) { return null }
+            val prop = try { getPropertyOfType(app, seg) } catch (_: Throwable) { null } ?: return null
+            t = try {
+                if (app is Type.Reference) {
+                    resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
+                } else {
+                    getTypeOfSymbol(prop)
+                }
+            } catch (_: Throwable) { return null }
+        }
+        if (t === anyType || t === errorType) return null
+        return t
     }
 
     /** Get the type of a property access expression (e.g., `obj.prop`). */
@@ -61324,7 +61385,19 @@ interface DataView {
                         val callee = expr.expression
                         val calleeType = when (callee) {
                             is Identifier -> getTypeOfIdentifier(callee)
-                            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+                            is PropertyAccessExpression -> {
+                                // B81.1d: `this`-receiver gap for contextual-param
+                                // inference. `getTypeOfPropertyAccess(this.x.sort)` →
+                                // `getTypeOfIdentifier("this")` returns anyType, so the
+                                // contextual chain breaks. When the callee chain's head
+                                // is `this` and we have enclosingClassType from the class-
+                                // body walker, manually walk the chain using
+                                // enclosingClassType as the head — mirroring
+                                // resolveUncalledOperandType. Narrow gate: head=`this`,
+                                // enclosingClassType != null, all segments resolve.
+                                resolveCalleeChainWithThis(callee, enclosingClassType)
+                                    ?: getTypeOfPropertyAccess(callee)
+                            }
                             else -> return@run null
                         }
                         if (calleeType !is Type.Object) return@run null
