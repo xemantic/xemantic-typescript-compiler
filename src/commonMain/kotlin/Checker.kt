@@ -619,6 +619,12 @@ class Checker(
         // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
         // (syntactic type-shape error, not an implicit-any diagnostic).
         checkNonArrayRestParameters()
+        // 7b''. B74.4: TS7051/TS7006 for interface MethodDeclaration params whose name
+        // is a strict-mode reserved word — fires unconditionally (mirrors TypeScript's
+        // behavior in `strictModeReservedWord2.ts`-style sources).
+        if (!options.strictExplicitlyFalse) {
+            checkReservedWordInterfaceParams()
+        }
         // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
         // when the user's `@lib` excludes es2015+ (es2015.iterable provides
         // Symbol.iterator); without it, only Array and string are iterable.
@@ -9526,6 +9532,97 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    /**
+     * B74.4: TS7051/TS7006 for interface method parameters whose name is a
+     * strict-mode reserved word (e.g. `package`, `protected`, `let`).
+     * Fires unconditionally — independent of `noImplicitAny`/`strict` — because
+     * a strict-mode reserved word as a param name is a syntactic error that
+     * TypeScript flags universally. This mirrors TypeScript's behavior in
+     * `strictModeReservedWord2.ts`-style sources (no `@strict`, no
+     * `@noImplicitAny`, but TS7006/TS7051 still emitted).
+     *
+     * Narrow gate: only inside `InterfaceDeclaration` `MethodDeclaration`
+     * params, and only when the param name is in `STRICT_MODE_RESERVED_WORDS`.
+     * Reuses `isTypeLikeParamName` to decide TS7051 vs TS7006.
+     */
+    private fun checkReservedWordInterfaceParams() {
+        // Skip when checkImplicitAnyParameters already handles all interface methods
+        // (avoids double-emission of TS7051/TS7006).
+        if (options.noImplicitAny || options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkReservedWordInterfaceParams(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
+        }
+    }
+
+    private fun walkReservedWordInterfaceParams(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> {
+                    for (member in stmt.members) {
+                        if (member is MethodDeclaration) {
+                            for ((idx, param) in member.parameters.withIndex()) {
+                                val name = param.name as? Identifier ?: continue
+                                if (name.text !in STRICT_MODE_RESERVED_WORDS) continue
+                                if (param.type != null) continue
+                                if (param.initializer != null) continue
+                                if (param.dotDotDotToken) continue
+                                val start = name.pos
+                                val length = if (param.questionToken) name.text.length + 1 else name.text.length
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                if (isTypeLikeParamName(name.text)) {
+                                    diagnostics.add(Diagnostic(
+                                        message = "Parameter has a name but no type. Did you mean 'arg$idx: ${name.text}'?",
+                                        category = DiagnosticCategory.Error,
+                                        code = 7051,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                } else {
+                                    diagnostics.add(Diagnostic(
+                                        message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 7006,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
+                is ModuleDeclaration -> {
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> walkReservedWordInterfaceParams(body.statements, source, fileName)
+                        is ModuleDeclaration -> walkReservedWordInterfaceParams(listOf(body), source, fileName)
+                        else -> {}
+                    }
+                }
+                else -> {}
             }
         }
     }
