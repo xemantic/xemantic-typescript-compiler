@@ -15664,6 +15664,29 @@ class Checker(
     }
 
     /**
+     * B85.1c: BFS-walk all namespace exports for [name], returning the first
+     * Type-flagged hit. Used by element-access / property-access chain resolution
+     * (B85.1d) where a type name is referenced from inside a deeply-nested namespace
+     * (e.g. `TemplateStorage` referenced from `namespace MsPortal.Util.TemplateEngine`)
+     * but `currentFileLocals` only carries the top-level namespace symbol. Filtering
+     * by `SymbolFlags.Type` avoids returning value-only symbols that share a name with
+     * a type from an unrelated namespace.
+     */
+    private fun findSymbolInNamespaceExports(name: String, topLevel: Collection<Symbol>): Symbol? {
+        val queue = ArrayDeque<Symbol>()
+        val visited = HashSet<Int>()
+        queue.addAll(topLevel)
+        while (queue.isNotEmpty()) {
+            val sym = queue.removeFirst()
+            if (!visited.add(sym.id)) continue
+            val exports = sym.exports ?: continue
+            exports[name]?.let { if (it.flags.hasAny(SymbolFlags.Type)) return it }
+            for (child in exports.values) queue.addLast(child)
+        }
+        return null
+    }
+
+    /**
      * Recursively search [stmts] for the first `let`/`const` declaration of [name].
      * Returns the position of the identifier in the declaration, or null if not found.
      */
