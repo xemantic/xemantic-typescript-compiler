@@ -54219,7 +54219,69 @@ interface DataView {
                     fnTypedParamMultiBareTpMatch(pt, tpsSet, currentTp = tp)
                         ?.takeIf { slots -> slots.any { it === tp } }
                 } else null
-                if (!isFnTypedOfT && multiSlots == null) continue
+                // B83.4d-quick (NEW 2026-05-27): callback-return-tp inference for the
+                // shape `f<S,T>(arg1: S, cb: (x: S) => T): T` (S already inferred via
+                // pass-1, T comes from the un-annotated lambda's concise body re-typed
+                // under `currentLocalTypes[lp.name] = mapper(S)`). Triggered ONLY when
+                // (a) the existing isFnTypedOfT / multiSlots paths don't apply (callback
+                // param isn't current `tp`), (b) the callback param IS some OTHER tp
+                // (otherTp ∈ tps, otherTp != tp), (c) callback return type MENTIONS the
+                // current tp, (d) otherTp is already in mapperPairs (inferred earlier),
+                // (e) the lambda is concise-body (single expression — NOT Block), (f)
+                // lambda has exactly 1 Identifier param, no annotation. Narrow gate;
+                // intentionally skips Block bodies and multi-param shapes (B83.4 follow-up).
+                if (!isFnTypedOfT && multiSlots == null) {
+                    val fnObj = pt as? Type.Object
+                    val callbackSig = fnObj?.callSignatures?.singleOrNull()
+                    val callbackParam = callbackSig?.parameters?.singleOrNull()
+                    val callbackParamType = callbackParam?.let {
+                        try { getTypeOfSymbol(it) } catch (_: StackOverflowError) { null }
+                    }
+                    val callbackReturn = callbackSig?.resolvedReturnType
+                    val otherTp = (callbackParamType as? Type.TypeParam)
+                        ?.takeIf { it in tpsSet && it !== tp }
+                    val otherTpMapped = otherTp?.let { o -> mapperPairs.firstOrNull { it.first === o }?.second }
+                    if (fnObj != null && otherTp != null && otherTpMapped != null &&
+                        callbackReturn != null && typeMentionsTypeParam(callbackReturn, tp) &&
+                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                        fnObj.symbol == null &&
+                        fnObj.constructSignatures.isNullOrEmpty() &&
+                        fnObj.members.isNullOrEmpty() &&
+                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                        val arg = args[i]
+                        val (argParamsLocal, argBody) = when (arg) {
+                            is ArrowFunction -> arg.parameters to arg.body
+                            is FunctionExpression -> arg.parameters to arg.body
+                            else -> null to null
+                        }
+                        if (argParamsLocal != null && argParamsLocal.size == 1 &&
+                            argBody != null && argBody !is Block) {
+                            val lp = argParamsLocal[0]
+                            val lpName = (lp.name as? Identifier)?.text
+                            if (!lp.dotDotDotToken && lpName != null && lp.type == null) {
+                                val savedLocalTypes = currentLocalTypes
+                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                currentLocalTypes[lpName] = otherTpMapped
+                                val bodyType = try {
+                                    getTypeOfExpression(argBody as Expression)
+                                } catch (_: StackOverflowError) {
+                                    null
+                                } finally {
+                                    currentLocalTypes = savedLocalTypes
+                                }
+                                if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
+                                    !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                    val widened = widenType(bodyType)
+                                    if (isNamedLikeAtom(widened) ||
+                                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                        candidates.add(Candidate(i, widened, null))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue
+                }
                 val arg = args[i]
                 if (arg is SpreadElement) continue
                 val argParams = when (arg) {
