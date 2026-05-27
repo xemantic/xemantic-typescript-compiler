@@ -338,15 +338,6 @@ class Checker(
     private var currentTypeAliasArgs: Map<String, Type>? = null
     private var typeAliasResolutionDepth: Int = 0
 
-    /** B86.1b-1: Additive infrastructure for inference-context mapper threading.
-     *  When a call site enters an inference context (e.g. resolving a generic
-     *  function's signature against contextual type args), it can push a
-     *  TypeParam → Type mapping here. Consumers downstream (B86.1b-2) read this
-     *  to substitute TypeParams with their inferred concrete types. Save/restore
-     *  semantics: callers save the previous value, set their own, and restore
-     *  on exit. ZERO consumers/producers in this substep — purely additive. */
-    private var currentInferenceMapper: Map<Type.TypeParam, Type>? = null
-
     /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
      *  type's value type recursively references another mapped type / generic alias
      *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
