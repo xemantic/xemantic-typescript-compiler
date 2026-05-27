@@ -72689,6 +72689,26 @@ interface DataView {
         }
     }
 
+    /**
+     * B86.7a (additive helper, no callers yet): strip outer `null` / `undefined`
+     * constituents from a `Type.Union` target when the source is non-nullable. Used
+     * downstream to render `A | B` instead of `A | B | null | undefined` in TS2322
+     * diagnostics where the actual incompatibility is between the non-nullish
+     * shapes. Returns [targetType] unchanged when:
+     *   - target is not a Type.Union,
+     *   - source is itself nullable (both nullable: keep null in display),
+     *   - target has no nullish constituents to strip,
+     *   - stripping would leave nothing behind (safety).
+     */
+    private fun stripNullishFromDisplayTarget(targetType: Type, sourceType: Type): Type {
+        if (targetType !is Type.Union) return targetType
+        if (typeIsPossiblyNullish(sourceType)) return targetType
+        val nonNullish = targetType.types.filter { it !== nullType && it !== undefinedType }
+        if (nonNullish.size == targetType.types.size) return targetType
+        if (nonNullish.isEmpty()) return targetType
+        return if (nonNullish.size == 1) nonNullish[0] else getUnionType(nonNullish)
+    }
+
     private fun formatTypeForDisplay(typeNode: TypeNode): String? {
         return when (typeNode) {
             is KeywordTypeNode -> when (typeNode.kind) {
