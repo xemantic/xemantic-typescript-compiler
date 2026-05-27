@@ -51293,7 +51293,18 @@ interface DataView {
                 if (decl != null && decl.typeParameters.isNullOrEmpty() &&
                     shouldRegister && !aliasDisplayMap.containsKey(resolved.id)
                 ) {
-                    aliasDisplayMap[resolved.id] = symbol.name to emptyList()
+                    // B86.4: qualify alias name with enclosing namespace path
+                    // (e.g. `Foo.Yep` instead of `Yep` for type alias declared inside
+                    // `namespace Foo`). Matches TypeScript's display when two same-named
+                    // aliases live in different namespaces and appear in the same union
+                    // (e.g. `Foo.Yep | Bar.Yep` not `Yep | Yep`).
+                    val segments = mutableListOf(symbol.name)
+                    var cur = symbol.parent
+                    while (cur != null && cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+                        segments.add(0, cur.name)
+                        cur = cur.parent
+                    }
+                    aliasDisplayMap[resolved.id] = segments.joinToString(".") to emptyList()
                 }
                 resolved
             }
