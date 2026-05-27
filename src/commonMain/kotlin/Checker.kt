@@ -49883,8 +49883,16 @@ interface DataView {
                                 tt.members.isNullOrEmpty() &&
                                 tt.constructSignatures.isNullOrEmpty() &&
                                 tt.id !in aliasDisplayMap
+                            // B86.7b: when target is a nullable Union (`A | null | undefined`)
+                            // and source is non-nullable, strip the outer nullish constituents
+                            // from BOTH the display and the chain comparison so we report the
+                            // structural mismatch against the underlying shape (matches TypeScript's
+                            // `elaboratedErrorsOnNullableTargets01` baseline shape). The helper
+                            // returns `tt` unchanged when not applicable.
+                            val ttForDisplay = stripNullishFromDisplayTarget(tt, sourceType)
                             val displayTarget = if (isIntrinsicNumericLiteral) resolvedDisplay
                                 else if (isPureFuncNoAlias) resolvedDisplay
+                                else if (ttForDisplay !== tt) typeToString(ttForDisplay)
                                 else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation!!) ?: resolvedDisplay
                                 else resolvedDisplay
                             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -49990,9 +49998,13 @@ interface DataView {
                                 }
                             } else {
                                 // Object→Object: property-level elaboration (16.1)
-                                if (sourceType is Type.Object && tt is Type.Object) {
+                                // B86.7b: use the (possibly stripped) ttForDisplay so when target
+                                // was `A | null | undefined`, we still get the property chain
+                                // against the underlying `A`.
+                                val ttForChain = ttForDisplay
+                                if (sourceType is Type.Object && ttForChain is Type.Object) {
                                     lastChainMissingPropSymbol = null
-                                    val propElab = getPropertyElaborationChain(sourceType, tt)
+                                    val propElab = getPropertyElaborationChain(sourceType, ttForChain)
                                     if (propElab != null) chain.addAll(propElab)
                                 }
                                 // 16.4cn: Missing index signature elaboration
