@@ -26797,6 +26797,12 @@ interface DataView {
                 for (p in stmt.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
+                // B86.9c: walk parameter default initializers AFTER binding names are
+                // registered so self-referential defaults `function f(x = x) {}` resolve
+                // correctly. Mirror of B86.9b for FunctionExpression/ArrowFunction.
+                for (p in stmt.parameters) {
+                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
+                }
                 stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
             }
             is ClassDeclaration -> {
