@@ -26855,10 +26855,31 @@ interface DataView {
                         is MethodDeclaration -> {
                             val innerTypeOnly = typeOnlyNames.toMutableSet()
                             member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, valueNames, namespaceOnlyNames) }
+                            // iter18 B86.11: register method parameter binding names as
+                            // values so a parameter named `N` shadows an outer
+                            // namespace-only `N` and doesn't trigger spurious TS2708
+                            // / TS2693 inside the method body.
+                            val innerValues = valueNames.toMutableSet()
+                            for (p in member.parameters) {
+                                addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                            }
+                            for (p in member.parameters) {
+                                p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
+                            }
+                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
                         }
-                        is Constructor -> member.body?.let {
-                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        is Constructor -> {
+                            val innerTypeOnly = typeOnlyNames.toMutableSet()
+                            val innerValues = valueNames.toMutableSet()
+                            for (p in member.parameters) {
+                                addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                            }
+                            for (p in member.parameters) {
+                                p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
+                            }
+                            member.body?.let {
+                                checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
+                            }
                         }
                         is PropertyDeclaration -> member.initializer?.let {
                             // iter17 B86.10b: re-attempt B86.9d on top of tightened
