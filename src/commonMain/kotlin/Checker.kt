@@ -2008,27 +2008,37 @@ class Checker(
     private fun mergeModuleAugmentations() {
         val processedSpecifiers = mutableSetOf<String>()
         for (result in binderResults) {
-            collectModuleAugmentations(result.sourceFile.statements, processedSpecifiers)
+            collectModuleAugmentations(result.sourceFile.statements, processedSpecifiers, null)
         }
     }
 
-    private fun collectModuleAugmentations(statements: List<Statement>, processedSpecifiers: MutableSet<String>) {
+    private fun collectModuleAugmentations(
+        statements: List<Statement>,
+        processedSpecifiers: MutableSet<String>,
+        parentLookupScope: SymbolTable?,
+    ) {
         for (stmt in statements) {
             if (stmt !is ModuleDeclaration) continue
             val name = stmt.name as? StringLiteralNode ?: continue
             val specifier = name.text
 
-            // Recursively process nested module declarations inside this one
-            // (e.g. `declare module "D" { module "a" { interface A { ... } } }`)
+            // 16.4: Inner-module augmentations like `declare module "D" { module "a" { interface A { ... } } }`
+            // are NOT in `globals` — the binder declares "a" inside "D".exports (per bindModuleDeclaration's
+            // nested scope semantics). When recursing into the body of an outer ambient module, pass that
+            // module's exports as the lookup scope so the inner `module "a"` symbol can be found.
             val body = stmt.body
+            val outerModuleSymbol = parentLookupScope?.get(specifier) ?: globals[specifier]
             if (body is ModuleBlock) {
-                collectModuleAugmentations(body.statements, processedSpecifiers)
+                // Use this module's exports as the lookup scope for nested module decls inside body
+                val thisModuleExports = outerModuleSymbol?.exports
+                collectModuleAugmentations(body.statements, processedSpecifiers, thisModuleExports)
             }
 
             if (!processedSpecifiers.add(specifier)) continue
 
-            // Find the augmentation module symbol in globals
-            val augModule = globals[specifier] ?: continue
+            // Find the augmentation module symbol — check parent scope first (for nested),
+            // then fall back to globals (for top-level `declare module "X"`)
+            val augModule = outerModuleSymbol ?: continue
             val augExports = augModule.exports ?: continue
 
             // Resolve the specifier to a target file
