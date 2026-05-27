@@ -54484,7 +54484,6 @@ interface DataView {
                         // Collect per-slot resolved (otherTp, mappedType) pairs; bail if any
                         // slot isn't a bare TP in tps, equals current tp, or isn't in mapperPairs.
                         val slotMapped = mutableListOf<Type>()
-                        val slotTps = mutableListOf<Type.TypeParam>()
                         var slotsOk = true
                         for (sp in callbackSig.parameters) {
                             if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { slotsOk = false; break }
@@ -54494,7 +54493,6 @@ interface DataView {
                             val mapped = mapperPairs.firstOrNull { it.first === slotTp }?.second
                             if (mapped == null) { slotsOk = false; break }
                             slotMapped.add(mapped)
-                            slotTps.add(slotTp)
                         }
                         if (slotsOk) {
                             val arg = args[i]
@@ -54537,27 +54535,12 @@ interface DataView {
                                         for ((idx, name) in lpNames.withIndex()) {
                                             currentLocalTypes[name] = slotMapped[idx]
                                         }
-                                        // B86.1b-3 (multi-param): publish ALL slot TP→mapped bindings to
-                                        // currentInferenceMapper so any nested ArrowFunction body re-typing
-                                        // path (e.g. applyContextualParameterTypes for a nested callback)
-                                        // can substitute outer TPs for their concrete mappings. Mirror of
-                                        // the single-param branch below.
-                                        val savedMapper = currentInferenceMapper
-                                        val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
-                                        for ((idx, slotTpVal) in slotTps.withIndex()) {
-                                            val slotType = slotMapped[idx]
-                                            if (slotType !== anyType && slotType !== errorType) {
-                                                newMapper[slotTpVal] = slotType
-                                            }
-                                        }
-                                        currentInferenceMapper = newMapper
                                         val bodyType = try {
                                             getTypeOfExpression(effectiveBodyExpr)
                                         } catch (_: StackOverflowError) {
                                             null
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
-                                            currentInferenceMapper = savedMapper
                                         }
                                         if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
                                             !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
