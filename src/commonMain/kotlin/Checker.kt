@@ -27251,7 +27251,16 @@ interface DataView {
 
     private fun containsBreak(stmt: Statement): Boolean {
         return when (stmt) {
-            is BreakStatement -> true
+            // Only count UNLABELED breaks. A labeled `break test;` jumps to its
+            // labeled target (which is OUTSIDE this loop), so it does NOT fall
+            // through to the statement immediately after this loop — for the
+            // purposes of "does this loop have an early-exit that would prevent
+            // it being infinite/terminating", labeled breaks escape further and
+            // are equivalent to a return/throw at this level. Required for
+            // reachabilityChecks5/6 f11: `do { do { break test; } while(true); x++; } while(true);`
+            // — the inner do's `break test` jumps out beyond the outer do, so
+            // x++ is unreachable.
+            is BreakStatement -> stmt.label == null
             is Block -> stmt.statements.any { containsBreak(it) }
             is IfStatement -> containsBreak(stmt.thenStatement) ||
                 (stmt.elseStatement?.let { containsBreak(it) } ?: false)
@@ -46812,7 +46821,46 @@ interface DataView {
             is IfStatement -> containsBreakOrReturn(stmt.thenStatement) ||
                 (stmt.elseStatement?.let { containsBreakOrReturn(it) } ?: false)
             is LabeledStatement -> containsBreakOrReturn(stmt.statement)
-            // Don't recurse into nested loops — breaks in them don't affect outer
+            // Recurse into nested loops/switches looking for LABELED breaks
+            // (unlabeled break exits the inner loop only — doesn't affect outer)
+            // or return statements (those exit the enclosing function entirely).
+            // Required for reachabilityChecks5/6 f11: `do { do { break test; } while(true) } while(true)`
+            // — the inner do's `break test` escapes the outer do too, so the outer
+            // do is NOT a truly-infinite loop and the function does NOT always return.
+            is WhileStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is DoStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForInStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForOfStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            else -> false
+        }
+    }
+
+    /**
+     * Like [containsBreakOrReturn] but unlabeled breaks are NOT counted — only
+     * labeled breaks (which escape further than the immediately-enclosing loop)
+     * and return statements. Used by [containsBreakOrReturn] when recursing into
+     * nested loops to ask "would something inside this nested loop ALSO exit the
+     * outer loop?".
+     */
+    private fun containsLabeledBreakOrReturn(stmt: Statement): Boolean {
+        return when (stmt) {
+            is BreakStatement -> stmt.label != null  // only LABELED breaks escape further
+            is ReturnStatement -> true
+            is Block -> stmt.statements.any { containsLabeledBreakOrReturn(it) }
+            is IfStatement -> containsLabeledBreakOrReturn(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { containsLabeledBreakOrReturn(it) } ?: false)
+            is LabeledStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is WhileStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is DoStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForInStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is ForOfStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is TryStatement -> {
+                stmt.tryBlock.statements.any { containsLabeledBreakOrReturn(it) } ||
+                (stmt.catchClause?.block?.statements?.any { containsLabeledBreakOrReturn(it) } ?: false) ||
+                (stmt.finallyBlock?.statements?.any { containsLabeledBreakOrReturn(it) } ?: false)
+            }
             else -> false
         }
     }
