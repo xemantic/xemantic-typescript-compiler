@@ -54254,27 +54254,50 @@ interface DataView {
                             is FunctionExpression -> arg.parameters to arg.body
                             else -> null to null
                         }
-                        if (argParamsLocal != null && argParamsLocal.size == 1 &&
-                            argBody != null && argBody !is Block) {
+                        if (argParamsLocal != null && argParamsLocal.size == 1 && argBody != null) {
                             val lp = argParamsLocal[0]
                             val lpName = (lp.name as? Identifier)?.text
                             if (!lp.dotDotDotToken && lpName != null && lp.type == null) {
-                                val savedLocalTypes = currentLocalTypes
-                                currentLocalTypes = currentLocalTypes.toMutableMap()
-                                currentLocalTypes[lpName] = otherTpMapped
-                                val bodyType = try {
-                                    getTypeOfExpression(argBody as Expression)
-                                } catch (_: StackOverflowError) {
-                                    null
-                                } finally {
-                                    currentLocalTypes = savedLocalTypes
+                                // B83.4d-quick-Block (NEW): extend the concise-body inference
+                                // path to Block bodies with EXACTLY one top-level
+                                // ReturnStatement whose expression we can type-re-resolve
+                                // under the pushed currentLocalTypes. Multi-return / no-return
+                                // bodies still bail. Mirrors the inferReturnTypeFromBody
+                                // single-return-extraction pattern (single-return is the
+                                // tractable shape).
+                                val effectiveBodyExpr: Expression? = when (argBody) {
+                                    is Block -> {
+                                        var retStmt: ReturnStatement? = null
+                                        var multi = false
+                                        for (s in argBody.statements) {
+                                            if (s is ReturnStatement) {
+                                                if (retStmt != null) { multi = true; break }
+                                                retStmt = s
+                                            }
+                                        }
+                                        if (multi) null else retStmt?.expression
+                                    }
+                                    is Expression -> argBody
+                                    else -> null
                                 }
-                                if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
-                                    !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                                    val widened = widenType(bodyType)
-                                    if (isNamedLikeAtom(widened) ||
-                                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
-                                        candidates.add(Candidate(i, widened, null))
+                                if (effectiveBodyExpr != null) {
+                                    val savedLocalTypes = currentLocalTypes
+                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentLocalTypes[lpName] = otherTpMapped
+                                    val bodyType = try {
+                                        getTypeOfExpression(effectiveBodyExpr)
+                                    } catch (_: StackOverflowError) {
+                                        null
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                    }
+                                    if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
+                                        !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                        val widened = widenType(bodyType)
+                                        if (isNamedLikeAtom(widened) ||
+                                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                            candidates.add(Candidate(i, widened, null))
+                                        }
                                     }
                                 }
                             }
