@@ -61537,7 +61537,22 @@ interface DataView {
                         if (symbol != null) break
                     }
                     if (symbol == null) symbol = globals[stmt.name.text]
-                    if (symbol != null) getDeclaredTypeOfSymbol(symbol) else null
+                    // B83.5: block-scoped classes (declared inside `while`/`for`/etc.
+                    // bodies) are NOT bound by the binder — `bindStatement` only
+                    // descends into namespace bodies, not block statements. To
+                    // restore TS2339/TS2551 checking for `this.X` accesses inside
+                    // such classes (anonymousClassExpression2_ts shape: `while (0) {
+                    // class B { methodB() { this.methodA; /*err*/ } } }`), synthesize
+                    // a transient Symbol that points at the AST declaration and let
+                    // `getDeclaredTypeOfClassOrInterface` build the Type.Interface
+                    // from it. The synthetic symbol is never published to the binder's
+                    // tables — used only for this check pass.
+                    if (symbol == null) {
+                        val syn = Symbol(SymbolFlags.Class, stmt.name.text)
+                        syn.declarations.add(stmt)
+                        symbol = syn
+                    }
+                    getDeclaredTypeOfSymbol(symbol)
                 } else null
                 val savedStatic = inStaticClassMethod
                 inStaticClassMethod = false
