@@ -26797,7 +26797,7 @@ interface DataView {
                 for (p in stmt.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
-                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues) }
+                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
             }
             is ClassDeclaration -> {
                 // `extends X` takes a value expression, so type-only names in it are TS2693.
@@ -26836,10 +26836,10 @@ interface DataView {
                         is MethodDeclaration -> {
                             val innerTypeOnly = typeOnlyNames.toMutableSet()
                             member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, valueNames) }
+                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, valueNames, namespaceOnlyNames) }
                         }
                         is Constructor -> member.body?.let {
-                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames, valueNames)
+                            checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                         }
                         is PropertyDeclaration -> member.initializer?.let {
                             checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames)
