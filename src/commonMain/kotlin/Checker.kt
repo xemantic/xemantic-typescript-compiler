@@ -54956,6 +54956,38 @@ interface DataView {
                 getNarrowedTypeForReference(rawObjectType, expr.expression)
             } else rawObjectType
         val propName = expr.name.text
+        // B83.4e: For Union receivers, map each constituent through
+        // `getApparentType` (so primitives → wrapper interface) and look up the
+        // property on each. If EVERY constituent has the property, return the
+        // union of their resolved types. This unblocks `(string|number).toString()`
+        // and similar union-of-primitives method calls — previously fell through
+        // to `anyType` because `getApparentType(union)` returns the union
+        // unchanged and `getPropertyOfType` on the union recurses into each
+        // primitive (Type.Intrinsic, not Type.Object) → returns null.
+        if (objectType is Type.Union && objectType !== anyType && objectType !== errorType) {
+            val propTypes = mutableListOf<Type>()
+            var allHaveProp = true
+            for (constituent in objectType.types) {
+                val apparent = getApparentType(constituent)
+                val prop = getPropertyOfType(apparent, propName)
+                if (prop == null) {
+                    allHaveProp = false
+                    break
+                }
+                val propType = if (apparent is Type.Reference) {
+                    resolveGenericPropertyType(apparent, prop) ?: getTypeOfSymbol(prop)
+                } else {
+                    getTypeOfSymbol(prop)
+                }
+                propTypes.add(propType)
+            }
+            if (allHaveProp && propTypes.isNotEmpty()) {
+                return if (propTypes.size == 1) propTypes[0] else getUnionType(propTypes)
+            }
+            // fall through to standard handling for the non-Union case below
+            // (which will hit the original `getApparentType(union)` no-op +
+            // `getPropertyOfType(union)` "all constituents" path → null → anyType).
+        }
         // If object resolved, check its apparent type for the property
         if (objectType !== anyType && objectType !== errorType) {
             val apparentType = getApparentType(objectType)
