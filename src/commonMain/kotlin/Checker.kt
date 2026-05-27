@@ -26848,6 +26848,66 @@ interface DataView {
                     }
                 }
             }
+            is ModuleDeclaration -> {
+                // B86.8: recurse into namespace bodies for TS2708/TS2693. The file-level
+                // walker only collected sub-namespaces at the top scope; expressions
+                // inside `namespace M { ... }` like `var z = N.X` need their own
+                // scope-aware namespace-only set (so a nested `namespace N { }`
+                // sibling can fire TS2708). Build inner sets by surveying the
+                // namespace body's direct child statements only — recursion handles
+                // any deeper nesting. Outer names propagate (a type alias declared
+                // at the file level is still type-only inside any namespace body).
+                val body = stmt.body ?: return
+                if (body !is ModuleBlock) return
+                // Self-reference: a namespace's own name is a valid value-side
+                // self-reference from inside its body (the JS emit binds the name
+                // locally via the IIFE arg). Drop it from inherited
+                // `namespaceOnlyNames` so e.g. `namespace N { N; }` does NOT fire
+                // TS2708 on the inner `N`.
+                val selfName = (stmt.name as? Identifier)?.text
+                val innerValueNames = valueNames.toMutableSet().also {
+                    if (selfName != null) it.add(selfName)
+                }
+                val innerTypeOnlyNames = typeOnlyNames.toMutableSet()
+                val innerNamespaceOnlyNames = namespaceOnlyNames.toMutableSet().also {
+                    if (selfName != null) it.remove(selfName)
+                }
+                for (s in body.statements) {
+                    when (s) {
+                        is ClassDeclaration -> s.name?.text?.let { innerValueNames.add(it) }
+                        is FunctionDeclaration -> s.name?.text?.let { innerValueNames.add(it) }
+                        is VariableStatement -> for (decl in s.declarationList.declarations) {
+                            (decl.name as? Identifier)?.text?.let { innerValueNames.add(it) }
+                        }
+                        is EnumDeclaration -> innerValueNames.add(s.name.text)
+                        is InterfaceDeclaration -> {
+                            val n = s.name.text
+                            if (n !in innerValueNames && n !in KNOWN_GLOBALS) innerTypeOnlyNames.add(n)
+                        }
+                        is TypeAliasDeclaration -> {
+                            val n = s.name.text
+                            if (n !in innerValueNames && n !in KNOWN_GLOBALS) innerTypeOnlyNames.add(n)
+                        }
+                        is ModuleDeclaration -> {
+                            val n = (s.name as? Identifier)?.text ?: continue
+                            if (n !in innerValueNames) {
+                                val subBody = s.body
+                                val hasValues = when (subBody) {
+                                    is ModuleBlock -> subBody.statements.any { ss ->
+                                        ss is FunctionDeclaration || ss is ClassDeclaration ||
+                                            ss is VariableStatement || ss is EnumDeclaration ||
+                                            ss is ModuleDeclaration
+                                    }
+                                    else -> false
+                                }
+                                if (!hasValues) innerNamespaceOnlyNames.add(n)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+                checkTypeAsValueInStatements(body.statements, source, fileName, innerTypeOnlyNames, innerValueNames, innerNamespaceOnlyNames)
+            }
             else -> {}
         }
     }
