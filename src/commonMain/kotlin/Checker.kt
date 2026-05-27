@@ -49963,7 +49963,128 @@ interface DataView {
             } else if (target is PropertyAccessExpression) {
                 // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
                 checkPropertyAccessAssignment(target, expr.right, source, fileName)
+            } else if (target is ElementAccessExpression) {
+                // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
+                checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
             }
+        }
+    }
+
+    /**
+     * B85.1d: Check `obj[key] = value` assignments against an index signature's value type.
+     * Currently narrowly scoped: only fires when the receiver chain bottoms out at `this`
+     * (so the leaf property type comes from `varTypes["this.X"]`, populated by B85.1b in the
+     * method-decl walker), and the resolved receiver type carries a stringIndexInfo. Reuses
+     * B85.1c's namespace-export BFS helper to walk namespace-internal type refs that
+     * `currentFileLocals` doesn't carry directly. Pairs with B85.1a (optional-param `| undefined`
+     * wrap in `currentLocalTypes`) so an optional param `value?: string` resolves to
+     * `string | undefined` and the check fires correctly.
+     *
+     * Bails silently for any shape outside the gate — no FP risk.
+     */
+    private fun checkElementAccessAssignment(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String,
+        varTypes: Map<String, String>
+    ) {
+        try {
+            // Only handle PropertyAccess receivers rooted at `this` for now — the most common
+            // shape and the one B85.1b's varTypes population is designed for.
+            val receiverExpr = target.expression as? PropertyAccessExpression ?: return
+            val receiverType = resolveReceiverTypeForElementAccess(receiverExpr, varTypes) ?: return
+            if (receiverType !is Type.Object) return
+            resolveStructuredTypeMembers(receiverType)
+            val stringIdx = receiverType.stringIndexInfo ?: return
+            val indexValueType = stringIdx.type
+            if (indexValueType === anyType || indexValueType === errorType) return
+            val rhsType = getTypeOfExpression(value)
+            if (rhsType === anyType || rhsType === errorType) return
+            // Use the existing relation engine.
+            if (checkTypeRelatedTo(rhsType, indexValueType, assignableRelation)) return
+            // Emit TS2322 at the entire element-access span.
+            val start = target.expression.pos
+            val end = expressionTrueEnd(target)
+            val length = (end - start).coerceAtLeast(1)
+            val displaySrc = typeToString(rhsType)
+            val displayTgt = typeToString(indexValueType)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            // For union sources containing undefined where target excludes it, append
+            // the standard "Type 'undefined' is not assignable to ..." chain line.
+            val chain = mutableListOf<String>()
+            if (rhsType is Type.Union && rhsType.types.any { it === undefinedType }) {
+                chain.add("  Type 'undefined' is not assignable to type '$displayTgt'.")
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySrc' is not assignable to type '$displayTgt'.",
+                messageChain = chain,
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) {}
+    }
+
+    /**
+     * B85.1d helper: resolve the type of a PropertyAccess chain whose root is `this`,
+     * consulting [varTypes] for the leaf `this.X` type-name and walking property lookups
+     * for each subsequent `.Y` step. Pushes [inferenceNamespaceStack] around each
+     * intermediate resolution so namespace-internal type refs resolve correctly.
+     */
+    private fun resolveReceiverTypeForElementAccess(
+        expr: PropertyAccessExpression, varTypes: Map<String, String>
+    ): Type? {
+        val inner = expr.expression
+        // Base case: this.X
+        if (inner is Identifier && inner.text == "this") {
+            val typeName = varTypes["this.${expr.name.text}"] ?: return null
+            // Strip "@" prefix from resolveSimpleTypeName encoding; bail on parameterized types.
+            if (!typeName.startsWith("@")) return null
+            val bare = typeName.removePrefix("@")
+            if (bare.contains('<')) return null
+            return resolveTypeNameViaNamespaceExports(bare)
+        }
+        // Recursive case: this.X.Y
+        val innerPA = inner as? PropertyAccessExpression ?: return null
+        val baseType = resolveReceiverTypeForElementAccess(innerPA, varTypes) ?: return null
+        val baseObj = baseType as? Type.Object ?: return null
+        resolveStructuredTypeMembers(baseObj)
+        val propSym = baseObj.members?.get(expr.name.text) ?: return null
+        // Push the base type's symbol's parent so type refs in the prop's annotation
+        // resolve against the enclosing namespace.
+        val pushed = baseObj.symbol?.let { pushInferenceNamespaceFor(it) } ?: false
+        try {
+            val propType = getTypeOfSymbol(propSym)
+            return propType.takeIf { it !== anyType && it !== errorType }
+        } finally {
+            if (pushed) inferenceNamespaceStack.removeLast()
+        }
+    }
+
+    /**
+     * B85.1d helper: resolve a bare type name via current file's locals or — when not at
+     * the top level — via BFS through namespace exports (B85.1c's helper). Pushes the
+     * enclosing namespace so the resolved type's member-resolution can see sibling types.
+     */
+    private fun resolveTypeNameViaNamespaceExports(typeName: String): Type? {
+        val fileLocals = currentFileLocals ?: return null
+        fileLocals[typeName]?.let {
+            if (it.flags.hasAny(SymbolFlags.Type)) {
+                val pushed = pushInferenceNamespaceFor(it)
+                try {
+                    return getDeclaredTypeOfSymbol(it).takeIf { t -> t !== anyType && t !== errorType }
+                } finally {
+                    if (pushed) inferenceNamespaceStack.removeLast()
+                }
+            }
+        }
+        val symbol = findSymbolInNamespaceExports(typeName, fileLocals.values) ?: return null
+        val pushed = pushInferenceNamespaceFor(symbol)
+        try {
+            return getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType }
+        } finally {
+            if (pushed) inferenceNamespaceStack.removeLast()
         }
     }
 
