@@ -34440,6 +34440,28 @@ interface DataView {
                 }
             }
             is CommaListExpression -> for (el in expr.elements) checkUBDForwardInExpr(el, blockDecls, source, fileName, inStaticInit)
+            // B83.6: ClassExpression — static property initializers evaluate at
+            // class-definition time (i.e. when the surrounding expression evaluates).
+            // Walk them for forward-ref detection. Instance-property initializers
+            // run inside the constructor (deferred), so they're safe.
+            // Mirrors the ClassDeclaration branch in checkUBDForwardRefs.
+            is ClassExpression -> {
+                expr.heritageClauses?.forEach { clause ->
+                    if (clause.token == SyntaxKind.ExtendsKeyword) {
+                        for (typeExpr in clause.types) {
+                            checkUBDForwardInExpr(typeExpr.expression, blockDecls, source, fileName, inStaticInit)
+                        }
+                    }
+                }
+                for (member in expr.members) {
+                    if (member is PropertyDeclaration &&
+                        ModifierFlag.Static in member.modifiers) {
+                        member.initializer?.let {
+                            checkUBDForwardInExpr(it, blockDecls, source, fileName, inStaticInit = true)
+                        }
+                    }
+                }
+            }
             // Don't recurse into functions/arrows (they capture lazily)
             is ArrowFunction, is FunctionExpression -> {}
             else -> {}
