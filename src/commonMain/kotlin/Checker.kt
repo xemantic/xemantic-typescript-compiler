@@ -53968,8 +53968,17 @@ interface DataView {
             val astParam = astParams.getOrNull(i + if (astParams.firstOrNull()?.let { (it.name as? Identifier)?.text } == "this") 1 else 0)
             if (astParam?.type != null) continue // has explicit type annotation
             val ctxParamType = getTypeOfSymbol(ctxParams[i])
-            if (ctxParamType !== anyType && ctxParamType !== errorType) {
-                symbolTypes[param.id] = ctxParamType
+            // B86.1b-2: substitute via inference mapper if available. When an outer
+            // caller (B86.1b-3, not yet landed) has populated currentInferenceMapper
+            // with TP→concrete mappings, replace a bare Type.TypeParam ctxParamType
+            // with its mapped value. Guard: skip mapping to anyType/errorType per
+            // iter17's lesson — those would propagate as silent failures downstream.
+            val substitutedCtxParamType = if (ctxParamType is Type.TypeParam) {
+                val mapped = currentInferenceMapper?.get(ctxParamType)
+                if (mapped != null && mapped !== anyType && mapped !== errorType) mapped else ctxParamType
+            } else ctxParamType
+            if (substitutedCtxParamType !== anyType && substitutedCtxParamType !== errorType) {
+                symbolTypes[param.id] = substitutedCtxParamType
             }
         }
     }
