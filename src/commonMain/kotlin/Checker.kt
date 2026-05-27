@@ -8264,7 +8264,42 @@ class Checker(
             is TypeAssertionExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is SatisfiesExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is CommaListExpression -> for (e in expr.elements) walkExprForFlowTS2454(e, uninitialized, source, fileName, emitted, inUncheckedBody)
-            else -> {} // literals, arrows, function expressions — nested-function descent runs separately
+            // B86.1a: recurse into nested arrow / function-expression bodies with a fresh
+            // flow scope so TS2454 fires inside callback bodies. The function's own
+            // parameters become preInit (the analog of "contextual param push" — call
+            // sites inherently supply values for declared params, so they're treated as
+            // assigned for definite-assignment purposes). Outer-scope captures still
+            // resolve via the outer uninit set if they're referenced from the inner body,
+            // but `runFlowTS2454OnFunction` builds a fresh uninit set scoped to the
+            // inner body — captured outer optionals are checked via their OWN function's
+            // pass (TS2454 is per-function-scope by design, mirroring TypeScript).
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> runFlowTS2454OnFunction(body, expr.parameters, source, fileName, emitted, fileLocals = null)
+                is Expression -> {
+                    // Expression-bodied arrow: no Block to run flow on, but we still
+                    // want to descend through the expression body's nested arrows /
+                    // function expressions. The inner expression is checked under the
+                    // OUTER uninit set (no fresh scope) since there are no local
+                    // declarations in an expression body.
+                    val innerPreInit = collectParamNames(expr.parameters)
+                    // If any uninit name is shadowed by an inner param, mask it out
+                    // for the body recursion (the inner param is the binding in scope).
+                    val maskedUninit = if (innerPreInit.isEmpty()) uninitialized
+                        else uninitialized - innerPreInit
+                    if (maskedUninit.isNotEmpty()) {
+                        walkExprForFlowTS2454(body, maskedUninit, source, fileName, emitted, inUncheckedBody)
+                    } else {
+                        // No outer uninit reaches; still recurse so nested function
+                        // expressions inside the body get their own pass.
+                        walkExprForFlowTS2454(body, emptySet(), source, fileName, emitted, inUncheckedBody)
+                    }
+                }
+                else -> {}
+            }
+            is FunctionExpression -> expr.body.let { body ->
+                runFlowTS2454OnFunction(body, expr.parameters, source, fileName, emitted, fileLocals = null)
+            }
+            else -> {} // literals only
         }
     }
 
