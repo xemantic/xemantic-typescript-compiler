@@ -47627,7 +47627,25 @@ interface DataView {
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> {
-                                checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, varTypes, classTypeParams,
+                                // B85.1b: Populate `this.X` types from class property declarations
+                                // into the local varTypes map only (NOT currentLocalTypes), so method
+                                // bodies can resolve `this._foo` chains via the lightweight type map.
+                                // Mirror of Constructor (47633) and SetAccessor (47691) varTypes push.
+                                // Skip the currentLocalTypes push deliberately — Constructor/SetAccessor
+                                // bodies legitimately assign through this.X, but method bodies broadcast
+                                // those types to many checker walkers and would cause TS2322/TS2339 FPs.
+                                // Net-zero expected; unblocks B85.1d (element-access TS2322).
+                                val methodTypes = varTypes.toMutableMap()
+                                for (m in stmt.members) {
+                                    if (m is PropertyDeclaration) {
+                                        val propType = m.type?.let { resolveSimpleTypeName(it) }
+                                        val propName = (m.name as? Identifier)?.text
+                                        if (propType != null && propName != null) {
+                                            methodTypes["this.$propName"] = propType
+                                        }
+                                    }
+                                }
+                                checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, methodTypes, classTypeParams,
                                     isAsync = ModifierFlag.Async in member.modifiers)
                             }
                             is Constructor -> member.body?.let { body ->
