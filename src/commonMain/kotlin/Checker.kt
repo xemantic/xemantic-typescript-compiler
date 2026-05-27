@@ -23754,10 +23754,14 @@ interface RegExp {
     ignoreCase: boolean;
     multiline: boolean;
     lastIndex: number;
+    compile(pattern: string, flags?: string): RegExp;
     flags: string;
     dotAll: boolean;
     sticky: boolean;
     unicode: boolean;
+    unicodeSets: boolean;
+    hasIndices: boolean;
+    readonly indices: any;
     toString(): string;
 }
 interface RegExpConstructor {
