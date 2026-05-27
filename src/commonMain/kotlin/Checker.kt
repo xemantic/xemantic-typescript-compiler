@@ -47895,7 +47895,12 @@ interface DataView {
                         try {
                             val resolvedType = getTypeFromTypeNode(paramType)
                             if (resolvedType !== anyType && resolvedType !== errorType) {
-                                currentLocalTypes[paramName.text] = resolvedType
+                                // B85.1a: optional param `value?: T` (without initializer) has effective
+                                // type `T | undefined`. Mirrors `resolveUncalledParamType` (Checker.kt:25081).
+                                val effectiveType = if (param.questionToken && param.initializer == null) {
+                                    getUnionType(listOf(resolvedType, undefinedType))
+                                } else resolvedType
+                                currentLocalTypes[paramName.text] = effectiveType
                             }
                         } catch (_: StackOverflowError) { /* circular type */ }
                     }
