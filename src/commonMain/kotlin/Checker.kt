@@ -27054,6 +27054,11 @@ interface DataView {
                 for (p in expr.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
+                // B86.9b: walk parameter default initializers AFTER binding names are
+                // registered so self-referential defaults `(x = x) =>` resolve correctly.
+                for (p in expr.parameters) {
+                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
+                }
                 checkTypeAsValueInStatements(expr.body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
             }
             is ArrowFunction -> {
@@ -27061,6 +27066,11 @@ interface DataView {
                 val innerValues = valueNames.toMutableSet()
                 for (p in expr.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                }
+                // B86.9b: walk parameter default initializers AFTER binding names are
+                // registered so self-referential defaults `(x = x) =>` resolve correctly.
+                for (p in expr.parameters) {
+                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
                 }
                 when (val body = expr.body) {
                     is Block -> checkTypeAsValueInStatements(body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
