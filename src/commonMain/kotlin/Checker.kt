@@ -54389,6 +54389,16 @@ interface DataView {
                                             if (isNamedLikeAtom(widened) ||
                                                 (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
                                                 candidates.add(Candidate(i, widened, null))
+                                            } else if (widened is Type.TypeParam && widened === tp &&
+                                                mapperPairs.none { it.first === tp }) {
+                                                // B83.4c (NEW 2026-05-27): identity-anchor for body-bare-tp shape.
+                                                // When un-annotated lambda body's resolved type IS exactly the current
+                                                // tp (no anchor yet in mapperPairs), add `tp` as a self-anchor candidate.
+                                                // Handles e.g. body `[x, x]` typed as `[tp, tp]` where the tuple wrapper
+                                                // would already pass the named-like check; this catches the bare-tp leaf case
+                                                // that the named-like gate silently drops. Gate excludes TPs already
+                                                // anchored elsewhere (would create redundant identity candidate).
+                                                candidates.add(Candidate(i, tp, null))
                                             }
                                         }
                                     }
@@ -54452,6 +54462,12 @@ interface DataView {
                                         if (isNamedLikeAtom(widened) ||
                                             (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
                                             candidates.add(Candidate(i, widened, null))
+                                        } else if (widened is Type.TypeParam && widened === tp &&
+                                            mapperPairs.none { it.first === tp }) {
+                                            // B83.4c (NEW 2026-05-27): identity-anchor — mirror of the
+                                            // multi-param branch (see ~line 54393). Catches body-bare-tp
+                                            // shape that the named-like gate would silently drop.
+                                            candidates.add(Candidate(i, tp, null))
                                         }
                                     }
                                 }
