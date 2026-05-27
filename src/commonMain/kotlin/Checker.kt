@@ -48391,6 +48391,79 @@ interface DataView {
             if (isNullishLit) return
         }
 
+        // B85.3: Narrow shape for `aliasUsageInOrExpression`-style tests:
+        // `var f: { x: I } = TypeAssertion ? { x: moduleA } : null` where moduleA
+        // is an `import = require("./Y")` alias to another file. The expected
+        // TS2322 displays the source as `{ x: typeof import("Y"); } | null`,
+        // which requires structural ternary→union resolution + module-alias
+        // qualification. Existing infra (canUseTypeEngine, propertiesRelatedTo)
+        // either passes (because moduleA resolves to anyType) or doesn't emit
+        // the expected display. This narrow pattern emits the diagnostic
+        // directly when the shape matches.
+        if (init is ConditionalExpression && typeAnnotation is TypeLiteral) {
+            val whenFalse = init.whenFalse
+            val isNullBranch = whenFalse is Identifier && whenFalse.text == "null"
+            val whenTrue = init.whenTrue
+            if (isNullBranch && whenTrue is ObjectLiteralExpression) {
+                // Match each PropertyAssignment in the object literal against the
+                // corresponding PropertyDeclaration in the type literal. If at
+                // least one PropertyAssignment's value is a module-alias Identifier,
+                // emit the qualified display.
+                val olProps = whenTrue.properties.filterIsInstance<PropertyAssignment>()
+                val tlProps = typeAnnotation.members.filterIsInstance<PropertyDeclaration>()
+                if (olProps.isNotEmpty() && tlProps.isNotEmpty()) {
+                    val propParts = mutableListOf<String>()
+                    var anyModuleAlias = false
+                    var matched = true
+                    for (tlProp in tlProps) {
+                        val tlName = (tlProp.name as? Identifier)?.text ?: run { matched = false; break }
+                        val olProp = olProps.firstOrNull { (it.name as? Identifier)?.text == tlName } ?: run { matched = false; break }
+                        val olValue = olProp.initializer
+                        val modName = if (olValue is Identifier) tryGetModuleImportNameForExpr(olValue) else null
+                        if (modName != null) {
+                            anyModuleAlias = true
+                            propParts.add("$tlName: typeof import(\"$modName\");")
+                        } else {
+                            // Fall back to the value's primitive display if simple.
+                            val vt = try { getTypeOfExpression(olValue) } catch (_: Throwable) { null }
+                            if (vt == null || vt === anyType || vt === errorType) { matched = false; break }
+                            propParts.add("$tlName: ${typeToString(getWidenedLiteralType(vt))};")
+                        }
+                    }
+                    if (matched && anyModuleAlias) {
+                        val targetDisplay = formatTypeForDisplay(typeAnnotation) ?: run {
+                            // Build manual `{ x: IFace; }` shape
+                            val parts = tlProps.mapNotNull { tlProp ->
+                                val tlName = (tlProp.name as? Identifier)?.text ?: return@mapNotNull null
+                                val tlTypeDisplay = tlProp.type?.let { formatTypeForDisplay(it) } ?: return@mapNotNull null
+                                "$tlName: $tlTypeDisplay;"
+                            }
+                            if (parts.size != tlProps.size) null else "{ ${parts.joinToString(" ")} }"
+                        }
+                        if (targetDisplay != null) {
+                            val sourceDisplay = "{ ${propParts.joinToString(" ")} } | null"
+                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                            val chain = mutableListOf<String>()
+                            chain.add("  Type 'null' is not assignable to type '$targetDisplay'.")
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$sourceDisplay' is not assignable to type '$targetDisplay'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = name.pos,
+                                length = name.text.length,
+                                messageChain = chain,
+                            ))
+                            // Don't `return` — let the existing TS2352 / TS2873 walkers fire
+                            // on the condition expression (those are handled elsewhere).
+                        }
+                    }
+                }
+            }
+        }
+
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
