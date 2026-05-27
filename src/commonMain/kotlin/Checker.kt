@@ -54304,6 +54304,98 @@ interface DataView {
                     val otherTp = (callbackParamType as? Type.TypeParam)
                         ?.takeIf { it in tpsSet && it !== tp }
                     val otherTpMapped = otherTp?.let { o -> mapperPairs.firstOrNull { it.first === o }?.second }
+                    // B83.4b (NEW 2026-05-27): multi-param callback parallel of B83.4d-quick.
+                    // Shape: `f<S,T,U>(arg1: S, arg2: T, cb: (x: S, y: T) => U): U` — S and T
+                    // already inferred via pass-1's anchor positions, U comes from the un-
+                    // annotated lambda's body re-typed under `currentLocalTypes[x]=mapper(S),
+                    // currentLocalTypes[y]=mapper(T)`. Gate: (a) multi-param callback (2+ params),
+                    // (b) ALL callback params are bare TPs in tps and all DIFFERENT from current
+                    // `tp` (pure callback-return-tp shape — no current-tp slot to gather from),
+                    // (c) ALL those TPs already in mapperPairs, (d) callback return MENTIONS the
+                    // current tp, (e) lambda has matching param count, all un-annotated Identifier
+                    // names. Narrow: rejects mixed shapes (some slots = current tp, some other).
+                    if (fnObj != null && callbackSig != null && callbackReturn != null &&
+                        callbackSig.parameters.size >= 2 &&
+                        typeMentionsTypeParam(callbackReturn, tp) &&
+                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                        fnObj.symbol == null &&
+                        fnObj.constructSignatures.isNullOrEmpty() &&
+                        fnObj.members.isNullOrEmpty() &&
+                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                        // Collect per-slot resolved (otherTp, mappedType) pairs; bail if any
+                        // slot isn't a bare TP in tps, equals current tp, or isn't in mapperPairs.
+                        val slotMapped = mutableListOf<Type>()
+                        var slotsOk = true
+                        for (sp in callbackSig.parameters) {
+                            if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { slotsOk = false; break }
+                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { slotsOk = false; break }
+                            val slotTp = spt as? Type.TypeParam
+                            if (slotTp == null || slotTp !in tpsSet || slotTp === tp) { slotsOk = false; break }
+                            val mapped = mapperPairs.firstOrNull { it.first === slotTp }?.second
+                            if (mapped == null) { slotsOk = false; break }
+                            slotMapped.add(mapped)
+                        }
+                        if (slotsOk) {
+                            val arg = args[i]
+                            val (argParamsLocal, argBody) = when (arg) {
+                                is ArrowFunction -> arg.parameters to arg.body
+                                is FunctionExpression -> arg.parameters to arg.body
+                                else -> null to null
+                            }
+                            if (argParamsLocal != null && argBody != null &&
+                                argParamsLocal.size == callbackSig.parameters.size) {
+                                // Validate ALL lambda params: Identifier-named, no dotDotDot, no annotation.
+                                val lpNames = mutableListOf<String>()
+                                var lpOk = true
+                                for (lp in argParamsLocal) {
+                                    val lpName = (lp.name as? Identifier)?.text
+                                    if (lp.dotDotDotToken || lpName == null || lp.type != null) {
+                                        lpOk = false; break
+                                    }
+                                    lpNames.add(lpName)
+                                }
+                                if (lpOk) {
+                                    val effectiveBodyExpr: Expression? = when (argBody) {
+                                        is Block -> {
+                                            var retStmt: ReturnStatement? = null
+                                            var multi = false
+                                            for (s in argBody.statements) {
+                                                if (s is ReturnStatement) {
+                                                    if (retStmt != null) { multi = true; break }
+                                                    retStmt = s
+                                                }
+                                            }
+                                            if (multi) null else retStmt?.expression
+                                        }
+                                        is Expression -> argBody
+                                        else -> null
+                                    }
+                                    if (effectiveBodyExpr != null) {
+                                        val savedLocalTypes = currentLocalTypes
+                                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                                        for ((idx, name) in lpNames.withIndex()) {
+                                            currentLocalTypes[name] = slotMapped[idx]
+                                        }
+                                        val bodyType = try {
+                                            getTypeOfExpression(effectiveBodyExpr)
+                                        } catch (_: StackOverflowError) {
+                                            null
+                                        } finally {
+                                            currentLocalTypes = savedLocalTypes
+                                        }
+                                        if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
+                                            !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                            val widened = widenType(bodyType)
+                                            if (isNamedLikeAtom(widened) ||
+                                                (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                                candidates.add(Candidate(i, widened, null))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if (fnObj != null && otherTp != null && otherTpMapped != null &&
                         callbackReturn != null && typeMentionsTypeParam(callbackReturn, tp) &&
                         fnObj !is Type.Interface && fnObj !is Type.Reference &&
