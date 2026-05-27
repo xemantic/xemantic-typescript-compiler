@@ -69223,13 +69223,20 @@ interface DataView {
         val sourceMembers = sourceType.members ?: return emptyList()
         val targetProps = targetType.properties ?: return emptyList()
         val targetStatics = getStaticMembersOfType(targetType)
+        // Round 53 iter7: when target is the `Function` interface, `toString` is a
+        // real own member (declared on Function itself, returns the function source),
+        // not Object.prototype.toString. Allow it through the OBJECT_PROTOTYPE_PROPERTIES
+        // filter so missing-property counts match TypeScript for Function-typed targets.
+        val targetIsFunction = targetType is Type.Interface && targetType.symbol?.name == "Function"
         val missing = mutableListOf<String>()
         for (prop in targetProps) {
             if (isOptionalProperty(prop)) continue
             // Skip target static members — they live on the class's static side and
             // are not part of the instance shape we're comparing against.
             if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
-            if (prop.name !in sourceMembers && prop.name !in OBJECT_PROTOTYPE_PROPERTIES) {
+            val isPrototypeProp = prop.name in OBJECT_PROTOTYPE_PROPERTIES
+            val isFunctionOwnToString = targetIsFunction && prop.name == "toString"
+            if (prop.name !in sourceMembers && (!isPrototypeProp || isFunctionOwnToString)) {
                 missing.add(prop.name)
             }
         }
