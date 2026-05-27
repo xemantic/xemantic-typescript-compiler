@@ -54625,12 +54625,23 @@ interface DataView {
                                     val savedLocalTypes = currentLocalTypes
                                     currentLocalTypes = currentLocalTypes.toMutableMap()
                                     currentLocalTypes[lpName] = otherTpMapped
+                                    // B86.1b-3 (single-param): publish the same TP→mapped binding to
+                                    // currentInferenceMapper so any nested ArrowFunction body re-typing
+                                    // path (e.g. applyContextualParameterTypes for a nested callback)
+                                    // can substitute the outer TP for its concrete mapping. Narrow gate:
+                                    // single-param branch only this iteration; multi-param branch
+                                    // (~line 54515) deferred to a follow-up iteration.
+                                    val savedMapper = currentInferenceMapper
+                                    val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
+                                    newMapper[otherTp] = otherTpMapped
+                                    currentInferenceMapper = newMapper
                                     val bodyType = try {
                                         getTypeOfExpression(effectiveBodyExpr)
                                     } catch (_: StackOverflowError) {
                                         null
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
+                                        currentInferenceMapper = savedMapper
                                     }
                                     if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
                                         !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
