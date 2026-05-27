@@ -522,6 +522,12 @@ class Checker(
      */
     private var builtinLibSourceFile: SourceFile? = null
 
+    /** B85.2: identity-set of builtin lib top-level declarations — see `parseBuiltinLib`.
+     *  Declared BEFORE [parseBuiltinLib]/[libGlobals] so it's initialized when
+     *  `parseBuiltinLib()` runs (Kotlin property init order — properties after the call
+     *  site have default values during the call). */
+    private val builtinLibDecls: MutableSet<Node> = mutableSetOf()
+
     /**
      * Parse and bind the built-in type declarations, returning the symbol table.
      * These are merged into globals BEFORE user files so that user declarations
@@ -531,6 +537,14 @@ class Checker(
         val source = BUILTIN_LIB_SOURCE
         val ast = Parser(source, "lib.es5.d.ts").parse()
         builtinLibSourceFile = ast
+        // B85.2: build identity-set of top-level builtin declarations for target-version
+        // member filtering in `resolveInterfaceMembers`. A declaration that came from the
+        // embedded lib is filtered against `LIB_MIN_TARGET` to drop methods introduced
+        // after `options.target` (e.g. drop `at`/`findLast`/`findLastIndex`/`includes`
+        // from `interface Array<T>` when `@target: es2015`). User-defined `interface
+        // Array<T> extends ...` declarations are NOT in this set and pass through
+        // unfiltered.
+        ast.statements.forEach { stmt -> builtinLibDecls.add(stmt) }
         return Binder(options).bind(ast).locals
     }
 
@@ -23482,6 +23496,30 @@ class Checker(
             "TypedPropertyDescriptor" to (1 to "TypedPropertyDescriptor<T>"),
             "ProxyHandler" to (1 to "ProxyHandler<T>"),
             "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
+        )
+
+        /**
+         * B85.2: minimum ScriptTarget at which a builtin-lib interface member becomes
+         * visible. Members not in this map are always visible (assumed ES5/baseline).
+         * Members listed here are FILTERED OUT of [Type.Interface.properties] /
+         * [Type.Interface.members] when `options.target < minTarget` AND the member's
+         * declaration comes from the embedded [BUILTIN_LIB_SOURCE] (user-declared
+         * augmentations of the same interface pass through unfiltered).
+         *
+         * Key: `"${interfaceName}.${memberName}"` (case-sensitive).
+         *
+         * Scope: ONLY the four Array/ReadonlyArray methods that move `arrayAssignment*`
+         * baselines from "and 29 more" (our current emit) to "and 25 more" (expected)
+         * at `@target: es2015`. NOT a comprehensive lib-version map — adding more entries
+         * requires verifying against TypeScript's actual lib subsetting per target.
+         */
+        private val LIB_MIN_TARGET: Map<String, ScriptTarget> = mapOf(
+            "Array.at" to ScriptTarget.ES2022,
+            "Array.findLast" to ScriptTarget.ES2023,
+            "Array.findLastIndex" to ScriptTarget.ES2023,
+            "Array.includes" to ScriptTarget.ES2016,
+            "ReadonlyArray.at" to ScriptTarget.ES2022,
+            "ReadonlyArray.includes" to ScriptTarget.ES2016,
         )
 
         /**
@@ -51773,7 +51811,28 @@ interface DataView {
                 is InterfaceDeclaration -> decl.members
                 else -> continue
             }
+            // B85.2: target-version member filter for builtin lib declarations.
+            // When `decl` is a top-level statement of the embedded [BUILTIN_LIB_SOURCE]
+            // AND a member's `(interfaceName, memberName)` is in [LIB_MIN_TARGET] with
+            // a minimum target > the current `options.target`, drop that member. Aligns
+            // lib member counts with TypeScript baselines for `@target: es2015` (e.g.
+            // `arrayAssignmentTest*` "and 25 more" instead of "and 29 more").
+            val ifaceName = symbol.name
+            val isBuiltinDecl = decl in builtinLibDecls
             for (member in classMembers) {
+                if (isBuiltinDecl) {
+                    val memberName = when (member) {
+                        is PropertyDeclaration -> getMemberName(member.name)
+                        is MethodDeclaration -> getMemberName(member.name)
+                        is GetAccessor -> getMemberName(member.name)
+                        is SetAccessor -> getMemberName(member.name)
+                        else -> null
+                    }
+                    if (memberName != null) {
+                        val minTarget = LIB_MIN_TARGET["$ifaceName.$memberName"]
+                        if (minTarget != null && options.target < minTarget) continue
+                    }
+                }
                 when (member) {
                     is PropertyDeclaration -> {
                         val name = getMemberName(member.name) ?: continue
