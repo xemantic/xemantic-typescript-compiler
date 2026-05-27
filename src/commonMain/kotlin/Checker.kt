@@ -50045,6 +50045,24 @@ interface DataView {
             if (bare.contains('<')) return null
             return resolveTypeNameViaNamespaceExports(bare)
         }
+        // B85.1e: Identifier-rooted case `varName.X` — look up `varName` in varTypes.
+        if (inner is Identifier) {
+            val typeName = varTypes[inner.text] ?: return null
+            if (!typeName.startsWith("@")) return null
+            val bare = typeName.removePrefix("@")
+            if (bare.contains('<')) return null
+            val baseType = resolveTypeNameViaNamespaceExports(bare) ?: return null
+            val baseObj = baseType as? Type.Object ?: return null
+            resolveStructuredTypeMembers(baseObj)
+            val propSym = baseObj.members?.get(expr.name.text) ?: return null
+            val pushed = baseObj.symbol?.let { pushInferenceNamespaceFor(it) } ?: false
+            try {
+                val propType = getTypeOfSymbol(propSym)
+                return propType.takeIf { it !== anyType && it !== errorType }
+            } finally {
+                if (pushed) inferenceNamespaceStack.removeLast()
+            }
+        }
         // Recursive case: this.X.Y
         val innerPA = inner as? PropertyAccessExpression ?: return null
         val baseType = resolveReceiverTypeForElementAccess(innerPA, varTypes) ?: return null
