@@ -26708,6 +26708,15 @@ interface DataView {
                         lname.startsWith("ES2") || lname.equals("ESNext", ignoreCase = true)
                 }
             val forwardLibTypeNames = mutableSetOf<String>()
+            // iter17 B86.10: aggregate ModuleDeclaration hasValues across ALL
+            // declarations with the same name BEFORE deciding namespaceOnly.
+            // Without this, a merged-namespace pair like
+            //   namespace M { interface T {} }       // type-only
+            //   namespace M { export const x = 1 }   // value-bearing
+            // mis-classifies M as namespace-only (the first decl wins, second
+            // never removes it). Tightening the gate prevents FP TS2708 when
+            // the per-decl walk treats hybrid M as a runtime-erased namespace.
+            val moduleHasValues = mutableMapOf<String, Boolean>()
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
                     is InterfaceDeclaration -> {
@@ -26725,7 +26734,6 @@ interface DataView {
                     }
                     is ModuleDeclaration -> {
                         val n = (stmt.name as? Identifier)?.text ?: continue
-                        // A namespace is "namespace-only" if it has no value exports
                         if (n !in valueNames) {
                             val body = stmt.body
                             val hasValues = when (body) {
@@ -26736,11 +26744,16 @@ interface DataView {
                                 }
                                 else -> false
                             }
-                            if (!hasValues) namespaceOnlyNames.add(n)
+                            // OR-merge across all declarations of the same name
+                            moduleHasValues[n] = (moduleHasValues[n] ?: false) || hasValues
                         }
                     }
                     else -> {}
                 }
+            }
+            // Finalize: only names with NO value-bearing declarations are namespace-only
+            for ((n, hasValues) in moduleHasValues) {
+                if (!hasValues) namespaceOnlyNames.add(n)
             }
             currentForwardLibTypeNames = forwardLibTypeNames
             try {
@@ -26848,7 +26861,12 @@ interface DataView {
                             checkTypeAsValueInStatements(it.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                         }
                         is PropertyDeclaration -> member.initializer?.let {
-                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames)
+                            // iter17 B86.10b: re-attempt B86.9d on top of tightened
+                            // namespaceOnlyNames classification (merged-namespace
+                            // value+type aggregate). Propagate namespaceOnlyNames so
+                            // `class C { x = N }` where N is a pure type-only namespace
+                            // fires TS2708 in property initializers.
+                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                         }
                         else -> {}
                     }
