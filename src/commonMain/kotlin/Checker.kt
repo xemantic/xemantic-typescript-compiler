@@ -68171,8 +68171,14 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             // 16.0b: contextual typing — set param type as context so arrow/function
             // arguments get their parameters typed from the expected signature.
+            // B83.4g: also propagate the param type for ObjectLiteralExpression args
+            // so getTypeOfObjectLiteral's per-property contextual push (B52.4) fires —
+            // e.g. `f2({ toString: (s) => s })` against param `I { toString: (t: string)
+            // => string }` types `s` as `string`, so the TS2345 source displays
+            // `{ toString: (s: string) => string }` (not `(s: any) => any`).
             val savedContextual = contextualType
-            val useCtx = paramType is Type.Object && (arg is ArrowFunction || arg is FunctionExpression)
+            val useCtx = paramType is Type.Object &&
+                (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression)
             if (useCtx) contextualType = paramType
             // 17.67: contextual literal preservation for call args (extends 17.66's
             // var-decl init / assignment-RHS pattern). When the param's type contains
@@ -68234,6 +68240,16 @@ interface DataView {
                             val missing = mutableListOf<Symbol>()
                             for (targetProp in paramType.properties!!) {
                                 if (isOptionalProperty(targetProp)) continue
+                                // B83.4g: a target property whose name is an Object.prototype
+                                // member (toString/valueOf/etc.) is satisfied by the literal's
+                                // implicit prototype when the source doesn't define it — so it
+                                // is NOT "missing". Matches TypeScript: `f2({ value: '' })`
+                                // against `I { value; toString: (t)=>string }` does NOT flag
+                                // toString. Mirrors the OBJECT_PROTOTYPE_PROPERTIES filter in
+                                // propertiesRelatedTo (Checker.kt:~69600). Only skips when the
+                                // source omits it — a source-defined toString still falls
+                                // through to the normal property-compatibility check elsewhere.
+                                if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
                                 if (argType.members?.get(targetProp.name) == null) {
                                     missing.add(targetProp)
                                 }
