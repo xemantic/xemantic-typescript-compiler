@@ -50170,6 +50170,49 @@ interface DataView {
                                 return
                             }
                         }
+                        // B87.4 (round 73): class-instance source → interface/class target
+                        // missing-property. `canUseTypeEngine` blocks named→named structural
+                        // comparison (recursive-expansion risk), so `i = c` / `d = c` where the
+                        // source class lacks members the target requires emit nothing. Missing-
+                        // property is NAME-presence only (no recursion into property types), so a
+                        // narrow additive check is safe: source is a class instance, target is a
+                        // class/interface, and `collectMissingProperties` (which handles inherited
+                        // + Object.prototype members) reports ≥1 required member absent from source.
+                        if (sourceType is Type.Interface && tt is Type.Interface &&
+                            sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+                            sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
+                        ) {
+                            val missing = try { collectMissingProperties(sourceType, tt) }
+                                catch (_: StackOverflowError) { emptyList() }
+                            if (missing.isNotEmpty()) {
+                                val displaySource = typeToString(sourceType)
+                                val displayTarget = if (typeAnnotation != null)
+                                    formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                if (missing.size >= 2) {
+                                    diagnostics.add(Diagnostic(
+                                        message = formatTs2740Message(displaySource, displayTarget, missing),
+                                        category = DiagnosticCategory.Error,
+                                        code = if (missing.size <= 4) 2739 else 2740,
+                                        fileName = fileName, line = line, character = character,
+                                        start = target.pos, length = target.text.length,
+                                    ))
+                                } else {
+                                    val mpName = missing[0]
+                                    val mpSym = try { getPropertyOfType(tt, mpName) } catch (_: StackOverflowError) { null }
+                                    val declaringDisplay = getDeclaringTypeDisplay(mpSym, tt, displayTarget)
+                                    val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                    diagnostics.add(Diagnostic(
+                                        message = "Property '$mpName' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
+                                        category = DiagnosticCategory.Error, code = 2741,
+                                        fileName = fileName, line = line, character = character,
+                                        start = target.pos, length = target.text.length,
+                                        relatedInformation = listOfNotNull(relatedInfo),
+                                    ))
+                                }
+                                return
+                            }
+                        }
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
                         // Excess property check for object literal assignments (TS2353)
