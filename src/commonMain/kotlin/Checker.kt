@@ -53973,28 +53973,47 @@ interface DataView {
 
     /** Get the type of an arrow function expression. */
     private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
+        val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
+        // Apply contextual typing: infer parameter types from contextual call signature.
+        // B83.4f-c: do this BEFORE return-type inference so the body's identifier
+        // resolution (`getTypeOfIdentifier` reads `currentLocalTypes`) sees concrete
+        // param types. Without this, `(x: number) => { return x.toFixed() }` infers
+        // its body return as `any` (x is invisible → `x.toFixed()` → `any`) instead of
+        // `string`, leaving the arg type `(x: number) => any` and masking TS2345.
+        applyContextualParameterTypes(params, expr.parameters)
         val returnType = expr.type?.let { getTypeFromTypeNode(it) } ?: run {
             val body = expr.body
-            when {
-                body is Block && !hasReturnWithExpression(body) -> voidType
-                // B52.4: Infer return type from simple `return <literal>` patterns so an
-                // un-annotated arrow `(n) => { return 0; }` in an object literal whose
-                // target is `{ f(n: number): number }` displays as `(n: number) => number`
-                // instead of `(n: any) => any`. Falls back to a narrow `return null;`
-                // check to handle the wrapper-target case (TS displays `() => null` for
-                // an arrow whose only return is the null literal).
-                body is Block -> inferReturnTypeFromBody(body)
-                    ?: inferArrowReturnNullLiteral(body)
-                    ?: anyType
-                // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
-                body is Identifier && body.text == "undefined" -> anyType
-                body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
-                else -> anyType
+            // B83.4f-c: push each named param's resolved type into `currentLocalTypes`
+            // (save/restore) so `inferReturnTypeFromBody` resolves body identifiers
+            // referencing the params to their concrete (annotated or contextual) types.
+            val savedLocalTypes = currentLocalTypes
+            currentLocalTypes = currentLocalTypes.toMutableMap()
+            try {
+                for (p in params) {
+                    if (p.name.isEmpty()) continue
+                    val pt = getTypeOfSymbol(p)
+                    if (pt !== anyType && pt !== errorType) currentLocalTypes[p.name] = pt
+                }
+                when {
+                    body is Block && !hasReturnWithExpression(body) -> voidType
+                    // B52.4: Infer return type from simple `return <literal>` patterns so an
+                    // un-annotated arrow `(n) => { return 0; }` in an object literal whose
+                    // target is `{ f(n: number): number }` displays as `(n: number) => number`
+                    // instead of `(n: any) => any`. Falls back to a narrow `return null;`
+                    // check to handle the wrapper-target case (TS displays `() => null` for
+                    // an arrow whose only return is the null literal).
+                    body is Block -> inferReturnTypeFromBody(body)
+                        ?: inferArrowReturnNullLiteral(body)
+                        ?: anyType
+                    // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
+                    body is Identifier && body.text == "undefined" -> anyType
+                    body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
+                    else -> anyType
+                }
+            } finally {
+                currentLocalTypes = savedLocalTypes
             }
         }
-        val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
-        // Apply contextual typing: infer parameter types from contextual call signature
-        applyContextualParameterTypes(params, expr.parameters)
         val sig = Signature(
             declaration = expr,
             parameters = params,
