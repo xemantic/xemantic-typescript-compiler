@@ -49588,6 +49588,49 @@ interface DataView {
                         return // TS2353 emitted
                     }
                 }
+                // B87.4c (round 73): class-instance source → interface/class return-type
+                // missing-property — completes the TS2741/2739 feature for the RETURN
+                // position (uniform with assignment B87.4 / var-decl B87.4b / argument
+                // 17.29). canUseTypeEngine blocks named→named, so `function f(): I { return
+                // c }` where class C lacks I's required members emits nothing. Name-presence
+                // only (no recursion → safe). Sync functions only (async return-type is
+                // Promise<T>, handled by the unwrap path below). Emits at the `return` keyword.
+                if (!inAsyncFunctionBody && expr != null &&
+                    sourceType is Type.Interface && targetType is Type.Interface &&
+                    sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+                    sourceType.callSignatures.isNullOrEmpty() && targetType.callSignatures.isNullOrEmpty() &&
+                    !canUseTypeEngine(sourceType, targetType)
+                ) {
+                    val missing = try { collectMissingProperties(sourceType, targetType) }
+                        catch (_: StackOverflowError) { emptyList() }
+                    if (missing.isNotEmpty()) {
+                        val displaySource = typeToString(sourceType)
+                        val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                        val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                        if (missing.size >= 2) {
+                            diagnostics.add(Diagnostic(
+                                message = formatTs2740Message(displaySource, displayTarget, missing),
+                                category = DiagnosticCategory.Error,
+                                code = if (missing.size <= 4) 2739 else 2740,
+                                fileName = fileName, line = line, character = character,
+                                start = stmt.pos, length = 6,
+                            ))
+                        } else {
+                            val mpName = missing[0]
+                            val mpSym = try { getPropertyOfType(targetType, mpName) } catch (_: StackOverflowError) { null }
+                            val declaringDisplay = getDeclaringTypeDisplay(mpSym, targetType, displayTarget)
+                            val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$mpName' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
+                                category = DiagnosticCategory.Error, code = 2741,
+                                fileName = fileName, line = line, character = character,
+                                start = stmt.pos, length = 6,
+                                relatedInformation = listOfNotNull(relatedInfo),
+                            ))
+                        }
+                        return
+                    }
+                }
                 if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                     // Async-function returns: declared `Promise<T>` accepts `T` directly.
                     // The returned value is implicitly wrapped in a Promise at runtime,
