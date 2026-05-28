@@ -62919,6 +62919,12 @@ interface DataView {
                 populateParameterLocalTypes(expr.parameters)
                 // 16.0: contextual param inference for un-annotated arrow parameters
                 val ctxType = contextualType
+                // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
+                // contextual type is a single-call-sig function, the body is contextually
+                // typed by that signature's RETURN type. Propagate it so a callback-
+                // returning-a-callback shape `() => (a => a.foo)` carries the inner
+                // contextual `(a: T) => void` into the inner arrow. Default to null.
+                var bodyCtx: Type? = null
                 if (ctxType is Type.Object) {
                     try {
                         resolveStructuredTypeMembers(ctxType)
@@ -62933,11 +62939,15 @@ interface DataView {
                                 if (pType === anyType || pType === errorType) continue
                                 currentLocalTypes[pName.text] = pType
                             }
+                            if (expr.body is Expression) {
+                                val ret = sig.resolvedReturnType
+                                if (ret != null && ret !== anyType && ret !== errorType) bodyCtx = ret
+                            }
                         }
                     } catch (_: StackOverflowError) { /* circular */ }
                 }
                 val savedCtx = contextualType
-                contextualType = null
+                contextualType = bodyCtx
                 try {
                     expr.body.let { body ->
                         when (body) {
@@ -71728,7 +71738,7 @@ interface DataView {
             type.symbol == null && !type.callSignatures.isNullOrEmpty() &&
             type.constructSignatures.isNullOrEmpty()
         ) {
-            val newSigs = type.callSignatures!!.map { instantiateSignature(it, mapper) }
+            val newSigs = type.callSignatures!!.map { instantiateContextualSignature(it, mapper) }
             // Avoid allocating a fresh object when nothing changed (identity preserved
             // per-signature is not guaranteed, so compare element-wise on the sigs).
             if (newSigs.zip(type.callSignatures!!).all { (a, b) -> a === b }) return type
@@ -71739,6 +71749,36 @@ interface DataView {
             return newObj
         }
         return instantiateType(type, mapper)
+    }
+
+    /**
+     * B83.4d: like [instantiateSignature] but uses [instantiateContextualParamType]
+     * (rather than the function-shape-no-op [instantiateType]) for BOTH parameter
+     * types AND the return type, so a callback-returning-a-callback contextual type
+     * `() => (a: T) => void` substitutes its inner `(a: T)` to `(a: <mapped>)`.
+     * Used only by the contextual-param substitution path in [checkPropertyAccessInExpr];
+     * preserves [instantiateSignature]'s behavior for non-function-shaped members.
+     */
+    private fun instantiateContextualSignature(sig: Signature, mapper: TypeMapper): Signature {
+        val newReturnType = sig.resolvedReturnType?.let { instantiateContextualParamType(it, mapper) }
+        val newParams = sig.parameters.map { param ->
+            val paramType = getTypeOfSymbol(param)
+            val instantiated = instantiateContextualParamType(paramType, mapper)
+            if (instantiated !== paramType) {
+                val newParam = Symbol(param.flags, param.name)
+                newParam.declarations.addAll(param.declarations)
+                newParam.valueDeclaration = param.valueDeclaration
+                symbolTypes[newParam.id] = instantiated
+                newParam
+            } else param
+        }
+        return Signature(
+            declaration = sig.declaration,
+            typeParameters = null,
+            parameters = newParams,
+            resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
+            minArgumentCount = sig.minArgumentCount,
+        )
     }
 
     /**
