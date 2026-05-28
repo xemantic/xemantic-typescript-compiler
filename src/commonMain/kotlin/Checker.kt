@@ -50308,6 +50308,32 @@ interface DataView {
                                 return
                             }
                         }
+                        // B87.6c (round 73): array-VARIABLE source → tuple target tuple-arity
+                        // TS2322 for ASSIGNMENT — completes the tuple-arity diagnostic uniformly
+                        // (async-return B87.6 + var-decl B87.6b + assignment B87.6c). `x = arr`
+                        // where `x: [number]`, `arr: number[]` → "Target allows only N element(s)
+                        // but source may have more." Gated: RHS not an array literal (literals are
+                        // tuple-assignable element-wise), source is `Array` Reference, target is a
+                        // tuple `Type.Object`, not already assignable. Emits at the LHS identifier.
+                        if (expr.right !is ArrayLiteralExpression &&
+                            sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
+                            tt is Type.Object && tt !is Type.Reference && tt.tupleElementTypes != null &&
+                            !checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                        ) {
+                            val n = tt.tupleElementTypes!!.size
+                            val displaySource = typeToString(sourceType)
+                            val displayTarget = if (typeAnnotation != null)
+                                formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                category = DiagnosticCategory.Error, code = 2322,
+                                fileName = fileName, line = line, character = character,
+                                start = target.pos, length = target.text.length,
+                                messageChain = listOf("  Target allows only $n element(s) but source may have more."),
+                            ))
+                            return
+                        }
                         // B87.4 (round 73): class-instance source → interface/class target
                         // missing-property. `canUseTypeEngine` blocks named→named structural
                         // comparison (recursive-expansion risk), so `i = c` / `d = c` where the
