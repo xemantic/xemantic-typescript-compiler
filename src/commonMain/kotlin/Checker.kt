@@ -68764,6 +68764,45 @@ interface DataView {
                         paramReturn !== anyType && paramReturn !== errorType &&
                         isSimpleCheckableType(paramReturn)
                 }
+                // B83.4f-d: Function-vs-function arg comparison when the ONLY mismatch is
+                // a concrete-and-incompatible RETURN type (params are pairwise assignable).
+                // The `allowFuncToFunc` gate above requires BOTH sigs to be fully simple-
+                // checkable, which excludes a callback param like `(x: T) => Date` whose
+                // return type `Date` (Type.Reference) is not simple. This narrow gate fires
+                // when: same param count, each param pair contravariant-assignable, the
+                // arg's return is a simple-checkable concrete type (e.g. `string`), the
+                // param's return is a concrete non-void/any/error type (e.g. `Date`), and
+                // the arg return is NOT assignable to the param return. Produces the
+                // `Type 'string' is not assignable to type 'Date'.` chain via
+                // `getFunctionMismatchElaboration`'s return-type block.
+                val allowFuncReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                    val argSig = (argType as Type.Object).callSignatures!!.first()
+                    val paramSig = (paramType as Type.Object).callSignatures!!.first()
+                    val argReturn = argSig.resolvedReturnType
+                    val paramReturn = paramSig.resolvedReturnType
+                    if (argReturn == null || paramReturn == null) return@run false
+                    if (argSig.parameters.size != paramSig.parameters.size) return@run false
+                    // Arg return must be a concrete simple type; param return must be a
+                    // concrete (non-void/any/error) type that is structurally describable.
+                    if (!isSimpleCheckableType(argReturn)) return@run false
+                    if (paramReturn === voidType || paramReturn === anyType ||
+                        paramReturn === errorType || argReturn === anyType ||
+                        argReturn === errorType) return@run false
+                    // Skip when the param return is itself a type parameter (unresolved
+                    // generic) — that's an inference scenario, not a concrete mismatch.
+                    if (paramReturn is Type.TypeParam) return@run false
+                    // Each param pair must be contravariant-assignable (target→source) so
+                    // the ONLY remaining incompatibility is the return type. If any param
+                    // pair fails, fall through to the standard paths (allowFuncToFunc etc.).
+                    val paramsCompatible = (0 until argSig.parameters.size).all { i ->
+                        val ap = getTypeOfSymbol(argSig.parameters[i])
+                        val pp = getTypeOfSymbol(paramSig.parameters[i])
+                        checkTypeRelatedTo(pp, ap, assignableRelation)
+                    }
+                    if (!paramsCompatible) return@run false
+                    // Final: the return types must actually be incompatible.
+                    !checkTypeRelatedTo(argReturn, paramReturn, assignableRelation)
+                }
                 // B50.4: Object→Object structural mismatch — narrow gate. Only fires
                 // when BOTH source and target are anonymous Type.Object with alias
                 // context registered (via B50.1's substitution or B50.4's non-generic
@@ -68779,7 +68818,7 @@ interface DataView {
                         val chain = getPropertyElaborationChain(argType, paramType)
                         chain != null && chain.isNotEmpty()
                     }
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowChainObjObj) continue
+                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
             }
             // B71.1: Strict-only void→undefined fn-return mismatch. Argument is a NAMED
             // FunctionDeclaration (source.symbol carries the function's symbol — arrow
