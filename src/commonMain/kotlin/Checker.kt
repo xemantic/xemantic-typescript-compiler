@@ -1277,6 +1277,11 @@ class Checker(
         return false
     }
 
+    /** B86.7c: True for a single (non-union) type that is exactly `null`,
+     *  `undefined`, or `void` — i.e. a nullish constituent of a union. */
+    private fun isNullishConstituent(t: Type): Boolean =
+        t !is Type.Union && t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
@@ -71091,6 +71096,29 @@ interface DataView {
             }
             // Try to go deeper into nested object properties (if not a leaf)
             if (leaf == null) {
+                // B86.7c: nested nullable-target collapse. When the chosen property's
+                // source is an Object and its target is a Union of exactly ONE
+                // non-nullish Object constituent + nullish-only siblings (e.g. source
+                // `{ bar: ... }` vs target `{ bar: ... } | undefined`), TypeScript does
+                // NOT emit the per-level Object→Union drill-in chain. It collapses
+                // directly through the single non-nullish constituent, carrying the
+                // property path so the deeper line reads "The types of 'foo.bar' are
+                // incompatible between these types." Recurse into the non-nullish
+                // constituent with the SAME propPath (collapsed form), preserving the
+                // outer chain shape. Gate is narrow: exactly one non-nullish Object
+                // constituent, all other constituents nullish.
+                val sObj = chosen.sourceType as? Type.Object
+                val tUnion = chosen.targetType as? Type.Union
+                if (sObj != null && tUnion != null) {
+                    val nonNullish = tUnion.types.filterNot { isNullishConstituent(it) }
+                    if (nonNullish.size == 1 && nonNullish[0] is Type.Object) {
+                        val collapsed = getPropertyElaborationChain(sObj, nonNullish[0], propPath)
+                        if (collapsed != null &&
+                            collapsed.first().trimStart().startsWith("The types of '")) {
+                            return collapsed
+                        }
+                    }
+                }
                 val deeper = getPropertyElaborationChain(chosen.sourceType, chosen.targetType, propPath)
                 if (deeper != null) {
                     // Two chain forms depending on what the deeper recursion produced:
@@ -71188,10 +71216,36 @@ interface DataView {
             val undefinedExtra: List<String> = if (chosen.sourceWidenedForOptional) {
                 listOf("      Type 'undefined' is not assignable to type '$targetPropStr'.")
             } else emptyList()
+            // B86.7c: per-failing-constituent elaboration for Union sources. When the
+            // source prop type is a Union and the leaf line "Type '<union>' is not
+            // assignable to type '<target>'." is emitted, TypeScript follows it with a
+            // sub-line naming the SPECIFIC constituent that fails (e.g. for
+            // `number | undefined` vs `string | null`, the `undefined` member is the
+            // elaborated failing constituent). Gate is narrow: only fire when source is
+            // a Union, no funcExtra/undefinedExtra already applies, and at least one
+            // constituent genuinely fails assignability to the target prop type.
+            // Prefer the nullish failing constituent (matches TypeScript's display
+            // ordering for nullable targets); fall back to the first failing one.
+            val unionConstituentExtra: List<String> =
+                if (chosen.sourceType is Type.Union && undefinedExtra.isEmpty() && funcExtra.isEmpty()) {
+                    // Narrow gate: only elaborate when the failing constituent is NULLISH
+                    // (null/undefined/void). Non-nullish failing constituents (e.g. a
+                    // plain `number` vs `string | null`) are NOT shown by TypeScript,
+                    // and broadening to them would change many existing union-source
+                    // TS2322 chains. This keeps the surface limited to the
+                    // nullable-mismatch family (cf. elaboratedErrorsOnNullableTargets01).
+                    val pick = (chosen.sourceType as Type.Union).types.firstOrNull {
+                        isNullishConstituent(it) &&
+                            !checkTypeRelatedTo(it, chosen.targetType, assignableRelation)
+                    }
+                    if (pick != null) {
+                        listOf("      Type '${typeToString(pick)}' is not assignable to type '$targetPropStr'.")
+                    } else emptyList()
+                } else emptyList()
             return listOf(
                 outerLine,
                 "    Type '$sourcePropStr' is not assignable to type '$targetPropStr'.",
-            ) + undefinedExtra + funcExtra
+            ) + undefinedExtra + unionConstituentExtra + funcExtra
         } finally {
             state.elaborationStack.remove(pairKey)
         }
