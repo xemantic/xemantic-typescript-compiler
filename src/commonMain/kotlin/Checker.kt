@@ -49646,6 +49646,32 @@ interface DataView {
                                 checkTypeRelatedTo(sourceType, awaited, assignableRelation)) {
                                 return // assignable to awaited form — no diagnostic
                             }
+                            // B87.6 (round 73): source not assignable to the AWAITED form.
+                            // NARROW tuple-arity case: array source (`any[]`/`T[]`) vs a tuple
+                            // awaited target (e.g. `Promise<[]>` → awaited `[]`) — TypeScript
+                            // reports against the awaited tuple with "Target allows only N
+                            // element(s) but source may have more.", NOT the Promise<T> shape.
+                            // (`promiseEmptyTupleNoException`.) Other async-return mismatches
+                            // fall through to the existing Promise<T> emission below.
+                            if (sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
+                                awaited is Type.Object && awaited !is Type.Reference &&
+                                awaited.tupleElementTypes != null
+                            ) {
+                                val n = awaited.tupleElementTypes!!.size
+                                val (tl, tc) = getLineAndCharacterOfPosition(source, stmt.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(awaited)}'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = tl,
+                                    character = tc,
+                                    start = stmt.pos,
+                                    length = 6,
+                                    messageChain = listOf("  Target allows only $n element(s) but source may have more."),
+                                ))
+                                return
+                            }
                         }
                     }
                     // Widen literal source for display when target type doesn't contain
@@ -54244,7 +54270,7 @@ interface DataView {
 
     /** Get the type of an array literal expression. */
     private fun getTypeOfArrayLiteral(expr: ArrayLiteralExpression): Type {
-        if (expr.elements.isEmpty()) return anyType // empty array — can't infer element type
+        if (expr.elements.isEmpty()) return getArrayType(anyType) // empty array → any[] (B87.6)
         // Infer element type as union of all element types
         val elementTypes = mutableListOf<Type>()
         for (el in expr.elements) {
