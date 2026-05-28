@@ -1109,6 +1109,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileEnumConflicts()
         }
+        // 73d. Check module-augmentation enum merging with a re-exported class/etc (TS2567 + TS6203)
+        if (binderResults.size > 1) {
+            checkModuleAugmentationEnumMerge()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -77587,6 +77591,148 @@ interface DataView {
                     length = info.name.length,
                     relatedInformation = relatedInfo,
                 ))
+            }
+        }
+    }
+
+    /**
+     * Resolved declaration of a name in a module file, following `export * from`
+     * and `export { X } from` re-export chains.
+     */
+    private class ReexportedDecl(
+        val stmt: Statement, val nameNode: Node, val fileName: String, val source: String,
+    )
+
+    /**
+     * Find the declaration of [name] exported (possibly re-exported) by [fileName].
+     * Follows `export * from "Y"` and `export { name } from "Y"` chains. Returns the
+     * concrete declaration (class/function/interface/enum/var) or null.
+     */
+    private fun findExportedDeclAcrossReexports(
+        fileName: String, name: String, visited: MutableSet<String>,
+    ): ReexportedDecl? {
+        if (!visited.add(fileName)) return null
+        val res = fileResults[fileName] ?: return null
+        val source = res.sourceFile.text
+        // Direct declarations first.
+        for (stmt in res.sourceFile.statements) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.let {
+                    if (it.text == name) return ReexportedDecl(stmt, it, fileName, source)
+                }
+                is FunctionDeclaration -> stmt.name?.let {
+                    if (it.text == name) return ReexportedDecl(stmt, it, fileName, source)
+                }
+                is InterfaceDeclaration ->
+                    if (stmt.name.text == name) return ReexportedDecl(stmt, stmt.name, fileName, source)
+                is EnumDeclaration ->
+                    if (stmt.name.text == name) return ReexportedDecl(stmt, stmt.name, fileName, source)
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    if (n.text == name) return ReexportedDecl(stmt, n, fileName, source)
+                }
+                else -> {}
+            }
+        }
+        // Re-export chains.
+        for (stmt in res.sourceFile.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val target = resolveModuleSpecifier(spec, stmt) ?: continue
+            val clause = stmt.exportClause
+            if (clause == null) {
+                // export * from "Y" — name passes through unchanged
+                findExportedDeclAcrossReexports(target, name, visited)?.let { return it }
+            } else if (clause is NamedExports) {
+                // export { X as name } from "Y" — look up the original X under name
+                for (el in clause.elements) {
+                    if (el.name.text != name) continue
+                    val original = el.propertyName?.text ?: el.name.text
+                    findExportedDeclAcrossReexports(target, original, visited)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * TS2567 for a `declare module "X" { export enum E { ... } }` augmentation whose
+     * target module "X" (possibly via `export * from`) already declares a non-enum,
+     * non-namespace `E` (class/function/var/interface). The per-file and cross-file
+     * (script) walkers don't see this shape: the augmentation lives in a module file
+     * and the conflicting partner is reached only through module-specifier + re-export
+     * resolution. Emits TS2567 on BOTH the enum name and the partner declaration name,
+     * each with a TS6203 "was also declared here" related info pointing at the other.
+     */
+    private fun checkModuleAugmentationEnumMerge() {
+        for (result in binderResults) {
+            val augFile = result.sourceFile.fileName
+            if (isDtsFile(augFile)) continue
+            val augSource = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val specName = (stmt.name as? StringLiteralNode)?.text ?: continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                val targetFile = resolveModuleSpecifier(specName, stmt) ?: continue
+                if (targetFile == augFile) continue
+                for (inner in body.statements) {
+                    val enumDecl = inner as? EnumDeclaration ?: continue
+                    val enumName = enumDecl.name.text
+                    val partner = findExportedDeclAcrossReexports(targetFile, enumName, mutableSetOf())
+                        ?: continue
+                    val partnerKind = when (partner.stmt) {
+                        is ClassDeclaration, is FunctionDeclaration,
+                        is InterfaceDeclaration, is VariableStatement -> true
+                        else -> false // enum partner merges fine; anything else: skip
+                    }
+                    if (!partnerKind) continue
+
+                    val (enumLine, enumChar) = getLineAndCharacterOfPosition(augSource, enumDecl.name.pos)
+                    val (pLine, pChar) = getLineAndCharacterOfPosition(partner.source, partner.nameNode.pos)
+
+                    // TS2567 on the enum name, related info -> partner declaration.
+                    diagnostics.add(Diagnostic(
+                        message = "Enum declarations can only merge with namespace or other enum declarations.",
+                        category = DiagnosticCategory.Error,
+                        code = 2567,
+                        fileName = augFile,
+                        line = enumLine,
+                        character = enumChar,
+                        start = enumDecl.name.pos,
+                        length = enumName.length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "'$enumName' was also declared here.",
+                            category = DiagnosticCategory.Message,
+                            code = 6203,
+                            fileName = partner.fileName,
+                            line = pLine,
+                            character = pChar,
+                            start = partner.nameNode.pos,
+                            length = enumName.length,
+                        )),
+                    ))
+                    // TS2567 on the partner declaration name, related info -> enum.
+                    diagnostics.add(Diagnostic(
+                        message = "Enum declarations can only merge with namespace or other enum declarations.",
+                        category = DiagnosticCategory.Error,
+                        code = 2567,
+                        fileName = partner.fileName,
+                        line = pLine,
+                        character = pChar,
+                        start = partner.nameNode.pos,
+                        length = enumName.length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "'$enumName' was also declared here.",
+                            category = DiagnosticCategory.Message,
+                            code = 6203,
+                            fileName = augFile,
+                            line = enumLine,
+                            character = enumChar,
+                            start = enumDecl.name.pos,
+                            length = enumName.length,
+                        )),
+                    ))
+                }
             }
         }
     }
