@@ -62739,9 +62739,34 @@ interface DataView {
                         // `callb((a) => {...})` patterns).
                         if (sigs.size == 1) {
                             val sig = sigs[0]
+                            // B86.1b (activation, 2026-05-28): for a single-signature
+                            // GENERIC callee with no explicit type args (e.g.
+                            // `map<T,U>(arr: T[], cb: (x: T) => U)` called as
+                            // `map([1,""], x => x.foo())`), infer the type-arg mapper
+                            // from the arguments and substitute it into each arg's
+                            // contextual param type. This turns a bare-TP contextual
+                            // type `(x: T) => U` into the concrete `(x: number|string)
+                            // => U`, so the un-annotated lambda param `x` resolves to
+                            // the concrete type during the diagnostic walk (TS2339 etc.)
+                            // rather than staying an opaque TypeParam. Closes the
+                            // temporal-inversion gap: the inference mapper produced inside
+                            // tryInferSingleTypeParamFromArgs (a return-type-only helper,
+                            // torn down in finally) was never visible to this diagnostic
+                            // pass. We re-run the inference here, in-pass, and apply it
+                            // directly to the propagated contextual types. Gate: only when
+                            // the sig has type params AND no explicit type args (explicit
+                            // args are handled by their own checking path).
+                            val inferMapper: TypeMapper? =
+                                if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
+                                    try { tryInferSingleTypeParamFromArgs(sig, expr.arguments!!, forReturnType = true) }
+                                    catch (_: StackOverflowError) { null }
+                                } else null
                             expr.arguments!!.mapIndexed { i, _ ->
                                 if (i < sig.parameters.size) {
-                                    val pt = getTypeOfSymbol(sig.parameters[i])
+                                    val ptRaw = getTypeOfSymbol(sig.parameters[i])
+                                    val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+                                        try { instantiateContextualParamType(ptRaw, inferMapper) } catch (_: StackOverflowError) { ptRaw }
+                                    } else ptRaw
                                     if (pt === anyType || pt === errorType) null else pt
                                 } else null
                             }
@@ -71587,6 +71612,37 @@ interface DataView {
             // Intrinsic, literal types don't contain type parameters
             else -> type
         }
+    }
+
+    /**
+     * B86.1b (activation, 2026-05-28): instantiate a CONTEXTUAL parameter type through an
+     * inference mapper. Unlike [instantiateType] (which deliberately returns
+     * function-shaped Type.Object UNCHANGED — see CLAUDE.md "instantiateType for
+     * Type.Object" gotcha), this helper DOES descend into a function-shaped
+     * Type.Object's call signatures so a contextual callback type like `(x: T) => U`
+     * becomes `(x: <mapped T>) => <mapped U>`. This is what lets the un-annotated lambda
+     * param `x` resolve to the concrete inferred type during the diagnostic walk
+     * (`checkPropertyAccessInExpr`'s ArrowFunction / FunctionExpression branches push
+     * `currentLocalTypes[x] = <contextual sig param type>`). Used ONLY at the
+     * checkPropertyAccessInExpr CallExpression arg-context computation — narrowly scoped
+     * so the existing instantiateType no-op behavior (relied on elsewhere) is untouched.
+     */
+    private fun instantiateContextualParamType(type: Type, mapper: TypeMapper): Type {
+        if (type is Type.Object && type !is Type.Interface && type !is Type.Reference &&
+            type.symbol == null && !type.callSignatures.isNullOrEmpty() &&
+            type.constructSignatures.isNullOrEmpty()
+        ) {
+            val newSigs = type.callSignatures!!.map { instantiateSignature(it, mapper) }
+            // Avoid allocating a fresh object when nothing changed (identity preserved
+            // per-signature is not guaranteed, so compare element-wise on the sigs).
+            if (newSigs.zip(type.callSignatures!!).all { (a, b) -> a === b }) return type
+            val newObj = Type.Object()
+            newObj.callSignatures = newSigs
+            newObj.properties = type.properties
+            newObj.members = type.members
+            return newObj
+        }
+        return instantiateType(type, mapper)
     }
 
     /**
