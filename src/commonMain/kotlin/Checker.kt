@@ -23670,11 +23670,13 @@ interface Array<T> {
     splice(start: number, deleteCount?: number): T[];
     indexOf(searchElement: T, fromIndex?: number): number;
     lastIndexOf(searchElement: T, fromIndex?: number): number;
-    every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
+    every<S extends T>(predicate: (value: T, index: number, array: T[]) => value is S, thisArg?: any): this is S[];
+    every(predicate: (value: T, index: number, array: T[]) => unknown, thisArg?: any): boolean;
     some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
     forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
     map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[];
-    filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
+    filter<S extends T>(predicate: (value: T, index: number, array: T[]) => value is S, thisArg?: any): S[];
+    filter(predicate: (value: T, index: number, array: T[]) => unknown, thisArg?: any): T[];
     reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
     reduce<U>(callbackfn: (previousValue: U, currentValue: T, currentIndex: number, array: T[]) => U, initialValue: U): U;
     reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
@@ -60494,6 +60496,22 @@ interface DataView {
         return "($params) => $ret"
     }
 
+    /**
+     * Like [methodSigColonDisplay] but prefixes the method's own type parameters
+     * (`<S extends T>`) — used to render overload-set members in the TS2416 base-type
+     * union display `{ <S extends T>(p): this is S[]; (p): boolean; }` (B86.13).
+     */
+    private fun methodSigColonDisplayWithTypeParams(md: MethodDeclaration): String {
+        val tp = md.typeParameters?.takeIf { it.isNotEmpty() }?.let { tps ->
+            "<" + tps.joinToString(", ") { p ->
+                val name = p.name.text
+                val constraint = p.constraint?.let { formatTypeForDisplay(it) }
+                if (constraint != null) "$name extends $constraint" else name
+            } + ">"
+        } ?: ""
+        return tp + methodSigColonDisplay(md)
+    }
+
     /** Display a method as `(params): returnType` — used in the "Signature '...' must be a type predicate." chain. */
     private fun methodSigColonDisplay(md: MethodDeclaration): String {
         val params = md.parameters.joinToString(", ") { p ->
@@ -61073,7 +61091,47 @@ interface DataView {
                     val basePropSymbol = baseMembers[memberName] ?: continue
 
                     // Skip if base member has multiple declarations (overloads)
-                    if (basePropSymbol.declarations.size > 1) continue
+                    if (basePropSymbol.declarations.size > 1) {
+                        // B86.13: predicate-overload mismatch. When the base member is an
+                        // OVERLOAD SET and at least one overload's return type is a non-asserting
+                        // type predicate (e.g. `every<S extends T>(...): this is S[]`), a derived
+                        // override that is NOT itself a type predicate must still be flagged
+                        // (TS2416) — the derived can never satisfy the predicate overload. The
+                        // sibling non-predicate overload (e.g. `filter(...): T[]`) does NOT trigger
+                        // this, so `filter` stays clean while `every` fires. Mirrors B68.6 but for
+                        // the multi-declaration base case, with the overload-union base display.
+                        val derivedMd = member as? MethodDeclaration
+                        if (derivedMd != null && (derivedMd.type as? TypePredicate) == null) {
+                            val baseOverloads = basePropSymbol.declarations.filterIsInstance<MethodDeclaration>()
+                            val predicateOverload = baseOverloads.firstOrNull { ov ->
+                                (ov.type as? TypePredicate)?.let { !it.assertsModifier } == true
+                            }
+                            if (predicateOverload != null && baseOverloads.size == basePropSymbol.declarations.size) {
+                                val nameNode = derivedMd.name
+                                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                val unionDisplay = "{ " +
+                                    baseOverloads.joinToString("; ") { methodSigColonDisplayWithTypeParams(it) } +
+                                    "; }"
+                                val derivedDisplay = methodSigDisplayWithBodyReturn(derivedMd)
+                                val sigColon = methodSigColonDisplay(derivedMd)
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2416,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameNode.pos,
+                                    length = memberName.length,
+                                    messageChain = listOf(
+                                        "  Type '$derivedDisplay' is not assignable to type '$unionDisplay'.",
+                                        "    Signature '$sigColon' must be a type predicate.",
+                                    ),
+                                ))
+                            }
+                        }
+                        continue
+                    }
 
                     val baseDecl = basePropSymbol.valueDeclaration ?: basePropSymbol.declarations.firstOrNull() ?: continue
 
