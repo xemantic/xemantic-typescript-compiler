@@ -51355,6 +51355,13 @@ interface DataView {
                 else -> null
             }
             var propType: Type? = null
+            // Whether the resolved property is an accessor (get/set) — for these, our
+            // write-type resolution (setter param type) does NOT substitute the class's
+            // type args into the setter annotation (e.g. `set foo(s: T | undefined)` on
+            // `Test1<string>` resolves to `string`, NOT `string | undefined`), so the
+            // null/undefined-falls-through path below would FP. Bail for nullish RHS on
+            // accessor properties (divergentAccessorsTypes2). Plain data fields are fine.
+            var propIsAccessor = false
             if (nsBaseSymbol != null && nsBaseSymbol.flags.hasAny(SymbolFlags.Module)) {
                 val exportSym = nsBaseSymbol.exports?.get(propName)
                 if (exportSym != null) {
@@ -51383,6 +51390,8 @@ interface DataView {
                 // with B54.6's accessor-pair-declarations merging — together they let
                 // checkPropertyAccessAssignment detect a write context against a setter.
                 val setAccessorDecl = propSym.declarations.firstOrNull { it is SetAccessor } as? SetAccessor
+                propIsAccessor = setAccessorDecl != null ||
+                    propSym.declarations.any { it is GetAccessor }
                 val setterParamTypeNode = setAccessorDecl?.parameters?.firstOrNull()?.type
                 val setterResolvedType = setterParamTypeNode?.let {
                     try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
@@ -51415,7 +51424,18 @@ interface DataView {
             val pt = propType
             val valueType = getTypeOfExpression(value)
             if (valueType === anyType || valueType === errorType) return
-            if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            // void source: bail unconditionally (no test exercises void-property-assign).
+            if (valueType.flags.hasAny(TypeFlags.Void)) return
+            // null/undefined source: under strictNullChecks this IS an error against a
+            // non-nullable property target (e.g. `a.id = null` where `id: number`, including
+            // the chained `a.id = b.value = null` shape — chainedAssignment3). Bail only when
+            // strictNullChecks is off (null/undefined assignable to everything) or when the
+            // target legitimately accepts null/undefined; otherwise fall through to the relation
+            // check below, which fails and emits "Type 'null' is not assignable to type 'X'.".
+            if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
+                if (!strictNullChecks || propIsAccessor ||
+                    typeIncludesNull(pt) || typeIncludesUndefined(pt)) return
+            }
             // 17.14a: Non-constructible source vs constructible target — `canUseTypeEngine`'s
             // gate at ~31688 short-circuits this case to skip class-instance vs constructor-type
             // comparisons, but TypeScript flags the assignment with a "provides no match for
