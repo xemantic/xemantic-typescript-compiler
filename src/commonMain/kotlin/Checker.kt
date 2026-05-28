@@ -66678,7 +66678,14 @@ interface DataView {
                     val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
                     // TS2344: Check type argument constraints
                     checkCallTypeArgConstraints(genericSig.typeParameters!!, resolvedTypeArgs, typeArgs, mapper, source, fileName)
-                    val instantiated = instantiateSignature(genericSig, mapper)
+                    // B83.4f-a: use instantiateContextualSignature (not the plain
+                    // instantiateSignature) so a nested FUNCTION-typed param like
+                    // `f: (x: T) => Date` substitutes its inner `(x: T)` to `(x: <number>)`.
+                    // Plain instantiateType deliberately no-ops on function-shaped
+                    // Type.Object (CLAUDE.md gotcha); instantiateContextualSignature descends
+                    // into the call signatures, so explicit `<number>` reaches the callback
+                    // param and TS2345 (`(x:number)=>string` ≠ `(x:number)=>Date`) can fire.
+                    val instantiated = instantiateContextualSignature(genericSig, mapper)
                     // TS2793: only attach "implementation would have succeeded" related info
                     // when the implementation signature actually accepts these args under
                     // the supplied type-args. For overloaded generic functions like
