@@ -54984,6 +54984,95 @@ interface DataView {
     }
 
     /**
+     * B86.1b-4 (2026-05-28): anchor-only PARTIAL inference for CONSUMER-side
+     * contextual-param substitution. Unlike [tryInferSingleTypeParamFromArgs]
+     * (which requires EVERY type param to be inferable and returns null if any
+     * isn't), this gathers candidates ONLY from non-callback "anchor" positions
+     * (bare-`T`, rest-`T[]`, non-rest `Array<T>`) and returns a mapper covering
+     * whatever subset of TPs got at least one anchor candidate. Return-position
+     * TPs of callback params (the `U` in `(x:T)=>U`) are intentionally NOT
+     * inferred here — the point is to let the un-annotated lambda's param (`x:T`)
+     * resolve to its concrete anchor type during the diagnostic walk so a body
+     * like `x.length` fires TS2339 when `T` is `number`.
+     *
+     * Used by the CallExpression `argCtxTypes` block in [checkPropertyAccessInExpr]
+     * as a fallback when the full mapper from [tryInferSingleTypeParamFromArgs] is
+     * null (the common case for callback-return-position shapes whose body errors).
+     * Narrow: only single-arg-position bare-`T` / rest-`T[]` / `Array<T>` anchors,
+     * widened candidate must be named-like, first-candidate-wins (no conflict
+     * detection — this is best-effort contextual typing, not diagnostic emission).
+     * Returns null when no anchor TP is inferable.
+     */
+    private fun tryInferAnchorTypeParamsForContext(
+        sig: Signature,
+        args: List<Expression>,
+    ): TypeMapper? {
+        val tps = sig.typeParameters ?: return null
+        if (tps.isEmpty()) return null
+        val params = sig.parameters
+        if (params.isEmpty() || args.isEmpty()) return null
+        val tpsSet = tps.toSet()
+        fun isNamedLikeAtom(t: Type): Boolean =
+            t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                t.flags.hasAny(
+                    TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                    TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                    TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                )
+        val mapperPairs = mutableListOf<Pair<Type.TypeParam, Type>>()
+        for (tp in tps) {
+            var anchored: Type? = null
+            for (i in params.indices) {
+                if (i >= args.size) break
+                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                val isBareT = pt === tp
+                val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
+                val isArrayT = !isRest && isArrayOfTypeParam(pt, tp)
+                if (!isBareT && !isRestT && !isArrayT) continue
+                val argRange = if (isRestT) i until args.size else i..i
+                for (ai in argRange) {
+                    if (ai >= args.size) break
+                    val arg = args[ai]
+                    if (arg is SpreadElement) continue
+                    if (isArrayT && arg is ArrayLiteralExpression && arg.elements.isEmpty()) continue
+                    val rawArgType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    if (rawArgType === anyType || rawArgType === errorType) continue
+                    if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+                    val argType = if (isArrayT) {
+                        if (rawArgType !is Type.Reference) continue
+                        if (rawArgType.target?.symbol?.name != "Array") continue
+                        val refArgs = rawArgType.resolvedTypeArguments ?: continue
+                        if (refArgs.size != 1) continue
+                        val element = refArgs[0]
+                        if (element is Type.Union) getUnionType(element.types.map { widenType(it) })
+                        else widenType(element)
+                    } else widenType(rawArgType)
+                    if (argType === anyType || argType === errorType) continue
+                    if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+                    val isNamedLike = isNamedLikeAtom(argType) ||
+                        (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
+                    if (!isNamedLike) continue
+                    // First anchor candidate wins for this TP.
+                    if (anchored == null) anchored = argType
+                }
+                if (anchored != null) break
+            }
+            if (anchored != null) {
+                val constraint = tp.constraint
+                if (constraint != null) {
+                    val ok = try { checkTypeRelatedTo(anchored, constraint, assignableRelation) }
+                        catch (_: StackOverflowError) { false }
+                    if (!ok) continue
+                }
+                mapperPairs.add(tp to anchored)
+            }
+        }
+        if (mapperPairs.isEmpty()) return null
+        return createTypeMapper(mapperPairs.map { it.first }, mapperPairs.map { it.second })
+    }
+
+    /**
      * 17.31b helper: true when [sig] has any parameter whose type is a function
      * shape (Type.Object with call/construct signatures) that mentions [tp] in
      * its parameter or return positions. Used to detect TypeScript's "context-
@@ -62758,8 +62847,15 @@ interface DataView {
                             // args are handled by their own checking path).
                             val inferMapper: TypeMapper? =
                                 if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
-                                    try { tryInferSingleTypeParamFromArgs(sig, expr.arguments!!, forReturnType = true) }
-                                    catch (_: StackOverflowError) { null }
+                                    val full = try { tryInferSingleTypeParamFromArgs(sig, expr.arguments!!, forReturnType = true) }
+                                        catch (_: StackOverflowError) { null }
+                                    // B86.1b-4 fallback: when the full mapper is null (e.g. a
+                                    // callback-return-position TP `U` is uninferable because the
+                                    // lambda body errors), use the partial anchor-only mapper so
+                                    // the lambda's PARAM `(x:T)` still resolves to its concrete
+                                    // anchor type during the diagnostic walk (TS2339 in the body).
+                                    full ?: try { tryInferAnchorTypeParamsForContext(sig, expr.arguments!!) }
+                                        catch (_: StackOverflowError) { null }
                                 } else null
                             expr.arguments!!.mapIndexed { i, _ ->
                                 if (i < sig.parameters.size) {
