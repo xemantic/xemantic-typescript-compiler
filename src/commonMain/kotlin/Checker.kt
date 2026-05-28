@@ -268,6 +268,14 @@ class Checker(
      *  switch detection for literal-type parameters (e.g., `bar: "a" | "b"`). */
     private var currentFunctionParams: List<Parameter> = emptyList()
 
+    /** B83.4i: binding names introduced by destructured parameters of the enclosing
+     *  function/method body (`[x]` / `{x}` patterns). Populated by
+     *  [populateParameterLocalTypes]; consulted by the call-inferred-var TS2339 gate
+     *  in [checkSinglePropertyAccess] so a destructured param shadows a same-named
+     *  file-level `var x = call(...)`. Saved/restored alongside `currentLocalTypes`
+     *  at function-body entry. NOT used for type resolution — membership-only. */
+    private var currentParamBindingNames: MutableSet<String> = mutableSetOf()
+
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
@@ -23665,10 +23673,12 @@ interface Array<T> {
     every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
     some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
     forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
-    map(callbackfn: (value: T, index: number, array: T[]) => any): any[];
+    map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[];
     filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
     reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    reduce<U>(callbackfn: (previousValue: U, currentValue: T, currentIndex: number, array: T[]) => U, initialValue: U): U;
     reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    reduceRight<U>(callbackfn: (previousValue: U, currentValue: T, currentIndex: number, array: T[]) => U, initialValue: U): U;
     find(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
     findIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
     fill(value: T, start?: number, end?: number): T[];
@@ -54432,6 +54442,13 @@ interface DataView {
             // in the sig-acceptance gate (per-TP gathering applies the narrower
             // currentTp gate).
             if (!isRest && fnTypedParamMultiBareTpMatch(pt, tpsSet) != null) continue
+            // (h) B83.4i: callback whose params are ALL concrete (mention no TP) and
+            // whose return type is exactly a bare TP in tps — e.g. the post-receiver-
+            // substitution `(value: number, index: number, array: number[]) => U`
+            // shape of `Array.map<U>`. Candidate gathering for the return-TP happens in
+            // pass-2's B83.4i branch (re-types the un-annotated lambda body). Accept the
+            // sig here so we don't bail at gate (c).
+            if (!isRest && fnTypedParamConcreteParamsBareReturnTp(pt, tpsSet) != null) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -54656,6 +54673,104 @@ interface DataView {
                     val otherTp = (callbackParamType as? Type.TypeParam)
                         ?.takeIf { it in tpsSet && it !== tp }
                     val otherTpMapped = otherTp?.let { o -> mapperPairs.firstOrNull { it.first === o }?.second }
+                    // B83.4i (NEW 2026-05-28): callback-return-TP inference when the
+                    // callback params are FULLY CONCRETE (mention NO TP) and the
+                    // callback RETURN type is exactly the current `tp`. This is the
+                    // `Array.map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[]`
+                    // shape after the receiver's T is already substituted to a concrete
+                    // type (so the callback param `value` is `number`, not a TP). The
+                    // existing B83.4b/d-quick branches require a callback PARAM that is a
+                    // TP to anchor from; here there is none — the only TP is the return
+                    // `U`. Re-type the un-annotated lambda's (concise OR single-return)
+                    // body under `currentLocalTypes[paramName] = <concrete sig param type>`
+                    // for each lambda param, and use the widened body type as the
+                    // candidate for `tp`. Gate NARROWLY: anonymous fn-shaped Type.Object,
+                    // single callSig, callback return type IS exactly `tp` (not a nested
+                    // mention), every callback param type concrete (no TP mention), lambda
+                    // param count matches the callback's, all params un-annotated
+                    // Identifier names, no rest params, `tp` not yet anchored.
+                    if (fnObj != null && callbackSig != null && callbackReturn === tp &&
+                        otherTp == null && mapperPairs.none { it.first === tp } &&
+                        callbackSig.parameters.isNotEmpty() &&
+                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                        fnObj.symbol == null &&
+                        fnObj.constructSignatures.isNullOrEmpty() &&
+                        fnObj.members.isNullOrEmpty() &&
+                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                        // Resolve each callback param type; all must be concrete (no TP mention).
+                        val sigParamTypes = mutableListOf<Type>()
+                        var concreteOk = true
+                        for (sp in callbackSig.parameters) {
+                            if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { concreteOk = false; break }
+                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { concreteOk = false; break }
+                            if (spt === anyType || spt === errorType) { concreteOk = false; break }
+                            if (tps.any { typeMentionsTypeParam(spt, it) }) { concreteOk = false; break }
+                            sigParamTypes.add(spt)
+                        }
+                        if (concreteOk) {
+                            val arg = args[i]
+                            val (argParamsLocal, argBody) = when (arg) {
+                                is ArrowFunction -> arg.parameters to arg.body
+                                is FunctionExpression -> arg.parameters to arg.body
+                                else -> null to null
+                            }
+                            // Lambda may declare FEWER params than the callback shape
+                            // (e.g. `(value, index, array) => ...` vs `s => ...`) — bind
+                            // only the lambda's declared params to the leading sig params.
+                            if (argParamsLocal != null && argBody != null &&
+                                argParamsLocal.isNotEmpty() &&
+                                argParamsLocal.size <= sigParamTypes.size) {
+                                val lpNames = mutableListOf<String>()
+                                var lpOk = true
+                                for (lp in argParamsLocal) {
+                                    val lpName = (lp.name as? Identifier)?.text
+                                    if (lp.dotDotDotToken || lpName == null || lp.type != null) {
+                                        lpOk = false; break
+                                    }
+                                    lpNames.add(lpName)
+                                }
+                                if (lpOk) {
+                                    val effectiveBodyExpr: Expression? = when (argBody) {
+                                        is Block -> {
+                                            var retStmt: ReturnStatement? = null
+                                            var multi = false
+                                            for (s in argBody.statements) {
+                                                if (s is ReturnStatement) {
+                                                    if (retStmt != null) { multi = true; break }
+                                                    retStmt = s
+                                                }
+                                            }
+                                            if (multi) null else retStmt?.expression
+                                        }
+                                        is Expression -> argBody
+                                        else -> null
+                                    }
+                                    if (effectiveBodyExpr != null) {
+                                        val savedLocalTypes = currentLocalTypes
+                                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                                        for ((idx, name) in lpNames.withIndex()) {
+                                            currentLocalTypes[name] = sigParamTypes[idx]
+                                        }
+                                        val bodyType = try {
+                                            getTypeOfExpression(effectiveBodyExpr)
+                                        } catch (_: StackOverflowError) {
+                                            null
+                                        } finally {
+                                            currentLocalTypes = savedLocalTypes
+                                        }
+                                        if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
+                                            !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                            val widened = widenType(bodyType)
+                                            if (isNamedLikeAtom(widened) ||
+                                                (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                                candidates.add(Candidate(i, widened, null))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // B83.4b (NEW 2026-05-27): multi-param callback parallel of B83.4d-quick.
                     // Shape: `f<S,T,U>(arg1: S, arg2: T, cb: (x: S, y: T) => U): U` — S and T
                     // already inferred via pass-1's anchor positions, U comes from the un-
@@ -55215,6 +55330,46 @@ interface DataView {
             // currentTp == null: no return-type TP-mention bail (B83.2 relaxation).
         }
         return pt
+    }
+
+    /**
+     * B83.4i helper: recognizes a function-typed param whose parameters are ALL
+     * fully concrete (mention NO TP from [tps]) and whose RETURN type is exactly
+     * a bare TP from [tps]. This is the post-receiver-substitution shape of
+     * `Array.map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[]`
+     * — after `resolveGenericPropertyType` maps `T→number`, the callback param
+     * `value` is concrete `number` and the only remaining TP is the return `U`.
+     *
+     * Returns the return-position TP (the `U`) when the shape matches, else null.
+     * Narrow gate: anonymous Type.Object, single callSig, at least one param, no
+     * construct sigs / index sigs / members / symbol. Used by gate (h) of
+     * [tryInferSingleTypeParamFromArgs] so the sig is ACCEPTED (not bailed at gate
+     * (c)); per-tp candidate gathering for the return TP happens in pass-2's
+     * B83.4i body-retyping branch.
+     */
+    private fun fnTypedParamConcreteParamsBareReturnTp(
+        type: Type,
+        tps: Set<Type.TypeParam>,
+    ): Type.TypeParam? {
+        if (type !is Type.Object) return null
+        if (type is Type.Interface) return null
+        if (type is Type.Reference) return null
+        if (type.symbol != null) return null
+        if (type.constructSignatures?.isNotEmpty() == true) return null
+        if (type.stringIndexInfo != null || type.numberIndexInfo != null) return null
+        if (type.members?.isNotEmpty() == true) return null
+        val sigs = type.callSignatures ?: return null
+        if (sigs.size != 1) return null
+        val sig = sigs[0]
+        if (sig.parameters.isEmpty()) return null
+        // All callback params must be concrete (mention no TP).
+        for (sp in sig.parameters) {
+            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { return null }
+            if (tps.any { typeMentionsTypeParam(spt, it) }) return null
+        }
+        val rt = sig.resolvedReturnType ?: return null
+        // Return type must be exactly a bare TP from tps.
+        return if (rt is Type.TypeParam && rt in tps) rt else null
     }
 
     /**
@@ -62610,10 +62765,13 @@ interface DataView {
             is FunctionDeclaration -> {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     populateParameterLocalTypes(stmt.parameters)
                     checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
                     currentLocalTypes = savedLocalTypes
+                    currentParamBindingNames = savedParamBindings
                 }
             }
             is VariableStatement -> {
@@ -62792,19 +62950,25 @@ interface DataView {
             is MethodDeclaration -> {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     populateParameterLocalTypes(member.parameters)
                     checkPropertyAccessInStatements(body.statements, source, fileName, classType)
                     currentLocalTypes = savedLocalTypes
+                    currentParamBindingNames = savedParamBindings
                 }
             }
             is Constructor -> {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     populateParameterLocalTypes(member.parameters)
                     checkPropertyAccessInStatements(body.statements, source, fileName, classType)
                     currentLocalTypes = savedLocalTypes
+                    currentParamBindingNames = savedParamBindings
                 }
             }
             is GetAccessor -> {
@@ -62815,10 +62979,13 @@ interface DataView {
             is SetAccessor -> {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     populateParameterLocalTypes(member.parameters)
                     checkPropertyAccessInStatements(body.statements, source, fileName, classType)
                     currentLocalTypes = savedLocalTypes
+                    currentParamBindingNames = savedParamBindings
                 }
             }
             is PropertyDeclaration -> {
@@ -62967,7 +63134,9 @@ interface DataView {
             is ParenthesizedExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             is ArrowFunction -> {
                 val savedLocalTypes = currentLocalTypes
+                val savedParamBindings = currentParamBindingNames
                 currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentParamBindingNames = currentParamBindingNames.toMutableSet()
                 populateParameterLocalTypes(expr.parameters)
                 // 16.0: contextual param inference for un-annotated arrow parameters
                 val ctxType = contextualType
@@ -63012,6 +63181,7 @@ interface DataView {
                     contextualType = savedCtx
                 }
                 currentLocalTypes = savedLocalTypes
+                currentParamBindingNames = savedParamBindings
             }
             is NewExpression -> {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -63089,11 +63259,18 @@ interface DataView {
             is YieldExpression -> expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             is FunctionExpression -> {
                 val savedLocalTypes = currentLocalTypes
+                val savedParamBindings = currentParamBindingNames
                 currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentParamBindingNames = currentParamBindingNames.toMutableSet()
                 // 16.0: shadow outer vars with unannotated function-expression params
                 // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
                 // type the inner `s` from the outer scope.
                 for (param in expr.parameters) {
+                    // B83.4i: register destructured-param binding names for the
+                    // call-inferred-var TS2339 shadow gate (see populateParameterLocalTypes).
+                    if (param.name is ArrayBindingPattern || param.name is ObjectBindingPattern) {
+                        collectBindingNames(param.name, currentParamBindingNames)
+                    }
                     val pName = (param.name as? Identifier)?.text ?: continue
                     if (param.type != null) {
                         try {
@@ -63139,6 +63316,7 @@ interface DataView {
                     contextualType = savedCtx
                 }
                 currentLocalTypes = savedLocalTypes
+                currentParamBindingNames = savedParamBindings
             }
             else -> {}
         }
@@ -63622,6 +63800,16 @@ interface DataView {
                         currentLocalTypes[paramName.text] = resolvedType
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
+            } else if (paramName is ArrayBindingPattern || paramName is ObjectBindingPattern) {
+                // B83.4i: register destructured-param binding NAMES (e.g. `[x]` / `{x}`)
+                // into the shadow tracker so a same-named file-level `var x = foo(...)`
+                // (call-inferred) does NOT drive TS2339 on `x.prop` inside this body.
+                // Without this the binding name is invisible to the shadow checks (the
+                // simple-identifier branch above skips patterns), and a primitive-typed
+                // file var would FP-fire (functionOverloads43: `function foo([x]:...){
+                // return x.a }` + `var x = foo(...)`). Records into a side set rather than
+                // currentLocalTypes to avoid changing identifier type resolution.
+                collectBindingNames(paramName, currentParamBindingNames)
             }
         }
     }
@@ -64955,7 +65143,33 @@ interface DataView {
                             is Identifier -> init.text == "true" || init.text == "false"
                             else -> false
                         }
-                    if ((!annotated && !literalInferred) || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
+                    // B83.4i: also accept a `CallExpression`-initialized var whose
+                    // resolved type is a concrete primitive intrinsic. `getTypeOfSymbol`
+                    // (above) already resolved the call's return type — when it lands on
+                    // a non-Object primitive (number/string/boolean/etc., NOT any/error/
+                    // unknown, filtered above), property access on it is checkable via the
+                    // wrapper apparent type, exactly like a literal-initialized var. Gate
+                    // mirrors `literalInferred` (top-level OR namespace-shadow, single
+                    // declaration, not locally shadowed) so it only fires for the same
+                    // narrow file-level var population. Unblocks `var n = arr.map(...)
+                    // .reduce(...); n.bogus` → TS2339 (genericReduce). Skipped when the
+                    // call's return type is a Type.Object (handled by the else branch).
+                    // Exclude when the name is bound by an enclosing function/method
+                    // parameter (including destructured patterns like `[x]` / `{x}`) —
+                    // there the identifier refers to the param, not the file-level var,
+                    // so the file-var's call-inferred type must NOT drive TS2339. This is
+                    // the `function foo([x]: {a}[]){ return x.a }` + `var x = foo(...)`
+                    // shadow case (functionOverloads43). The `localShadow` check above
+                    // misses destructured params because they aren't in `currentLocalTypes`;
+                    // `currentParamBindingNames` tracks destructured-param binding names
+                    // for exactly this purpose (populated in populateParameterLocalTypes).
+                    val shadowedByParam = identName in currentParamBindingNames
+                    val callInferred = !annotated && !literalInferred && !shadowedByParam &&
+                        decl is VariableDeclaration &&
+                        (isNsShadow || identSymbol.parent == null) &&
+                        identSymbol.declarations.size == 1 &&
+                        !localShadow && decl.initializer is CallExpression
+                    if ((!annotated && !literalInferred && !callInferred) || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
                     if (propName.isEmpty()) return
                     displayTypeOverride = if (literalInferred) getWidenedLiteralType(rawType) else rawType
                     getApparentType(rawType)
