@@ -61641,6 +61641,21 @@ interface DataView {
                         else -> null
                     }
                     is PostfixUnaryExpression -> numberType  // x++ / x-- always number
+                    // B83.4f-b: `return foo(...)` / `return x.toFixed()` — infer the call's
+                    // return type. Load-bearing for contextual-callback shapes like
+                    // `(x: number) => { return x.toFixed() }` (must infer `string`, not `any`,
+                    // so the callback's `(x:number)=>string` ≠ `(x:number)=>Date` mismatch
+                    // can fire TS2345). Mirrors the NewExpression branch above: only return a
+                    // CONCRETE result (non-any/error) so the existing `?: anyType` fallback is
+                    // unchanged for unresolvable calls. getReturnTypeOfCallExpression resolves
+                    // the callee via getTypeOfIdentifier / getTypeOfPropertyAccess, which
+                    // consult currentLocalTypes (where contextual typing has pushed `x: number`).
+                    is CallExpression -> {
+                        try {
+                            val t = getReturnTypeOfCallExpression(expr)
+                            if (t !== anyType && t !== errorType) t else null
+                        } catch (_: Throwable) { null }
+                    }
                     is TypeOfExpression -> stringType
                     is VoidExpression -> undefinedType
                     is DeleteExpression -> booleanType
