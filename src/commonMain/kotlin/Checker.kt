@@ -769,6 +769,8 @@ class Checker(
         checkJsxImportResolutions()
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
         checkJsxFactoryValidity()
+        // 14a''''. TS2318: essential es5-base global types missing under dotted-only @lib.
+        checkMissingEssentialGlobalTypes()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
@@ -13864,6 +13866,37 @@ class Checker(
         }
     }
 
+    /**
+     * B87.3 (round 73): TS2318 "Cannot find global type 'X'" for the es5-base
+     * essential global types that NO loaded `@lib` sub-library provides. When
+     * `@lib` lists only dotted sub-libraries (e.g. `es2015.core`) with no full
+     * es-version lib, the base interfaces `Boolean`/`Number`/`Object`/`IArguments`
+     * and the strict-bind-call-apply `CallableFunction`/`NewableFunction` (all in
+     * lib.es5.d.ts) are unavailable — TypeScript emits one global (file-less)
+     * TS2318 per missing essential type. Array/String/Function/RegExp are augmented
+     * by the es2015.* sub-libs so they remain found. Our embedded lib always loads
+     * the full set, so synthesize the missing-essential errors here. Emitted in
+     * alphabetical order to match the baseline.
+     */
+    private fun checkMissingEssentialGlobalTypes() {
+        if (libProvidesBaseValues()) return
+        val missing = listOf(
+            "Boolean", "CallableFunction", "IArguments", "NewableFunction", "Number", "Object"
+        )
+        for (name in missing) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find global type '$name'.",
+                category = DiagnosticCategory.Error,
+                code = 2318,
+                fileName = null,
+                line = null,
+                character = null,
+                start = -1,
+                length = 0,
+            ))
+        }
+    }
+
     /** TS5067: Invalid value for 'jsxFactory'. */
     private fun checkJsxFactoryValidity() {
         val factory = options.jsxFactory ?: return
@@ -24478,6 +24511,24 @@ interface DataView {
      * `@lib` listing only pre-es2015 entries). Used to swap TS2304 → TS2583 in type
      * position and to suppress TS2564 on properties whose type references such a name.
      */
+    /**
+     * B87.3 (round 73): true when the active `@lib` config provides the base-lib
+     * VALUE declarations + es5-base essential global TYPES (`Boolean`, `Number`,
+     * `Object`, `IArguments`, `CallableFunction`, `NewableFunction`) that live in
+     * `lib.es5.d.ts`. A full non-dotted es-version lib (es3/es5/es6/es2015…/esnext)
+     * is cumulative over es5 and provides them; a DOTTED sub-library
+     * (`es2015.core`, `es2015.iterable`, …) provides only interface augmentations
+     * for Array/String/etc., NOT the es5 base. Empty `@lib` = default full lib.
+     */
+    private fun libProvidesBaseValues(): Boolean {
+        if (options.lib.isEmpty()) return true
+        return options.lib.any {
+            val l = it.lowercase()
+            l == "es3" || l == "es5" || l == "es6" || l == "es7" || l == "esnext" ||
+                (l.startsWith("es2") && !l.contains('.'))
+        }
+    }
+
     private fun isLibTypeUnavailableEs2015(name: String): Boolean {
         if (name !in FORWARD_DECLARABLE_LIB_TYPES_ES2015) return false
         if (options.noLib) return true
@@ -26782,6 +26833,14 @@ interface DataView {
             // Finalize: only names with NO value-bearing declarations are namespace-only
             for ((n, hasValues) in moduleHasValues) {
                 if (!hasValues) namespaceOnlyNames.add(n)
+            }
+            // B87.3 (round 73): under a dotted-only `@lib` (no full es-lib), the
+            // base-lib VALUE `declare var Array: ArrayConstructor` (lib.es5.d.ts)
+            // is unavailable, so `Array` used as a value is TS2693 even though the
+            // Array TYPE is provided by the sub-library. Our embedded lib always
+            // loads the value; synthesize the type-only treatment for that name.
+            if (!libProvidesBaseValues() && "Array" !in valueNames) {
+                typeOnlyNames.add("Array")
             }
             currentForwardLibTypeNames = forwardLibTypeNames
             try {
