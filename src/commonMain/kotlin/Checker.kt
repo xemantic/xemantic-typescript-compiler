@@ -48817,6 +48817,32 @@ interface DataView {
                     targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
             val canUse = canUseRaw || callBypass
             val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            // B87.6b (round 73): array-VARIABLE source → tuple target tuple-arity TS2322 for
+            // VAR-DECL — completes the tuple-arity feature uniformly with the async-return
+            // path (B87.6). `var x: [number] = someNumberArray` → "Target allows only N
+            // element(s) but source may have more." Gated: source is an `Array` Reference,
+            // target is a tuple `Type.Object` (`tupleElementTypes != null`), init is NOT an
+            // array literal (literals are checked element-wise elsewhere and ARE tuple-
+            // assignable), and not already assignable. Emits at the var name.
+            if (init !is ArrayLiteralExpression &&
+                sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
+                targetType is Type.Object && targetType !is Type.Reference &&
+                targetType.tupleElementTypes != null && !isAssignable &&
+                !checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            ) {
+                val n = targetType.tupleElementTypes!!.size
+                val displaySource = typeToString(sourceType)
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = character,
+                    start = name.pos, length = name.text.length,
+                    messageChain = listOf("  Target allows only $n element(s) but source may have more."),
+                ))
+                return
+            }
             // B87.4b (round 73): class-instance source → interface/class target
             // missing-property for VAR-DECL — completes the missing-property TS2741/2739
             // feature uniformly (the assignment path B87.4 + the argument path 17.29
