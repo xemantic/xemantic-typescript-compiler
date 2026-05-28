@@ -1277,6 +1277,14 @@ class Checker(
         return false
     }
 
+    /** B86.7d: symmetric to [typeIncludesUndefined] for the `null` constituent. */
+    private fun typeIncludesNull(t: Type): Boolean {
+        if (t === anyType || t === unknownType) return true
+        if (t.flags.hasAny(TypeFlags.Null)) return true
+        if (t is Type.Union) return t.types.any { typeIncludesNull(it) }
+        return false
+    }
+
     /** B86.7c: True for a single (non-union) type that is exactly `null`,
      *  `undefined`, or `void` — i.e. a nullish constituent of a union. */
     private fun isNullishConstituent(t: Type): Boolean =
@@ -49946,6 +49954,52 @@ interface DataView {
                                     ))
                                     return
                                 }
+                            }
+                        }
+                        // B86.7d: reverse-direction nullable-source TS2322. `canUseTypeEngine`
+                        // returns false for Union-source → Object/Interface target (it skips
+                        // those because most need control-flow narrowing we don't implement),
+                        // so a genuinely-illegal `y = x` where `x: T | null | undefined` and
+                        // `y: T` (T non-nullable) currently emits nothing. Add a VERY narrow
+                        // emit for exactly that case: source is a Union literally containing a
+                        // nullish constituent (null/undefined/void) that the target does NOT
+                        // include, the nullish constituent fails assignability to the target,
+                        // and strictNullChecks is on. The chain names the failing nullish
+                        // constituent (matches `elaboratedErrorsOnNullableTargets01` line 6).
+                        // Gate is deliberately not "source union not assignable to target" —
+                        // that would fire for narrowed-union / contextual-typing cases that are
+                        // legitimately assignable; we ONLY fire when the unambiguous cause is a
+                        // nullish member missing from the (non-nullable) target.
+                        if (strictNullChecks && sourceType is Type.Union &&
+                            (tt is Type.Object || tt is Type.Interface) &&
+                            !typeIncludesUndefined(tt) && !typeIncludesNull(tt)
+                        ) {
+                            // First nullish constituent (in flags-value order undefined<null,
+                            // matching TypeScript's reported `undefined`) that fails assignability.
+                            val failingNullish = sourceType.types.firstOrNull {
+                                isNullishConstituent(it) &&
+                                    !checkTypeRelatedTo(it, tt, assignableRelation)
+                            }
+                            if (failingNullish != null) {
+                                val displaySource = typeToString(sourceType)
+                                val displayTarget = if (typeAnnotation != null)
+                                    formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt)
+                                    else typeToString(tt)
+                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = target.pos,
+                                    length = target.text.length,
+                                    messageChain = listOf(
+                                        "  Type '${typeToString(failingNullish)}' is not assignable to type '$displayTarget'.",
+                                    ),
+                                ))
+                                return
                             }
                         }
                         val canUse = canUseTypeEngine(sourceType, tt)
