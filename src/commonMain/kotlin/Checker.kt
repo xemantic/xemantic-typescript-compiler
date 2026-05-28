@@ -55079,7 +55079,7 @@ interface DataView {
             }
 
             if (conflictAt >= 0 && source != null && fileName != null &&
-                tparamMentionedInFunctionType(sig, tp)) {
+                tparamMentionedInFunctionTypeDeep(sig, tp)) {
                 // Context-sensitive sig (function-type-T param) signals TypeScript's
                 // literal-preserving inference. Emit TS2345 directly at the failing
                 // arg position with LITERAL-form display, then return null so the
@@ -55231,6 +55231,109 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /**
+     * B83.4d-deepgate (round 73): deep variant of [tparamMentionedInFunctionType].
+     * Recurses into NESTED function-shaped Type.Object (call/construct signatures'
+     * param + return types) so shapes like `b: () => (a: T) => void` are detected
+     * as mentioning [tp]. The shallow [typeMentionsTypeParam] deliberately does NOT
+     * descend into function shapes (CLAUDE.md gotcha), which is why the shallow
+     * helper misses fixed-type-parameter callbacks whose T sits inside a RETURNED
+     * function type (TypeScript's fixed-type-parameter rule applies there too).
+     * Used ONLY to widen the conflict-branch literal-display gate in
+     * [tryInferSingleTypeParamFromArgs]. Cycle-guarded by a visited-id set so
+     * self-referential function shapes don't recurse forever. Superset of the
+     * shallow helper (also matches the direct `(t:T)=>T` case).
+     */
+    private fun tparamMentionedInFunctionTypeDeep(sig: Signature, tp: Type.TypeParam): Boolean {
+        val seen = HashSet<Int>()
+        fun mentionsDeep(t: Type): Boolean {
+            when (t) {
+                is Type.TypeParam -> return t === tp
+                is Type.Reference -> return (t.resolvedTypeArguments ?: emptyList()).any { mentionsDeep(it) }
+                is Type.Union -> return t.types.any { mentionsDeep(it) }
+                is Type.Intersection -> return t.types.any { mentionsDeep(it) }
+                is Type.Object -> {
+                    if (!seen.add(t.id)) return false
+                    val sigs = (t.callSignatures ?: emptyList()) + (t.constructSignatures ?: emptyList())
+                    for (s in sigs) {
+                        for (sp in s.parameters) {
+                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { continue }
+                            if (mentionsDeep(spt)) return true
+                        }
+                        val rt = s.resolvedReturnType
+                        if (rt != null && mentionsDeep(rt)) return true
+                    }
+                    return false
+                }
+                else -> return false
+            }
+        }
+        for (p in sig.parameters) {
+            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            if (pt !is Type.Object) continue
+            val sigs = (pt.callSignatures ?: emptyList()) + (pt.constructSignatures ?: emptyList())
+            if (sigs.isEmpty()) continue
+            if (mentionsDeep(pt)) return true
+        }
+        return false
+    }
+
+    /**
+     * B83.4d (round 73): for the consumer-side contextual-typing substitution,
+     * compute a literal-preserving OVERRIDE mapper for TypeScript's fixed-type-
+     * parameter rule. A type parameter that (a) is mentioned inside a function-
+     * typed parameter (deep — incl. nested returned function types) AND (b) has
+     * CONFLICTING bare-`T` anchor candidates (e.g. `f<T>(x:T, b:()=>(a:T)=>void,
+     * y:T)` called `f('', ..., 1)`) is FIXED by TypeScript to the FIRST anchor
+     * candidate UNWIDENED (the literal `""`), not the widened common type — so
+     * the callback param `a` is contextually typed `""` and `a.foo` reports
+     * TS2339 on `""`. Returns a mapper from such TPs to their unwidened first
+     * literal, or null when no TP qualifies. Kept SEPARATE from the widened
+     * inference mapper (which return-type inference + JS-emit contextual
+     * this-binding rely on, per the B83.4d-literal CLAUDE.md gotcha) so the
+     * literal is confined to this call's contextual-param typing for display.
+     */
+    private fun computeFixedConflictLiteralMapper(sig: Signature, args: List<Expression>): TypeMapper? {
+        val tps = sig.typeParameters ?: return null
+        if (tps.isEmpty()) return null
+        val params = sig.parameters
+        if (params.isEmpty() || args.isEmpty()) return null
+        val pairs = mutableListOf<Pair<Type.TypeParam, Type>>()
+        for (tp in tps) {
+            if (!tparamMentionedInFunctionTypeDeep(sig, tp)) continue
+            var firstLiteral: Type? = null
+            var firstWidened: Type? = null
+            var conflict = false
+            for (i in params.indices) {
+                if (i >= args.size) break
+                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                if (pt !== tp) continue  // bare-T anchor positions only
+                val arg = args[i]
+                if (arg is SpreadElement) continue
+                val raw = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                if (raw === anyType || raw === errorType) continue
+                if (raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+                // Prefer the unwidened LITERAL form (`""`/`1`) for the fixed-type
+                // display; getTypeOfExpression already widens under @strict:false.
+                val literal = try { literalTypeOfExpression(arg) } catch (_: StackOverflowError) { null } ?: raw
+                val widened = widenType(raw)
+                if (firstWidened == null) {
+                    firstLiteral = literal
+                    firstWidened = widened
+                } else {
+                    val ok = try {
+                        checkTypeRelatedTo(widened, firstWidened, assignableRelation) ||
+                            checkTypeRelatedTo(firstWidened, widened, assignableRelation)
+                    } catch (_: StackOverflowError) { true }
+                    if (!ok) conflict = true
+                }
+            }
+            if (conflict && firstLiteral != null) pairs.add(tp to firstLiteral)
+        }
+        if (pairs.isEmpty()) return null
+        return createTypeMapper(pairs.map { it.first }, pairs.map { it.second })
     }
 
     /**
@@ -63134,11 +63237,30 @@ interface DataView {
                                     full ?: try { tryInferAnchorTypeParamsForContext(sig, expr.arguments!!) }
                                         catch (_: StackOverflowError) { null }
                                 } else null
+                            // B83.4d: literal-preserving OVERRIDE for fixed-type-parameter
+                            // conflict TPs (e.g. `f<T>(x:T, b:()=>(a:T)=>void, y:T)` called
+                            // with conflicting `''`/`1`). TypeScript fixes T to the unwidened
+                            // first literal `""`, so the callback param `a` is contextually
+                            // typed `""` and `a.foo` reports TS2339 on `""` (not `string`).
+                            // Composed over inferMapper: literal wins for conflict TPs, the
+                            // widened mapper covers the rest. Confined to contextual-param
+                            // typing for THIS call (restored after the arg walk) so the literal
+                            // never leaks into return-type inference / JS-emit per the gotcha.
+                            val litMapper: TypeMapper? =
+                                if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty())
+                                    try { computeFixedConflictLiteralMapper(sig, expr.arguments!!) }
+                                        catch (_: StackOverflowError) { null }
+                                else null
+                            val ctxMapper: TypeMapper? = when {
+                                litMapper == null -> inferMapper
+                                inferMapper == null -> litMapper
+                                else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
+                            }
                             expr.arguments!!.mapIndexed { i, _ ->
                                 if (i < sig.parameters.size) {
                                     val ptRaw = getTypeOfSymbol(sig.parameters[i])
-                                    val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                                        try { instantiateContextualParamType(ptRaw, inferMapper) } catch (_: StackOverflowError) { ptRaw }
+                                    val pt = if (ctxMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+                                        try { instantiateContextualParamType(ptRaw, ctxMapper) } catch (_: StackOverflowError) { ptRaw }
                                     } else ptRaw
                                     if (pt === anyType || pt === errorType) null else pt
                                 } else null
