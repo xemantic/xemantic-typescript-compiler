@@ -55893,6 +55893,24 @@ interface DataView {
         return "  '$primitive' is a primitive, but '$sourceName' is a wrapper object. Prefer using '$primitive' when possible."
     }
 
+    /**
+     * B83.4h: resolve the type of an Object.prototype member (toString/valueOf/...)
+     * from the built-in `Object` interface. Used to compare a source object literal's
+     * own prototype-named property against the inherited signature. Returns null if the
+     * Object interface isn't resolvable or the member isn't found.
+     */
+    private fun getObjectPrototypeMemberType(memberName: String): Type? {
+        val symbol = globals["Object"] ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Interface)) return null
+        val type = getDeclaredTypeOfSymbol(symbol)
+        if (type === errorType || type !is Type.Object) return null
+        resolveStructuredTypeMembers(type)
+        val memberSym = type.members?.get(memberName) ?: return null
+        val memberType = getTypeOfSymbol(memberSym)
+        if (memberType === anyType || memberType === errorType) return null
+        return memberType
+    }
+
     /** Resolve a built-in wrapper type from globals, caching the result. */
     private inline fun getBuiltinWrapperType(name: String, cached: () -> Type?): Type? {
         cached()?.let { return it }
@@ -68236,6 +68254,68 @@ interface DataView {
                         // type 'Z'." chain. Matches TypeScript's `foo({ name: "hello" })` vs
                         // param `{ id: number; name?: string }` → TS2345 + missing-prop chain
                         // + TS2728 related info pointing to first missing property declaration.
+                        // B83.4h: source-defined Object.prototype-member OVERRIDE check.
+                        // When the source object literal defines a property whose name is an
+                        // Object.prototype member (toString/valueOf/...) that the TARGET does
+                        // NOT declare itself, TypeScript compares the source's property type
+                        // against the INHERITED Object.prototype member signature (e.g.
+                        // Object.toString: () => string). If incompatible, it emits TS2322 at
+                        // the property NAME and SUPPRESSES the arg-level missing-prop TS2345.
+                        // Example: `f2({ toString: (s) => s })` against `I2 { value; doStuff }`
+                        //   → TS2322 "Type '(s: any) => any' is not assignable to type
+                        //     '() => string'. Target signature provides too few arguments...".
+                        if (argType is Type.Object) {
+                            var protoOverrideEmitted = false
+                            for (propNode in arg.properties) {
+                                val (propName, keyPos, keyLen) = when (propNode) {
+                                    is PropertyAssignment -> {
+                                        val n = propNode.name
+                                        if (n is Identifier) Triple(n.text, n.pos, n.text.length) else continue
+                                    }
+                                    else -> continue
+                                }
+                                if (propName !in OBJECT_PROTOTYPE_PROPERTIES) continue
+                                // Skip when the target declares this property itself — then the
+                                // standard per-property mismatch path (below) owns the comparison.
+                                if (paramType.members?.get(propName) != null) continue
+                                val inheritedType = getObjectPrototypeMemberType(propName) ?: continue
+                                val sourcePropSym = argType.members?.get(propName) ?: continue
+                                val sourcePropType = getTypeOfSymbol(sourcePropSym)
+                                if (sourcePropType === anyType || sourcePropType === errorType) continue
+                                // Only handle anonymous-function-typed source/inherited pairs
+                                // (both have callSignatures) — the inherited prototype members
+                                // we filter on (toString/valueOf/...) are all methods.
+                                val srcIsFunc = sourcePropType is Type.Object &&
+                                    sourcePropType !is Type.Interface &&
+                                    !(sourcePropType as Type.Object).callSignatures.isNullOrEmpty()
+                                val tgtIsFunc = inheritedType is Type.Object &&
+                                    inheritedType !is Type.Interface &&
+                                    !(inheritedType as Type.Object).callSignatures.isNullOrEmpty()
+                                if (!srcIsFunc || !tgtIsFunc) continue
+                                if (checkTypeRelatedTo(sourcePropType, inheritedType, assignableRelation)) continue
+                                val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+                                val displayInherited = typeToString(inheritedType)
+                                val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+                                val chain = mutableListOf<String>()
+                                chain.addAll(getFunctionMismatchElaboration(
+                                    sourcePropType as Type.Object,
+                                    inheritedType as Type.Object,
+                                ))
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '$displaySource' is not assignable to type '$displayInherited'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = kline,
+                                    character = kchar,
+                                    start = keyPos,
+                                    length = keyLen,
+                                    messageChain = chain,
+                                ))
+                                protoOverrideEmitted = true
+                            }
+                            if (protoOverrideEmitted) return
+                        }
                         if (argType is Type.Object) {
                             val missing = mutableListOf<Symbol>()
                             for (targetProp in paramType.properties!!) {
