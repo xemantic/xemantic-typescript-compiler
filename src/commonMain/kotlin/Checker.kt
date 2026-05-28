@@ -38582,7 +38582,10 @@ interface DataView {
             is TypeOfExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is DeleteExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
-            is AsExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            is AsExpression -> {
+                if (inNullCastOverlapPass) emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
+                walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
+            }
             is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is TemplateExpression -> for (span in expr.templateSpans) walkTypeAssertionsInExpr(span.expression, source, fileName, onAssertion)
             is TaggedTemplateExpression -> {
@@ -38638,6 +38641,12 @@ interface DataView {
      * T is a named Interface/Class (not a TypeAlias, and not any/unknown). `null!`
      * is skipped — the NonNullExpression wraps the null literal and shouldn't match.
      */
+    /** B87.2 (round 73): when true, the [walkTypeAssertionsInExpr] AsExpression
+     *  branch also runs the narrow `undefined/null as readonly [tuple]` TS2352
+     *  check. Only the null-cast-overlap pass sets it — the unrelated erasable-
+     *  syntax pass leaves it false, so no double emission. */
+    private var inNullCastOverlapPass = false
+
     private fun checkNullTypeAssertionOverlap() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -38645,14 +38654,56 @@ interface DataView {
             val source = result.sourceFile.text
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
+            val savedPass = inNullCastOverlapPass
+            inNullCastOverlapPass = true
             try {
                 for (stmt in result.sourceFile.statements) {
                     walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfNullCast)
                 }
             } finally {
+                inNullCastOverlapPass = savedPass
                 currentFileLocals = savedLocals
             }
         }
+    }
+
+    /**
+     * B87.2 (round 73): TS2352 for `undefined as readonly [...]` / `null as readonly [...]`
+     * AsExpression casts. The shared [walkTypeAssertionsInExpr] visits AsExpression but
+     * only forwards TypeAssertionExpression to the emit callback, so AsExpression casts
+     * were never checked. Narrowly gated: source is bare `undefined`/`null`/`void <expr>`,
+     * target is `readonly [tuple]` (TypeOperator over a TupleType) — neither sufficiently
+     * overlaps. Span = the whole `<src> as <type>` (expr.pos .. tightEnd).
+     */
+    private fun emitTS2352IfNullAsReadonlyTuple(expr: AsExpression, source: String, fileName: String) {
+        var inner: Expression = expr.expression
+        if (inner is ParenthesizedExpression) inner = inner.expression
+        val srcLit: String = when {
+            inner is Identifier && (inner.text == "undefined" || inner.text == "null") -> inner.text
+            inner is VoidExpression -> "undefined"
+            else -> return
+        }
+        val t = expr.type
+        if (t !is TypeOperator || t.operator != SyntaxKind.ReadonlyKeyword) return
+        if (t.type !is TupleType) return
+        // formatTypeForDisplay doesn't render the `readonly` TypeOperator, so build
+        // `readonly <tuple>` explicitly from the inner tuple's display.
+        val tupleDisplay = formatTypeForDisplay(t.type) ?: return
+        val targetDisplay = "readonly $tupleDisplay"
+        val start = expr.pos
+        val end = if (expr.tightEnd > start) expr.tightEnd else expr.end
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '$srcLit' to type '$targetDisplay' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     private fun emitTS2352IfNullCast(
