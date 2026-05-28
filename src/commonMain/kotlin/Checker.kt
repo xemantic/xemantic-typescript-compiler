@@ -52632,8 +52632,20 @@ interface DataView {
             // Spread
             is SpreadElement -> getTypeOfExpression(expr.expression)
 
-            // Await
-            is AwaitExpression -> anyType // TODO: unwrap Promise
+            // Await: unwrap one level of Promise<X> -> X; non-Promise operands
+            // await to their own type (await of a non-thenable is the value). A
+            // bare/unknown operand stays anyType (prior behavior) to avoid cascade.
+            // B87.1b (round 73): partial Awaited resolution — full recursive Awaited<>
+            // (nested promises / thenables / union distribution) still TODO.
+            is AwaitExpression -> {
+                val t = getTypeOfExpression(expr.expression)
+                when {
+                    t === anyType || t === errorType -> t
+                    t is Type.Reference && t.target.symbol?.name == "Promise" ->
+                        t.resolvedTypeArguments?.getOrNull(0) ?: anyType
+                    else -> t
+                }
+            }
 
             // Yield
             is YieldExpression -> anyType // TODO: generator return type
