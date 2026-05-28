@@ -983,6 +983,8 @@ class Checker(
         checkDerivedConstructorSuper()
         // 55b. Check derived class constructor `return null` (TS2322 + TS2409)
         checkDerivedConstructorReturnNull()
+        // 55c. Check generic class constructor returning an unconstrained-type-param value (TS2322 + TS2409 + TS2208)
+        checkConstructorReturnTypeParam()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
         // 57. Check return statement outside function body (TS1108)
@@ -42963,6 +42965,166 @@ interface DataView {
                     length = 6,
                 ))
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2322 + TS2409 + TS2208: generic class constructor returning a value
+    // typed as one of the class's own UNCONSTRAINED type parameters.
+    //   class B<T> { constructor() { var x: T; return x; } }
+    // The returned `T` is not assignable to the instance type `B<T>` (an
+    // unconstrained TP could be instantiated with anything). Narrowly gated to
+    // `return <ident>` where ident is a local var declared `var ident: TP` and
+    // TP is a class type param with no constraint — primitive returns
+    // (`return 1`, ignored by JS) and assignable returns are not flagged.
+    // -----------------------------------------------------------------------
+
+    private fun checkConstructorReturnTypeParam() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForCtorReturnTypeParam(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForCtorReturnTypeParam(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    checkClassCtorReturnTypeParam(stmt.typeParameters, stmt.members, source, fileName, stmt.name?.text)
+                    for (m in stmt.members) when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    when (val init = d.initializer) {
+                        is ClassExpression -> checkClassCtorReturnTypeParam(init.typeParameters, init.members, source, fileName, init.name?.text)
+                        is FunctionExpression -> walkForCtorReturnTypeParam(init.body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForCtorReturnTypeParam(it.statements, source, fileName) }
+                is Block -> walkForCtorReturnTypeParam(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkClassCtorReturnTypeParam(
+        typeParameters: List<TypeParameter>?,
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+        className: String?,
+    ) {
+        if (className == null) return
+        val tps = typeParameters ?: return
+        if (tps.isEmpty()) return
+        val unconstrained = tps.filter { it.constraint == null }.associateBy { it.name.text }
+        if (unconstrained.isEmpty()) return
+        val instanceDisplay = "$className<${tps.joinToString(", ") { it.name.text }}>"
+        for (member in members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            // var name -> annotation type-param name (only bare `var x: TP` with TP an unconstrained class TP)
+            val varTpName = mutableMapOf<String, String>()
+            collectCtorVarTypeParamAnnotations(body.statements, unconstrained.keys, varTpName)
+            if (varTpName.isEmpty()) continue
+            findReturnIdentsInStatements(body.statements) { returnPos, identName ->
+                val tpName = varTpName[identName] ?: return@findReturnIdentsInStatements
+                val tpDecl = unconstrained[tpName] ?: return@findReturnIdentsInStatements
+                val (line, character) = getLineAndCharacterOfPosition(source, returnPos)
+                val (relLine, relChar) = getLineAndCharacterOfPosition(source, tpDecl.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$tpName' is not assignable to type '$instanceDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = character,
+                    start = returnPos, length = 6,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "This type parameter might need an `extends $instanceDisplay` constraint.",
+                        category = DiagnosticCategory.Message, code = 2208,
+                        fileName = fileName, line = relLine, character = relChar,
+                        start = tpDecl.name.pos, length = tpDecl.name.text.length,
+                    )),
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Return type of constructor signature must be assignable to the instance type of the class.",
+                    category = DiagnosticCategory.Error, code = 2409,
+                    fileName = fileName, line = line, character = character,
+                    start = returnPos, length = 6,
+                ))
+            }
+        }
+    }
+
+    /** Collect `var name: TP` declarations (TP a bare TypeReference whose name is in [tpNames])
+     *  within [stmts], not descending into nested functions/classes. */
+    private fun collectCtorVarTypeParamAnnotations(
+        stmts: List<Statement>, tpNames: Set<String>, out: MutableMap<String, String>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    val tr = d.type as? TypeReference ?: continue
+                    val tn = tr.typeName as? Identifier ?: continue
+                    if (tr.typeArguments.isNullOrEmpty() && tn.text in tpNames) out[n.text] = tn.text
+                }
+                is Block -> collectCtorVarTypeParamAnnotations(stmt.statements, tpNames, out)
+                is IfStatement -> {
+                    collectCtorVarTypeParamAnnotations(listOf(stmt.thenStatement), tpNames, out)
+                    stmt.elseStatement?.let { collectCtorVarTypeParamAnnotations(listOf(it), tpNames, out) }
+                }
+                is ForStatement -> collectCtorVarTypeParamAnnotations(listOf(stmt.statement), tpNames, out)
+                is WhileStatement -> collectCtorVarTypeParamAnnotations(listOf(stmt.statement), tpNames, out)
+                is TryStatement -> {
+                    collectCtorVarTypeParamAnnotations(stmt.tryBlock.statements, tpNames, out)
+                    stmt.catchClause?.let { collectCtorVarTypeParamAnnotations(it.block.statements, tpNames, out) }
+                    stmt.finallyBlock?.let { collectCtorVarTypeParamAnnotations(it.statements, tpNames, out) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun findReturnIdentsInStatements(stmts: List<Statement>, callback: (Int, String) -> Unit) {
+        for (stmt in stmts) findReturnIdentsInStmt(stmt, callback)
+    }
+
+    private fun findReturnIdentsInStmt(stmt: Statement, callback: (Int, String) -> Unit) {
+        when (stmt) {
+            is ReturnStatement -> {
+                val expr = stmt.expression
+                if (expr is Identifier) callback(stmt.pos, expr.text)
+            }
+            is Block -> findReturnIdentsInStatements(stmt.statements, callback)
+            is IfStatement -> {
+                findReturnIdentsInStmt(stmt.thenStatement, callback)
+                stmt.elseStatement?.let { findReturnIdentsInStmt(it, callback) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
+                is CaseClause -> clause.statements.forEach { findReturnIdentsInStmt(it, callback) }
+                is DefaultClause -> clause.statements.forEach { findReturnIdentsInStmt(it, callback) }
+                else -> {}
+            }
+            is ForStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            is ForInStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            is ForOfStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            is WhileStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            is DoStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            is TryStatement -> {
+                findReturnIdentsInStatements(stmt.tryBlock.statements, callback)
+                stmt.catchClause?.let { findReturnIdentsInStatements(it.block.statements, callback) }
+                stmt.finallyBlock?.let { findReturnIdentsInStatements(it.statements, callback) }
+            }
+            is LabeledStatement -> findReturnIdentsInStmt(stmt.statement, callback)
+            else -> {}
         }
     }
 
