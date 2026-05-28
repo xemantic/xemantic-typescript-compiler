@@ -49370,6 +49370,49 @@ interface DataView {
                 } finally {
                     if (useCtx) contextualType = savedContextual
                 }
+                // B87.1 (round 73): async-generic-return — `async function f<T>(...):
+                // Promise<T>` returning a value whose (awaited) type is a UNION that
+                // includes the bare unconstrained type parameter T PLUS other (non-
+                // TypeParam) constituents. TypeScript reports the value as not
+                // assignable to T ("could be instantiated with an arbitrary type").
+                // Display: non-TP members first, then each TP member wrapped as
+                // `Awaited<name>` (the await unwrap of `T | Yadda` leaves `Awaited<T> |
+                // Yadda`). Narrowly gated to avoid touching the global relation/scope:
+                // unconstrained TP, Promise<bareTP> return annotation, union source.
+                run {
+                    if (!inAsyncFunctionBody) return@run
+                    val rtn = returnTypeNode as? TypeReference ?: return@run
+                    if ((rtn.typeName as? Identifier)?.text != "Promise") return@run
+                    val pArgs = rtn.typeArguments ?: return@run
+                    if (pArgs.size != 1) return@run
+                    val innerRef = pArgs[0] as? TypeReference ?: return@run
+                    if (innerRef.typeArguments?.isNotEmpty() == true) return@run
+                    val tpName = (innerRef.typeName as? Identifier)?.text ?: return@run
+                    if (tpName !in typeParams) return@run
+                    val u = sourceType as? Type.Union ?: return@run
+                    val tpMembers = u.types.filter { it is Type.TypeParam && typeToString(it) == tpName }
+                    val nonTp = u.types.filter { it !is Type.TypeParam }
+                    if (tpMembers.isEmpty() || nonTp.isEmpty()) return@run
+                    if (nonTp.any { it === anyType || it === errorType }) return@run
+                    if (tpMembers.any { (it as Type.TypeParam).constraint != null }) return@run
+                    val srcDisplay = (nonTp.map { typeToString(it) } +
+                        tpMembers.map { "Awaited<${typeToString(it)}>" }).joinToString(" | ")
+                    val (bl, bc) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$srcDisplay' is not assignable to type '$tpName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = bl,
+                        character = bc,
+                        start = stmt.pos,
+                        length = 6,
+                        messageChain = listOf(
+                            "  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$srcDisplay'."
+                        ),
+                    ))
+                    return
+                }
                 // 16.0: Fresh-literal excess check for `return X = { excess }` — the
                 // literal flows through the assignment into the return value.
                 if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
