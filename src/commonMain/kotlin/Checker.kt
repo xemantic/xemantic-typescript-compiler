@@ -24484,10 +24484,13 @@ interface DataView {
         if (options.lib.isEmpty()) return false
         return options.lib.none { lname ->
             val lower = lname.lowercase()
-            // es6/es2015 alias, plus any es2*/esnext entry.
-            lower == "es6" || lower == "es2015" ||
+            // es6/es2015 alias, the legacy es7 (=es2016) alias, plus any es2*/esnext
+            // entry. es7/es2016+ libs are cumulative over es2015, so Promise et al.
+            // are available — without the es7 case, `@lib: dom, es7` FP-emits TS2583.
+            lower == "es6" || lower == "es2015" || lower == "es7" ||
                 lower.startsWith("es2") || lower == "esnext" ||
-                lower.startsWith("es6.") || lower.startsWith("es2015.")
+                lower.startsWith("es6.") || lower.startsWith("es2015.") ||
+                lower.startsWith("es7.")
         }
     }
 
