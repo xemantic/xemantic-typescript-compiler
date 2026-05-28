@@ -48817,6 +48817,49 @@ interface DataView {
                     targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
             val canUse = canUseRaw || callBypass
             val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            // B87.4b (round 73): class-instance source → interface/class target
+            // missing-property for VAR-DECL — completes the missing-property TS2741/2739
+            // feature uniformly (the assignment path B87.4 + the argument path 17.29
+            // already emit it; var-decl was the remaining gap, leaving an asymmetry
+            // where `i = c` errors but `var i: I = c` doesn't). `canUseTypeEngine` blocks
+            // named→named, so this fires only when the class source genuinely lacks the
+            // target's required members. Missing-property is NAME-presence only (no
+            // recursion → safe; full-suite verified net-zero, zero regressions). Emits at
+            // the var name, mirroring the existing var-decl TS2741 position (~48973).
+            if (!canUse && sourceType is Type.Interface && targetType is Type.Interface &&
+                sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+                sourceType.callSignatures.isNullOrEmpty() && targetType.callSignatures.isNullOrEmpty()
+            ) {
+                val missing = try { collectMissingProperties(sourceType, targetType) }
+                    catch (_: StackOverflowError) { emptyList() }
+                if (missing.isNotEmpty()) {
+                    val displaySource = typeToString(sourceType)
+                    val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    if (missing.size >= 2) {
+                        diagnostics.add(Diagnostic(
+                            message = formatTs2740Message(displaySource, displayTarget, missing),
+                            category = DiagnosticCategory.Error,
+                            code = if (missing.size <= 4) 2739 else 2740,
+                            fileName = fileName, line = line, character = character,
+                            start = name.pos, length = name.text.length,
+                        ))
+                    } else {
+                        val mpName = missing[0]
+                        val mpSym = try { getPropertyOfType(targetType, mpName) } catch (_: StackOverflowError) { null }
+                        val declaringDisplay = getDeclaringTypeDisplay(mpSym, targetType, displayTarget)
+                        val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$mpName' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
+                            category = DiagnosticCategory.Error, code = 2741,
+                            fileName = fileName, line = line, character = character,
+                            start = name.pos, length = name.text.length,
+                            relatedInformation = listOfNotNull(relatedInfo),
+                        ))
+                    }
+                    return
+                }
+            }
             // Excess property check for fresh object literals (TS2353).
             // Fires even when assignability passes (e.g., {b: 0, a: 0} → {b: number}).
             if (canUse && init is ObjectLiteralExpression) {
