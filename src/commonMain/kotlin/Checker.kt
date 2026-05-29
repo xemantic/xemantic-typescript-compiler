@@ -1126,6 +1126,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileInterfaceMemberConflicts()
         }
+        // 73g. Check cross-file top-level class-vs-class conflicts (TS2300, or collapsed
+        //      TS6200 + TS6201 when >= 8 names conflict)
+        if (binderResults.size > 1) {
+            checkCrossFileClassConflicts()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -78055,18 +78060,11 @@ interface DataView {
             }
         }
 
-        // Amalgamate conflicting names per ordered file-pair.
-        class PairConflict(val firstFile: String, val secondFile: String) {
-            val names = mutableListOf<String>()
-            val firstLocs = mutableMapOf<String, MutableList<MemberDecl>>()
-            val secondLocs = mutableMapOf<String, MutableList<MemberDecl>>()
-        }
-        val amalgam = mutableMapOf<String, PairConflict>()
-
+        // Build conflicting member declarations (property-vs-method, cross-file).
+        val entries = mutableListOf<CrossFileDupDecl>()
         for ((_, byIface) in groups) {
             for ((_, members) in byIface) {
-                val byName = members.groupBy { it.memberName }
-                for ((name, decls) in byName) {
+                for ((_, decls) in members.groupBy { it.memberName }) {
                     val distinctFiles = decls.map { it.fileName }.distinct()
                     if (distinctFiles.size != 2) continue   // only the common 2-file case
                     // Cross-file property-vs-method conflict: a property in one file
@@ -78075,31 +78073,70 @@ interface DataView {
                     val methFiles = decls.filter { it.isMethod }.map { it.fileName }.toSet()
                     val crossConflict = propFiles.any { pf -> methFiles.any { mf -> pf != mf } }
                     if (!crossConflict) continue
-                    val (fA, fB) = distinctFiles.sorted()
-                    val pc = amalgam.getOrPut("$fA|$fB") { PairConflict(fA, fB) }
-                    if (name !in pc.names) pc.names.add(name)
-                    pc.firstLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fA })
-                    pc.secondLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fB })
+                    for (d in decls) entries.add(CrossFileDupDecl(d.memberName, d.nameNode, d.fileName, d.source))
                 }
             }
         }
+        amalgamateAndEmitCrossFileDuplicates(entries)
+    }
 
-        fun emit2300(node: Node, name: String, file: String, src: String, related: List<MemberDecl>) {
-            val (line, ch) = getLineAndCharacterOfPosition(src, node.pos)
+    /** One conflicting declaration site for cross-file duplicate-identifier reporting. */
+    private class CrossFileDupDecl(
+        val name: String,
+        val nameNode: Node,
+        val fileName: String,
+        val source: String,
+    )
+
+    /**
+     * Shared amalgamation + emission for cross-file duplicate-identifier conflicts
+     * (B92). [entries] are the conflicting declaration sites; the caller has already
+     * decided they conflict. Groups by name, restricts to the common 2-distinct-file
+     * case, amalgamates per ordered file-pair, then for each pair: when FEWER THAN 8
+     * names conflict → per-member TS2300 "Duplicate identifier 'X'." + related TS6203
+     * "'X' was also declared here."; when 8 OR MORE → collapsed TS6200 "Definitions of
+     * the following identifiers conflict ...: a, b, c" at the file's first non-trivia
+     * token + related TS6201 "Conflicts are in this file." (TypeScript's threshold is
+     * `conflictingSymbols.size < 8`.)
+     */
+    private fun amalgamateAndEmitCrossFileDuplicates(entries: List<CrossFileDupDecl>) {
+        if (entries.isEmpty()) return
+        val fileSources = mutableMapOf<String, String>()
+        for (e in entries) fileSources.getOrPut(e.fileName) { e.source }
+
+        class PairConflict(val firstFile: String, val secondFile: String) {
+            val names = mutableListOf<String>()
+            val firstLocs = mutableMapOf<String, MutableList<CrossFileDupDecl>>()
+            val secondLocs = mutableMapOf<String, MutableList<CrossFileDupDecl>>()
+        }
+        val amalgam = mutableMapOf<String, PairConflict>()
+
+        for ((name, decls) in entries.groupBy { it.name }) {
+            val distinctFiles = decls.map { it.fileName }.distinct()
+            if (distinctFiles.size != 2) continue
+            val (fA, fB) = distinctFiles.sorted()
+            val pc = amalgam.getOrPut("$fA|$fB") { PairConflict(fA, fB) }
+            if (name !in pc.names) pc.names.add(name)
+            pc.firstLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fA })
+            pc.secondLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fB })
+        }
+
+        fun emit2300(decl: CrossFileDupDecl, related: List<CrossFileDupDecl>) {
+            val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
             val rel = related.map { other ->
                 val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
                 Diagnostic(
-                    message = "'$name' was also declared here.",
+                    message = "'${decl.name}' was also declared here.",
                     category = DiagnosticCategory.Message, code = 6203,
                     fileName = other.fileName, line = ol, character = oc,
-                    start = other.nameNode.pos, length = other.memberName.length,
+                    start = other.nameNode.pos, length = other.name.length,
                 )
             }
             diagnostics.add(Diagnostic(
-                message = "Duplicate identifier '$name'.",
+                message = "Duplicate identifier '${decl.name}'.",
                 category = DiagnosticCategory.Error, code = 2300,
-                fileName = file, line = line, character = ch,
-                start = node.pos, length = name.length,
+                fileName = decl.fileName, line = line, character = ch,
+                start = decl.nameNode.pos, length = decl.name.length,
                 relatedInformation = rel,
             ))
         }
@@ -78128,8 +78165,8 @@ interface DataView {
                 for (name in pc.names) {
                     val firstNodes = pc.firstLocs[name] ?: emptyList()
                     val secondNodes = pc.secondLocs[name] ?: emptyList()
-                    for (fn in firstNodes) emit2300(fn.nameNode, name, fn.fileName, fn.source, secondNodes)
-                    for (sn in secondNodes) emit2300(sn.nameNode, name, sn.fileName, sn.source, firstNodes)
+                    for (fn in firstNodes) emit2300(fn, secondNodes)
+                    for (sn in secondNodes) emit2300(sn, firstNodes)
                 }
             } else {
                 val list = pc.names.joinToString(", ")
@@ -78137,6 +78174,40 @@ interface DataView {
                 emit6200(pc.secondFile, pc.firstFile, list)
             }
         }
+    }
+
+    /**
+     * B92d: Cross-file duplicate-identifier conflicts for top-level CLASS declarations
+     * in script (non-module) files sharing the global scope. Two same-named class
+     * declarations in different script files always conflict (classes never merge with
+     * classes), so this is a genuine TS2300 — collapsed to TS6200 when >= 8 names
+     * conflict (e.g. `class A..I` in two files). Restricted to script files (module
+     * files are scoped separately) and the 2-distinct-file case to keep FP surface
+     * minimal. Class-vs-interface / class-vs-namespace MERGES are unaffected (only the
+     * class-vs-class pair conflicts; an interface/namespace partner does not rescue it).
+     */
+    private fun checkCrossFileClassConflicts() {
+        val byName = mutableMapOf<String, MutableList<CrossFileDupDecl>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ClassDeclaration) {
+                    val nm = stmt.name ?: continue
+                    if (nm.text.isEmpty()) continue
+                    byName.getOrPut(nm.text) { mutableListOf() }
+                        .add(CrossFileDupDecl(nm.text, nm, fileName, source))
+                }
+            }
+        }
+        val entries = mutableListOf<CrossFileDupDecl>()
+        for ((_, decls) in byName) {
+            // Conflict only when the SAME class name is declared in 2 different files.
+            if (decls.map { it.fileName }.distinct().size != 2) continue
+            entries.addAll(decls)
+        }
+        amalgamateAndEmitCrossFileDuplicates(entries)
     }
 
     /**
