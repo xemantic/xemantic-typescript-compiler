@@ -850,7 +850,12 @@ class Checker(
         // 21. Check null/undefined used in invalid positions (TS18050)
         checkNullUndefinedUsage()
         // 22. Check for implicit this (TS2683)
-        if (options.noImplicitThis || options.strict) {
+        // Round 79h: mirror the TS2454/TS2564 convention — TS2683 fires by
+        // default in the test harness unless `@strict: false` was set explicitly.
+        // (TypeScript's compiler test baselines for `thisInModuleFunction1` etc.
+        // set neither `noImplicitThis` nor `strict` yet expect TS2683.) JS files
+        // and contextually-typed `this` are suppressed inside `checkImplicitThis`.
+        if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
             checkImplicitThis()
         }
         // 22b. Check for `this` directly inside namespace/module bodies (TS2331 + TS2683).
@@ -29514,6 +29519,13 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            // Round 79h: skip JS-like files. Under allowJs/checkJs TypeScript
+            // infers `this` from JSDoc `@this`, prototype-assignment and IIFE
+            // context, so a bare `this` in a JS file is NOT implicit-any the way
+            // it is in a `.ts` file. No JS-file error baseline expects TS2683, so
+            // skipping them is FP-safe and prevents regressions on
+            // `signaturesUseJSDocForOptionalParameters` / `noParameterReassignmentJSIIFE`.
+            if (isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             checkThisInStatements(
                 result.sourceFile.statements, source, fileName,
@@ -29523,6 +29535,10 @@ interface DataView {
             )
         }
     }
+
+    private fun isJsLikeFileName(fileName: String): Boolean =
+        fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+            fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
 
     private fun checkThisInStatements(
         statements: List<Statement>,
@@ -29742,6 +29758,12 @@ interface DataView {
         insideFunction: Boolean,
         shadowFunctionPos: Int,
         insideArrowFunction: Boolean = false,
+        // Round 79h: set by the CallExpression branch when this expression is a
+        // function-expression argument whose contextual callback type declares a
+        // `this:` parameter (e.g. `each(xs, function(d){...this...})` against
+        // `(this: T, d: T) => T`). Such a `this` is contextually typed, not
+        // implicit-any, so TS2683 is suppressed inside the body.
+        contextualThisTyped: Boolean = false,
     ) {
         when (expr) {
             is Identifier -> {
@@ -29772,7 +29794,7 @@ interface DataView {
                 // the body — same effect as a `this:` parameter. The exact type
                 // doesn't matter for the diagnostic; we only check tag presence.
                 val hasJSDocThis = hasJSDocThisTag(expr.leadingComments, fileName)
-                val newThisIsTyped = hasThisParam || hasJSDocThis
+                val newThisIsTyped = hasThisParam || hasJSDocThis || contextualThisTyped
                 val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
                     // This function expression shadows a typed this context
                     expr.name?.pos ?: expr.pos
@@ -29817,8 +29839,12 @@ interface DataView {
             }
             is CallExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                expr.arguments.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                expr.arguments.forEachIndexed { i, arg ->
+                    // Round 79h: a function-expression argument whose contextual
+                    // callback type declares a `this:` parameter has a contextually
+                    // typed `this` — suppress TS2683 inside it.
+                    val ctxThis = arg is FunctionExpression && callArgHasContextualThis(expr.expression, i)
+                    checkThisInExpr(arg, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction, contextualThisTyped = ctxThis)
                 }
             }
             is NewExpression -> {
@@ -29961,6 +29987,56 @@ interface DataView {
         val first = parameters.firstOrNull() ?: return false
         val name = first.name
         return name is Identifier && name.text == "this"
+    }
+
+    /**
+     * Round 79h: a function-expression argument's `this` is contextually typed
+     * (and thus NOT implicit-any) when the callee's parameter at [argIndex] is a
+     * function type that declares a `this:` parameter — e.g. `$.each(xs,
+     * function(d) { ...this... })` where `each`'s callback param is
+     * `(this: T, d: T) => T`. Resolves the callee's call signature(s), takes the
+     * parameter type at [argIndex], and checks whether it's a function type whose
+     * declaration carries a `this` parameter. Conservative: any resolution
+     * failure returns false, so TS2683 still fires (never a false suppression).
+     */
+    private fun callArgHasContextualThis(callee: Expression, argIndex: Int): Boolean {
+        return try {
+            val calleeType = when (callee) {
+                is Identifier -> getTypeOfIdentifier(callee)
+                is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+                else -> return false
+            }
+            if (calleeType !is Type.Object) return false
+            resolveStructuredTypeMembers(calleeType)
+            val sigs = calleeType.callSignatures ?: return false
+            sigs.any { sig ->
+                argIndex < sig.parameters.size &&
+                    typeIsFunctionWithThisParam(getTypeOfSymbol(sig.parameters[argIndex]))
+            }
+        } catch (_: StackOverflowError) {
+            false
+        }
+    }
+
+    /** True when [type] is a function type whose call signature declares a `this:` parameter. */
+    private fun typeIsFunctionWithThisParam(type: Type): Boolean {
+        if (type !is Type.Object) return false
+        val cbSigs = type.callSignatures ?: return false
+        return cbSigs.any { cb ->
+            signatureDeclarationParameters(cb.declaration)?.let { hasThisParameter(it) } == true
+        }
+    }
+
+    /** Extract the parameter list from any signature-bearing AST declaration node. */
+    private fun signatureDeclarationParameters(node: Node?): List<Parameter>? = when (node) {
+        is FunctionType -> node.parameters
+        is ConstructorType -> node.parameters
+        is FunctionDeclaration -> node.parameters
+        is FunctionExpression -> node.parameters
+        is ArrowFunction -> node.parameters
+        is MethodDeclaration -> node.parameters
+        is Constructor -> node.parameters
+        else -> null
     }
 
     // 17.63: detect a leading JSDoc `@this {Type}` annotation on a function
