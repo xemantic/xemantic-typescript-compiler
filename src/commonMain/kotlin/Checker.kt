@@ -3837,6 +3837,24 @@ class Checker(
     }
 
     /**
+     * Resolve a value-position dotted name `M.C` / `A.B.C` (a chain of
+     * [PropertyAccessExpression] over an [Identifier] head) to the exported symbol
+     * — mirroring [resolveQualifiedName] which works on type-position
+     * [QualifiedName] nodes. Used by [getReturnTypeOfNewExpression] so `new M.C()`
+     * resolves to the namespace-qualified class instance type. Returns null when any
+     * segment fails to resolve.
+     */
+    private fun resolveQualifiedValueSymbol(expr: PropertyAccessExpression): Symbol? {
+        val left = when (val l = expr.expression) {
+            is Identifier -> currentFileLocals?.get(l.text) ?: globals[l.text]
+            is PropertyAccessExpression -> resolveQualifiedValueSymbol(l)
+            else -> null
+        } ?: return null
+        val resolved = resolveAlias(left)
+        return resolved.exports?.get(expr.name.text)
+    }
+
+    /**
      * Simple module specifier resolution: strip leading `./` and append `.ts` / try `.ts`.
      * This is a simplified version for the test suite where module specifiers
      * are relative paths within the same test compilation unit.
@@ -57174,6 +57192,16 @@ interface DataView {
         }
         val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
+            // `new M.C()` / `new A.B.C()`: resolve the namespace-qualified CLASS to its
+            // declared (instance) type. Gated strictly on SymbolFlags.Class so only a
+            // genuine qualified class resolves — qualified functions/namespaces/vars fall
+            // through to anyType (prior behavior), keeping the FP surface minimal.
+            is PropertyAccessExpression -> {
+                val sym = try { resolveQualifiedValueSymbol(callee) } catch (_: StackOverflowError) { null }
+                if (sym != null && sym.flags.hasAny(SymbolFlags.Class)) {
+                    try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { return anyType }
+                } else return anyType
+            }
             else -> return anyType
         }
         if (calleeType === anyType || calleeType === errorType) return anyType
@@ -71041,7 +71069,15 @@ interface DataView {
             // (`genericRestArgs_ts`) has only literal/primitive args, which
             // pass this gate. Skipping `continue`s rather than `return`s so
             // a later simple-arg mismatch can still emit.
-            if (!isSimpleCheckableType(argType)) continue
+            // B-vararg: ALSO check a NAMED class/interface-instance arg against a
+            // PRIMITIVE rest element type (`...rest: string[]` ← `x: C`). A class
+            // instance is never assignable to a primitive, so this is FP-safe and
+            // mirrors the main-loop "primitive arg vs named class param" rule. The
+            // structurally-risky named-vs-named element case stays excluded (element
+            // must be simple-checkable here).
+            val argIsNamedInstance = argType is Type.Interface && (argType as Type.Interface).symbol != null
+            if (!isSimpleCheckableType(argType) &&
+                !(argIsNamedInstance && isSimpleCheckableType(elementType))) continue
             val ok = try {
                 checkTypeRelatedTo(argType, elementType, assignableRelation)
             } catch (_: StackOverflowError) { true }
