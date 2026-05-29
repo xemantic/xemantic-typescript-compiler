@@ -1131,6 +1131,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileClassConflicts()
         }
+        // 73h. Check block-scoped export re-declared via module augmentation(s) (TS2451)
+        if (binderResults.size > 1) {
+            checkCrossFileModuleAugmentationDuplicates()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -20490,7 +20494,12 @@ class Checker(
                 if (name !is StringLiteralNode) continue
                 val moduleName = name.text
 
-                val resolvesToFile = resolveModuleSpecifier(moduleName) != null ||
+                // Use the directory-aware resolver so relative augmentation specifiers
+                // (`./a`, `../dir/a`) resolve against the augmenting file's directory.
+                // It is a superset of `resolveModuleSpecifier` (falls back to it), so this
+                // can only SUPPRESS false-positive TS2664 for resolvable relative modules,
+                // never add new TS2664 (a truly-missing module still resolves to null).
+                val resolvesToFile = resolveModuleSpecifierRelative(moduleName, fileName) != null ||
                     resolvesAsJsOrJsx(moduleName)
                 val definedElsewhere = moduleName in moduleDefinitions
 
@@ -78208,6 +78217,104 @@ interface DataView {
             entries.addAll(decls)
         }
         amalgamateAndEmitCrossFileDuplicates(entries)
+    }
+
+    /**
+     * B92d: TS2451 for a block-scoped `export const`/`export let` that is re-declared
+     * via `declare module "X"` augmentation(s) of the SAME file-module (which already
+     * exports it), or across two augmentations of the same module. Re-declaring an
+     * existing block-scoped export through an augmentation is illegal. The original
+     * declaration is the "hub": its diagnostic accumulates a related TS6203 (then
+     * TS6204 for each subsequent) pointing at each augmentation re-declaration; each
+     * augmentation re-declaration points back at the hub (TS6203). The existing
+     * `checkCrossFileBlockScopedDuplicates` (step 73b) skips module files, so there is
+     * no double-emit. Gate is narrow (augmentation re-declaring an existing
+     * block-scoped file-module export) → tiny FP surface.
+     */
+    private fun checkCrossFileModuleAugmentationDuplicates() {
+        class Decl(val name: String, val nameNode: Node, val fileName: String, val source: String)
+        fun isBlockScopedExport(stmt: VariableStatement): Boolean =
+            ModifierFlag.Export in stmt.modifiers &&
+                (stmt.declarationList.flags == SyntaxKind.LetKeyword ||
+                    stmt.declarationList.flags == SyntaxKind.ConstKeyword)
+
+        // A file-module's OWN top-level block-scoped exports: moduleFile -> (name -> Decl).
+        val ownExports = mutableMapOf<String, MutableMap<String, Decl>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement && isBlockScopedExport(stmt)) {
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = d.name as? Identifier ?: continue
+                        ownExports.getOrPut(fileName) { mutableMapOf() }[nm.text] =
+                            Decl(nm.text, nm, fileName, source)
+                    }
+                }
+            }
+        }
+
+        // Augmentation block-scoped exports grouped by (targetFile, name), in source order.
+        val augByTarget = mutableMapOf<Pair<String, String>, MutableList<Decl>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val spec = (stmt.name as? StringLiteralNode)?.text ?: continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                val target = resolveModuleSpecifierRelative(spec, fileName) ?: continue
+                for (inner in body.statements) {
+                    if (inner is VariableStatement && isBlockScopedExport(inner)) {
+                        for (d in inner.declarationList.declarations) {
+                            val nm = d.name as? Identifier ?: continue
+                            augByTarget.getOrPut(target to nm.text) { mutableListOf() }
+                                .add(Decl(nm.text, nm, fileName, source))
+                        }
+                    }
+                }
+            }
+        }
+
+        fun emit2451(decl: Decl, related: List<Decl>) {
+            val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
+            val rel = related.mapIndexed { idx, other ->
+                val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
+                Diagnostic(
+                    message = if (idx == 0) "'${decl.name}' was also declared here." else "and here.",
+                    category = DiagnosticCategory.Message,
+                    code = if (idx == 0) 6203 else 6204,
+                    fileName = other.fileName, line = ol, character = oc,
+                    start = other.nameNode.pos, length = other.name.length,
+                )
+            }
+            diagnostics.add(Diagnostic(
+                message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                category = DiagnosticCategory.Error, code = 2451,
+                fileName = decl.fileName, line = line, character = ch,
+                start = decl.nameNode.pos, length = decl.name.length,
+                relatedInformation = rel,
+            ))
+        }
+
+        for ((key, augs) in augByTarget) {
+            val (target, name) = key
+            val own = ownExports[target]?.get(name)
+            val total = (if (own != null) 1 else 0) + augs.size
+            if (total < 2) continue   // single declaration: a valid augmentation, no conflict
+            val hub: Decl
+            val others: List<Decl>
+            if (own != null) {
+                hub = own
+                others = augs
+            } else {
+                hub = augs.first()
+                others = augs.drop(1)
+            }
+            emit2451(hub, others)
+            for (o in others) emit2451(o, listOf(hub))
+        }
     }
 
     /**
