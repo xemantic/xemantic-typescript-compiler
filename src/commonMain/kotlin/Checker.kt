@@ -55797,7 +55797,11 @@ interface DataView {
                 if (i >= sig.parameters.size) break
                 val paramType = getTypeOfSymbol(sig.parameters[i])
                 if (paramType === anyType || paramType === errorType) continue
-                val argType = getTypeOfExpression(arg)
+                // Prefer the non-widened literal type so a string/number-literal arg can
+                // select a specialized literal-param overload (e.g. createElement('canvas')
+                // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
+                // fallback). Falls through to the widened type for non-literal args.
+                val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
                 if (argType === anyType || argType === errorType) continue
                 if (!isSimpleTypeRelatedTo(argType, paramType) &&
                     !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
