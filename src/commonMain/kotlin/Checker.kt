@@ -1115,6 +1115,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkModuleAugmentationEnumMerge()
         }
+        // 73e. Check augmentation of a module that resolves to a non-module entity (TS2671)
+        if (binderResults.size > 1) {
+            checkModuleAugmentationOfNonModuleEntity()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -14414,6 +14418,18 @@ class Checker(
                         // Leftmost IS in scope. If the resolved symbol is NOT a namespace/module,
                         // look for a similarly-named namespace and emit TS2833.
                         val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
+                        // B90.1: leftmost is an `import x = require("M")` alias where module M
+                        // is defined with `export = <value-only entity>` — M has no namespace
+                        // meaning, so `x.A` used as a namespace qualifier in a type position
+                        // fires TS2503 "Cannot find namespace 'x'." (fires regardless of the
+                        // Module flag, which the augmentation merge may have set on x).
+                        if (leftSym != null && leftSym.flags.hasAny(SymbolFlags.Alias)) {
+                            val spec = getImportEqualsSpecifier(leftSym)
+                            if (spec != null && ambientModuleExportEqualsIsValueOnly(spec)) {
+                                emitTS2503(lname, leftmost, source, fileName)
+                                return
+                            }
+                        }
                         if (leftSym != null && !leftSym.flags.hasAny(SymbolFlags.Module)) {
                             val candidates = collectNamespaceNames(fileName)
                             val suggestion = getSpellingSuggestionFromNames(lname, candidates)
@@ -77917,6 +77933,109 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /**
+     * B90.1: TS2671 "Cannot augment module 'X' because it resolves to a non-module
+     * entity." An ambient module defined with `export = V` where V is a value-only
+     * entity (a `var`/`function` with no namespace/class/interface/enum/module
+     * meaning) has no namespace meaning, so a `declare module "X" { ... }`
+     * augmentation of it is illegal. Mirrors the B88.1 cross-file augmentation
+     * walker structure. The augmentation block is distinguished from the
+     * definition block by the ABSENCE of the `export =` inside it.
+     */
+    private fun checkModuleAugmentationOfNonModuleEntity() {
+        for (result in binderResults) {
+            val augFile = result.sourceFile.fileName
+            val augSource = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val nameNode = stmt.name as? StringLiteralNode ?: continue
+                val specifier = nameNode.text
+                val body = stmt.body as? ModuleBlock ?: continue
+                // Skip the DEFINITION block (carries `export = X`) — only augmentations error.
+                if (body.statements.any { it is ExportAssignment && it.isExportEquals }) continue
+                // An augmentation with no declarations to merge isn't worth flagging.
+                if (body.statements.isEmpty()) continue
+                if (!ambientModuleExportEqualsIsValueOnly(specifier)) continue
+                val (line, character) = getLineAndCharacterOfPosition(augSource, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot augment module '$specifier' because it resolves to a non-module entity.",
+                    category = DiagnosticCategory.Error,
+                    code = 2671,
+                    fileName = augFile,
+                    line = line,
+                    character = character,
+                    start = nameNode.pos,
+                    length = (nameNode.rawText?.length ?: nameNode.text.length) + 2,
+                ))
+            }
+        }
+    }
+
+    /**
+     * B90.1: Returns true when ambient module [specifier] is DEFINED with
+     * `export = V` where V is a value-only entity (declared as `var`/`function`
+     * only, with no namespace/class/interface/enum/module meaning) in the same
+     * module block — making it a non-module entity (no namespace meaning).
+     * Used for TS2671 (illegal augmentation) and TS2503 (`x.A` namespace use).
+     */
+    private fun ambientModuleExportEqualsIsValueOnly(specifier: String): Boolean {
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if ((stmt.name as? StringLiteralNode)?.text != specifier) continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s is ExportAssignment && s.isExportEquals) {
+                        val expr = s.expression as? Identifier ?: continue
+                        if (isNameValueOnlyInBlock(expr.text, body)) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * B90.1: True when [name] is declared inside [block] ONLY as a value
+     * (`var`/`function`) and NOT as any namespace/type entity (class, interface,
+     * type alias, enum, namespace/module). Used to classify an `export = name`
+     * target as a pure non-module value.
+     */
+    private fun isNameValueOnlyInBlock(name: String, block: ModuleBlock): Boolean {
+        var hasValue = false
+        var hasNsOrType = false
+        for (stmt in block.statements) {
+            when (stmt) {
+                is VariableStatement ->
+                    if (stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) hasValue = true
+                is FunctionDeclaration -> if (stmt.name?.text == name) hasValue = true
+                is ClassDeclaration -> if (stmt.name?.text == name) hasNsOrType = true
+                is InterfaceDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is TypeAliasDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is EnumDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == name) hasNsOrType = true
+                else -> {}
+            }
+        }
+        return hasValue && !hasNsOrType
+    }
+
+    /**
+     * B90.1: Extract the external-module specifier of an `import X = require("spec")`
+     * alias symbol, or null if it's not such an import-equals.
+     */
+    private fun getImportEqualsSpecifier(sym: Symbol): String? {
+        for (decl in sym.declarations) {
+            if (decl is ImportEqualsDeclaration) {
+                val ref = decl.moduleReference
+                if (ref is ExternalModuleReference) {
+                    return (ref.expression as? StringLiteralNode)?.text
+                }
+            }
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
