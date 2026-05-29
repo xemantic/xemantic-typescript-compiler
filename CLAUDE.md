@@ -309,6 +309,11 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **A write-target is not a use**: `this.p6 = "x"` in another field's initializer must NOT count as using `p6`. In the `BinaryExpression` branch, for `operator == SyntaxKind.Equals` with a `this.X`/`ClassName.X` LHS, recurse only into the LHS receiver (so `this.a.b = …` still uses `this.a`) + RHS — skip the LHS name ref.
 - **DIRECT object-literal accessor/method computed names fire; SPREAD-nested ones don't**: `{get [this.X]() {}}` directly initializing a field IS use-before-init, but `...{get [D.D]() {}}` (spread-nested) is NOT (matches TypeScript). `collectThisPropertyRefs` threads a `viaSpread` flag (set true by the `SpreadAssignment` branch) and gates the getter/setter/method computed-name collection on `!viaSpread`. The accessor/method BODY is always deferred (not recursed). ClassExpression `extends` heritage (`class extends this.X`) IS recursed (eager evaluation) for both static and instance props; the class BODY is not.
 
+### `new` expression / rest-arg gotchas (round 79k)
+
+- **`getReturnTypeOfNewExpression` resolves qualified-class callees `new M.C()`**: it handles both `Identifier` (`new C()`) and `PropertyAccessExpression` (`new M.C()` / `new A.B.C()`) callees. The qualified case uses `resolveQualifiedValueSymbol` (the value-position analog of `resolveQualifiedName`) and is gated strictly on `SymbolFlags.Class` → `getDeclaredTypeOfSymbol`. Without this, a namespace-qualified `new` returns `anyType`, so `var x = new M.C()` is `any` and `x.method(...)` is never arg-checked (was the `vararg` gap). Qualified non-class callees still fall through to `anyType`.
+- **`checkRestArgsAgainstArrayElementType` also flags a named class/interface-instance arg vs a PRIMITIVE rest element**: e.g. `f(...rest: string[])` called `f(someClassInstance)`. A class instance is never assignable to a primitive, so this is FP-safe (mirrors the main-loop "primitive arg vs named-class param" rule). The element type MUST be simple-checkable — named-vs-named element comparison stays excluded (the documented structural-comparison gap).
+
 ### TS2528 multiple default exports gotchas
 
 - **Anonymous FD/CD position**: Error at `export` keyword, NOT `function`/`class` — `FunctionDeclaration.pos` = `function` keyword, must search backwards for `export`.
