@@ -29066,14 +29066,32 @@ interface DataView {
                     if (stmt.body == null) {
                         // B70.10: Body-less FunctionDeclaration. If another declaration of the
                         // same name already exists (or appears later), this is an overload
-                        // signature — skip checking. If it's the SOLE declaration (typical
+                        // signature. If it's the SOLE declaration (typical
                         // `declare function f(...)`), treat the signature as authoritative
                         // for arity. Use a two-pass-aware merge: any previously-recorded
                         // info implies an overload, AND we look ahead briefly to see if a
                         // sibling declaration follows.
+                        // B95 (round 80): for overload groups, accumulate the arity RANGE
+                        // across the overload SIGNATURES (excluding the impl) so a call whose
+                        // arg count matches NO overload can fire TS2554. (Was: collapsed to
+                        // (0, MAX, rest) which suppressed all overload arity checking.)
+                        val thisInfo = paramInfo(stmt.parameters, isJsFile)
                         val existing = funcParams[name]
                         if (existing != null) {
-                            funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                            val baseMin = if (existing.isOverloaded) existing.minParams else thisInfo.minParams
+                            val baseMax = if (existing.isOverloaded) existing.maxParams else thisInfo.maxParams
+                            val baseRest = existing.isOverloaded && existing.hasRest
+                            // Preserve the FIRST overload signature's parameters — TypeScript's
+                            // TS6210 "An argument for 'x' was not provided." points at the first
+                            // overload's param at the missing index.
+                            val firstParams = if (existing.isOverloaded) existing.parameters else thisInfo.parameters
+                            funcParams[name] = FuncParamInfo(
+                                minParams = minOf(baseMin, thisInfo.minParams),
+                                maxParams = maxOf(baseMax, thisInfo.maxParams),
+                                hasRest = baseRest || thisInfo.hasRest,
+                                isOverloaded = true,
+                                parameters = firstParams,
+                            )
                             continue
                         }
                         // Look ahead in the same statement list for a sibling declaration.
@@ -29081,14 +29099,15 @@ interface DataView {
                             other !== stmt && other is FunctionDeclaration && other.name?.text == name
                         }
                         if (hasSibling) {
-                            funcParams[name] = FuncParamInfo(0, Int.MAX_VALUE, hasRest = true, isOverloaded = true)
+                            // Seed the overload group with THIS signature's arity.
+                            funcParams[name] = thisInfo.copy(isOverloaded = true)
                             continue
                         }
                         // Sole declaration — record its real param info
-                        funcParams[name] = paramInfo(stmt.parameters, isJsFile)
+                        funcParams[name] = thisInfo
                         continue
                     }
-                    if (funcParams[name]?.isOverloaded == true) continue // already marked as overloaded
+                    if (funcParams[name]?.isOverloaded == true) continue // impl of an overloaded fn — keep overload arity
                     val info = paramInfo(stmt.parameters, isJsFile)
                     funcParams[name] = info
                 }
@@ -29363,6 +29382,20 @@ interface DataView {
                             } else {
                                 emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
                             }
+                        }
+                    } else if (info != null && info.isOverloaded && expr.typeArguments.isNullOrEmpty()) {
+                        // B95 (round 80): overload-arity TS2554. Emit ONLY when the call's arg
+                        // count is outside the [min, max] arity RANGE of all overload signatures
+                        // — i.e. NO overload could match by arity. Within range, an overload may
+                        // match (type-based TS2769 handles type mismatches). No related TS6210/6211
+                        // (TypeScript omits the "argument for 'x'" hint for overload arity errors).
+                        // Skipped when explicit type args are present (those filter overloads to
+                        // generic ones, changing the applicable arity — out of scope here).
+                        val argCount = expr.arguments.size
+                        if (argCount < info.minParams) {
+                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                        } else if (!info.hasRest && argCount > info.maxParams) {
+                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
                         }
                     }
                 }
