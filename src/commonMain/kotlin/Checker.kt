@@ -1107,6 +1107,8 @@ class Checker(
         }
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
+        // 72b. Enum member initializers may not forward-reference later members (TS2651)
+        checkEnumForwardReferences()
         // 73. Check cross-file duplicate function implementation (TS2393)
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
@@ -2254,6 +2256,133 @@ class Checker(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * TS2651: an enum member initializer may not reference an enum member that is
+     * declared AFTER it (a forward reference), including members defined in other
+     * declaration blocks of the same merged enum. Fires for both `enum` and
+     * `const enum`. The members of a merged enum are ordered across all of the enum
+     * symbol's declarations (source order). A reference may take the form of a bare
+     * member identifier (`Y`), a property access on the enum name (`E.Y`), or an
+     * element access with a string-literal key (`E["Y"]`). The squiggle covers the
+     * whole reference expression. References to OTHER enums are not flagged (the
+     * leftmost name must be this enum's own name, or a bare member name of this enum).
+     */
+    private fun checkEnumForwardReferences() {
+        val orderCache = mutableMapOf<Int, Map<String, Int>>()
+        fun memberNameText(node: Node): String? = when (node) {
+            is Identifier -> node.text
+            is StringLiteralNode -> node.text
+            is NumericLiteralNode -> node.text
+            else -> null
+        }
+        // Build (and cache) the merged member-order map for an enum symbol: member
+        // name → global index across all of the symbol's EnumDeclarations (source order).
+        fun mergedOrder(sym: Symbol): Map<String, Int> = orderCache.getOrPut(sym.id) {
+            val order = mutableMapOf<String, Int>()
+            var idx = 0
+            for (d in sym.declarations) {
+                if (d !is EnumDeclaration) continue
+                for (m in d.members) {
+                    val nm = memberNameText(m.name) ?: continue
+                    if (nm !in order) order[nm] = idx
+                    idx++
+                }
+            }
+            order
+        }
+
+        // Collect (refExpr, referencedMemberName) pairs for references to members of
+        // [enumName] reachable within an initializer expression.
+        fun collectRefs(
+            expr: Expression, enumName: String, memberNames: Set<String>,
+            out: MutableList<Pair<Expression, String>>,
+        ) {
+            when (expr) {
+                is Identifier -> if (expr.text in memberNames) out.add(expr to expr.text)
+                is PropertyAccessExpression -> {
+                    val recv = expr.expression
+                    if (recv is Identifier && recv.text == enumName && expr.name.text in memberNames)
+                        out.add(expr to expr.name.text)
+                }
+                is ElementAccessExpression -> {
+                    val recv = expr.expression
+                    val key = when (val a = expr.argumentExpression) {
+                        is StringLiteralNode -> a.text
+                        is NoSubstitutionTemplateLiteralNode -> a.text
+                        else -> null
+                    }
+                    if (recv is Identifier && recv.text == enumName && key != null && key in memberNames)
+                        out.add(expr to key)
+                }
+                is BinaryExpression -> {
+                    collectRefs(expr.left, enumName, memberNames, out)
+                    collectRefs(expr.right, enumName, memberNames, out)
+                }
+                is PrefixUnaryExpression -> collectRefs(expr.operand, enumName, memberNames, out)
+                is PostfixUnaryExpression -> collectRefs(expr.operand, enumName, memberNames, out)
+                is ParenthesizedExpression -> collectRefs(expr.expression, enumName, memberNames, out)
+                is ConditionalExpression -> {
+                    collectRefs(expr.condition, enumName, memberNames, out)
+                    collectRefs(expr.whenTrue, enumName, memberNames, out)
+                    collectRefs(expr.whenFalse, enumName, memberNames, out)
+                }
+                else -> {}
+            }
+        }
+
+        fun checkEnumDecl(enumDecl: EnumDeclaration, sym: Symbol?, source: String, fileName: String) {
+            val realSym = sym ?: return
+            if (!realSym.flags.hasAny(SymbolFlags.Enum)) return
+            val order = mergedOrder(realSym)
+            if (order.isEmpty()) return
+            val memberNames = order.keys
+            for (member in enumDecl.members) {
+                val mname = memberNameText(member.name) ?: continue
+                val myIdx = order[mname] ?: continue
+                val init = member.initializer ?: continue
+                val refs = mutableListOf<Pair<Expression, String>>()
+                collectRefs(init, enumDecl.name.text, memberNames, refs)
+                for ((refExpr, refName) in refs) {
+                    val refIdx = order[refName] ?: continue
+                    if (refIdx > myIdx) {
+                        val start = refExpr.pos
+                        val length = expressionTrueEnd(refExpr) - start
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "A member initializer in a enum declaration cannot reference " +
+                                "members declared after it, including members defined in other enums.",
+                            category = DiagnosticCategory.Error, code = 2651,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = length,
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Walk top-level + namespace-nested enum declarations in each file.
+        fun walk(statements: List<Statement>, localsLookup: (String) -> Symbol?, source: String, fileName: String) {
+            for (stmt in statements) {
+                when (stmt) {
+                    is EnumDeclaration -> checkEnumDecl(stmt, localsLookup(stmt.name.text), source, fileName)
+                    is ModuleDeclaration -> {
+                        val body = stmt.body as? ModuleBlock ?: continue
+                        val nsSym = localsLookup((stmt.name as? Identifier)?.text ?: "")
+                        val inner: (String) -> Symbol? = { nm -> nsSym?.exports?.get(nm) }
+                        walk(body.statements, inner, source, fileName)
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        for (result in binderResults) {
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            walk(result.sourceFile.statements, { nm -> result.locals[nm] ?: globals[nm] }, source, fileName)
         }
     }
 
