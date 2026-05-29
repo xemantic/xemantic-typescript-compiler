@@ -987,6 +987,8 @@ class Checker(
         checkConstructorReturnTypeParam()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
+        // 56b. Check circular `import = require` / `export =` re-export cycles (TS2303)
+        checkCircularExportEqualsImportAlias()
         // 57. Check return statement outside function body (TS1108)
         checkReturnOutsideFunction()
         // 57b. Check with statements (TS1101 in strict mode, TS2410 always)
@@ -43582,6 +43584,179 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2303: Circular definition of import alias — `export =`/`require` cycle
+    // -----------------------------------------------------------------------
+    //
+    // Handles the shape `import self = require("M"); export = self;` (an
+    // ExternalModuleReference, distinct from `checkCircularImportAlias` which
+    // only handles entity-name `import X = Y.Z` references). The self-import
+    // re-exports module M; if following the `require → export = self` chain
+    // (across ambient `declare module "X"` blocks AND real file modules) loops
+    // back to a previously-visited module, the alias definition is circular.
+    //
+    // Report position (matches TypeScript): the cycle is "entered" at the
+    // module that some NON-cycle file imports (the entry). For an AMBIENT entry
+    // the error lands on the entry module's self-import; for a FILE entry it
+    // lands on the entry's predecessor in the cycle (the self-import whose
+    // `require` points back to the entry).
+
+    private class SelfExportModule(
+        val key: String,
+        val importNode: ImportEqualsDeclaration,
+        val source: String,
+        val fileName: String,
+        val nextSpec: String,
+        val contextFileName: String,
+    )
+
+    /** If [statements] (a file's top-level or an ambient module body) contains
+     *  `export = NAME` where NAME is an `import NAME = require("spec")`
+     *  declaration in the same scope, return a [SelfExportModule] describing
+     *  that re-export edge; otherwise null. */
+    private fun buildSelfExportModule(
+        statements: List<Statement>,
+        key: String,
+        fileName: String,
+        source: String,
+    ): SelfExportModule? {
+        val exportEq = statements.filterIsInstance<ExportAssignment>().firstOrNull { it.isExportEquals } ?: return null
+        val exprName = (exportEq.expression as? Identifier)?.text ?: return null
+        val imp = statements.filterIsInstance<ImportEqualsDeclaration>().firstOrNull {
+            it.name.text == exprName && it.moduleReference is ExternalModuleReference
+        } ?: return null
+        val spec = ((imp.moduleReference as ExternalModuleReference).expression as? StringLiteralNode)?.text ?: return null
+        return SelfExportModule(key, imp, source, fileName, spec, fileName)
+    }
+
+    private fun checkCircularExportEqualsImportAlias() {
+        // Collect all ambient module names (to route bare specifiers to ambient keys).
+        val ambientNames = mutableSetOf<String>()
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    ambientNames.add((stmt.name as StringLiteralNode).text)
+                }
+            }
+        }
+
+        // Collect self-export modules (file-level + ambient bodies), insertion order = declaration order.
+        val modules = LinkedHashMap<String, SelfExportModule>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            buildSelfExportModule(result.sourceFile.statements, "file:$fileName", fileName, source)?.let { modules[it.key] = it }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    val body = stmt.body as? ModuleBlock ?: continue
+                    val key = "ambient:" + (stmt.name as StringLiteralNode).text
+                    buildSelfExportModule(body.statements, key, fileName, source)?.let { modules[it.key] = it }
+                }
+            }
+        }
+        if (modules.isEmpty()) return
+
+        fun nextKey(m: SelfExportModule): String? {
+            if (m.nextSpec in ambientNames) return "ambient:" + m.nextSpec
+            val resolved = resolveModuleSpecifierRelative(m.nextSpec, m.contextFileName)
+                ?: resolveModuleSpecifier(m.nextSpec)
+            return if (resolved != null) "file:$resolved" else null
+        }
+
+        // Resolve a single `import X = require(spec)` declaration to a module key (for entry detection).
+        fun importTargetKey(imp: ImportEqualsDeclaration, contextFile: String): String? {
+            val ref = imp.moduleReference as? ExternalModuleReference ?: return null
+            val spec = (ref.expression as? StringLiteralNode)?.text ?: return null
+            if (spec in ambientNames) return "ambient:$spec"
+            val resolved = resolveModuleSpecifierRelative(spec, contextFile) ?: resolveModuleSpecifier(spec)
+            return if (resolved != null) "file:$resolved" else null
+        }
+
+        // Find, for a given cycle, the "entry" module: a cycle member imported by an
+        // `import X = require(...)` whose container is NOT in the cycle.
+        fun findEntry(cycle: Set<String>): String? {
+            for (result in binderResults) {
+                val fn = result.sourceFile.fileName
+                val containerKey = "file:$fn"
+                // file-level imports
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt is ImportEqualsDeclaration) {
+                        val tgt = importTargetKey(stmt, fn)
+                        if (tgt != null && tgt in cycle && containerKey !in cycle) return tgt
+                    }
+                    if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                        val modKey = "ambient:" + (stmt.name as StringLiteralNode).text
+                        val body = stmt.body as? ModuleBlock
+                        if (body != null) {
+                            for (inner in body.statements) {
+                                if (inner is ImportEqualsDeclaration) {
+                                    val tgt = importTargetKey(inner, fn)
+                                    if (tgt != null && tgt in cycle && modKey !in cycle) return tgt
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        val emittedCycles = mutableSetOf<Set<String>>()
+        for ((startKey, _) in modules) {
+            val path = mutableListOf<String>()
+            var cur: String? = startKey
+            while (cur != null && cur in modules) {
+                if (cur in path) {
+                    val idx = path.indexOf(cur)
+                    val cycle = path.subList(idx, path.size).toSet()
+                    if (cycle in emittedCycles) break
+                    emittedCycles.add(cycle)
+                    // Determine the entry (a cycle member imported from outside the cycle).
+                    val entry = findEntry(cycle) ?: break
+                    val reportKey = if (entry.startsWith("ambient:")) {
+                        entry
+                    } else {
+                        // FILE entry: report the predecessor (member whose next == entry).
+                        cycle.firstOrNull { k -> modules[k]?.let { nextKey(it) } == entry } ?: entry
+                    }
+                    modules[reportKey]?.let { emitTS2303ForExportEqualsCycle(it) }
+                    break
+                }
+                path.add(cur)
+                cur = nextKey(modules[cur]!!)
+            }
+        }
+    }
+
+    /** Emit TS2303 on a self-import `import NAME = require("...")`, squiggle spanning
+     *  the declaration up to the closing `)` of `require(...)` (no trailing `;`). */
+    private fun emitTS2303ForExportEqualsCycle(m: SelfExportModule) {
+        val source = m.source
+        var spanStart = m.importNode.pos
+        while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+        val refExpr = (m.importNode.moduleReference as ExternalModuleReference).expression
+        val refPos = (refExpr as? StringLiteralNode)?.pos ?: spanStart
+        val closeParen = source.indexOf(')', refPos)
+        var spanEnd = if (closeParen >= spanStart) closeParen + 1 else m.importNode.end
+        // Include a trailing `;` if it immediately follows the `require(...)` (TypeScript
+        // squiggles the whole statement including the semicolon).
+        var probe = spanEnd
+        while (probe < source.length && source[probe].let { it == ' ' || it == '\t' }) probe++
+        if (probe < source.length && source[probe] == ';') spanEnd = probe + 1
+        val length = (spanEnd - spanStart).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        diagnostics.add(Diagnostic(
+            message = "Circular definition of import alias '${m.importNode.name.text}'.",
+            category = DiagnosticCategory.Error,
+            code = 2303,
+            fileName = m.fileName,
+            line = line,
+            character = character,
+            start = spanStart,
+            length = length,
+        ))
     }
 
     // -----------------------------------------------------------------------
