@@ -699,6 +699,12 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
         }
+        // 7a'. TS7009: `new F()` where F is a plain function (no construct signature)
+        // implicitly has type 'any'. Gated on noImplicitAny/strict (TypeScript's tests
+        // set @noimplicitany explicitly — it is NOT a harness default like TS2683).
+        if (options.noImplicitAny || options.strict) {
+            checkImplicitAnyNewExpressions()
+        }
         // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
         // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
         if (!options.strictExplicitlyFalse) {
@@ -10301,6 +10307,175 @@ class Checker(
                 currentFileLocals = savedLocals
             }
         }
+    }
+
+    /**
+     * Round 79i: TS7009 — `new F()` where `F` is a plain function (it has call
+     * signatures but no construct signature, e.g. `function F() {}`) implicitly
+     * yields type `any`. Fires under noImplicitAny/strict. FP-safe: a passing
+     * noImplicitAny test that `new`s a plain function would already carry TS7009
+     * in its baseline (TypeScript always emits it), so adding the check can only
+     * flip-or-be-neutral. Classes (which carry a construct signature) and
+     * `any`-cast targets are excluded by the pure-`Function`-symbol gate.
+     */
+    private fun checkImplicitAnyNewExpressions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkNewImplicitAnyStmts(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
+        }
+    }
+
+    private fun walkNewImplicitAnyStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) walkNewImplicitAnyStmt(stmt, source, fileName)
+    }
+
+    private fun walkNewImplicitAnyStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is Block -> walkNewImplicitAnyStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
+                walkNewImplicitAnyStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkNewImplicitAnyStmt(it, source, fileName) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    d.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+                }
+                (stmt.initializer as? Expression)?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+                stmt.condition?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+                walkNewImplicitAnyStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
+            is ForOfStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
+            is WhileStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
+            is DoStatement -> { walkNewImplicitAnyStmt(stmt.statement, source, fileName); walkNewImplicitAnyInExpr(stmt.expression, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is ClassDeclaration -> for (member in stmt.members) walkNewImplicitAnyClassMember(member, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is TryStatement -> {
+                walkNewImplicitAnyStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.statements?.let { walkNewImplicitAnyStmts(it, source, fileName) }
+                stmt.finallyBlock?.statements?.let { walkNewImplicitAnyStmts(it, source, fileName) }
+            }
+            is SwitchStatement -> {
+                walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> { walkNewImplicitAnyInExpr(c.expression, source, fileName); walkNewImplicitAnyStmts(c.statements, source, fileName) }
+                    is DefaultClause -> walkNewImplicitAnyStmts(c.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is LabeledStatement -> walkNewImplicitAnyStmt(stmt.statement, source, fileName)
+            is ExpressionStatement -> walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            is ExportAssignment -> stmt.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkNewImplicitAnyClassMember(member: ClassElement, source: String, fileName: String) {
+        when (member) {
+            is MethodDeclaration -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is Constructor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is GetAccessor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is SetAccessor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+            is PropertyDeclaration -> member.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkNewImplicitAnyInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is NewExpression -> {
+                checkNewExprImplicitAny(expr, source, fileName)
+                walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { walkNewImplicitAnyInExpr(it, source, fileName) }
+            }
+            is CallExpression -> {
+                walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { walkNewImplicitAnyInExpr(it, source, fileName) }
+            }
+            is BinaryExpression -> { walkNewImplicitAnyInExpr(expr.left, source, fileName); walkNewImplicitAnyInExpr(expr.right, source, fileName) }
+            is ParenthesizedExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is PropertyAccessExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> { walkNewImplicitAnyInExpr(expr.expression, source, fileName); walkNewImplicitAnyInExpr(expr.argumentExpression, source, fileName) }
+            is ConditionalExpression -> {
+                walkNewImplicitAnyInExpr(expr.condition, source, fileName)
+                walkNewImplicitAnyInExpr(expr.whenTrue, source, fileName)
+                walkNewImplicitAnyInExpr(expr.whenFalse, source, fileName)
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkNewImplicitAnyInExpr(e, source, fileName)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkNewImplicitAnyInExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkNewImplicitAnyInExpr(p.expression, source, fileName)
+                is MethodDeclaration -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+                is GetAccessor -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+                is SetAccessor -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+            is SpreadElement -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
+            is VoidExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkNewImplicitAnyInExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkNewImplicitAnyInExpr(expr.operand, source, fileName)
+            is TemplateExpression -> for (span in expr.templateSpans) walkNewImplicitAnyInExpr(span.expression, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkNewImplicitAnyInExpr(e, source, fileName)
+            is ArrowFunction -> when (val b = expr.body) {
+                is Block -> walkNewImplicitAnyStmts(b.statements, source, fileName)
+                is Expression -> walkNewImplicitAnyInExpr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> walkNewImplicitAnyStmts(expr.body.statements, source, fileName)
+            is AsExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkNewExprImplicitAny(expr: NewExpression, source: String, fileName: String) {
+        // `new <T>Expr()` (leading type args) is a different (often parse-error) form
+        // than a plain `new F()` — TypeScript parses `new <any>Test2()` as a comparison,
+        // emitting TS2365/TS1109/TS2693 rather than TS7009. Skip it to avoid a spurious
+        // TS7009 on the identifier target our parser recovers.
+        if (!expr.leadingTypeArguments.isNullOrEmpty()) return
+        val callee = expr.expression
+        if (callee !is Identifier) return
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
+        // Only a pure plain-function target lacks a construct signature. Classes
+        // (construct sig), interfaces/vars with `new()` types, and `any` casts are
+        // excluded — those either carry a construct signature or aren't function symbols.
+        if (!sym.flags.hasAny(SymbolFlags.Function)) return
+        if (sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) return
+        if (sym.declarations.any { it is ClassDeclaration }) return
+        val start = expr.pos
+        val length = (expressionTrueEnd(expr) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'new' expression, whose target lacks a construct signature, implicitly has an 'any' type.",
+            category = DiagnosticCategory.Error,
+            code = 7009,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /**
