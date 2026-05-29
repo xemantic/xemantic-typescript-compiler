@@ -1121,6 +1121,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkModuleAugmentationOfNonModuleEntity()
         }
+        // 73f. Check cross-file merged-interface member conflicts (TS2300 + TS6203, or
+        //      collapsed TS6200 + TS6201 when >= 8 names conflict)
+        if (binderResults.size > 1) {
+            checkCrossFileInterfaceMemberConflicts()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -77966,6 +77971,211 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * B92: Cross-file duplicate-identifier conflicts for MERGED interface members.
+     *
+     * When the same interface name is declared in two different files that share a
+     * scope — global script scope, a `declare global { }` block, or a
+     * `declare module "X" { }` block — and a member appears as a PROPERTY in one
+     * file and a METHOD in another, the merged interface has a duplicate-identifier
+     * conflict (property-vs-method is always a hard conflict in TypeScript).
+     *
+     * TypeScript amalgamates these per ordered file-pair: when FEWER THAN 8 member
+     * names conflict, it emits per-member TS2300 "Duplicate identifier 'X'." with a
+     * related TS6203 "'X' was also declared here." pointing to the other file's
+     * member. When 8 OR MORE names conflict, it COLLAPSES to a single TS6200 per
+     * file ("Definitions of the following identifiers conflict ...: a, b, c") at the
+     * file's first non-trivia token, with a related TS6201 "Conflicts are in this
+     * file." pointing at the other file's first token. (TypeScript's threshold is
+     * `conflictingSymbols.size < 8` → per-member, else collapsed.)
+     *
+     * Gate is narrow (property-vs-method, cross-file, same interface name in a shared
+     * scope) so the FP surface is tiny: such a pairing is always a genuine error.
+     */
+    private fun checkCrossFileInterfaceMemberConflicts() {
+        // A merged-interface member declaration site.
+        data class MemberDecl(
+            val memberName: String,
+            val nameNode: Node,   // member name node (for the squiggle)
+            val isMethod: Boolean,
+            val fileName: String,
+            val source: String,
+        )
+        // scopeKey -> (interfaceName -> member decls across files). scopeKey is
+        // "global" for script/`declare global` interfaces, "module:<spec>" for
+        // ambient-module interfaces. Namespace-scoped interfaces are excluded
+        // (they do not merge across files).
+        val groups = mutableMapOf<String, MutableMap<String, MutableList<MemberDecl>>>()
+        val fileSources = mutableMapOf<String, String>()
+
+        fun addInterface(scopeKey: String, iface: InterfaceDeclaration, fileName: String, source: String) {
+            val list = groups.getOrPut(scopeKey) { mutableMapOf() }
+                .getOrPut(iface.name.text) { mutableListOf() }
+            for (member in iface.members) {
+                val (nameNode, isMethod) = when (member) {
+                    is PropertyDeclaration -> member.name to false
+                    is MethodDeclaration -> member.name to true
+                    else -> continue
+                }
+                val text = getMemberNameText(nameNode) ?: continue
+                if (text.isEmpty() || text == "new") continue
+                list.add(MemberDecl(text, nameNode, isMethod, fileName, source))
+            }
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            fileSources[fileName] = source
+            val isModule = isModuleFile(result.sourceFile.statements)
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is InterfaceDeclaration ->
+                        // A top-level interface merges into the global scope only in
+                        // script files; in module files it is module-local.
+                        if (!isModule) addInterface("global", stmt, fileName, source)
+                    is ModuleDeclaration -> {
+                        val body = stmt.body as? ModuleBlock ?: continue
+                        val nm = stmt.name
+                        when {
+                            nm is Identifier && nm.text == "global" ->
+                                for (inner in body.statements)
+                                    if (inner is InterfaceDeclaration) addInterface("global", inner, fileName, source)
+                            nm is StringLiteralNode ->
+                                for (inner in body.statements)
+                                    if (inner is InterfaceDeclaration)
+                                        addInterface("module:" + nm.text, inner, fileName, source)
+                            else -> {}
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        // Amalgamate conflicting names per ordered file-pair.
+        class PairConflict(val firstFile: String, val secondFile: String) {
+            val names = mutableListOf<String>()
+            val firstLocs = mutableMapOf<String, MutableList<MemberDecl>>()
+            val secondLocs = mutableMapOf<String, MutableList<MemberDecl>>()
+        }
+        val amalgam = mutableMapOf<String, PairConflict>()
+
+        for ((_, byIface) in groups) {
+            for ((_, members) in byIface) {
+                val byName = members.groupBy { it.memberName }
+                for ((name, decls) in byName) {
+                    val distinctFiles = decls.map { it.fileName }.distinct()
+                    if (distinctFiles.size != 2) continue   // only the common 2-file case
+                    // Cross-file property-vs-method conflict: a property in one file
+                    // and a method in another (different) file.
+                    val propFiles = decls.filter { !it.isMethod }.map { it.fileName }.toSet()
+                    val methFiles = decls.filter { it.isMethod }.map { it.fileName }.toSet()
+                    val crossConflict = propFiles.any { pf -> methFiles.any { mf -> pf != mf } }
+                    if (!crossConflict) continue
+                    val (fA, fB) = distinctFiles.sorted()
+                    val pc = amalgam.getOrPut("$fA|$fB") { PairConflict(fA, fB) }
+                    if (name !in pc.names) pc.names.add(name)
+                    pc.firstLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fA })
+                    pc.secondLocs.getOrPut(name) { mutableListOf() }.addAll(decls.filter { it.fileName == fB })
+                }
+            }
+        }
+
+        fun emit2300(node: Node, name: String, file: String, src: String, related: List<MemberDecl>) {
+            val (line, ch) = getLineAndCharacterOfPosition(src, node.pos)
+            val rel = related.map { other ->
+                val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
+                Diagnostic(
+                    message = "'$name' was also declared here.",
+                    category = DiagnosticCategory.Message, code = 6203,
+                    fileName = other.fileName, line = ol, character = oc,
+                    start = other.nameNode.pos, length = other.memberName.length,
+                )
+            }
+            diagnostics.add(Diagnostic(
+                message = "Duplicate identifier '$name'.",
+                category = DiagnosticCategory.Error, code = 2300,
+                fileName = file, line = line, character = ch,
+                start = node.pos, length = name.length,
+                relatedInformation = rel,
+            ))
+        }
+
+        fun emit6200(thisFile: String, otherFile: String, list: String) {
+            val thisSrc = fileSources[thisFile] ?: return
+            val otherSrc = fileSources[otherFile] ?: return
+            val (tStart, tLen) = firstTokenSpanOfFile(thisSrc)
+            val (oStart, oLen) = firstTokenSpanOfFile(otherSrc)
+            val (tLine, tCh) = getLineAndCharacterOfPosition(thisSrc, tStart)
+            val (oLine, oCh) = getLineAndCharacterOfPosition(otherSrc, oStart)
+            diagnostics.add(Diagnostic(
+                message = "Definitions of the following identifiers conflict with those in another file: $list",
+                category = DiagnosticCategory.Error, code = 6200,
+                fileName = thisFile, line = tLine, character = tCh, start = tStart, length = tLen,
+                relatedInformation = listOf(Diagnostic(
+                    message = "Conflicts are in this file.",
+                    category = DiagnosticCategory.Message, code = 6201,
+                    fileName = otherFile, line = oLine, character = oCh, start = oStart, length = oLen,
+                )),
+            ))
+        }
+
+        for ((_, pc) in amalgam) {
+            if (pc.names.size < 8) {
+                for (name in pc.names) {
+                    val firstNodes = pc.firstLocs[name] ?: emptyList()
+                    val secondNodes = pc.secondLocs[name] ?: emptyList()
+                    for (fn in firstNodes) emit2300(fn.nameNode, name, fn.fileName, fn.source, secondNodes)
+                    for (sn in secondNodes) emit2300(sn.nameNode, name, sn.fileName, sn.source, firstNodes)
+                }
+            } else {
+                val list = pc.names.joinToString(", ")
+                emit6200(pc.firstFile, pc.secondFile, list)
+                emit6200(pc.secondFile, pc.firstFile, list)
+            }
+        }
+    }
+
+    /**
+     * Span of the first non-trivia token in [source] (start position + length).
+     * Mirrors TypeScript's `getSpanOfTokenAtPosition(sourceFile, skipTrivia(text, 0))`
+     * used when a diagnostic is reported on a whole SourceFile node (e.g. TS6200).
+     * Skips whitespace, line comments (`//`, `///`) and block comments, then reads
+     * the leading identifier/keyword run (e.g. `interface`, `class`, `declare`).
+     */
+    private fun firstTokenSpanOfFile(source: String): Pair<Int, Int> {
+        var i = 0
+        val n = source.length
+        loop@ while (i < n) {
+            when (source[i]) {
+                ' ', '\t', '\r', '\n', '\u000B', '\u000C', '\u00A0', '\uFEFF' -> i++
+                '/' -> when {
+                    i + 1 < n && source[i + 1] == '/' -> {
+                        i += 2
+                        while (i < n && source[i] != '\n' && source[i] != '\r') i++
+                    }
+                    i + 1 < n && source[i + 1] == '*' -> {
+                        i += 2
+                        while (i + 1 < n && !(source[i] == '*' && source[i + 1] == '/')) i++
+                        i = (i + 2).coerceAtMost(n)
+                    }
+                    else -> break@loop
+                }
+                else -> break@loop
+            }
+        }
+        val start = i
+        if (i >= n) return start to 0
+        val c0 = source[i]
+        if (c0.isLetter() || c0 == '_' || c0 == '$') {
+            var j = i + 1
+            while (j < n && (source[j].isLetterOrDigit() || source[j] == '_' || source[j] == '$')) j++
+            return start to (j - start)
+        }
+        return start to 1
     }
 
     /**
