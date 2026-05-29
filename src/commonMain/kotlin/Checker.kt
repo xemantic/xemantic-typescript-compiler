@@ -1111,6 +1111,9 @@ class Checker(
         checkEnumForwardReferences()
         // 72c. Setter bodies may not return a value (TS2408)
         checkSetterReturns()
+        // 72d. A class's own name used in a direct member's computed property name is a
+        //      TDZ use-before-declaration (TS2449)
+        checkClassNameInOwnComputedMemberNames()
         // 73. Check cross-file duplicate function implementation (TS2393)
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
@@ -2532,6 +2535,128 @@ class Checker(
             }
             is FunctionExpression -> findSettersInStatements(e.body.statements, source, fileName)
             is TemplateExpression -> e.templateSpans.forEach { findSettersInExpr(it.expression, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /**
+     * TS2449: a class's OWN name used (as a value) in a DIRECT member's computed
+     * property name `[A.x]` / `[A]` is a temporal-dead-zone use-before-declaration —
+     * the class binding is not yet initialized while its member names are evaluated.
+     * Squiggle = the class-name identifier; reuses [emitTS2449] (with TS2728 "declared
+     * here"). Only direct-member computed names are flagged (a reference inside a member
+     * BODY runs after the class is declared and is legal). Reuses the setter-traversal's
+     * class-finding ([findClassesForComputed]) to reach nested classes.
+     */
+    private fun checkClassNameInOwnComputedMemberNames() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            findClassesForComputed(result.sourceFile.statements, result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun leftmostIdentifierOf(e: Expression): Identifier? = when (e) {
+        is Identifier -> e
+        is PropertyAccessExpression -> leftmostIdentifierOf(e.expression)
+        is ElementAccessExpression -> leftmostIdentifierOf(e.expression)
+        is CallExpression -> leftmostIdentifierOf(e.expression)
+        is NonNullExpression -> leftmostIdentifierOf(e.expression)
+        is ParenthesizedExpression -> leftmostIdentifierOf(e.expression)
+        else -> null
+    }
+
+    private fun checkComputedSelfRefMembers(className: String, declPos: Int, members: List<ClassElement>, source: String, fileName: String) {
+        for (m in members) {
+            val nameNode: NameNode? = when (m) {
+                is PropertyDeclaration -> m.name
+                is MethodDeclaration -> m.name
+                is GetAccessor -> m.name
+                is SetAccessor -> m.name
+                else -> null
+            }
+            if (nameNode is ComputedPropertyName) {
+                val lead = leftmostIdentifierOf(nameNode.expression)
+                if (lead != null && lead.text == className) {
+                    emitTS2449(lead, declPos, className, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun findClassesForComputed(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) findClassesForComputedInStatement(s, source, fileName)
+    }
+
+    private fun findClassesForComputedInStatement(s: Statement, source: String, fileName: String) {
+        when (s) {
+            is ClassDeclaration -> {
+                s.name?.let { checkComputedSelfRefMembers(it.text, it.pos, s.members, source, fileName) }
+                findClassesForComputedInMembers(s.members, source, fileName)
+            }
+            is FunctionDeclaration -> s.body?.let { findClassesForComputed(it.statements, source, fileName) }
+            is ModuleDeclaration -> when (val b = s.body) {
+                is ModuleBlock -> findClassesForComputed(b.statements, source, fileName)
+                is ModuleDeclaration -> findClassesForComputedInStatement(b, source, fileName)
+                else -> {}
+            }
+            is VariableStatement -> for (d in s.declarationList.declarations)
+                d.initializer?.let { findClassesForComputedInExpr(it, source, fileName) }
+            is ExpressionStatement -> findClassesForComputedInExpr(s.expression, source, fileName)
+            is ReturnStatement -> s.expression?.let { findClassesForComputedInExpr(it, source, fileName) }
+            is Block -> findClassesForComputed(s.statements, source, fileName)
+            is IfStatement -> {
+                findClassesForComputedInStatement(s.thenStatement, source, fileName)
+                s.elseStatement?.let { findClassesForComputedInStatement(it, source, fileName) }
+            }
+            is ForStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            is ForInStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            is ForOfStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            is WhileStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            is DoStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            is TryStatement -> {
+                findClassesForComputedInStatement(s.tryBlock, source, fileName)
+                s.catchClause?.block?.let { findClassesForComputedInStatement(it, source, fileName) }
+                s.finallyBlock?.let { findClassesForComputedInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> findClassesForComputedInStatement(s.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun findClassesForComputedInMembers(members: List<ClassElement>, source: String, fileName: String) {
+        for (m in members) when (m) {
+            is MethodDeclaration -> m.body?.let { findClassesForComputed(it.statements, source, fileName) }
+            is Constructor -> m.body?.let { findClassesForComputed(it.statements, source, fileName) }
+            is GetAccessor -> m.body?.let { findClassesForComputed(it.statements, source, fileName) }
+            is SetAccessor -> m.body?.let { findClassesForComputed(it.statements, source, fileName) }
+            is PropertyDeclaration -> m.initializer?.let { findClassesForComputedInExpr(it, source, fileName) }
+            is ClassStaticBlockDeclaration -> findClassesForComputed(m.body.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun findClassesForComputedInExpr(e: Expression, source: String, fileName: String) {
+        when (e) {
+            is ClassExpression -> {
+                e.name?.let { checkComputedSelfRefMembers(it.text, it.pos, e.members, source, fileName) }
+                findClassesForComputedInMembers(e.members, source, fileName)
+            }
+            is ParenthesizedExpression -> findClassesForComputedInExpr(e.expression, source, fileName)
+            is BinaryExpression -> { findClassesForComputedInExpr(e.left, source, fileName); findClassesForComputedInExpr(e.right, source, fileName) }
+            is CallExpression -> { findClassesForComputedInExpr(e.expression, source, fileName); e.arguments.forEach { findClassesForComputedInExpr(it, source, fileName) } }
+            is NewExpression -> { findClassesForComputedInExpr(e.expression, source, fileName); e.arguments?.forEach { findClassesForComputedInExpr(it, source, fileName) } }
+            is ArrayLiteralExpression -> e.elements.forEach { findClassesForComputedInExpr(it, source, fileName) }
+            is ConditionalExpression -> { findClassesForComputedInExpr(e.condition, source, fileName); findClassesForComputedInExpr(e.whenTrue, source, fileName); findClassesForComputedInExpr(e.whenFalse, source, fileName) }
+            is ArrowFunction -> when (val b = e.body) {
+                is Block -> findClassesForComputed(b.statements, source, fileName)
+                is Expression -> findClassesForComputedInExpr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> findClassesForComputed(e.body.statements, source, fileName)
+            is AsExpression -> findClassesForComputedInExpr(e.expression, source, fileName)
+            is NonNullExpression -> findClassesForComputedInExpr(e.expression, source, fileName)
+            is SpreadElement -> findClassesForComputedInExpr(e.expression, source, fileName)
             else -> {}
         }
     }
