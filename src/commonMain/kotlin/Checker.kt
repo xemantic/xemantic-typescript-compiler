@@ -79647,6 +79647,12 @@ interface DataView {
             // conflict regardless of the imported symbol's kind, distinct from the type-only-vs-type-only
             // case handled by `isExportedNameTypeOnly`.
             val typeAliasNames = mutableSetOf<String>()
+            // Local value-declaration names that a NAMED import cannot share (function /
+            // class / enum / namespace). A named `import { X }` does not declaration-merge
+            // with a local function/class/enum/namespace of the same name → TS2440. (This is
+            // distinct from `mergeableNames`, which exists to AVOID conflicting with an
+            // import-equals INTERNAL alias.)
+            val namedImportConflictNames = mutableSetOf<String>()
             for (stmt in stmts) {
                 when (stmt) {
                     is VariableStatement -> {
@@ -79655,9 +79661,10 @@ interface DataView {
                             varNames.add(name)
                         }
                     }
-                    is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
-                    is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text) }
-                    is EnumDeclaration -> mergeableNames.add(stmt.name.text)
+                    is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text) }
+                    is EnumDeclaration -> { mergeableNames.add(stmt.name.text); namedImportConflictNames.add(stmt.name.text) }
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let { namedImportConflictNames.add(it.text) }
                     is TypeAliasDeclaration -> {
                         typeOnlyNames.add(stmt.name.text)
                         typeAliasNames.add(stmt.name.text)
@@ -79812,6 +79819,30 @@ interface DataView {
                                 // declaration merging. Mirrors TS2440 fired in this exact shape (e.g.
                                 // `import {E} from "./f1"; type E = E;` where f1 re-exports a value).
                                 if (localAlias in typeAliasNames) {
+                                    val startNode = element.propertyName ?: element.name
+                                    val startPos = startNode.pos
+                                    val spanLen = if (element.propertyName != null) {
+                                        element.name.pos + element.name.text.length - startPos
+                                    } else {
+                                        localAlias.length
+                                    }
+                                    val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Import declaration conflicts with local declaration of '$localAlias'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2440,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = startPos,
+                                        length = spanLen,
+                                    ))
+                                    continue
+                                }
+                                // Named import of a value name conflicting with a local
+                                // function / class / enum / namespace declaration → TS2440
+                                // (these do not declaration-merge with a named import).
+                                if (localAlias in namedImportConflictNames) {
                                     val startNode = element.propertyName ?: element.name
                                     val startPos = startNode.pos
                                     val spanLen = if (element.propertyName != null) {
