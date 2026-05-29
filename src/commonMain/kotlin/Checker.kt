@@ -62493,17 +62493,17 @@ interface DataView {
         currentCheckFileName = null
     }
 
-    private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String) {
+    private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String, enclosingNs: List<Symbol> = emptyList()) {
         when (stmt) {
             is ClassDeclaration -> {
-                checkClassPropertyOverrides(stmt, source, fileName)
+                checkClassPropertyOverrides(stmt, source, fileName, enclosingNs)
                 // Recurse into nested class declarations in member bodies
                 for (member in stmt.members) {
                     when (member) {
-                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is Constructor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is GetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is SetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
                         else -> {}
                     }
                 }
@@ -62511,48 +62511,57 @@ interface DataView {
             is ModuleDeclaration -> {
                 val body = stmt.body
                 if (body is ModuleBlock) {
-                    for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                    // Track the enclosing namespace so heritage-base names declared inside
+                    // it shadow same-named globals (see checkClassPropertyOverrides).
+                    val nameNode = stmt.name
+                    val moduleSymbol = if (nameNode is Identifier && ModifierFlag.Declare !in stmt.modifiers) {
+                        if (enclosingNs.isNotEmpty()) enclosingNs.last().exports?.get(nameNode.text)
+                        else currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+                    } else null
+                    val childNs = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module))
+                        enclosingNs + moduleSymbol else enclosingNs
+                    for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName, childNs)
                 }
             }
-            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-            is Block -> for (s in stmt.statements) checkPropertyOverrideInStatement(s, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+            is Block -> for (s in stmt.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
             is IfStatement -> {
-                checkPropertyOverrideInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkPropertyOverrideInStatement(it, source, fileName) }
+                checkPropertyOverrideInStatement(stmt.thenStatement, source, fileName, enclosingNs)
+                stmt.elseStatement?.let { checkPropertyOverrideInStatement(it, source, fileName, enclosingNs) }
             }
-            is ForStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is ForStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
+            is ForInStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
+            is ForOfStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
+            is WhileStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
+            is DoStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
             is SwitchStatement -> {
                 for (clause in stmt.caseBlock) {
                     when (clause) {
-                        is CaseClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName)
-                        is DefaultClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName)
+                        is CaseClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
+                        is DefaultClause -> for (s in clause.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
                         else -> {}
                     }
                 }
             }
             is TryStatement -> {
-                for (s in stmt.tryBlock.statements) checkPropertyOverrideInStatement(s, source, fileName)
-                stmt.catchClause?.block?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName) }
-                stmt.finallyBlock?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName) }
+                for (s in stmt.tryBlock.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
+                stmt.catchClause?.block?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName, enclosingNs) }
+                stmt.finallyBlock?.statements?.forEach { checkPropertyOverrideInStatement(it, source, fileName, enclosingNs) }
             }
-            is LabeledStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName)
+            is LabeledStatement -> checkPropertyOverrideInStatement(stmt.statement, source, fileName, enclosingNs)
             // round 44 iter1: walk ExpressionStatement / ReturnStatement / VariableStatement
             // initializers so ClassExpression nested in arrow/function bodies is reached for
             // TS2416 override checks.
-            is ExpressionStatement -> checkPropertyOverrideInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkPropertyOverrideInExpr(it, source, fileName) }
+            is ExpressionStatement -> checkPropertyOverrideInExpr(stmt.expression, source, fileName, enclosingNs)
+            is ReturnStatement -> stmt.expression?.let { checkPropertyOverrideInExpr(it, source, fileName, enclosingNs) }
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkPropertyOverrideInExpr(it, source, fileName) }
+                d.initializer?.let { checkPropertyOverrideInExpr(it, source, fileName, enclosingNs) }
             }
             else -> {}
         }
     }
 
-    private fun checkPropertyOverrideInExpr(expr: Expression, source: String, fileName: String) {
+    private fun checkPropertyOverrideInExpr(expr: Expression, source: String, fileName: String, enclosingNs: List<Symbol> = emptyList()) {
         when (expr) {
             is ClassExpression -> {
                 // Build a synthetic ClassDeclaration check by inlining the logic.
@@ -62561,26 +62570,26 @@ interface DataView {
                 // Recurse into nested member bodies.
                 for (member in expr.members) {
                     when (member) {
-                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is Constructor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is GetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is SetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName) }
-                        is PropertyDeclaration -> member.initializer?.let { checkPropertyOverrideInExpr(it, source, fileName) }
+                        is MethodDeclaration -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is Constructor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is GetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is SetAccessor -> member.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
+                        is PropertyDeclaration -> member.initializer?.let { checkPropertyOverrideInExpr(it, source, fileName, enclosingNs) }
                         else -> {}
                     }
                 }
             }
             is ArrowFunction -> when (val body = expr.body) {
-                is Block -> for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName)
-                is Expression -> checkPropertyOverrideInExpr(body, source, fileName)
+                is Block -> for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
+                is Expression -> checkPropertyOverrideInExpr(body, source, fileName, enclosingNs)
                 else -> {}
             }
-            is FunctionExpression -> for (s in expr.body.statements) checkPropertyOverrideInStatement(s, source, fileName)
-            is ParenthesizedExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName)
+            is FunctionExpression -> for (s in expr.body.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs)
+            is ParenthesizedExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
+            is AsExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
+            is TypeAssertionExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
+            is SatisfiesExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
+            is NonNullExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
             else -> {}
         }
     }
@@ -62595,7 +62604,7 @@ interface DataView {
         // (Out of scope for this iteration — only the recursion is the value here.)
     }
 
-    private fun checkClassPropertyOverrides(classDecl: ClassDeclaration, source: String, fileName: String) {
+    private fun checkClassPropertyOverrides(classDecl: ClassDeclaration, source: String, fileName: String, enclosingNs: List<Symbol> = emptyList()) {
         val heritageClauses = classDecl.heritageClauses ?: return
         val rawClassName = classDecl.name?.text ?: return
         val classTypeParams = classDecl.typeParameters
@@ -62626,13 +62635,36 @@ interface DataView {
 
         for (clause in heritageClauses) {
             for (typeExpr in clause.types) {
-                val baseName = when (val tn = typeExpr.expression) {
-                    is Identifier -> tn.text
-                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                val tnExpr = typeExpr.expression
+                val baseName = when (tnExpr) {
+                    is Identifier -> tnExpr.text
+                    is PropertyAccessExpression -> (tnExpr.name as? Identifier)?.text
                     else -> null
                 } ?: continue
 
-                val baseSymbol = globals[baseName] ?: continue
+                // Resolve the heritage base name with namespace awareness: a class
+                // declared inside `namespace M` whose base name is also declared in M
+                // must bind to M's member, not the global of the same name (e.g.
+                // `namespace M { interface I1 {item:string} class C implements I1 {...} }`
+                // — C's base is M.I1, not the outer `interface I1 {item:number}`). Bare
+                // names consult the enclosing-namespace chain innermost-first; qualified
+                // names (`M2.M3.I1`) resolve through the value-position dotted-name resolver.
+                // Falls back to `globals[baseName]` (prior behavior) when not shadowed.
+                val baseSymbol = run {
+                    when (tnExpr) {
+                        is Identifier -> {
+                            for (ns in enclosingNs.asReversed()) {
+                                val s = ns.exports?.get(tnExpr.text)
+                                if (s != null && s.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Class)) {
+                                    return@run s
+                                }
+                            }
+                            globals[tnExpr.text]
+                        }
+                        is PropertyAccessExpression -> resolveQualifiedValueSymbol(tnExpr) ?: globals[baseName]
+                        else -> globals[baseName]
+                    }
+                } ?: continue
                 val baseTypeRawOriginal = getDeclaredTypeOfSymbol(baseSymbol)
                 // 17.50: For `class C implements Wrapper` where `type Wrapper = Foo & Bar`
                 // (Type.Intersection of class/interface types), build a synthetic merged
