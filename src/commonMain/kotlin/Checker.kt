@@ -31651,6 +31651,8 @@ interface DataView {
                                 if (member.body == null) {
                                     checkParamPropsInParams(member.parameters, source, fileName)
                                 }
+                                // TS1187: parameter property declared with a binding pattern
+                                checkBindingPatternParamProperties(member.parameters, source, fileName)
                                 // TS1090: invalid modifiers checked on ALL constructors (with or without body)
                                 checkInvalidParameterModifiers(member.parameters, source, fileName)
                                 // Check for param props in parameter type annotations
@@ -31730,6 +31732,7 @@ interface DataView {
                 }
                 is Constructor -> {
                     // Constructor param-props are legitimate; only check non-param-props
+                    checkBindingPatternParamProperties(m.parameters, source, fileName)
                     m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
                 }
                 is GetAccessor -> m.body?.let { walkForParameterProperties(it.statements, source, fileName) }
@@ -31902,6 +31905,36 @@ interface DataView {
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * TS1187: a parameter property (a constructor parameter carrying an accessibility
+     * modifier — public/private/protected/readonly/override) may not be declared using
+     * an object/array binding pattern. The squiggle spans the whole parameter (modifier
+     * through type annotation), mirroring [checkParamPropsInParams]'s span computation.
+     */
+    private fun checkBindingPatternParamProperties(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            if (!param.modifiers.any { isParameterPropertyModifier(it) }) continue
+            val name = param.name
+            if (name !is ObjectBindingPattern && name !is ArrayBindingPattern) continue
+            var spanStart = param.pos
+            while (spanStart < source.length &&
+                source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+            val rawEnd = param.initializer?.end ?: param.type?.end ?: param.name.end
+            var contentEnd = rawEnd
+            while (contentEnd > spanStart && contentEnd <= source.length &&
+                source[contentEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
+                contentEnd--
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "A parameter property may not be declared using a binding pattern.",
+                category = DiagnosticCategory.Error, code = 1187,
+                fileName = fileName, line = line, character = character,
+                start = spanStart, length = contentEnd - spanStart,
+            ))
         }
     }
 
