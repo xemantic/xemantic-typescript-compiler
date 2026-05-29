@@ -725,6 +725,20 @@ fun formatErrorBaseline(
                     +"Found $errorCount errors in the same file, starting at: ${firstDiag.fileName}\u001b[90m:${firstDiag.line}\u001b[0m\r\n"
                 } else {
                     +"Found $errorCount errors in ${distinctFiles.size} files.\r\n"
+                    // Pretty per-file summary table (TypeScript appends this when errors
+                    // span multiple files). Count column is right-aligned to width 6
+                    // (matching the "Errors" header). Note: the table lines use LF only,
+                    // while the summary lines above use CRLF — matches TS output exactly.
+                    val byFile = LinkedHashMap<String, MutableList<Diagnostic>>()
+                    for (d in sorted) {
+                        val fn = d.fileName ?: continue
+                        byFile.getOrPut(fn) { mutableListOf() }.add(d)
+                    }
+                    +"\r\n"
+                    +"Errors  Files\n"
+                    for ((fn, ds) in byFile) {
+                        +"${ds.size.toString().padStart(6)}  $fn\u001b[90m:${ds.first().line}\u001b[0m\n"
+                    }
                 }
             }
         }
