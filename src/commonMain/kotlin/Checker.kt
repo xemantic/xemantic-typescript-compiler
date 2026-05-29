@@ -355,6 +355,12 @@ class Checker(
      *  on exit. ZERO consumers/producers in this substep — purely additive. */
     private var currentInferenceMapper: Map<Type.TypeParam, Type>? = null
 
+    /** B93: names whose cross-file block-scoped VALUE-space conflict is emitted by the
+     *  unified [checkCrossFileIdentifierConflicts] (because the name also has a class or
+     *  type-alias declaration). [checkCrossFileBlockScopedDuplicates] (73b) skips these
+     *  to avoid double-emitting the TS2451. Populated just before 73b runs. */
+    private val crossFileIdentifierHandledBlockNames = mutableSetOf<String>()
+
     /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
      *  type's value type recursively references another mapped type / generic alias
      *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
@@ -1104,6 +1110,13 @@ class Checker(
         // 73. Check cross-file duplicate function implementation (TS2393)
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
+        }
+        // 73a2. Unified cross-file identifier conflicts mixing class / type-alias with
+        //       const/let (and cross-file type-alias conflicts) — hub model TS6203/TS6204.
+        //       Runs BEFORE 73b so it can claim block-scoped names that also have a
+        //       class/type-alias declaration (73b then skips them).
+        if (binderResults.size > 1) {
+            checkCrossFileIdentifierConflicts()
         }
         // 73b. Check cross-file block-scoped variable redeclarations (TS2451)
         if (binderResults.size > 1) {
@@ -77795,6 +77808,159 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
+    // TS2300 / TS2451 cross-file: unified identifier conflicts (B93)
+    // -----------------------------------------------------------------------
+
+    /**
+     * B93: Unified cross-file duplicate-identifier conflicts for top-level declarations
+     * in script (non-module) files that MIX a CLASS / TYPE-ALIAS with CONST/LET (or have
+     * multiple type-aliases). These are the cases the per-kind checkers miss:
+     *  - [checkCrossFileBlockScopedDuplicates] (73b) handles pure const/let/var but not a
+     *    class sharing the name, and emits no TS6204 follow-on for 3+ files.
+     *  - [checkCrossFileClassConflicts] (73g) handles pure class-vs-class only.
+     *  - No checker handled cross-file type-alias conflicts at all.
+     *
+     * TypeScript reports these PER SPACE (value-space / type-space) with a HUB model: the
+     * FIRST-processed declaration occupying the conflicting space is the hub; its
+     * diagnostic accumulates a related TS6203 (first other) then TS6204 (subsequent
+     * others), and each other declaration points back at the hub (TS6203). The code is
+     * TS2451 when any conflicting value-space decl is block-scoped (const/let), else
+     * TS2300; type-space conflicts are always TS2300. (This mirrors TypeScript's
+     * `mergeSymbol` amalgamation where the first-merged file's declaration stays the
+     * persistent target and `lookupOrIssueError` dedup accumulates the related infos.)
+     *
+     * Gate is narrow to keep the FP surface minimal:
+     *  - every declaration of the name is a class / type-alias / const / let (names that
+     *    also have a var / function / interface / namespace / enum decl have merge
+     *    semantics and are left to their own checkers);
+     *  - at most ONE class decl (≥2 classes → pure class-vs-class is 73g's job);
+     *  - the name must involve a type-alias OR a class+block-scoped mix (pure const/let →
+     *    73b). Block-scoped names emitted here are recorded in
+     *    [crossFileIdentifierHandledBlockNames] so 73b skips them.
+     */
+    private fun checkCrossFileIdentifierConflicts() {
+        // One tracked declaration. kind ∈ {"class","typeAlias","const","let"}.
+        class IdDecl(
+            val name: String, val nameNode: Node, val fileName: String,
+            val source: String, val kind: String,
+        )
+        val byName = mutableMapOf<String, MutableList<IdDecl>>()
+        // Names that also have a merge-semantics decl (var/function/interface/namespace/
+        // enum) at top level in a script file → bail (leave to their own checkers).
+        val bailNames = mutableSetOf<String>()
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ClassDeclaration -> stmt.name?.let {
+                        if (it.text.isNotEmpty())
+                            byName.getOrPut(it.text) { mutableListOf() }
+                                .add(IdDecl(it.text, it, fileName, source, "class"))
+                    }
+                    is TypeAliasDeclaration -> {
+                        val n = stmt.name
+                        if (n.text.isNotEmpty())
+                            byName.getOrPut(n.text) { mutableListOf() }
+                                .add(IdDecl(n.text, n, fileName, source, "typeAlias"))
+                    }
+                    is VariableStatement -> {
+                        val kind = when (stmt.declarationList.flags) {
+                            SyntaxKind.ConstKeyword -> "const"
+                            SyntaxKind.LetKeyword -> "let"
+                            else -> null  // var → merge semantics
+                        }
+                        for (decl in stmt.declarationList.declarations) {
+                            val n = decl.name as? Identifier ?: continue
+                            if (n.text.isEmpty()) continue
+                            if (kind == null) bailNames.add(n.text)
+                            else byName.getOrPut(n.text) { mutableListOf() }
+                                .add(IdDecl(n.text, n, fileName, source, kind))
+                        }
+                    }
+                    is FunctionDeclaration -> stmt.name?.let { bailNames.add(it.text) }
+                    is InterfaceDeclaration -> bailNames.add(stmt.name.text)
+                    is EnumDeclaration -> bailNames.add(stmt.name.text)
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let { bailNames.add(it.text) }
+                    else -> {}
+                }
+            }
+        }
+
+        for ((name, decls) in byName) {
+            if (name in bailNames) continue
+            if (decls.size < 2) continue
+            if (decls.map { it.fileName }.distinct().size < 2) continue
+            val classCount = decls.count { it.kind == "class" }
+            if (classCount >= 2) continue  // pure/partial class-vs-class → 73g
+            val typeAliasCount = decls.count { it.kind == "typeAlias" }
+            val hasBlock = decls.any { it.kind == "const" || it.kind == "let" }
+            // Must involve a type-alias OR a class+block-scoped mix; pure const/let → 73b.
+            if (typeAliasCount == 0 && !(classCount > 0 && hasBlock)) continue
+
+            // value-space occupiers: class, const, let.
+            val valueDecls = decls.filter { it.kind == "class" || it.kind == "const" || it.kind == "let" }
+            // type-space occupiers: class, type-alias.
+            val typeDecls = decls.filter { it.kind == "class" || it.kind == "typeAlias" }
+
+            if (valueDecls.size >= 2 && valueDecls.map { it.fileName }.distinct().size >= 2) {
+                val anyBlock = valueDecls.any { it.kind == "const" || it.kind == "let" }
+                if (anyBlock) crossFileIdentifierHandledBlockNames.add(name)
+                emitCrossFileHubDuplicates(
+                    valueDecls.map { CrossFileDupDecl(it.name, it.nameNode, it.fileName, it.source) },
+                    if (anyBlock) 2451 else 2300,
+                    if (anyBlock) "Cannot redeclare block-scoped variable '$name'."
+                    else "Duplicate identifier '$name'.",
+                )
+            }
+            if (typeDecls.size >= 2 && typeDecls.map { it.fileName }.distinct().size >= 2) {
+                emitCrossFileHubDuplicates(
+                    typeDecls.map { CrossFileDupDecl(it.name, it.nameNode, it.fileName, it.source) },
+                    2300, "Duplicate identifier '$name'.",
+                )
+            }
+        }
+    }
+
+    /**
+     * Emit a cross-file duplicate-identifier conflict with the HUB model (B93): the first
+     * declaration in [ordered] (source-processing order) is the hub. The hub's diagnostic
+     * relates to each other declaration — TS6203 for the first, TS6204 for the rest. Each
+     * other declaration relates back to the hub with a single TS6203.
+     */
+    private fun emitCrossFileHubDuplicates(ordered: List<CrossFileDupDecl>, code: Int, message: String) {
+        if (ordered.size < 2) return
+        fun related(targets: List<CrossFileDupDecl>): List<Diagnostic> =
+            targets.mapIndexed { idx, other ->
+                val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
+                Diagnostic(
+                    message = if (idx == 0) "'${other.name}' was also declared here." else "and here.",
+                    category = DiagnosticCategory.Message,
+                    code = if (idx == 0) 6203 else 6204,
+                    fileName = other.fileName, line = ol, character = oc,
+                    start = other.nameNode.pos, length = other.name.length,
+                )
+            }
+        fun emitOne(decl: CrossFileDupDecl, rel: List<Diagnostic>) {
+            val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error, code = code,
+                fileName = decl.fileName, line = line, character = ch,
+                start = decl.nameNode.pos, length = decl.name.length,
+                relatedInformation = rel,
+            ))
+        }
+        val hub = ordered.first()
+        val others = ordered.drop(1)
+        emitOne(hub, related(others))
+        for (o in others) emitOne(o, related(listOf(hub)))
+    }
+
+    // -----------------------------------------------------------------------
     // TS2451 cross-file: block-scoped variable redeclarations across files
     // -----------------------------------------------------------------------
 
@@ -77833,6 +77999,9 @@ interface DataView {
         // Emit TS2451 for names that appear in multiple files where at least one is block-scoped
         for ((name, infos) in varDecls) {
             if (infos.size < 2) continue
+            // B93: skip names whose value-space conflict the unified checker already emitted
+            // (those that also have a cross-file class/type-alias declaration).
+            if (name in crossFileIdentifierHandledBlockNames) continue
             val anyBlockScoped = infos.any { it.isBlockScoped }
             if (!anyBlockScoped) continue  // only var+var conflicts are TS2300, not TS2451
 
