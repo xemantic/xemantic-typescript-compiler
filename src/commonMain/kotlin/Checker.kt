@@ -60404,7 +60404,7 @@ interface DataView {
                 }.toSet()
 
                 // Collect properties from each base type
-                data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?, val isOptional: Boolean = false, val isMethod: Boolean = false, val typeArgs: List<TypeNode>? = null)
+                data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?, val isOptional: Boolean = false, val isMethod: Boolean = false, val typeArgs: List<TypeNode>? = null, val hasTypeParams: Boolean = false)
                 val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
 
                 for (typeExpr in baseTypeExprs) {
@@ -60445,6 +60445,7 @@ interface DataView {
                             val propType: TypeNode?
                             val isOpt: Boolean
                             val isMethod: Boolean
+                            var memberHasTypeParams = false
                             when (member) {
                                 is PropertyDeclaration -> {
                                     propName = (member.name as? Identifier)?.text ?: continue
@@ -60459,11 +60460,12 @@ interface DataView {
                                     propType = member.type
                                     isOpt = member.questionToken
                                     isMethod = true
+                                    memberHasTypeParams = !member.typeParameters.isNullOrEmpty()
                                 }
                                 else -> continue
                             }
                             propSources.getOrPut(propName) { mutableListOf() }
-                                .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs))
+                                .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs, memberHasTypeParams))
                         }
                     }
                 }
@@ -60493,6 +60495,13 @@ interface DataView {
                     val conflict = if (hasPrivate) {
                         true
                     } else if (src1.isOptional != src2.isOptional) {
+                        true
+                    } else if (src1.isMethod && src2.isMethod && src1.hasTypeParams != src2.hasTypeParams) {
+                        // B97 (round 80): a generic method `f<T>(x:T):T` and a non-generic
+                        // `f(x:any):any` of the same name from two bases are NOT identical
+                        // (different type-parameter lists). The plain type-node comparison
+                        // below can't see this (the generic return type `T` resolves to
+                        // errorType without the method's TP scope), so flag it explicitly.
                         true
                     } else if (src1.typeArgs != null && src2.typeArgs != null && src1.typeArgs.size == src2.typeArgs.size && src1.typeArgs.isNotEmpty()) {
                         // Same base, different type args: parent types substituted differently.
