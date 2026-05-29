@@ -1109,6 +1109,8 @@ class Checker(
         checkCallTypeArgCount()
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         checkEnumForwardReferences()
+        // 72c. Setter bodies may not return a value (TS2408)
+        checkSetterReturns()
         // 73. Check cross-file duplicate function implementation (TS2393)
         if (binderResults.size > 1) {
             checkCrossFileDuplicateFunction()
@@ -2383,6 +2385,154 @@ class Checker(
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
             walk(result.sourceFile.statements, { nm -> result.locals[nm] ?: globals[nm] }, source, fileName)
+        }
+    }
+
+    /**
+     * TS2408: a setter (SetAccessor) body may not `return` a value. Each
+     * `return <expr>;` directly within a setter body (not crossing into a nested
+     * function or class) is flagged at the `return` keyword (length 6). A bare
+     * `return;` is allowed. Finds setters anywhere — class declarations/expressions
+     * and object literals, including nested ones.
+     */
+    private fun checkSetterReturns() {
+        for (result in binderResults) {
+            findSettersInStatements(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
+        }
+    }
+
+    /** Walk a setter body for value-`return` statements, NOT crossing function/class
+     *  boundaries (returns inside nested functions belong to those functions). */
+    private fun checkSetterBodyReturns(s: Statement, source: String, fileName: String) {
+        when (s) {
+            is ReturnStatement -> if (s.expression != null) {
+                val (line, ch) = getLineAndCharacterOfPosition(source, s.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Setters cannot return a value.",
+                    category = DiagnosticCategory.Error, code = 2408,
+                    fileName = fileName, line = line, character = ch,
+                    start = s.pos, length = 6,
+                ))
+            }
+            is Block -> s.statements.forEach { checkSetterBodyReturns(it, source, fileName) }
+            is IfStatement -> {
+                checkSetterBodyReturns(s.thenStatement, source, fileName)
+                s.elseStatement?.let { checkSetterBodyReturns(it, source, fileName) }
+            }
+            is ForStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is ForInStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is ForOfStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is WhileStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is DoStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is SwitchStatement -> for (c in s.caseBlock) when (c) {
+                is CaseClause -> c.statements.forEach { checkSetterBodyReturns(it, source, fileName) }
+                is DefaultClause -> c.statements.forEach { checkSetterBodyReturns(it, source, fileName) }
+                else -> {}
+            }
+            is TryStatement -> {
+                checkSetterBodyReturns(s.tryBlock, source, fileName)
+                s.catchClause?.block?.let { checkSetterBodyReturns(it, source, fileName) }
+                s.finallyBlock?.let { checkSetterBodyReturns(it, source, fileName) }
+            }
+            is LabeledStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            is WithStatement -> checkSetterBodyReturns(s.statement, source, fileName)
+            else -> {}   // FunctionDeclaration / ClassDeclaration / etc. — own scope
+        }
+    }
+
+    private fun findSettersInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) findSettersInStatement(s, source, fileName)
+    }
+
+    private fun findSettersInStatement(s: Statement, source: String, fileName: String) {
+        when (s) {
+            is ClassDeclaration -> findSettersInMembers(s.members, source, fileName)
+            is FunctionDeclaration -> s.body?.let { findSettersInStatements(it.statements, source, fileName) }
+            is ModuleDeclaration -> when (val b = s.body) {
+                is ModuleBlock -> findSettersInStatements(b.statements, source, fileName)
+                is ModuleDeclaration -> findSettersInStatement(b, source, fileName)
+                else -> {}
+            }
+            is VariableStatement -> for (d in s.declarationList.declarations)
+                d.initializer?.let { findSettersInExpr(it, source, fileName) }
+            is ExpressionStatement -> findSettersInExpr(s.expression, source, fileName)
+            is ReturnStatement -> s.expression?.let { findSettersInExpr(it, source, fileName) }
+            is ThrowStatement -> s.expression?.let { findSettersInExpr(it, source, fileName) }
+            is Block -> findSettersInStatements(s.statements, source, fileName)
+            is IfStatement -> {
+                findSettersInExpr(s.expression, source, fileName)
+                findSettersInStatement(s.thenStatement, source, fileName)
+                s.elseStatement?.let { findSettersInStatement(it, source, fileName) }
+            }
+            is ForStatement -> { (s.initializer as? Statement)?.let { findSettersInStatement(it, source, fileName) }; findSettersInStatement(s.statement, source, fileName) }
+            is ForInStatement -> findSettersInStatement(s.statement, source, fileName)
+            is ForOfStatement -> { findSettersInExpr(s.expression, source, fileName); findSettersInStatement(s.statement, source, fileName) }
+            is WhileStatement -> findSettersInStatement(s.statement, source, fileName)
+            is DoStatement -> findSettersInStatement(s.statement, source, fileName)
+            is SwitchStatement -> for (c in s.caseBlock) when (c) {
+                is CaseClause -> findSettersInStatements(c.statements, source, fileName)
+                is DefaultClause -> findSettersInStatements(c.statements, source, fileName)
+                else -> {}
+            }
+            is TryStatement -> {
+                findSettersInStatement(s.tryBlock, source, fileName)
+                s.catchClause?.block?.let { findSettersInStatement(it, source, fileName) }
+                s.finallyBlock?.let { findSettersInStatement(it, source, fileName) }
+            }
+            is LabeledStatement -> findSettersInStatement(s.statement, source, fileName)
+            is WithStatement -> findSettersInStatement(s.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun findSettersInMembers(members: List<ClassElement>, source: String, fileName: String) {
+        for (m in members) when (m) {
+            is SetAccessor -> m.body?.let {
+                checkSetterBodyReturns(it, source, fileName)
+                findSettersInStatements(it.statements, source, fileName)
+            }
+            is GetAccessor -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
+            is MethodDeclaration -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
+            is Constructor -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
+            is PropertyDeclaration -> m.initializer?.let { findSettersInExpr(it, source, fileName) }
+            is ClassStaticBlockDeclaration -> findSettersInStatements(m.body.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun findSettersInExpr(e: Expression, source: String, fileName: String) {
+        when (e) {
+            is ClassExpression -> findSettersInMembers(e.members, source, fileName)
+            is ObjectLiteralExpression -> for (p in e.properties) when (p) {
+                is PropertyAssignment -> findSettersInExpr(p.initializer, source, fileName)
+                is SetAccessor -> p.body?.let {
+                    checkSetterBodyReturns(it, source, fileName)
+                    findSettersInStatements(it.statements, source, fileName)
+                }
+                is GetAccessor -> p.body?.let { findSettersInStatements(it.statements, source, fileName) }
+                is MethodDeclaration -> p.body?.let { findSettersInStatements(it.statements, source, fileName) }
+                is SpreadElement -> findSettersInExpr(p.expression, source, fileName)
+                else -> {}
+            }
+            is ParenthesizedExpression -> findSettersInExpr(e.expression, source, fileName)
+            is BinaryExpression -> { findSettersInExpr(e.left, source, fileName); findSettersInExpr(e.right, source, fileName) }
+            is CallExpression -> { findSettersInExpr(e.expression, source, fileName); e.arguments.forEach { findSettersInExpr(it, source, fileName) } }
+            is NewExpression -> { findSettersInExpr(e.expression, source, fileName); e.arguments?.forEach { findSettersInExpr(it, source, fileName) } }
+            is ArrayLiteralExpression -> e.elements.forEach { findSettersInExpr(it, source, fileName) }
+            is ConditionalExpression -> { findSettersInExpr(e.condition, source, fileName); findSettersInExpr(e.whenTrue, source, fileName); findSettersInExpr(e.whenFalse, source, fileName) }
+            is PropertyAccessExpression -> findSettersInExpr(e.expression, source, fileName)
+            is ElementAccessExpression -> { findSettersInExpr(e.expression, source, fileName); findSettersInExpr(e.argumentExpression, source, fileName) }
+            is SpreadElement -> findSettersInExpr(e.expression, source, fileName)
+            is AsExpression -> findSettersInExpr(e.expression, source, fileName)
+            is NonNullExpression -> findSettersInExpr(e.expression, source, fileName)
+            is ArrowFunction -> when (val b = e.body) {
+                is Block -> findSettersInStatements(b.statements, source, fileName)
+                is Expression -> findSettersInExpr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> findSettersInStatements(e.body.statements, source, fileName)
+            is TemplateExpression -> e.templateSpans.forEach { findSettersInExpr(it.expression, source, fileName) }
+            else -> {}
         }
     }
 
