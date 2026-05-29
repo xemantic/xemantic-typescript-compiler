@@ -68683,7 +68683,7 @@ interface DataView {
                         }
                     }
                     checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
-                    checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated)
+                    checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true)
                     return
                 }
             }
@@ -70090,6 +70090,11 @@ interface DataView {
         source: String,
         fileName: String,
         implementationRelated: Diagnostic? = null,
+        // Round 79l: true when [sigIn] is an instantiation of a GENERIC callee (the
+        // call site already substituted explicit/inferred type args). Suppresses the
+        // fine-grained TS2322-at-arrow-return conversion — for a generic-instantiated
+        // callback param TypeScript keeps the coarse whole-argument TS2345.
+        calleeGenericInstantiation: Boolean = false,
     ) {
         // 17.31a: Single-typeParam inference for non-overloaded sigs.
         // When the gate matches, instantiate the signature with the inferred T so
@@ -70842,6 +70847,63 @@ interface DataView {
                         chain != null && chain.isNotEmpty()
                     }
                 if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
+                // Round 79l (orchestrated — Agent A plan): for a contextually-typed
+                // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
+                // body-return type (allowFuncReturnMismatch), TypeScript reports a
+                // fine-grained TS2322 AT THE ARROW'S RETURN EXPRESSION (+ related
+                // TS6502 pointing at the callback signature's return-type node), NOT
+                // the coarse whole-argument TS2345. Emit it here and `continue` to
+                // suppress the TS2345 below. (`foo(a => a)` vs `(item: number) =>
+                // boolean` → TS2322 'number' not assignable to 'boolean' at `a`.)
+                if (!calleeGenericInstantiation && sigIn.typeParameters.isNullOrEmpty() &&
+                    allowFuncReturnMismatch && (arg is ArrowFunction || arg is FunctionExpression)) {
+                    val argSig = (argType as Type.Object).callSignatures!!.first()
+                    val paramSig = (paramType as Type.Object).callSignatures!!.first()
+                    val argReturn = argSig.resolvedReturnType
+                    val paramReturn = paramSig.resolvedReturnType
+                    val retExpr: Expression? = when (arg) {
+                        is ArrowFunction -> when (val b = arg.body) {
+                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                            is Expression -> b
+                            else -> null
+                        }
+                        is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        else -> null
+                    }
+                    if (retExpr != null && argReturn != null && paramReturn != null) {
+                        val rStart = retExpr.pos
+                        val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                        // TS6502 points at the START of the callback SIGNATURE
+                        // `(item: number) => boolean` (the `(`), i.e. the FunctionType
+                        // declaration node's pos — NOT the return-type node.
+                        val related = (paramSig.declaration as? FunctionType)?.let { ftNode ->
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                            listOf(Diagnostic(
+                                message = "The expected type comes from the return type of this signature.",
+                                category = DiagnosticCategory.Message,
+                                code = 6502,
+                                fileName = fileName,
+                                line = relLine,
+                                character = relChar,
+                                start = ftNode.pos,
+                                length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                            ))
+                        } ?: emptyList()
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(argReturn)}' is not assignable to type '${typeToString(paramReturn)}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = rLine,
+                            character = rChar,
+                            start = rStart,
+                            length = rLength,
+                            relatedInformation = related,
+                        ))
+                        continue
+                    }
+                }
             }
             // B71.1: Strict-only void→undefined fn-return mismatch. Argument is a NAMED
             // FunctionDeclaration (source.symbol carries the function's symbol — arrow
