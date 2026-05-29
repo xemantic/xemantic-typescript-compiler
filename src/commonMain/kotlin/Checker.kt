@@ -17969,6 +17969,63 @@ class Checker(
             // B81.2: accessor return type `typeof this.<sameName>` is a TS2502
             // self-referential annotation. Walks class declarations recursively.
             checkAccessorSelfTypeofInStatements(result.sourceFile.statements, source, fileName)
+            // B96 (round 80): TS2300 for a `prototype` member declared in a namespace
+            // that merges with a class of the same name (the class's implicit static
+            // `prototype` conflicts).
+            checkClassNamespacePrototypeConflict(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B96 (round 80): A class and a namespace of the same name merge into a "clodule".
+     * The class contributes an implicit static `prototype` member, so if the namespace
+     * body declares anything named `prototype` (var / function / namespace / class /
+     * interface / enum), that's a TS2300 "Duplicate identifier 'prototype'." reported at
+     * the namespace member's name. Covers both same-file (`declare namespace m { var
+     * prototype } declare class m {}`) and cross-file (`declare class Foo {}` in a.d.ts +
+     * `declare namespace Foo { namespace prototype {} }` in b.ts) shapes — the class is
+     * found via the merged `globals` symbol (Class+Module canMerge → shared declarations).
+     */
+    private fun checkClassNamespacePrototypeConflict(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            if (stmt !is ModuleDeclaration) continue
+            val nsName = (stmt.name as? Identifier)?.text
+            val body = stmt.body
+            if (nsName != null && body is ModuleBlock) {
+                val mergedSym = currentFileLocals?.get(nsName) ?: globals[nsName]
+                val hasClass = mergedSym?.declarations?.any { it is ClassDeclaration } == true ||
+                    globals[nsName]?.declarations?.any { it is ClassDeclaration } == true
+                if (hasClass) {
+                    for (member in body.statements) {
+                        val protoNameNode: Node? = when (member) {
+                            is VariableStatement -> member.declarationList.declarations
+                                .firstOrNull { (it.name as? Identifier)?.text == "prototype" }?.name
+                            is FunctionDeclaration -> member.name?.takeIf { it.text == "prototype" }
+                            is ModuleDeclaration -> (member.name as? Identifier)?.takeIf { it.text == "prototype" }
+                            is ClassDeclaration -> member.name?.takeIf { it.text == "prototype" }
+                            is InterfaceDeclaration -> member.name.takeIf { it.text == "prototype" }
+                            is EnumDeclaration -> member.name.takeIf { it.text == "prototype" }
+                            else -> null
+                        }
+                        if (protoNameNode != null) {
+                            val start = protoNameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Duplicate identifier 'prototype'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2300,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = 9, // "prototype".length
+                            ))
+                        }
+                    }
+                }
+                // Recurse into nested namespace bodies for nested clodules.
+                checkClassNamespacePrototypeConflict(body.statements, source, fileName)
+            }
         }
     }
 
