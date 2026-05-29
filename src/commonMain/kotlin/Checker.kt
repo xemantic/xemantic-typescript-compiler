@@ -62200,7 +62200,7 @@ interface DataView {
         }
 
         // Collect property declarations in order, tracking which are "initialized"
-        data class PropInfo(val name: String, val pos: Int, val hasInit: Boolean, val hasExcl: Boolean, val isStatic: Boolean)
+        data class PropInfo(val name: String, val pos: Int, val hasInit: Boolean, val hasExcl: Boolean, val hasQuestion: Boolean, val isStatic: Boolean)
         val props = mutableListOf<PropInfo>()
         for (member in classDecl.members) {
             when (member) {
@@ -62212,6 +62212,7 @@ interface DataView {
                         pos = (member.name as Identifier).pos,
                         hasInit = member.initializer != null,
                         hasExcl = member.exclamationToken,
+                        hasQuestion = member.questionToken,
                         isStatic = isStatic,
                     ))
                 }
@@ -62243,10 +62244,14 @@ interface DataView {
                     // Check if refProp is initialized before the current prop
                     val refIdx = props.indexOf(refProp)
                     val isBeforeInit = if (refIdx < idx) {
-                        // Declared above — error only if no initializer and no `!`
-                        !refProp.hasInit && !refProp.hasExcl
+                        // Declared ABOVE: error only if it has no initializer of its own,
+                        // no `!`, AND is not OPTIONAL. A non-optional, un-initialized
+                        // property (e.g. `abstract prop: string`) read by an earlier-running
+                        // field IS use-before-init; an OPTIONAL `p5?: number` is legitimately
+                        // `undefined` so reading it is fine.
+                        !refProp.hasInit && !refProp.hasExcl && !refProp.hasQuestion
                     } else {
-                        // Declared below — always an error (unless has `!`)
+                        // Declared below or self-reference — an error (unless has `!`)
                         !refProp.hasExcl
                     }
 
@@ -62313,6 +62318,12 @@ interface DataView {
     private fun collectThisPropertyRefs(
         expr: Node, refs: MutableList<Pair<String, Int>>,
         isStatic: Boolean, className: String?,
+        // True once recursion has descended through an object-spread (`...{...}`).
+        // TypeScript does NOT report use-before-init for a getter/setter/method
+        // computed name nested inside a spread object (`...{get [D.D]() {}}`), only
+        // for a DIRECT object-literal accessor/method. A direct PropertyAssignment
+        // computed name still fires regardless.
+        viaSpread: Boolean = false,
     ) {
         when (expr) {
             is PropertyAccessExpression -> {
@@ -62339,7 +62350,20 @@ interface DataView {
                 expr.arguments?.forEach { collectThisPropertyRefs(it, refs, isStatic, className) }
             }
             is BinaryExpression -> {
-                collectThisPropertyRefs(expr.left, refs, isStatic, className)
+                // A simple assignment `this.X = ...` WRITES X — that is not a "use" of
+                // X (TypeScript doesn't flag it). Skip the direct ref of the LHS name but
+                // still recurse into the receiver (so `this.a.b = ...` still counts a use
+                // of `this.a`) and the RHS.
+                val left = expr.left
+                val isWriteTargetRef = expr.operator == SyntaxKind.Equals &&
+                    left is PropertyAccessExpression &&
+                    (if (isStatic) (left.expression as? Identifier)?.text == className
+                     else (left.expression as? Identifier)?.text == "this")
+                if (isWriteTargetRef) {
+                    collectThisPropertyRefs((left as PropertyAccessExpression).expression, refs, isStatic, className)
+                } else {
+                    collectThisPropertyRefs(expr.left, refs, isStatic, className)
+                }
                 collectThisPropertyRefs(expr.right, refs, isStatic, className)
             }
             is ConditionalExpression -> {
@@ -62365,8 +62389,16 @@ interface DataView {
                             prop.name?.let { if (it is ComputedPropertyName) collectThisPropertyRefs(it.expression, refs, isStatic, className) }
                             collectThisPropertyRefs(prop.initializer, refs, isStatic, className)
                         }
-                        is SpreadAssignment -> collectThisPropertyRefs(prop.expression, refs, isStatic, className)
+                        is SpreadAssignment -> collectThisPropertyRefs(prop.expression, refs, isStatic, className, viaSpread = true)
                         is ShorthandPropertyAssignment -> {}
+                        // A computed name on a DIRECT object-literal method/accessor is
+                        // evaluated eagerly (`{ get [this.X]() {} }`), so `this.X` there is a
+                        // use. Inside a spread (`...{get [D.D]() {}}`) TypeScript does NOT
+                        // report it — gate on !viaSpread. The accessor/method BODY is
+                        // deferred and intentionally not recursed.
+                        is MethodDeclaration -> if (!viaSpread) (prop.name as? ComputedPropertyName)?.let { collectThisPropertyRefs(it.expression, refs, isStatic, className) }
+                        is GetAccessor -> if (!viaSpread) (prop.name as? ComputedPropertyName)?.let { collectThisPropertyRefs(it.expression, refs, isStatic, className) }
+                        is SetAccessor -> if (!viaSpread) (prop.name as? ComputedPropertyName)?.let { collectThisPropertyRefs(it.expression, refs, isStatic, className) }
                         else -> {}
                     }
                 }
@@ -62392,12 +62424,13 @@ interface DataView {
             is DeleteExpression -> collectThisPropertyRefs(expr.expression, refs, isStatic, className)
             is YieldExpression -> expr.expression?.let { collectThisPropertyRefs(it, refs, isStatic, className) }
             is ClassExpression -> {
-                // Check heritage clause for ClassName.X references (static only)
-                if (isStatic) {
-                    expr.heritageClauses?.forEach { clause ->
-                        for (typeExpr in clause.types) {
-                            collectThisPropertyRefs(typeExpr.expression, refs, isStatic, className)
-                        }
+                // Heritage-clause expressions (`class extends this.X`) are evaluated
+                // eagerly when the class expression is created, so `this.X` / `ClassName.X`
+                // there is a use — for instance props too (not just static). The class
+                // BODY is deferred and intentionally not recursed.
+                expr.heritageClauses?.forEach { clause ->
+                    for (typeExpr in clause.types) {
+                        collectThisPropertyRefs(typeExpr.expression, refs, isStatic, className)
                     }
                 }
             }
