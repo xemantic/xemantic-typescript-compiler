@@ -73097,6 +73097,60 @@ interface DataView {
                         ) + propChain.map { "    $it" }
                     }
                 }
+                // typeParameterConstrainedToOuterTypeParameter: target param reduces to a
+                // bare call-sig TypeParam (U) and source param reduces to Array<TypeParam>
+                // (U[]) whose element TypeParam carries a constraint. TypeScript substitutes
+                // each side's own call-sig type parameter by its CONSTRAINT for display
+                // (source U[] -> <srcCons>[], target U -> <tgtCons>), then drills one level
+                // into the array: deeper line compares target's <tgtCons> scalar against
+                // source's <srcCons>[] array. The constraint of an inner `<U extends T>` is
+                // the OUTER interface type param `T`, which must be instantiated through the
+                // enclosing reference's args (A<string> -> T=string) before display — without
+                // this it renders the raw `T[]`/`T` (empirically confirmed). Gated tightly to
+                // this exact array-element-vs-scalar shape with BOTH constraints resolving to
+                // concrete types, so every other param shape falls through unchanged.
+                run {
+                    val tgtTp = targetParamType as? Type.TypeParam
+                    val srcRef = sourceParamType as? Type.Reference
+                    val srcElem = srcRef?.resolvedTypeArguments?.singleOrNull() as? Type.TypeParam
+                    if (tgtTp != null && srcRef != null && srcRef.target === globalArrayType &&
+                        srcElem != null
+                    ) {
+                        val rawTgtCons = tgtTp.constraint
+                        val rawSrcCons = srcElem.constraint
+                        if (rawTgtCons != null && rawTgtCons !== errorType &&
+                            rawSrcCons != null && rawSrcCons !== errorType
+                        ) {
+                            // Instantiate each constraint through its enclosing reference's
+                            // type-arg mapper so an outer-TP constraint (`U extends T`) becomes
+                            // the concrete outer arg (`string`). When the enclosing type isn't
+                            // a generic reference the mapper is identity (constraint unchanged).
+                            fun refMapper(t: Type.Object): TypeMapper? {
+                                val ref = t as? Type.Reference ?: return null
+                                val tps = ref.target.typeParameters ?: return null
+                                val args = ref.resolvedTypeArguments ?: return null
+                                if (tps.isEmpty() || tps.size != args.size) return null
+                                return createTypeMapper(tps, args)
+                            }
+                            val srcMapper = refMapper(source)
+                            val tgtMapper = refMapper(target)
+                            val tgtCons = if (tgtMapper != null) instantiateType(rawTgtCons, tgtMapper) else rawTgtCons
+                            val srcCons = if (srcMapper != null) instantiateType(rawSrcCons, srcMapper) else rawSrcCons
+                            // Only take this branch when at least one constraint actually
+                            // became concrete (not still a bare TypeParam) — otherwise the
+                            // raw-`T` display would not match TypeScript and we'd flip nothing
+                            // while risking an unexpected baseline; fall through instead.
+                            if (srcCons !is Type.TypeParam && tgtCons !is Type.TypeParam) {
+                                val srcArrDisplay = "${typeToString(srcCons)}[]"
+                                return listOf(
+                                    "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                                    "    Type '${typeToString(tgtTp)}' is not assignable to type '$srcArrDisplay'.",
+                                    "      Type '${typeToString(tgtCons)}' is not assignable to type '$srcArrDisplay'.",
+                                )
+                            }
+                        }
+                    }
+                }
                 // B70.1ext: When `targetParamType` is a literal type AND `sourceParamType`
                 // is a primitive of a DIFFERENT base (e.g. `'hi'` (StringLiteral) vs
                 // `number`), TypeScript widens the literal in the chain display:
