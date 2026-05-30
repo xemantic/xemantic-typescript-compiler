@@ -659,9 +659,14 @@ class Checker(
         // 3b. Build per-file type maps for file-level declarations
         buildFileLocalTypeMaps()
 
-        // For declarationOnly mode, only run class strict-mode checks (TS1210)
+        // For declarationOnly mode, only run class strict-mode checks (TS1210) plus
+        // name-resolution (TS2304/TS2552/…). B95g (round 82): emitDeclarationOnly still
+        // reports unresolved names (e.g. `[Enum.A]` in a type position where `Enum` is
+        // undefined → TS2304) — checkUnresolvedNames is a self-contained name-resolution
+        // walker (no TS6131-style unused FPs that the broader declaration-only mode avoids).
         if (declarationOnly) {
             checkClassStrictModeIdentifiers()
+            checkUnresolvedNames()
         }
 
         if (!declarationOnly) {
