@@ -1568,6 +1568,47 @@ session log above (`Session 2026-05-17 ...`) and `STATUS.md` together carry the
 recent narrative; consult the history file when you need the original
 checkbox-item rationale.
 
+---
+
+### STRATEGIC MAP of the remaining failures (2026-05-30, pipeline-optimization session)
+
+**The "surgical pool exhausted → only architectural blockers left" framing that
+drove ~20 rounds of recon-only / +1 sessions was a TOOL ARTIFACT, not reality.**
+`find_candidates.py` only ever scanned tests that already emit a parseable
+`error TSxxxx` line (the EXTRA/MISSING/SWAP buckets) — that slice is **33 of the
+1014 current failures**. The tool was blind to the other ~70%. It has now been
+extended (commit `tooling(queue): un-blind …`) with two new buckets. Full map of
+the 1014 failures (from the 2026-05-30 fresh XML set):
+
+| bucket | count | what it means | tool flag |
+|---|---|---|---|
+| **NONE-PRODUCED** | **611** (590 fresh) | baseline expects errors, we emit nothing | `--none` |
+| error-baseline diff (EXTRA/MISSING/SWAP) | 307 (33 in ≤3-code window) | we emit something, wrong/incomplete | default |
+| **OUTPUT** (JS/decl/sourcemap) | 105 (≈95% already skip-logged) | pure output diff, no codes | `--output` |
+
+**NONE-PRODUCED is the path to 100%.** It is dominated by the hard type-engine
+families (TS2322 ×91, TS2345 ×38, TS2339 ×37 — these need the assignability /
+generic-inference / cross-file-scope blockers), BUT it has a large **BOUNDED
+tail that is genuinely surgical and was never triaged**:
+
+- **TS2307 ×14 (module resolution)** — e.g. `es6ExportAll` does `import … from 'server'`
+  where `server.ts` exists but the specifier is BARE (non-relative, not a
+  node_modules package); TS fires TS2307, we wrongly resolve it. Shared root
+  cause across most of the 14 → likely one fix flips several. **Best first target.**
+- **TS2403 ×9 (subsequent var decls must have same type)** — `promiseIdentity*`
+  cluster (5) shares a Promise-interface-merge root; more type-engine-coupled.
+- **TS2367 ×9 (comparison appears unintentional)**, **TS2688 ×5 (cannot find type-def file)**,
+  **TS2540 ×5 (readonly assignment)**, **TS2554 ×4 (arg count)**, **TS2344 ×4**,
+  **TS4023/TS4025 (decl emit)**, **TS2305/TS2649/TS2551/TS2552 …** — each a
+  bounded check, 2–3 expected error lines, mostly fresh.
+
+**Process rule going forward:** run `find_candidates.py --none --fresh` (and
+`--code TSxxxx` to focus) BEFORE ever declaring the pool dry. A session is only
+"pool exhausted" when EXTRA/MISSING/SWAP **and** the bounded NONE tail **and**
+OUTPUT are all dry — which is not the case today.
+
+- [ ] **B98 (PROMOTED 2026-05-30 — top item, replaces the false "pool exhausted" framing): triage + fix the TS2307 bare-specifier NONE-PRODUCED cluster.** Run `python3 scripts/find_candidates.py --none --fresh --code TS2307` (14 tests). Confirm the shared shape: a BARE (non-relative, non-node_modules) module specifier whose target `.ts` file is present in the multi-file fixture — TypeScript does NOT resolve bare specifiers to sibling files, so it fires `TS2307: Cannot find module 'X' or its corresponding type declarations.`; we wrongly resolve them and emit nothing. **Likely root cause:** `resolveModuleSpecifier` (and/or the module-resolution path that feeds the import-resolution diagnostic) treats a bare specifier as resolvable when a sibling-named file exists. The fix is to emit TS2307 for an import whose specifier is bare AND does not resolve to (a) an ambient `declare module "X"`, (b) a node_modules package, (c) a lib. **CAUTION:** module resolution is cross-cutting — gate narrowly and full-suite verify (TS2307 has 16 EXTRA-side false positives today too, per `--none`/default; watch both directions). Land per-test or per-sub-shape, net-zero-or-+flip, commit each. **Backpointer:** STRATEGIC MAP above; spot-checked `es6ExportAll` (`import {…} from 'server'`). After this cluster, move to TS2540 (readonly) / TS2554 (arg count) / TS2688 (type-ref dirs) — all bounded NONE categories.
+
 - [ ] **B94 (PROMOTED 2026-05-29 round 80 — next-session blocker substep; surgical pool confirmed exhausted via the no-line-cap single-code cluster scan): union-vs-object-literal disambiguation + object-literal-return per-property elaboration.** Target cluster: `errorOnUnionVsObjectShouldDeeplyDisambiguate{,2}_ts` (2 tests, both single-code BOTH TS2322). **Current behaviour:** for `function foo(): Stuff | string { return { a(){...}, b: () => "hello", ... } }` we emit ONE coarse `TS2322: Type '{...}' is not assignable to type 'Stuff | string'.` at the object literal. **Expected:** TypeScript disambiguates the union target — picks the object-like constituent `Stuff` (the others are primitives) — and elaborates the object literal PER-PROPERTY against `Stuff`'s members: 11× TS2322 at each property value (`() => "hello"` arrow return vs `Promise<string>`, etc.), each with related TS6502 "The expected type comes from the return type of this signature." (pointing at the interface member's signature) AND TS1356 "Did you mean to mark this function as 'async'?" (when the target member return is `Promise<T>` and the arrow returns `T`). **Decomposition:** (a) when an object-literal initializer/return value is checked against a `Type.Union` target whose constituents are exactly ONE object-like (Object/Interface) + N primitives, pick the object-like constituent and run the existing per-property object-literal-vs-interface elaboration against it (instead of the coarse whole-object TS2322); (b) reuse/extend the round-79l TS6502 arrow-return-mismatch infra (`checkArgumentsAgainstSignature`'s `allowFuncReturnMismatch` block at Checker.kt:~70842) for the RETURN/property-init context — a property value that is an arrow/fn-expr whose body return mismatches the target member's function-type return emits TS2322-at-the-return + TS6502; (c) add TS1356 "Did you mean to mark this function as 'async'?" when the target member return is `Promise<X>` and the source arrow returns a non-Promise `X`-ish value. RISK: MEDIUM-HIGH (object-literal-vs-union elaboration is a hot path; the per-property drill-in changes many TS2322 baselines — gate strictly to the single-object-like-constituent union shape). **Backpointer:** round-80 single-code cluster scan (`/tmp/single_code.py` — failing tests whose entire diff is one TS code); this cluster + `typedArraysCrossAssignability01` (typed-array lib+structural) + `arrayBestCommonTypes` (best-common-type) are the only single-code tests left, the latter two being lib/BCT-architectural.
 
 - [x] **B92 (CLOSED 2026-05-29 round 80 — all `duplicateIdentifierRelatedSpans*` tests now PASS; test1/`duplicateIdentifierRelatedSpans1` was flipped by B93a, moduleAugmentation by a48e493). Verified round-80: zero `duplicateIdentifierRelatedSpans*` failures in the suite.** (original spec retained below for history) **B92 (was IN PROGRESS 2026-05-29 round 78 — B92a-d + moduleAug LANDED +7): TS6200/TS6201 cross-file duplicate-identifier cluster.** **moduleAug piece (LANDED +1, 9030 → 9031):** `checkCrossFileModuleAugmentationDuplicates()` (step 73h) — TS2451 (hub-model: original decl relates to each aug with TS6203/TS6204; each aug relates back with TS6203) for a block-scoped `export const`/`let` re-declared via `declare module "X"` augmentation(s) of the same file-module. ALSO fixed the pre-existing FP that blocked it: `checkAmbientModuleAugmentations`' TS2664 check used non-relative `resolveModuleSpecifier("./a")` (failed for dir-relative paths → spurious "module './a' cannot be found"); switched to `resolveModuleSpecifierRelative(spec, fileName)` (strict superset, can only suppress FP TS2664, full-suite verified zero regressions). **ONLY test1 REMAINS** (Blocker #3-class — needs cross-file dup-identifier checker UNIFICATION, see below). B92a/b/c landed in `checkCrossFileInterfaceMemberConflicts()` (step 73f) + `BaselineFormatter` footer — flips `duplicateIdentifierRelatedSpans3/4/5/6/7_ts` (+5). **B92d** extracted the amalgamate+emit core into shared `amalgamateAndEmitCrossFileDuplicates(entries)` + added `checkCrossFileClassConflicts()` (step 73g) for top-level cross-file class-vs-class — flips test2 (9 classes → collapsed TS6200, +1). Total 9024 → 9030, zero regressions. **Conflict rule (interfaces): property-vs-method same name across files sharing a scope** (always a hard TS2300; property-vs-property deliberately excluded → zero FP). **Threshold confirmed: collapse to TS6200 when `>= 8` (`< 8` → per-member).** **STILL REMAINING (deferred, multi-piece Blocker #3-adjacent):** test1 (`class Foo`/`type Foo`×2 → TS2300 + `const Bar`/`class Bar`/`let Bar` → TS2451, 3 FILES, needs the amalgam generalized to N-files with **TS6204 "and here"** for the 3rd decl + value/type-identifier classification covering type-alias/const/let/class-as-block-scoped); `duplicateIdentifierRelatedSpans_moduleAugmentation` (`export const x` in `/dir/a.ts` re-declared in two `declare module "./a"`/`"../dir/a"` augmentations in b.ts → TS2451 + TS6204, needs module-specifier resolution `./a`+`../dir/a` → `/dir/a.ts`). The shared `amalgamateAndEmitCrossFileDuplicates` helper currently restricts to the 2-distinct-file case and emits only TS6203 (no TS6204) — generalizing it to N files with the leading-TS6203/follow-on-TS6204 split is the next step for both remaining tests. Original spec retained below.
