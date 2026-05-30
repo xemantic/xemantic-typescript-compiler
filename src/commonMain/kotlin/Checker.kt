@@ -29108,7 +29108,39 @@ interface DataView {
         val hasRest: Boolean,   // has ...rest param
         val isOverloaded: Boolean, // has multiple declarations (skip checking)
         val parameters: List<Parameter> = emptyList(), // actual parameter nodes (for related info)
+        // B95b: per-overload SIGNATURE arity+type-param info (excludes impl sig). Lets a
+        // call with EXPLICIT type args filter the overload set to the generic signatures
+        // that can actually accept that many type args, then arity-check against THAT subset.
+        val overloadSigs: List<OverloadSig> = emptyList(),
     )
+
+    /** One overload SIGNATURE's arity + type-param shape (for explicit-type-arg filtering). */
+    private data class OverloadSig(
+        val minParams: Int,
+        val maxParams: Int,
+        val hasRest: Boolean,
+        val typeParamCount: Int,     // total type parameters
+        val minTypeParams: Int,      // type parameters without a default (required type args)
+        val parameters: List<Parameter>,
+    )
+
+    /** Best-effort OverloadSig from an already-collected FuncParamInfo (type-param shape
+     *  unknown → treated as non-generic; conservative for explicit-type-arg filtering). */
+    private fun overloadSigFromInfo(info: FuncParamInfo): OverloadSig =
+        OverloadSig(info.minParams, info.maxParams, info.hasRest, 0, 0, info.parameters)
+
+    private fun overloadSigOf(stmt: FunctionDeclaration, isJsFile: Boolean): OverloadSig {
+        val pi = paramInfo(stmt.parameters, isJsFile)
+        val tps = stmt.typeParameters
+        return OverloadSig(
+            minParams = pi.minParams,
+            maxParams = pi.maxParams,
+            hasRest = pi.hasRest,
+            typeParamCount = tps?.size ?: 0,
+            minTypeParams = tps?.count { it.default == null } ?: 0,
+            parameters = stmt.parameters,
+        )
+    }
 
     private fun collectFuncDecls(
         statements: List<Statement>,
@@ -29133,6 +29165,7 @@ interface DataView {
                         // arg count matches NO overload can fire TS2554. (Was: collapsed to
                         // (0, MAX, rest) which suppressed all overload arity checking.)
                         val thisInfo = paramInfo(stmt.parameters, isJsFile)
+                        val thisSig = overloadSigOf(stmt, isJsFile)
                         val existing = funcParams[name]
                         if (existing != null) {
                             val baseMin = if (existing.isOverloaded) existing.minParams else thisInfo.minParams
@@ -29142,12 +29175,14 @@ interface DataView {
                             // TS6210 "An argument for 'x' was not provided." points at the first
                             // overload's param at the missing index.
                             val firstParams = if (existing.isOverloaded) existing.parameters else thisInfo.parameters
+                            val baseSigs = if (existing.isOverloaded) existing.overloadSigs else listOf(overloadSigFromInfo(existing))
                             funcParams[name] = FuncParamInfo(
                                 minParams = minOf(baseMin, thisInfo.minParams),
                                 maxParams = maxOf(baseMax, thisInfo.maxParams),
                                 hasRest = baseRest || thisInfo.hasRest,
                                 isOverloaded = true,
                                 parameters = firstParams,
+                                overloadSigs = baseSigs + thisSig,
                             )
                             continue
                         }
@@ -29157,7 +29192,7 @@ interface DataView {
                         }
                         if (hasSibling) {
                             // Seed the overload group with THIS signature's arity.
-                            funcParams[name] = thisInfo.copy(isOverloaded = true)
+                            funcParams[name] = thisInfo.copy(isOverloaded = true, overloadSigs = listOf(thisSig))
                             continue
                         }
                         // Sole declaration — record its real param info
@@ -29453,6 +29488,32 @@ interface DataView {
                             emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
                         } else if (!info.hasRest && argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                        }
+                    } else if (info != null && info.isOverloaded && !expr.typeArguments.isNullOrEmpty()
+                        && info.overloadSigs.isNotEmpty()
+                    ) {
+                        // B95b (round 81): overload call WITH explicit type args, e.g.
+                        // `foo<string>("hello")` against `foo<T>(a,b)` + `foo(a)`. Explicit type
+                        // args filter the overload set to the GENERIC signatures that can accept
+                        // this many type args (non-generic overloads are inapplicable). Arity-check
+                        // the call against ONLY that applicable subset. functionCall18 case.
+                        val typeArgCount = expr.typeArguments!!.size
+                        val applicable = info.overloadSigs.filter { sig ->
+                            sig.typeParamCount > 0 && typeArgCount in sig.minTypeParams..sig.typeParamCount
+                        }
+                        if (applicable.isNotEmpty()) {
+                            val argCount = expr.arguments.size
+                            val gMin = applicable.minOf { it.minParams }
+                            val gMax = applicable.maxOf { it.maxParams }
+                            val gRest = applicable.any { it.hasRest }
+                            // TS6210 "argument for 'x' not provided" only when the applicable subset
+                            // is unambiguous (single signature) — matches TypeScript's hint.
+                            val relParams = if (applicable.size == 1) applicable[0].parameters else emptyList()
+                            if (argCount < gMin) {
+                                emitTS2554TooFew(gMin, gMax, argCount, expr.expression, source, fileName, relParams)
+                            } else if (!gRest && argCount > gMax) {
+                                emitTS2554TooMany(gMin, gMax, argCount, expr.arguments, gMax, source, fileName)
+                            }
                         }
                     }
                 }
