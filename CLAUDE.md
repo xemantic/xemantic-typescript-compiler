@@ -432,7 +432,8 @@ When an item can't be implemented surgically — e.g. the diagnostic relies on i
 
 A "recon-only session" is one that runs `find_candidates.py --fresh`, gets `0/0/0` (or similarly empty), spot-checks a handful of candidates, confirms they are all architectural, commits a `chore(status): refresh ... empty pool` note, and ends without landing any code change. **This is not a legitimate session outcome when the queue contains unchecked Blocker items.**
 
-- **Hard rule**: if `find_candidates.py --fresh` returns `0/0/0` (or the surgical pool is otherwise confirmed empty for the current top item) AND the queue contains any unchecked `- [ ]` Blocker substep, you MUST start work on the next unchecked Blocker substep in the same session. Do NOT commit a recon note and stop.
+- **The `0/0/0` "exhausted" reading is almost always FALSE (fixed 2026-05-30).** The plain `find_candidates.py` EXTRA/MISSING/SWAP buckets only scan tests that ALREADY emit a parseable `error TSxxxx` line — historically ~33 of >1000 failures. The other ~70% (tests where we emit NOTHING, plus pure JS/decl/sourcemap output diffs) were structurally invisible, which is what manufactured the recurring "pool exhausted" illusion across ~20 rounds. The tool now has a **`--none`** bucket (baseline expects diagnostics, we emit none — recovered by reading the `*.errors.txt` baseline, grouped by code, fewest-error-lines-first = most tractable) and an **`--output`** bucket. **The bounded NONE tail IS the live surgical pool** (TS2307 module-resolution, TS2403, TS2367, TS2540, TS2554, TS2688, TS2344, TS2305, TS2551/2552, decl-emit TS4023/4025 …). See PLAN-PHASE-4.md § "STRATEGIC MAP of the remaining failures" for the current breakdown.
+- **Hard rule**: the pool is "exhausted" ONLY when `find_candidates.py --fresh` (EXTRA/MISSING/SWAP) **and** `find_candidates.py --none --fresh` (the bounded-code NONE tail) **and** `find_candidates.py --output --fresh` are ALL dry. If any has fresh bounded candidates, work them — do NOT jump to an architectural blocker or commit a recon note. Only when all three are genuinely dry AND the queue has an unchecked `- [ ]` Blocker substep do you start that substep in the same session.
 - **Diagnostic signal**: before starting a session, run `git log --oneline -10`. If three or more of the last 10 commits match `chore(status): refresh ... empty pool` (or equivalent recon-only commits), the queue is mis-structured — the agent in earlier sessions failed to promote a blocker to a checkbox. **Your first action is to fix the queue**: open PLAN-PHASE-4.md's "Known architectural blockers" section, pick the highest-yield blocker that has no corresponding `- [ ]` queue item, decompose it into the smallest standalone substep, insert it at the top of the QUEUE, commit that restructure (`chore(queue): promote Blocker #N to queue item`), and only THEN start work on it.
 - **Recon is allowed as part of step 1**, not as a session deliverable. If a recon turns up surgical candidates, fine — work them. If it doesn't, that's the trigger to attack the next Blocker substep, not to wrap up.
 - **Forbidden commit message patterns** when the queue has unchecked Blocker items: `chore(status): refresh post-N.N recon`, `... empty surgical pool`, `... N+ consecutive empty pool`. These are signals that the protocol has failed. The only acceptable session-end commits are (a) a feature commit landing real code, (b) a `chore(queue): promote ...` restructure that prepares the next session, (c) a `chore(maint)`-class action like a stale-skip-log audit when one is genuinely warranted (≤ once per ~5 sessions), or (d) a revert of a regressing attempt.
@@ -470,9 +471,16 @@ rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "te
 rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest --tests '*.<TestName>*' 2>&1 | grep -a -A 40 "message" | head -50
 
 # Candidate finder (must have fresh full-suite XMLs first):
-python3 scripts/find_candidates.py --fresh      # hide tests already in skipped log
-python3 scripts/find_candidates.py              # show all, with [SKIP] markers
+python3 scripts/find_candidates.py --fresh              # EXTRA/MISSING/SWAP, hide skip-logged
+python3 scripts/find_candidates.py                      # all buckets, with [SKIP] markers
+python3 scripts/find_candidates.py --none --fresh       # tests where we emit NOTHING (the real pool)
+python3 scripts/find_candidates.py --none --fresh --code TS2307   # focus one diagnostic code
+python3 scripts/find_candidates.py --output --fresh     # JS/decl/sourcemap output diffs
 ```
+The plain (no-flag) buckets only see tests that already emit some `error TSxxxx`
+— ~33 of >1000 failures. **`--none` is where ~60% of the remaining work lives**
+(see PLAN-PHASE-4.md § "STRATEGIC MAP"). Do not call the pool exhausted until
+`--fresh`, `--none --fresh`, and `--output --fresh` are all dry.
 
 **Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability. **Gradle wipes XMLs when run with `--tests '*Name*'`** — the full suite must be re-run before `find_candidates.py` can report accurate results; the script warns if the XML count is below the expected ~27.
 
