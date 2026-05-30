@@ -8,15 +8,31 @@ each by diff shape:
   EXTRA     — actual has N extra error lines expected doesn't ("too aggressive")
   MISSING   — expected has N error lines actual doesn't ("simple new check")
   SWAP      — same position, different TS code ("wrong code at call site")
+  NONE      — baseline expects diagnostics but we emit NONE ("missing check")
+  OUTPUT    — JS-emit / decl-emit / sourcemap output diff, no error codes involved
+
+IMPORTANT — the three "diff" buckets (EXTRA/MISSING/SWAP) only see tests where
+we ALREADY emit some parseable `error TSxxxx` line. Historically this caused
+recurring false "surgical pool exhausted" sessions: ~70% of remaining failures
+are NONE (we emit nothing) or OUTPUT (pure JS/decl/sourcemap diffs) and were
+structurally invisible. The NONE and OUTPUT buckets close that blind spot. Do
+NOT declare the pool exhausted unless NONE and OUTPUT are also dry.
+
+The NONE bucket reads the expected `*.errors.txt` baseline from
+typescript-repo/tests/baselines/reference/ to recover the expected codes, then
+groups by code signature and sorts by error-line count (fewest = most tractable).
 
 Cross-references each candidate against the "Explored-but-skipped" section
 in PLAN-PHASE-4.md; flagged candidates print with a "[SKIP]" marker so the
 agent doesn't re-investigate already-characterized failures.
 
 Usage:
-    python3 scripts/find_candidates.py            # all three buckets, first 20 each
+    python3 scripts/find_candidates.py            # all buckets, first 20 each
     python3 scripts/find_candidates.py --all      # no per-bucket limit
     python3 scripts/find_candidates.py --fresh    # only candidates NOT in skipped log
+    python3 scripts/find_candidates.py --none      # NONE bucket only (grouped by code)
+    python3 scripts/find_candidates.py --output    # OUTPUT bucket only
+    python3 scripts/find_candidates.py --none --fresh --code TS2307   # focus one code
 
 Exit code is 0 unless XMLs are missing.
 """
@@ -33,8 +49,11 @@ XML_GLOB = os.path.join(
     "TEST-com.xemantic.typescript.compiler.TypeScriptCompilerTests_*.xml",
 )
 PLAN = os.path.join(REPO_ROOT, "PLAN-PHASE-4.md")
+REF_DIR = os.path.join(REPO_ROOT, "typescript-repo", "tests", "baselines", "reference")
 
 ERR_LINE_RE = re.compile(r"(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$")
+NONE_RE = re.compile(r"reference/([^ \n]+\.errors\.txt)")
+CODE_RE = re.compile(r"error (TS\d+)")
 
 
 def load_skipped_tests() -> set[str]:
@@ -124,6 +143,77 @@ def collect():
     return extras, missings, swaps
 
 
+def _node_text(tc) -> str:
+    """Full failure/error text (the `message` attr is JUnit-truncated; `.text`
+    carries the complete diff / stack trace)."""
+    node = tc.find("failure")
+    if node is None:
+        node = tc.find("error")
+    if node is None:
+        return ""
+    return node.text or node.get("message") or ""
+
+
+def _classify_output(desc: str) -> str:
+    d = desc.lower()
+    if "compiles to javascript" in d:
+        return "js-emit"
+    if "declaration" in d:
+        return "decl-emit"
+    if "source map" in d or "sourcemap" in d:
+        return "sourcemap"
+    return "other"
+
+
+def collect_uncovered():
+    """Return (none_produced, output_diffs).
+
+    none_produced: list of (testname, code_sig_tuple, n_err_lines, baseline)
+      — baseline expects diagnostics but we emit none. Codes recovered from the
+      expected `*.errors.txt` baseline. These are INVISIBLE to collect() because
+      no diff is produced.
+    output_diffs: list of (testname, n_changed_lines, kind)
+      — failing tests with an expected/actual diff but NO parseable error lines
+      on either side (pure JS/decl/sourcemap/formatting). Also invisible to
+      collect() (it requires at least one parsed error line).
+    """
+    none_produced, output_diffs = [], []
+    for xml_file in glob.glob(XML_GLOB):
+        try:
+            tree = ET.parse(xml_file)
+        except ET.ParseError:
+            continue
+        for tc in tree.getroot().iter("testcase"):
+            if tc.find("failure") is None and tc.find("error") is None:
+                continue
+            msg = _node_text(tc)
+            name = tc.get("name", "")
+            short = name.split(" ")[0]
+            if "but none produced" in msg:
+                m = NONE_RE.search(msg)
+                if not m:
+                    continue
+                path = os.path.join(REF_DIR, m.group(1))
+                if not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    txt = fh.read()
+                codes = CODE_RE.findall(txt)
+                if not codes:
+                    continue
+                sig = tuple(sorted(set(codes)))
+                none_produced.append((short, sig, len(codes), m.group(1)))
+            elif "--- expected" in msg:
+                minus, plus = parse_diff_lines(msg)
+                if any(parse_err(l) for l in minus + plus):
+                    continue  # has error lines → handled by collect()
+                changed = len(minus) + len(plus)
+                if changed == 0:
+                    continue
+                output_diffs.append((short, changed, _classify_output(name)))
+    return none_produced, output_diffs
+
+
 def tag(name: str, skipped: set[str]) -> str:
     base = name.split("[jvm]")[0].strip()
     # Strip the "_ts__strict_false__" suffix chunk when present to match skipped keys
@@ -135,6 +225,13 @@ def tag(name: str, skipped: set[str]) -> str:
 def main(argv):
     fresh_only = "--fresh" in argv
     show_all = "--all" in argv
+    none_only = "--none" in argv
+    output_only = "--output" in argv
+    code_filter = None
+    if "--code" in argv:
+        i = argv.index("--code")
+        if i + 1 < len(argv):
+            code_filter = argv[i + 1].upper()
     skipped = load_skipped_tests()
 
     xmls = glob.glob(XML_GLOB)
@@ -179,9 +276,63 @@ def main(argv):
                     print(f"                  exp: {ex[1][:80]}")
                     print(f"                  act: {ac[1][:80]}")
 
-    emit("EXTRA DIAGS (too aggressive)", extras, "extra")
-    emit("MISSING DIAGS", missings, "missing")
-    emit("CODE SWAPS", swaps, "swap")
+    def emit_none(none_produced):
+        print("=" * 80)
+        rows = none_produced
+        if fresh_only:
+            rows = [r for r in rows if tag(r[0], skipped).strip() != "[SKIP]"]
+        if code_filter:
+            rows = [r for r in rows if code_filter in r[1]]
+        # group by code signature; within a group sort by err-line count
+        groups = defaultdict(list)
+        for r in rows:
+            groups[r[1]].append(r)
+        # rank signatures: single-code first, then by tractability (fewest lines),
+        # then by group size (bigger cluster = more leverage)
+        ranked = sorted(
+            groups.items(),
+            key=lambda kv: (len(kv[0]), min(r[2] for r in kv[1]), -len(kv[1])),
+        )
+        total = sum(len(v) for v in groups.values())
+        print(f"NONE-PRODUCED (baseline expects errors, we emit none): {total} "
+              f"across {len(groups)} code signatures")
+        for sig, members in ranked:
+            members.sort(key=lambda r: r[2])
+            print(f"  --- {'+'.join(sig)}  ({len(members)} tests) ---")
+            for short, _sig, nlines, _bl in members[:limit]:
+                mark = tag(short, skipped)
+                print(f"    {mark}{nlines:>2}ln {short}")
+
+    def emit_output(output_diffs):
+        print("=" * 80)
+        rows = output_diffs
+        if fresh_only:
+            rows = [r for r in rows if tag(r[0], skipped).strip() != "[SKIP]"]
+        if code_filter:
+            rows = []  # OUTPUT diffs carry no codes
+        bykind = defaultdict(list)
+        for r in rows:
+            bykind[r[2]].append(r)
+        print(f"OUTPUT DIFFS (JS/decl/sourcemap, no error codes): {len(rows)}")
+        for kind in sorted(bykind, key=lambda k: -len(bykind[k])):
+            members = sorted(bykind[kind], key=lambda r: r[1])
+            print(f"  --- {kind}  ({len(members)} tests) ---")
+            for short, changed, _k in members[:limit]:
+                mark = tag(short, skipped)
+                print(f"    {mark}Δ{changed:<3} {short}")
+
+    none_produced, output_diffs = collect_uncovered()
+
+    if none_only:
+        emit_none(none_produced)
+    elif output_only:
+        emit_output(output_diffs)
+    else:
+        emit("EXTRA DIAGS (too aggressive)", extras, "extra")
+        emit("MISSING DIAGS", missings, "missing")
+        emit("CODE SWAPS", swaps, "swap")
+        emit_none(none_produced)
+        emit_output(output_diffs)
 
     if skipped:
         print()
