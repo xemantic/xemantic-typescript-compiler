@@ -29097,6 +29097,31 @@ interface DataView {
             val classCtorParams = mutableMapOf<String, FuncParamInfo>()
             collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile)
 
+            // B95c (round 82): a class with an `extends` base but NO own constructor inherits
+            // the base's constructor arity. collectFuncDecls records NOTHING for these (a
+            // forward reference like `class derived extends base {}` where `base` is declared
+            // later can't be resolved during the single linear pass), so `new derived()` was
+            // never arity-checked. Resolve inherited ctors here via a fixpoint (handles forward
+            // references and `A extends B extends C` chains). Conservative: a class whose base
+            // is unresolvable (imported, mixin-expression base, circular) stays unrecorded → no
+            // TS2554, never a false positive.
+            val pendingCtorInherit = mutableMapOf<String, String>()
+            collectInheritedCtorPending(result.sourceFile.statements, classCtorParams, pendingCtorInherit)
+            var inheritChanged = true
+            while (inheritChanged && pendingCtorInherit.isNotEmpty()) {
+                inheritChanged = false
+                val iter = pendingCtorInherit.entries.iterator()
+                while (iter.hasNext()) {
+                    val e = iter.next()
+                    val baseInfo = classCtorParams[e.value]
+                    if (baseInfo != null) {
+                        classCtorParams[e.key] = baseInfo
+                        iter.remove()
+                        inheritChanged = true
+                    }
+                }
+            }
+
             // Walk statements checking call expressions
             checkArgCountInStatements(result.sourceFile.statements, funcParams, classCtorParams, source, fileName)
         }
@@ -29140,6 +29165,35 @@ interface DataView {
             minTypeParams = tps?.count { it.default == null } ?: 0,
             parameters = stmt.parameters,
         )
+    }
+
+    /** B95c: collect classes that have an `extends` base but no own constructor and are not
+     *  already recorded by collectFuncDecls (no-heritage / circular / own-ctor cases). Maps
+     *  className → single-Identifier base name for the post-collection inheritance fixpoint. */
+    private fun collectInheritedCtorPending(
+        statements: List<Statement>,
+        classCtorParams: Map<String, FuncParamInfo>,
+        pending: MutableMap<String, String>,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val name = stmt.name?.text ?: continue
+                    if (classCtorParams.containsKey(name)) continue
+                    if (stmt.members.any { it is Constructor }) continue
+                    val extClause = stmt.heritageClauses?.firstOrNull {
+                        it.token == SyntaxKind.ExtendsKeyword
+                    } ?: continue
+                    val baseName = (extClause.types.firstOrNull()?.expression as? Identifier)?.text ?: continue
+                    pending[name] = baseName
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body as? ModuleBlock ?: continue
+                    collectInheritedCtorPending(body.statements, classCtorParams, pending)
+                }
+                else -> {}
+            }
+        }
     }
 
     private fun collectFuncDecls(
@@ -29536,10 +29590,15 @@ interface DataView {
                             val args = expr.arguments ?: emptyList()
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
                         } else if (argCount < info.minParams) {
+                            // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
+                            // not just the class identifier — matches TypeScript. Pass info.parameters
+                            // so the TS6210 "argument for 'x' not provided" related info fires (it points
+                            // at the ctor's param at the missing index; for an inherited ctor that's the
+                            // base class's param).
                             if (info.hasRest) {
-                                emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName)
+                                emitTS2555TooFew(info.minParams, argCount, expr, source, fileName, info.parameters)
                             } else {
-                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName)
+                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters)
                             }
                         }
                     }
@@ -29743,8 +29802,12 @@ interface DataView {
                     }
                     is Identifier -> {
                         // TS6210: "An argument for 'x' was not provided."
-                        val paramStart = paramName.pos
-                        val paramLen = paramName.text.length
+                        // B95c (round 82): anchor at the PARAMETER's pos (Parameter.pos is captured
+                        // before modifiers, so for a parameter-property `public n` it points at
+                        // `public` — matching TypeScript), not the name's pos. For a plain param,
+                        // Parameter.pos == name.pos so function-call TS6210 is unaffected.
+                        val paramStart = missingParam.pos
+                        val paramLen = (paramName.pos + paramName.text.length - paramStart).coerceAtLeast(1)
                         val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
                         relatedInfo.add(Diagnostic(
                             message = "An argument for '${paramName.text}' was not provided.",
@@ -39555,7 +39618,10 @@ interface DataView {
             is DeleteExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is AsExpression -> {
-                if (inNullCastOverlapPass) emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
+                if (inNullCastOverlapPass) {
+                    emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
+                    emitTS2352IfNullAsCast(expr, source, fileName)
+                }
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
             is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
@@ -39681,6 +39747,25 @@ interface DataView {
     private fun emitTS2352IfNullCast(
         expr: TypeAssertionExpression, source: String, fileName: String,
     ) {
+        emitTS2352NullishCastCore(
+            expr.expression, expr.type, expr.pos, expressionTrueEnd(expr.expression), source, fileName,
+        )
+    }
+
+    /** B95d (round 82): `undefined as number` / `null as Foo` AsExpression form. The shared
+     *  [walkTypeAssertionsInExpr] visits AsExpression but only forwards TypeAssertionExpression
+     *  to the emit callback, so `as` casts were never checked by [emitTS2352IfNullCast]. Same
+     *  gate; span = the whole `<src> as <type>` (expr.pos .. tightEnd). */
+    private fun emitTS2352IfNullAsCast(expr: AsExpression, source: String, fileName: String) {
+        val spanEnd = if (expr.tightEnd > expr.pos) expr.tightEnd else expr.end
+        emitTS2352NullishCastCore(expr.expression, expr.type, expr.pos, spanEnd, source, fileName)
+    }
+
+    /** Shared core for TS2352 nullish/primitive-mismatch cast diagnostics (both `<T>x` and
+     *  `x as T` forms). [rawInner] = source expr, [typeNode] = target type, span = [spanStart]..[spanEnd]. */
+    private fun emitTS2352NullishCastCore(
+        rawInner: Expression, typeNode: TypeNode, spanStart: Int, spanEnd: Int, source: String, fileName: String,
+    ) {
         // B51.6: also catch `<FuncType>(undefined)` casts (matching
         // `defaultValueInFunctionTypes_ts`). Source must be a bare `null` or
         // `undefined` Identifier; unwrap one level of ParenthesizedExpression.
@@ -39689,7 +39774,7 @@ interface DataView {
         // B65.4: also accept Identifier source whose declared type is a
         // concrete primitive different from the target primitive
         // (`<boolean>(n)` where `n: number`).
-        var inner: Expression = expr.expression
+        var inner: Expression = rawInner
         if (inner is ParenthesizedExpression) inner = inner.expression
         val identType: Type? = if (inner is Identifier && inner.text != "null" && inner.text != "undefined") {
             try { getTypeOfIdentifier(inner) } catch (_: StackOverflowError) { null }
@@ -39701,7 +39786,6 @@ interface DataView {
                 setOf("number", "string", "boolean", "bigint", "symbol") -> identType.intrinsicName
             else -> return
         }
-        val typeNode = expr.type
         // 17.109: Compute the display name and gate on type-shape.
         // Allowed shapes (`null` doesn't sufficiently overlap):
         //   - TypeReference to named Class or Interface (not TypeAlias)
@@ -39751,12 +39835,8 @@ interface DataView {
             else -> return
         }
 
-        val start = expr.pos
-        // B51.6: use the OUTER expression's end (including `)` for paren-wrapped
-        // source like `<T>(undefined)`), not the unwrapped Identifier's end.
-        val endPos = expressionTrueEnd(expr.expression)
-        val length = (endPos - start).coerceAtLeast(1)
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val length = (spanEnd - spanStart).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
         diagnostics.add(Diagnostic(
             message = "Conversion of type '$sourceLit' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
             category = DiagnosticCategory.Error,
@@ -39764,7 +39844,7 @@ interface DataView {
             fileName = fileName,
             line = line,
             character = character,
-            start = start,
+            start = spanStart,
             length = length,
         ))
     }
@@ -67013,6 +67093,61 @@ interface DataView {
                         return
                     }
                     return
+                }
+
+                // B95e (round 82): enum-receiver missing member, e.g. `U8.bit_2` where the
+                // enum U8 (RegularEnum, no Module flag → not handled above) has member BIT_2.
+                // TS2551 "Property 'bit_2' does not exist on type 'typeof U8'. Did you mean
+                // 'BIT_2'?" + related TS2728 at the member declaration. Falls to plain TS2339
+                // when no close spelling match. Gated on a pure Enum symbol whose exports hold
+                // the members (always — the receiver here is already an Identifier).
+                run {
+                    val enumExports = identSymbol.exports
+                    // Only PROPERTY access `E.foo` (isPropertyAccessShape) — NOT element access
+                    // `E[0]` (numeric enum reverse-mapping `E[0]` is valid) nor `E["x"]`. Also
+                    // skip an all-numeric propName defensively (reverse mapping).
+                    val isNumericProp = propName.isNotEmpty() && propName.all { it in '0'..'9' }
+                    if (identSymbol.flags.hasAny(SymbolFlags.Enum)
+                        && !identSymbol.flags.hasAny(SymbolFlags.Module)
+                        && enumExports != null
+                        && isPropertyAccessShape
+                        && !isNumericProp
+                    ) {
+                        if (enumExports.containsKey(propName) || propName in RUNTIME_PROPERTIES) return
+                        val typeName = "typeof $identName"
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        val suggestion = getSpellingSuggestionFromNames(propName, enumExports.keys)
+                        if (suggestion != null) {
+                            val memberDecl = enumExports[suggestion]?.declarations?.firstOrNull() as? EnumMember
+                            val related = memberDecl?.let { md ->
+                                val nm = md.name
+                                val namePos = nm.pos
+                                val nameLen = (nm as? Identifier)?.text?.length ?: (nm.end - nm.pos).coerceAtLeast(1)
+                                val (rl, rc) = getLineAndCharacterOfPosition(source, namePos)
+                                listOf(Diagnostic(
+                                    message = "'$suggestion' is declared here.",
+                                    category = DiagnosticCategory.Message, code = 2728,
+                                    fileName = fileName, line = rl, character = rc,
+                                    start = namePos, length = nameLen,
+                                ))
+                            } ?: emptyList()
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
+                                category = DiagnosticCategory.Error, code = 2551,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                                relatedInformation = related,
+                            ))
+                        } else {
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$typeName'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                        }
+                        return
+                    }
                 }
 
                 val rawType = getTypeOfSymbol(identSymbol)
