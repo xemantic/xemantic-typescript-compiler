@@ -40710,6 +40710,7 @@ interface DataView {
             try {
                 for (stmt in result.sourceFile.statements) {
                     walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfSameTargetMismatch)
+                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfFunctionReturnMismatch)
                 }
             } finally {
                 currentFileLocals = savedLocals
@@ -40806,6 +40807,65 @@ interface DataView {
             ))
             return
         }
+    }
+
+    /**
+     * B95h (round 82): TS2352 for a FUNCTION-typed cast whose call-signature RETURN type is a
+     * different primitive than the target call signature's — `<{ (): number; }> function() {
+     * return "err"; }` (source `() => string`). Emits the whole-cast span + chain "Type
+     * 'string' is not comparable to type 'number'." Conservative: both sides single-or-first
+     * call sig, both returns distinct primitive intrinsics. (contextualTyping39/41.)
+     */
+    private fun emitTS2352IfFunctionReturnMismatch(
+        expr: TypeAssertionExpression, source: String, fileName: String,
+    ) {
+        var inner: Expression = expr.expression
+        if (inner is ParenthesizedExpression) inner = inner.expression
+        if (inner !is FunctionExpression && inner !is ArrowFunction) return
+        val sourceType = try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
+        if (sourceType !is Type.Object) return
+        val srcSigs = sourceType.callSignatures ?: return
+        if (srcSigs.isEmpty()) return
+        val targetType = try { getTypeFromTypeNode(expr.type) } catch (_: StackOverflowError) { return }
+        if (targetType !is Type.Object) return
+        val tgtSigs = targetType.callSignatures ?: return
+        if (tgtSigs.isEmpty()) return
+        val srcRet = srcSigs[0].resolvedReturnType ?: return
+        val tgtRet = tgtSigs[0].resolvedReturnType ?: return
+        val prims = setOf("string", "number", "boolean", "bigint", "symbol")
+        if (srcRet !is Type.Intrinsic || tgtRet !is Type.Intrinsic) return
+        if (srcRet.intrinsicName !in prims || tgtRet.intrinsicName !in prims) return
+        if (srcRet.intrinsicName == tgtRet.intrinsicName) return
+        val start = expr.pos
+        // Span = the whole `<T> <source>` cast. `expressionTrueEnd` has no FunctionExpression case
+        // (overshoots by 1 via the default, which also leaks through the ParenthesizedExpression
+        // case), so compute the end from the unwrapped function body's `}` (`closeBracePos + 1`)
+        // plus one for each wrapping paren — handles both `<T> function(){...}` (39) and
+        // `<T> (function(){...})` (41, the `)` after `}`).
+        val parenLayers = if (expr.expression is ParenthesizedExpression) 1 else 0
+        val innerBlock: Block? = when (inner) {
+            is FunctionExpression -> inner.body
+            is ArrowFunction -> inner.body as? Block
+            else -> null
+        }
+        val endPos = if (innerBlock != null && innerBlock.closeBracePos >= 0) {
+            innerBlock.closeBracePos + 1 + parenLayers
+        } else {
+            expressionTrueEnd(expr.expression)
+        }
+        val length = (endPos - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '${typeToString(sourceType)}' to type '${typeToString(targetType)}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            messageChain = listOf("  Type '${srcRet.intrinsicName}' is not comparable to type '${tgtRet.intrinsicName}'."),
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /**
