@@ -15423,6 +15423,29 @@ class Checker(
                             emitTS2503(lname, leftmost, source, fileName)
                             return
                         }
+                        // TS2713: the leftmost is a TYPE PARAMETER used as a namespace qualifier
+                        // (`T.abc` where `T` is `<T extends …>`). A type parameter is a type, not a
+                        // namespace — TypeScript suggests the indexed-access form `T["abc"]`.
+                        if (scope.isTypeParam(lname)) {
+                            var q: QualifiedName = name
+                            while (q.left is QualifiedName) q = q.left as QualifiedName
+                            val memberNode = q.right
+                            val member = memberNode.text
+                            val start = leftmost.pos
+                            val length = (memberNode.pos + member.length - start).coerceAtLeast(1)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot access '$lname.$member' because '$lname' is a type, but not a namespace. Did you mean to retrieve the type of the property '$member' in '$lname' with '$lname[\"$member\"]'?",
+                                category = DiagnosticCategory.Error,
+                                code = 2713,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                            return
+                        }
                         // Leftmost IS in scope. If the resolved symbol is NOT a namespace/module,
                         // look for a similarly-named namespace and emit TS2833.
                         val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
