@@ -23690,6 +23690,21 @@ class Checker(
     // TS1042: modifier cannot be used here (object literal members)
     // -----------------------------------------------------------------------
 
+    /** Source keyword for a modifier the parser recovered on an object-literal
+     *  property assignment (used for the TS1042 message + span). */
+    private fun objLitModifierKeyword(mod: ModifierFlag): String? = when (mod) {
+        ModifierFlag.Public -> "public"
+        ModifierFlag.Private -> "private"
+        ModifierFlag.Protected -> "protected"
+        ModifierFlag.Abstract -> "abstract"
+        ModifierFlag.Static -> "static"
+        ModifierFlag.Readonly -> "readonly"
+        ModifierFlag.Override -> "override"
+        ModifierFlag.Accessor -> "accessor"
+        ModifierFlag.Async -> "async"
+        else -> null
+    }
+
     private fun checkObjectLiteralModifiers() {
         val accessModifiers = setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
         for (result in binderResults) {
@@ -23714,6 +23729,30 @@ class Checker(
             when (node) {
                 is ObjectLiteralExpression -> {
                     for (prop in node.properties) {
+                        // TS1042: a property assignment (`name: value`) cannot carry ANY
+                        // modifier — the parser recovers them into prop.modifiers. Emit
+                        // one TS1042 per modifier (no TS1184 — that's methods-only),
+                        // in source order.
+                        if (prop is PropertyAssignment && prop.modifiers.isNotEmpty()) {
+                            val found = prop.modifiers.mapNotNull { mod ->
+                                val nm = objLitModifierKeyword(mod) ?: return@mapNotNull null
+                                val idx = source.indexOf(nm, prop.pos)
+                                if (idx in prop.pos until prop.end.coerceAtMost(source.length)) idx to nm else null
+                            }.sortedBy { it.first }
+                            for ((idx, nm) in found) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, idx)
+                                diagnostics.add(Diagnostic(
+                                    message = "'$nm' modifier cannot be used here.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 1042,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = idx,
+                                    length = nm.length,
+                                ))
+                            }
+                        }
                         val modifiers = when (prop) {
                             is MethodDeclaration -> prop.modifiers
                             is GetAccessor -> prop.modifiers

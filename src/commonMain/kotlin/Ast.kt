@@ -1641,6 +1641,10 @@ data class QualifiedName(
 data class PropertyAssignment(
     val name: NameNode,
     val initializer: Expression,
+    /** Illegal modifiers the parser recovered before the property name (e.g.
+     *  `public foo: 1` in an object literal). Always empty for valid syntax;
+     *  the checker emits TS1042 for each. */
+    val modifiers: Set<ModifierFlag> = emptySet(),
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
