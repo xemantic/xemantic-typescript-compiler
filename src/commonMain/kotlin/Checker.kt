@@ -838,6 +838,8 @@ class Checker(
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
         checkTypesPackageImports()
+        // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
+        checkNamedImportFromExportEqualsInDts()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
         // 16. Check call expression argument counts (TS2554)
@@ -22656,6 +22658,49 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+            }
+        }
+    }
+
+    /**
+     * B98.r53: a `.d.ts` file doing `import { X } from './m'` where `./m`'s
+     * `export =` target is a namespace/object that has no member `X` → TS2305
+     * "Module '"./m"' has no exported member 'X'.". The general named-import
+     * existence path (checkDefaultImports) skips `.d.ts` files, and
+     * checkNamedImportExistence `continue`s on `export =` modules. This narrow
+     * walker covers the `.d.ts` + export=-namespace shape only, reusing
+     * [getExportEqualsMemberNames] (non-null only for a genuine namespace/object
+     * `export =` — null shapes fall through with no emission → FP-safe).
+     */
+    private fun checkNamedImportFromExportEqualsInDts() {
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
+        if (!isMultiFile) return
+        if (!options.moduleSuffixes.isNullOrEmpty()) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val clause = stmt.importClause ?: continue
+                if (clause.isTypeOnly) continue
+                val named = clause.namedBindings as? NamedImports ?: continue
+                val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
+                val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+                val targetResult = fileResults[resolvedFile] ?: continue
+                val targetFile = targetResult.sourceFile
+                if (!targetFile.statements.any { it is ExportAssignment && it.isExportEquals }) continue
+                val exportEqMembers = getExportEqualsMemberNames(targetFile, targetResult) ?: continue
+                for (specEl in named.elements) {
+                    if (specEl.isTypeOnly) continue
+                    val nameNode = specEl.propertyName ?: specEl.name
+                    val importedName = nameNode.text
+                    if (importedName == "default") continue
+                    if (importedName !in exportEqMembers) {
+                        emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                    }
+                }
             }
         }
     }
