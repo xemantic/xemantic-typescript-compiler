@@ -4772,7 +4772,13 @@ class Checker(
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
-            val isModule = isModuleFile(result.sourceFile.statements)
+            // B98.r15: a checkJs `.js`/`.cjs` file with CommonJS exports (`exports.x = …`,
+            // `module.exports = …`) is a MODULE — its file-level locals are module-scoped (not
+            // global), so unused locals ARE checked (TS6133). `isModuleFile` only recognizes ES
+            // import/export, so JS CommonJS modules were wrongly treated as scripts and skipped.
+            val isModule = isModuleFile(result.sourceFile.statements) ||
+                (isJsLikeFileName(result.sourceFile.fileName) &&
+                    hasCommonJsExportAssignment(result.sourceFile.statements))
             checkUnusedInStatements(
                 result.sourceFile.statements,
                 source,
@@ -4810,6 +4816,34 @@ class Checker(
                         if (ModifierFlag.Export in modifiers) return true
                     }
                 }
+            }
+        }
+        return false
+    }
+
+    /**
+     * B98.r15: detect a CommonJS module indicator in a JS file's top-level statements:
+     * `exports.x = …`, `module.exports = …`, or `module.exports.x = …`. Used to treat such
+     * files as modules for unused-local checking (TS6133).
+     */
+    private fun hasCommonJsExportAssignment(statements: List<Statement>): Boolean {
+        fun isExportsTarget(e: Expression): Boolean = when (e) {
+            // `exports`
+            is Identifier -> e.text == "exports"
+            is PropertyAccessExpression -> {
+                val recv = e.expression
+                // `module.exports` or `exports.x` or `module.exports.x`
+                (recv is Identifier && recv.text == "module" && e.name.text == "exports") ||
+                    (recv is Identifier && recv.text == "exports") ||
+                    isExportsTarget(recv)
+            }
+            else -> false
+        }
+        for (stmt in statements) {
+            if (stmt !is ExpressionStatement) continue
+            val expr = stmt.expression
+            if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals && isExportsTarget(expr.left)) {
+                return true
             }
         }
         return false
