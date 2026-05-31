@@ -1174,6 +1174,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileModuleAugmentationDuplicates()
         }
+        // 73i. Check `export * from` re-export ambiguity (TS2308) — two different modules
+        //      re-exported via `export *` both directly export the same member name.
+        if (binderResults.size > 1) {
+            checkExportStarAmbiguity()
+        }
         // 74. Check module hidden by local declaration (TS2437)
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
@@ -17673,6 +17678,98 @@ class Checker(
                     if (n is Identifier && ModifierFlag.Export in s.modifiers) out.add(n.text)
                 }
                 else -> {}
+            }
+        }
+    }
+
+    /**
+     * B98.r12: collect the DIRECTLY-declared exported names of a file (top-level `export`-modified
+     * declarations + `export { x }`/`export { x as y }` named re-exports without `from`). Does NOT
+     * follow the file's own `export * from` chains — keeping it to directly-declared names means two
+     * different files' same-named exports are always DISTINCT symbols (the TS2308 conflict
+     * condition), and a common-source re-export of the same symbol is naturally excluded.
+     */
+    private fun collectFileDirectExportedNames(stmts: List<Statement>, out: MutableSet<String>) {
+        for (s in stmts) {
+            when (s) {
+                is VariableStatement -> if (ModifierFlag.Export in s.modifiers) {
+                    for (decl in s.declarationList.declarations) (decl.name as? Identifier)?.let { out.add(it.text) }
+                }
+                is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers && ModifierFlag.Default !in s.modifiers && s.name != null) out.add(s.name.text)
+                is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers && ModifierFlag.Default !in s.modifiers && s.name != null) out.add(s.name.text)
+                is InterfaceDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is TypeAliasDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is EnumDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is ImportEqualsDeclaration -> if (ModifierFlag.Export in s.modifiers) out.add(s.name.text)
+                is ModuleDeclaration -> { val n = s.name; if (n is Identifier && ModifierFlag.Export in s.modifiers) out.add(n.text) }
+                is ExportDeclaration -> if (s.moduleSpecifier == null) {
+                    (s.exportClause as? NamedExports)?.elements?.forEach { out.add(it.name.text) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * B98.r12: TS2308 "Module 'X' has already exported a member named 'Y'. Consider explicitly
+     * re-exporting to resolve the ambiguity." — fires when a file has ≥2 `export * from "…"`
+     * declarations resolving to DIFFERENT files that both directly export the same member name
+     * (and the name isn't also exported locally in the importing file). Emitted at the SECOND (and
+     * each subsequent) conflicting `export *`, naming the FIRST module's specifier.
+     */
+    private fun checkExportStarAmbiguity() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Collect `export * from "X"` declarations (no `as`, has specifier) in source order.
+            data class StarExport(val targetFile: String, val node: ExportDeclaration, val spec: String)
+            val starExports = mutableListOf<StarExport>()
+            for (s in stmts) {
+                if (s !is ExportDeclaration) continue
+                if (s.moduleSpecifier == null || s.exportClause != null) continue
+                val spec = (s.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val target = resolveModuleSpecifierRelative(spec, fileName) ?: continue
+                starExports.add(StarExport(target, s, spec))
+            }
+            if (starExports.size < 2) continue
+            // The importing file's own directly-exported names (these win — suppress TS2308).
+            val localExports = mutableSetOf<String>()
+            collectFileDirectExportedNames(stmts, localExports)
+            // name -> ordered list of (targetFile, specText, node) — one per star-export that exports it.
+            val nameToStars = mutableMapOf<String, MutableList<Triple<String, String, ExportDeclaration>>>()
+            for (se in starExports) {
+                val targetResult = fileResults[se.targetFile] ?: continue
+                val names = mutableSetOf<String>()
+                collectFileDirectExportedNames(targetResult.sourceFile.statements, names)
+                for (n in names) {
+                    if (n == "default") continue
+                    nameToStars.getOrPut(n) { mutableListOf() }.add(Triple(se.targetFile, se.spec, se.node))
+                }
+            }
+            for ((name, occ) in nameToStars) {
+                if (name in localExports) continue
+                // Need ≥2 DISTINCT target files for a genuine conflict.
+                if (occ.map { it.first }.distinct().size < 2) continue
+                val firstSpec = occ[0].second
+                for (i in 1 until occ.size) {
+                    val node = occ[i].third
+                    // Squiggle covers the whole `export * from "…";` statement (incl. trailing `;`).
+                    var endPos = node.pos
+                    while (endPos < source.length && source[endPos] != ';' && source[endPos] != '\n') endPos++
+                    if (endPos < source.length && source[endPos] == ';') endPos++
+                    val (line, character) = getLineAndCharacterOfPosition(source, node.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Module \"$firstSpec\" has already exported a member named '$name'. Consider explicitly re-exporting to resolve the ambiguity.",
+                        category = DiagnosticCategory.Error,
+                        code = 2308,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = node.pos,
+                        length = endPos - node.pos,
+                    ))
+                }
             }
         }
     }
