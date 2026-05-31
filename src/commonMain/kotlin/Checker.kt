@@ -65696,6 +65696,48 @@ interface DataView {
             ))
             return true // Only report first conflict per class
         }
+
+        // Computed-name private members (`private [x]` where x is a const symbol) are
+        // NOT in the resolved member tables (getMemberName returns null for them), so
+        // the identifier-based loop above misses them. They are nominal: a derived class
+        // re-declaring a private `[x]` already declared as private on a base is always a
+        // "separate declarations" conflict (TS2415), regardless of value type.
+        fun privateComputedKeys(els: List<ClassElement>): Set<String> {
+            val keys = mutableSetOf<String>()
+            for (m in els) {
+                val (priv, isStatic, nameNode) = when (m) {
+                    is PropertyDeclaration -> Triple(ModifierFlag.Private in m.modifiers, ModifierFlag.Static in m.modifiers, m.name)
+                    is MethodDeclaration -> Triple(ModifierFlag.Private in m.modifiers, ModifierFlag.Static in m.modifiers, m.name)
+                    is GetAccessor -> Triple(ModifierFlag.Private in m.modifiers, ModifierFlag.Static in m.modifiers, m.name)
+                    is SetAccessor -> Triple(ModifierFlag.Private in m.modifiers, ModifierFlag.Static in m.modifiers, m.name)
+                    else -> Triple(false, false, null as NameNode?)
+                }
+                if (!priv || isStatic) continue
+                val cpn = nameNode as? ComputedPropertyName ?: continue
+                (cpn.expression as? Identifier)?.let { keys.add(it.text) }
+            }
+            return keys
+        }
+        val baseComputedPriv = (baseType.symbol?.declarations?.filterIsInstance<ClassDeclaration>() ?: emptyList())
+            .flatMap { privateComputedKeys(it.members) }.toSet()
+        if (baseComputedPriv.isNotEmpty()) {
+            val shared = privateComputedKeys(classDecl.members).firstOrNull { it in baseComputedPriv }
+            if (shared != null) {
+                val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Class '$rawClassName' incorrectly extends base class '$baseName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2415,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = classNameNode.pos,
+                    length = rawClassName.length,
+                    messageChain = listOf("  Types have separate declarations of a private property '[$shared]'."),
+                ))
+                return true
+            }
+        }
         return false
     }
 
