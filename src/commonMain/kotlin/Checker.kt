@@ -1199,6 +1199,8 @@ class Checker(
         checkInvalidParameterDecorators()
         // 81. B98.r8: TS6053 "File 'X' not found." for missing `/// <reference path>` targets.
         checkReferencePathsExist()
+        // 82. B98.r13: TS7022 self-referential un-annotated object/array-literal variables.
+        checkRecursiveLiteralVariables()
         } // end if (!declarationOnly)
     }
 
@@ -61465,6 +61467,78 @@ interface DataView {
                     checkIndexSigInStatement(stmt, source, fileName)
                 }
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /**
+     * B98.r13: TS7022 "'X' implicitly has type 'any' because it does not have a type annotation
+     * and is referenced directly or indirectly in its own initializer." — fires for an
+     * un-annotated `var/let/const X = { … X … }` (or `[ … X … ]`) whose OBJECT/ARRAY-LITERAL
+     * initializer references X. Restricted to object/array literals because only there is the
+     * inferred type genuinely circular (the referenced type is embedded directly) — a call/`new`
+     * with an annotated return type breaks the circularity and must NOT fire. We DO NOT descend
+     * into nested function/arrow/class bodies (deferred references). Gated `!strictExplicitlyFalse`.
+     */
+    private fun checkRecursiveLiteralVariables() {
+        if (options.strictExplicitlyFalse) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                checkRecursiveLiteralVarInStatement(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun checkRecursiveLiteralVarInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue                       // annotated → not implicit-any
+                    val name = (decl.name as? Identifier)?.text ?: continue
+                    val init = decl.initializer
+                    if (init !is ObjectLiteralExpression && init !is ArrayLiteralExpression) continue
+                    if (!objectInitializerSelfReferences(init, name)) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, decl.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'$name' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+                        category = DiagnosticCategory.Error,
+                        code = 7022,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = decl.name.pos,
+                        length = name.length,
+                    ))
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach {
+                checkRecursiveLiteralVarInStatement(it, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** True if [expr] references [name] directly inside an object/array literal value position
+     *  (descending only through literals/spreads/parens — NOT function/arrow/class bodies). */
+    private fun objectInitializerSelfReferences(expr: Expression?, name: String): Boolean {
+        if (expr == null) return false
+        return when (expr) {
+            is Identifier -> expr.text == name
+            is ParenthesizedExpression -> objectInitializerSelfReferences(expr.expression, name)
+            is SpreadElement -> objectInitializerSelfReferences(expr.expression, name)
+            is ArrayLiteralExpression -> expr.elements.any { objectInitializerSelfReferences(it, name) }
+            is ObjectLiteralExpression -> expr.properties.any { p ->
+                when (p) {
+                    is PropertyAssignment -> objectInitializerSelfReferences(p.initializer, name)
+                    is ShorthandPropertyAssignment -> p.name.text == name
+                    is SpreadAssignment -> objectInitializerSelfReferences(p.expression, name)
+                    else -> false
+                }
+            }
+            else -> false
         }
     }
 
