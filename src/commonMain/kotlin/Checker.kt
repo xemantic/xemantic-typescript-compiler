@@ -63432,6 +63432,13 @@ interface DataView {
                 if (baseName == effectiveSourceBase) continue
                 val baseType = getTypeFromTypeNode(baseNode)
                 if (baseType === errorType || baseType === anyType) continue
+                // The empty object type `{}` is a universal assignment target — every non-nullish
+                // type is assignable to it (e.g. `[s:string]: number` narrowing a base's
+                // `[s:string]: {}` is valid). Our relation engine mis-evaluates primitive→`{}`,
+                // so skip the comparison when the target index value is an empty object type to
+                // avoid a false TS2430 (e.g. `hidingIndexSignatures`). A genuine conflict always
+                // has a non-`{}` target value (e.g. `number` vs `string`).
+                if (isEmptyObjectValueType(baseType)) continue
                 if (!checkTypeRelatedTo(effectiveType, baseType, assignableRelation)) {
                     val effDisplay = formatTypeForDisplay(effectiveNode) ?: typeToString(effectiveType)
                     val baseDisplay = formatTypeForDisplay(baseNode) ?: typeToString(baseType)
@@ -63454,6 +63461,23 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /**
+     * True for the empty object type `{}` — an anonymous [Type.Object] (not a Reference/named
+     * Interface) with no members, no call/construct signatures, and no index signatures. Used as a
+     * universal-target guard: every non-nullish type is assignable to `{}`, so a `{}`-valued index
+     * signature can never be the LOSING side of a TS2430 index-signature conflict.
+     */
+    private fun isEmptyObjectValueType(t: Type): Boolean {
+        if (t !is Type.Object || t is Type.Reference || t is Type.Interface) return false
+        if (t.symbol != null) return false
+        resolveStructuredTypeMembers(t)
+        val propsEmpty = (t.properties?.isEmpty() ?: true) && (t.members?.isEmpty() ?: true)
+        return propsEmpty &&
+            t.callSignatures.isNullOrEmpty() &&
+            t.constructSignatures.isNullOrEmpty() &&
+            t.stringIndexInfo == null && t.numberIndexInfo == null
     }
 
     private fun emitTS2430(
