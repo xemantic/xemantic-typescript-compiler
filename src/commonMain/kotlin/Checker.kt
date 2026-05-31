@@ -39857,6 +39857,11 @@ interface DataView {
                     val allowed: SwitchAllowedSet? = when (expr) {
                         is Identifier -> annotatedBindings[expr.text]
                             ?: constBindings[expr.text]?.let { allowedSetFromBinding(it) }
+                        // B98.r60: `switch (/** @type {"foo"|"bar"} */ (value))` — a
+                        // parenthesized JSDoc `@type` cast supplies the switch subject's
+                        // allowed literal set (the parser attaches it as jsdocCastType).
+                        is ParenthesizedExpression -> expr.jsdocCastType?.let { allowedSetFromTypeAnnotation(it, source) }
+                            ?: literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
                         else -> literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
                     }
                     if (allowed != null) {
