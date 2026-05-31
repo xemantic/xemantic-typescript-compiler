@@ -61038,6 +61038,7 @@ interface DataView {
         val functionNames = mutableSetOf<String>()
         val funcDecls = mutableMapOf<String, FunctionDeclaration>()
         val varDecls = mutableMapOf<String, VariableDeclaration>() // variable name → declaration
+        val importEqualsRequire = mutableMapOf<String, String>() // alias → require specifier
         for (stmt in stmts) {
             when (stmt) {
                 is ClassDeclaration -> stmt.name?.let { classNames.add(it.text) }
@@ -61049,6 +61050,12 @@ interface DataView {
                     for (decl in stmt.declarationList.declarations) {
                         val name = (decl.name as? Identifier)?.text ?: continue
                         varDecls[name] = decl
+                    }
+                }
+                is ImportEqualsDeclaration -> {
+                    val ref = stmt.moduleReference
+                    if (ref is ExternalModuleReference) {
+                        (ref.expression as? StringLiteralNode)?.text?.let { importEqualsRequire[stmt.name.text] = it }
                     }
                 }
                 else -> {}
@@ -61129,6 +61136,34 @@ interface DataView {
                         }
                     }
                     val baseName = (baseExpr as? Identifier)?.text ?: continue
+                    // B98.r37: TS2507 for `class C extends X` where X is an
+                    // `import X = require("./mod")` alias and mod has NO `export =` — the alias
+                    // refers to the module NAMESPACE (`typeof import("mod")`), which has no
+                    // construct signature. (When mod has `export = SomeClass`, X IS that class and
+                    // extending it is valid, so the no-`export =` gate is the FP firewall.)
+                    val ieSpec = importEqualsRequire[baseName]
+                    if (ieSpec != null && baseName !in classNames &&
+                        (ieSpec.startsWith("./") || ieSpec.startsWith("../"))) {
+                        val resolved = resolveModuleSpecifierRelative(ieSpec, fileName)
+                        val targetFile = resolved?.let { fileResults[it]?.sourceFile }
+                        if (targetFile != null &&
+                            targetFile.statements.none { it is ExportAssignment && it.isExportEquals }) {
+                            val display = "typeof import(\"${ieSpec.removePrefix("./")}\")"
+                            val start = baseExpr.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$display' is not a constructor function type.",
+                                category = DiagnosticCategory.Error,
+                                code = 2507,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = baseName.length,
+                            ))
+                            continue
+                        }
+                    }
                     // 17.202: TS2507 for `class C extends Foo` where Foo is a
                     // FunctionDeclaration. Display: `(<params>) => <returnType>`.
                     // Only fires when the scope has a function with this name AND
