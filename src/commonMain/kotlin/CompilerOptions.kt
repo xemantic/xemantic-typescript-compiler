@@ -172,6 +172,7 @@ data class CompilerOptions(
     val inlineSources: Boolean = false,
     val sourceRoot: String? = null,
     val composite: Boolean = false,
+    val declarationDir: String? = null,
     val exactOptionalPropertyTypes: Boolean = false,
     val pretty: Boolean = false,
     val incremental: Boolean? = null,
@@ -463,6 +464,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noemit" -> options.copy(noEmit = boolValue)
         "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
+        "declarationdir" -> options.copy(declarationDir = value.trim())
         "declarationmap" -> options.copy(declarationMap = boolValue)
         "removecomments" -> options.copy(removeComments = boolValue)
         "preserveconstenums" -> options.copy(
@@ -840,6 +842,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         "noimplicitany", "noimplicitreturns", "strictnullchecks",
         "nounusedlocals", "nounusedparameters", "baseurl",
         "resolvejsonmodule", "inlinesourcemap", "sourcemap", "maproot",
+        "declarationdir",
     )
 
     // Compute line/column positions for option keys and values in the tsconfig JSON
