@@ -200,6 +200,12 @@ class Checker(
      *  return type is `Promise<T>` — async functions implicitly wrap returns. */
     private var inAsyncFunctionBody = false
 
+    /** Match keys of computed-name private members (`x` for `private [x]: T`) for the
+     *  current class being checked by `checkUnusedPrivateMembers`. Set per-class before
+     *  reference collection; empty for classes with no computed-name members so the
+     *  TS6133 reference collector's behaviour is unchanged in the common case. */
+    private var unusedComputedKeys: Set<String> = emptySet()
+
     /** B55.2: TypeParam declarations currently in scope, keyed by name. Populated
      *  at function-body / method-body / class-member entry; consumed by emitTS2322
      *  to emit TS2208 "type parameter might need an `extends X` constraint" related
@@ -6487,9 +6493,18 @@ class Checker(
         if (!options.noUnusedLocals) return
 
         // Collect private members
-        data class PrivateMember(val name: String, val nameNode: Node)
+        // `name` is the match key (used to detect references); `display` is the
+        // text shown in the TS6133 message and used for the squiggle length. For
+        // a computed-name member `private [x]: T` the match key is the bracket
+        // identifier `x` and the display is `[x]`.
+        data class PrivateMember(val name: String, val display: String, val nameNode: Node)
         val privateMembers = mutableListOf<PrivateMember>()
         val getterSetterNames = mutableSetOf<String>() // track getter/setter pairs
+        // Match keys of computed-name private members (e.g. `x` for `private [x]: T`).
+        // Used to recognize `this[x]` element-access reads as uses of `[x]` while
+        // excluding `this[x] = 0` write-only assignments. Empty for the common case
+        // (no computed members) so reference collection is unchanged there.
+        val computedKeys = mutableSetOf<String>()
 
         for (member in members) {
             val isPrivate = when (member) {
@@ -6501,19 +6516,24 @@ class Checker(
             }
             if (!isPrivate) continue
 
-            val name = when (member) {
-                is PropertyDeclaration -> (member.name as? Identifier)?.text
-                is MethodDeclaration -> (member.name as? Identifier)?.text
-                is GetAccessor -> (member.name as? Identifier)?.text
-                is SetAccessor -> (member.name as? Identifier)?.text
-                else -> null
-            } ?: continue
-
-            val nameNode = when (member) {
+            val memberName: Node? = when (member) {
                 is PropertyDeclaration -> member.name
                 is MethodDeclaration -> member.name
                 is GetAccessor -> member.name
                 is SetAccessor -> member.name
+                else -> null
+            }
+            // Identifier-named member → match key = display = the identifier text.
+            // Computed-name member `[x]` → match key = `x`, display = `[x]`.
+            val (name, display, nameNode) = when (memberName) {
+                is Identifier -> Triple(memberName.text, memberName.text, memberName as Node)
+                is ComputedPropertyName -> {
+                    val inner = memberName.expression
+                    if (inner is Identifier) {
+                        computedKeys.add(inner.text)
+                        Triple(inner.text, "[${inner.text}]", memberName as Node)
+                    } else continue
+                }
                 else -> continue
             }
 
@@ -6523,10 +6543,14 @@ class Checker(
                 getterSetterNames.add(name)
             }
 
-            privateMembers.add(PrivateMember(name, nameNode))
+            privateMembers.add(PrivateMember(name, display, nameNode))
         }
 
         if (privateMembers.isEmpty()) return
+
+        // Expose computed-name match keys to the reference collector for this class
+        // (enables `this[x]` read recognition + `this[x] = 0` write exclusion).
+        unusedComputedKeys = computedKeys
 
         // Collect property access names per member (for self-reference detection)
         val privateMemberNames = privateMembers.map { it.name }.toSet()
@@ -6563,10 +6587,10 @@ class Checker(
             }
             if (isExternallyAccessed) continue
             val start = pm.nameNode.pos
-            val length = pm.name.length
+            val length = pm.display.length
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
-                message = "'${pm.name}' is declared but its value is never read.",
+                message = "'${pm.display}' is declared but its value is never read.",
                 category = DiagnosticCategory.Error,
                 code = 6133,
                 fileName = fileName,
@@ -6671,6 +6695,15 @@ class Checker(
                     } else if (left is PropertyAccessExpression) {
                         // this.x = ... → only recurse into the base (this), not the property name
                         collectPropertyAccessNamesInExpr(left.expression, names, paramLiterals)
+                    } else if (unusedComputedKeys.isNotEmpty() && left is ElementAccessExpression) {
+                        // this[x] = ... → write-only via a computed key; recurse into the base
+                        // and into a NON-bare-key argument (e.g. `this[this.b] = 0` reads this.b),
+                        // but do not count the write target `x` as a read.
+                        collectPropertyAccessNamesInExpr(left.expression, names, paramLiterals)
+                        val larg = left.argumentExpression
+                        if (larg !is Identifier && larg !is StringLiteralNode) {
+                            collectPropertyAccessNamesInExpr(larg, names, paramLiterals)
+                        }
                     } else {
                         collectPropertyAccessNamesInExpr(left, names, paramLiterals)
                     }
@@ -6701,6 +6734,12 @@ class Checker(
                 } else if (arg is Identifier && paramLiterals.isNotEmpty()) {
                     // this[param] where param has string literal union type
                     paramLiterals[arg.text]?.let { names.addAll(it) }
+                } else if (arg is Identifier && arg.text in unusedComputedKeys) {
+                    // this[x] (read) where `x` is the bracket identifier of a computed-name
+                    // private member `private [x]: T`. Counts as a use of `[x]`. Writes
+                    // (`this[x] = 0`) are excluded by the assignment-LHS handling above.
+                    val recv = expr.expression
+                    if (recv is Identifier && recv.text == "this") names.add(arg.text)
                 }
             }
             is TemplateExpression -> {
