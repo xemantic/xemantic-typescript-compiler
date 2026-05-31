@@ -213,6 +213,14 @@ class Checker(
      *  annotation's position. */
     private var deepInstantiationBailed: Boolean = false
 
+    /**
+     * B98.r26: per-program set of tslib helper names already reported missing via TS2343. Mirrors
+     * TypeScript's `requestedExternalEmitHelpers` bitmask — each helper-missing error is reported
+     * exactly ONCE per program (at the first construct needing it), then suppressed everywhere.
+     * Declared before init so it is non-null while the check pipeline runs.
+     */
+    private val reportedMissingTslibHelpers: MutableSet<String> = mutableSetOf()
+
     /** B57.3d (a): side list of `new C<...>(...)` expressions whose explicit-type-arg
      *  resolution triggered [deepInstantiationBailed]. Keyed by "fileName|pos" for
      *  dedup; values store (fileName, start, length) for the squiggle span. Flushed
@@ -46956,6 +46964,23 @@ interface DataView {
                     // Walk body for yield* statements
                     stmt.body?.let {
                         checkBlockForAsyncDelegator(it, source, fileName, tslibExports)
+                    }
+                } else if (ModifierFlag.Async in stmt.modifiers) {
+                    // B98.r26: plain `async function f()` (non-generator) → needs __awaiter
+                    // (and __generator at ES5). Reported at the function NAME position. Per-program
+                    // dedup (`reportedMissingTslibHelpers`) mirrors TypeScript's bitmask — the
+                    // __awaiter-missing error fires ONCE total, at the first async construct.
+                    val namePos = stmt.name?.pos
+                    if (namePos != null) {
+                        val nameLen = stmt.name!!.text.length
+                        if ("__awaiter" !in tslibExports && "__awaiter" !in reportedMissingTslibHelpers) {
+                            reportedMissingTslibHelpers.add("__awaiter")
+                            emitTS2343("__awaiter", namePos, nameLen, source, fileName)
+                        }
+                        if (isEs5Target && "__generator" !in tslibExports && "__generator" !in reportedMissingTslibHelpers) {
+                            reportedMissingTslibHelpers.add("__generator")
+                            emitTS2343("__generator", namePos, nameLen, source, fileName)
+                        }
                     }
                 }
             }
