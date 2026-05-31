@@ -22373,6 +22373,39 @@ class Checker(
                             length = specLength,
                         ))
                     }
+                } else if (!isEsmOutput && hasExportEquals && nsBinding is NamespaceImport) {
+                    // B98.r18: CJS output — `import * as X from "./a"` where a uses
+                    // `export = <class|function>` and X is referenced as a value → TS2497 with
+                    // the 'esModuleInterop' flag message (vs the ESM 'allowSyntheticDefaultImports'
+                    // form above). A namespace object can't BE the exported class/function value;
+                    // you must default-import it. Fires regardless of esModuleInterop (matches TS:
+                    // the JS still emits via __importStar but the value-position use is invalid).
+                    // GATED to class/function export= targets — a namespace/var `export =` is a
+                    // legal namespace-import target, so restricting keeps the FP surface zero.
+                    val aliasName = nsBinding.name.text
+                    val exportEqStmt = targetFile.statements
+                        .firstOrNull { it is ExportAssignment && it.isExportEquals } as? ExportAssignment
+                    val exportEqName = (exportEqStmt?.expression as? Identifier)?.text
+                    val targetIsClassOrFn = exportEqName != null && targetFile.statements.any {
+                        (it is ClassDeclaration && it.name?.text == exportEqName) ||
+                            (it is FunctionDeclaration && it.name?.text == exportEqName)
+                    }
+                    if (targetIsClassOrFn && aliasName.isNotEmpty() &&
+                        isIdentifierReferencedAsValue(aliasName, result.sourceFile.statements, stmt)) {
+                        val specStart = specifier.pos
+                        val specLength = moduleName.length + 2
+                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
+                        diagnostics.add(Diagnostic(
+                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
+                            category = DiagnosticCategory.Error,
+                            code = 2497,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = specStart,
+                            length = specLength,
+                        ))
+                    }
                 }
             }
         }
