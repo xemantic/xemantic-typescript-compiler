@@ -62051,14 +62051,22 @@ interface DataView {
         }
         when (stmt) {
             is InterfaceDeclaration -> {
-                val extendsClauses = stmt.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword } ?: return
-                // Collect all base type names from extends clauses
-                val baseTypeExprs = extendsClauses.flatMap { it.types }
-                if (baseTypeExprs.size < 2) return // Need 2+ base types
                 val ifaceName = stmt.name.text
+                // B98.r48: collect `extends` bases across ALL declarations of a
+                // declaration-MERGED interface (bases may be split across decls, e.g.
+                // `interface E extends B {}` + `interface E extends D {}`), and process
+                // ONLY at the first declaration to avoid double-emit.
+                val mergedDecls = (currentFileLocals?.get(ifaceName) ?: globals[ifaceName])
+                    ?.declarations?.filterIsInstance<InterfaceDeclaration>()?.takeIf { it.isNotEmpty() }
+                if (mergedDecls != null && mergedDecls.first() !== stmt) return
+                val allDecls = mergedDecls ?: listOf(stmt)
+                val baseTypeExprs = allDecls.flatMap { d ->
+                    d.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword }?.flatMap { it.types } ?: emptyList()
+                }
+                if (baseTypeExprs.size < 2) return // Need 2+ base types
 
-                // Own members override base member conflicts — skip names this interface declares itself.
-                val ownMemberNames = stmt.members.mapNotNull {
+                // Own members override base member conflicts — skip names declared by ANY merged decl.
+                val ownMemberNames = allDecls.flatMap { it.members }.mapNotNull {
                     when (it) {
                         is PropertyDeclaration -> (it.name as? Identifier)?.text
                         is MethodDeclaration -> (it.name as? Identifier)?.text
@@ -62070,67 +62078,83 @@ interface DataView {
                 data class BaseProperty(val baseName: String, val isPrivate: Boolean, val propType: TypeNode?, val isOptional: Boolean = false, val isMethod: Boolean = false, val typeArgs: List<TypeNode>? = null, val hasTypeParams: Boolean = false)
                 val propSources = mutableMapOf<String, MutableList<BaseProperty>>()
 
+                // 16.4cu: Resolve both bare Identifier (`extends Mover`) and qualified
+                // PropertyAccessExpression (`extends NS.Mover`) base types.
+                fun resolveBaseSym(be: Expression): Symbol? = when (be) {
+                    is Identifier -> globals[be.text] ?: currentFileLocals?.get(be.text)
+                    is PropertyAccessExpression -> resolvePropertyAccessToSymbol(be)
+                    else -> null
+                }
+                // Extract one declaration's DIRECT members into propSources (attributed to baseDisplay).
+                fun addBaseMembers(memberList: List<Any>, baseDisplay: String, effectiveTypeArgs: List<TypeNode>?) {
+                    for (member in memberList) {
+                        val propName: String
+                        val isPrivate: Boolean
+                        val propType: TypeNode?
+                        val isOpt: Boolean
+                        val isMethod: Boolean
+                        var memberHasTypeParams = false
+                        when (member) {
+                            is PropertyDeclaration -> {
+                                propName = (member.name as? Identifier)?.text ?: continue
+                                isPrivate = ModifierFlag.Private in member.modifiers
+                                propType = member.type
+                                isOpt = member.questionToken
+                                isMethod = false
+                            }
+                            is MethodDeclaration -> {
+                                propName = (member.name as? Identifier)?.text ?: continue
+                                isPrivate = ModifierFlag.Private in member.modifiers
+                                propType = member.type
+                                isOpt = member.questionToken
+                                isMethod = true
+                                memberHasTypeParams = !member.typeParameters.isNullOrEmpty()
+                            }
+                            else -> continue
+                        }
+                        propSources.getOrPut(propName) { mutableListOf() }
+                            .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs, memberHasTypeParams))
+                    }
+                }
+                // B98.r48: collect a base's OWN + INHERITED members (recurse into its own
+                // `extends` chain), attributing inherited members to the ORIGINAL direct
+                // base of this interface. `visited` is PER-DIRECT-BASE (so a diamond where
+                // two direct bases share an ancestor attributes the shared member to both).
+                fun collectBase(baseSymbol: Symbol, baseDisplay: String, effectiveTypeArgs: List<TypeNode>?, visited: MutableSet<Int>) {
+                    if (!visited.add(baseSymbol.id)) return
+                    for (decl in baseSymbol.declarations) {
+                        when (decl) {
+                            is ClassDeclaration -> addBaseMembers(decl.members, baseDisplay, effectiveTypeArgs)
+                            is InterfaceDeclaration -> {
+                                addBaseMembers(decl.members.toList(), baseDisplay, effectiveTypeArgs)
+                                decl.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword }?.forEach { hc ->
+                                    for (bt in hc.types) {
+                                        val bs = resolveBaseSym(bt.expression) ?: continue
+                                        collectBase(bs, baseDisplay, bt.typeArguments, visited)
+                                    }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
                 for (typeExpr in baseTypeExprs) {
                     val effectiveTypeArgs: List<TypeNode>? = typeExpr.typeArguments
-                    // 16.4cu: Resolve both bare Identifier (`extends Mover`) and qualified
-                    // PropertyAccessExpression (`extends NS.Mover`) base types. For qualified,
-                    // the base name displayed in the diagnostic is the rightmost segment.
-                    val (baseName, baseSymbol) = when (val be = typeExpr.expression) {
-                        is Identifier -> {
-                            val sym = globals[be.text] ?: currentFileLocals?.get(be.text) ?: continue
-                            be.text to sym
-                        }
-                        is PropertyAccessExpression -> {
-                            val sym = resolvePropertyAccessToSymbol(be) ?: continue
-                            be.name.text to sym
-                        }
+                    val baseSymbol = resolveBaseSym(typeExpr.expression) ?: continue
+                    val baseName = when (val be = typeExpr.expression) {
+                        is Identifier -> be.text
+                        is PropertyAccessExpression -> be.name.text
                         else -> continue
                     }
                     // B67.4: For display in TS2320 message, use the source-text base
                     // expression so generic refs render as `A<string>` not just `A`.
-                    // Falls back to symbol-resolved name for non-generic-typed extends.
                     val baseDisplay = if (effectiveTypeArgs != null && effectiveTypeArgs.isNotEmpty()) {
                         val argTexts = effectiveTypeArgs.joinToString(", ") {
                             source.substring(it.pos, it.end).trim()
                         }
                         "$baseName<$argTexts>"
                     } else baseName
-                    // Get members from all declarations (class or interface)
-                    for (decl in baseSymbol.declarations) {
-                        val members: List<Any> = when (decl) {
-                            is ClassDeclaration -> decl.members
-                            is InterfaceDeclaration -> decl.members.toList()
-                            else -> continue
-                        }
-                        for (member in members) {
-                            val propName: String
-                            val isPrivate: Boolean
-                            val propType: TypeNode?
-                            val isOpt: Boolean
-                            val isMethod: Boolean
-                            var memberHasTypeParams = false
-                            when (member) {
-                                is PropertyDeclaration -> {
-                                    propName = (member.name as? Identifier)?.text ?: continue
-                                    isPrivate = ModifierFlag.Private in member.modifiers
-                                    propType = member.type
-                                    isOpt = member.questionToken
-                                    isMethod = false
-                                }
-                                is MethodDeclaration -> {
-                                    propName = (member.name as? Identifier)?.text ?: continue
-                                    isPrivate = ModifierFlag.Private in member.modifiers
-                                    propType = member.type
-                                    isOpt = member.questionToken
-                                    isMethod = true
-                                    memberHasTypeParams = !member.typeParameters.isNullOrEmpty()
-                                }
-                                else -> continue
-                            }
-                            propSources.getOrPut(propName) { mutableListOf() }
-                                .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs, memberHasTypeParams))
-                        }
-                    }
+                    collectBase(baseSymbol, baseDisplay, effectiveTypeArgs, mutableSetOf())
                 }
 
                 // Check for conflicts: same property from different bases
