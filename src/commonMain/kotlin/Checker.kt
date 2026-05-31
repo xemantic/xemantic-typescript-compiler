@@ -80213,6 +80213,30 @@ interface DataView {
         val localSym = currentCheckLocals?.get(name)
         if (localSym != null && localSym.flags.hasAny(SymbolFlags.Alias)) {
             val decl = localSym.declarations.firstOrNull()
+            // B98.r57: `import * as X from "spec"` used DIRECTLY as a type (`let y: X`)
+            // is TS2709 — a namespace import is a value, never a bare type (it can only
+            // be a qualifier, `X.Foo`, which this function doesn't reach since typeName
+            // must be a bare Identifier). Skip when X ALSO has a type meaning (a merged
+            // interface/class/type-alias/enum makes it usable as a type).
+            if (decl is ImportDeclaration &&
+                !localSym.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Class or
+                    SymbolFlags.TypeAlias or SymbolFlags.Enum)) {
+                val nb = decl.importClause?.namedBindings
+                if (nb is NamespaceImport && nb.name.text == name) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, typeNode.typeName.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot use namespace '$name' as a type.",
+                        category = DiagnosticCategory.Error,
+                        code = 2709,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = typeNode.typeName.pos,
+                        length = name.length,
+                    ))
+                    return
+                }
+            }
             if (decl is ImportEqualsDeclaration) {
                 val modRef = decl.moduleReference
                 if (modRef is ExternalModuleReference) {
