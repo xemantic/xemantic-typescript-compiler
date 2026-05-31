@@ -22,6 +22,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Checker walker gotchas
 
+- **Any NEW full-tree expression walker MUST handle `BinaryExpression` iteratively (worklist/right-spine), not recursively** — `binderBinaryExpressionStress` is a deeply-nested `a+b+c+…` chain that StackOverflows a naive `walk(left); walk(right)`, and a crash mid-check ABORTS JS emit, so the regression shows up as a JS-EMIT output diff (NOT in the `find_candidates` EXTRA bucket — only the failing-set diff catches it). B98b's `walkThisTypeExpr` learned this the hard way. Reference iterative patterns: `checkArgCountInExprCore`'s BinaryExpression case (right-spine while-loop) and B98b's worklist (`ArrayDeque` frontier).
 - **MappedType walkers must remember to walk `typeParameter.constraint`**: A `MappedType` AST node has FOUR meaningful child positions: `typeParameter.constraint` (the constraint of `[K in C]`, e.g. `keyof T`), `nameType` (after `as`), `type` (the value), and the typeParameter NAME (introduced into a child scope). Tree-walking visitors must hit all four. Crucially the constraint must be walked in the OUTER `scope` (not the mapped child scope) — the TP being introduced is NOT in scope inside its own constraint. Reference patterns: `collectTypeReferenceNames` (Checker.kt:3890) and `checkUnresolvedInType` (Checker.kt:13931) both walk the constraint correctly. Symptom of forgetting: TS2304 / TS2503 / TS6133 for a name only-used inside the constraint silently never fires.
 
 ### Scanner/Parser gotchas
