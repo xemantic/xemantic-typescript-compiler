@@ -19703,20 +19703,18 @@ class Checker(
                 val hasNamespace = "namespace" in kinds
 
                 // Check if namespace+var should be allowed:
-                // A namespace can merge with a var when:
-                // - The namespace is `declare` (ambient), OR
-                // - The namespace only contains type declarations (interfaces, types) and no value exports
-                // A `declare var` can merge with any namespace
+                // A `var` (incl. `declare var`) can merge with a namespace ONLY when
+                // the namespace is value-free (uninstantiated — only types/interfaces).
+                // An INSTANTIATED namespace (one with value exports) is a second value
+                // binding → TS2300, regardless of the var's `declare` modifier
+                // (`declare var console; namespace console { export var x }` conflicts).
+                // The empty/value-free case (`declare const b; declare namespace b {}`)
+                // still merges via allNamespacesValueFree.
                 val namespaceVarAllowed = if (hasVar && hasNamespace) {
-                    val allNamespacesValueFree = group.filter { it.kind == "namespace" }.all { decl ->
+                    group.filter { it.kind == "namespace" }.all { decl ->
                         val modDecl = decl.stmt as? ModuleDeclaration ?: return@all true
                         !isNamespaceInstantiated(modDecl)
                     }
-                    val allVarsDeclare = group.filter { it.kind == "var" }.all { decl ->
-                        val varStmt = decl.stmt as? VariableStatement ?: return@all false
-                        ModifierFlag.Declare in varStmt.modifiers
-                    }
-                    allNamespacesValueFree || allVarsDeclare
                 } else false
 
                 // TS2395: All declarations in a merged name must be uniformly exported or local.
