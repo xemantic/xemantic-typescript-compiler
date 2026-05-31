@@ -62651,8 +62651,46 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            // Default-import local names whose module specifier resolves to THIS file —
+            // i.e. a self-import `import X from './thisfile'`. Such an X aliases this file's
+            // own `export default`, so an `export default { … X … }` is INDIRECTLY
+            // self-referential (TS7022). Computed once per file.
+            val selfDefaultImports = mutableSetOf<String>()
+            val normFile = fileName.removePrefix("./")
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ImportDeclaration) {
+                    val def = stmt.importClause?.name?.text
+                    val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                    // Use the .js-aware index resolver (resolveModuleSpecifierRelative skips
+                    // .js extensions, so a JS self-import would never resolve).
+                    val resolved = if (spec != null) resolveRelativeIncludingIndex(spec, fileName)?.removePrefix("./") else null
+                    if (def != null && resolved != null && resolved == normFile) {
+                        selfDefaultImports.add(def)
+                    }
+                }
+            }
             for (stmt in result.sourceFile.statements) {
                 checkRecursiveLiteralVarInStatement(stmt, source, fileName)
+                // TS7022: `export default { … selfDefaultImport … }` — the default export's
+                // object/array-literal initializer references this file's own default via a
+                // self-import alias, making the inferred type circular.
+                if (stmt is ExportAssignment && !stmt.isExportEquals && selfDefaultImports.isNotEmpty()) {
+                    val init = stmt.expression
+                    if ((init is ObjectLiteralExpression || init is ArrayLiteralExpression) &&
+                        selfDefaultImports.any { objectInitializerSelfReferences(init, it) }) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'default' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+                            category = DiagnosticCategory.Error,
+                            code = 7022,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = stmt.pos,
+                            length = expressionTrueEnd(init) - stmt.pos,
+                        ))
+                    }
+                }
             }
         }
     }
