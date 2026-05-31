@@ -13628,6 +13628,14 @@ class Checker(
                 // Inside with() body, name resolution is dynamic — skip checking
             }
             is FunctionDeclaration -> {
+                // B98.r11: TS2842 for a destructured-rename param `{ a: b }` whose binding `b`
+                // is unused in a BODYLESS function declaration (ambient `declare function` OR an
+                // overload signature). With no body the binding can't be a valid local, so it's
+                // an "unused renaming" — "Did you intend to use it as a type annotation?".
+                // Implementation functions (with a body) are TS6133 territory, not TS2842.
+                if (stmt.body == null) {
+                    checkUnusedDestructuredRenames(stmt.parameters, stmt.type, source, fileName)
+                }
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
