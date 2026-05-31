@@ -4201,16 +4201,34 @@ class Checker(
                     if (!referencePathResolves(refPath, fileName)) {
                         val groupStart = offset + m.groups[2]!!.range.first
                         val (l, c) = getLineAndCharacterOfPosition(source, groupStart)
-                        diagnostics.add(Diagnostic(
-                            message = "File '$refPath' not found.",
-                            category = DiagnosticCategory.Error,
-                            code = 6053,
-                            fileName = fileName,
-                            line = l,
-                            character = c,
-                            start = groupStart,
-                            length = refPath.length,
-                        ))
+                        // A reference path WITH a recognized extension that doesn't exist →
+                        // TS6053 "File 'X' not found."; one WITHOUT an extension (the resolver
+                        // tried appending extensions and failed) → TS6231 "Could not resolve the
+                        // path 'X' with the extensions: …" (the list grows under allowJs).
+                        val knownExts = listOf(".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json",
+                            ".mts", ".cts", ".mjs", ".cjs", ".d.mts", ".d.cts")
+                        val hasKnownExt = knownExts.any { refPath.endsWith(it) }
+                        val diag = if (hasKnownExt) {
+                            Diagnostic(
+                                message = "File '$refPath' not found.",
+                                category = DiagnosticCategory.Error, code = 6053,
+                                fileName = fileName, line = l, character = c,
+                                start = groupStart, length = refPath.length,
+                            )
+                        } else {
+                            val extList = if (options.allowJs) {
+                                "'.ts', '.tsx', '.d.ts', '.js', '.jsx', '.cts', '.d.cts', '.cjs', '.mts', '.d.mts', '.mjs'"
+                            } else {
+                                "'.ts', '.tsx', '.d.ts'"
+                            }
+                            Diagnostic(
+                                message = "Could not resolve the path '$refPath' with the extensions: $extList.",
+                                category = DiagnosticCategory.Error, code = 6231,
+                                fileName = fileName, line = l, character = c,
+                                start = groupStart, length = refPath.length,
+                            )
+                        }
+                        diagnostics.add(diag)
                     }
                 }
                 offset += line.length + 1
