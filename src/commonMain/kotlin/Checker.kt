@@ -3991,6 +3991,74 @@ class Checker(
         return null
     }
 
+    /**
+     * Resolve a relative module specifier strictly relative to the context file's directory,
+     * checking EVERY module-bearing extension (`.ts/.tsx/.d.ts/.js/.jsx/.json/.mts/.cts/.mjs/.cjs`),
+     * both `./`-prefixed and unprefixed fileResults keys, AND node-style directory-index resolution
+     * (`./foo` → `./foo/index.<ext>`). Returns null only when nothing at all matches the target.
+     *
+     * This is the FP-safe "does this relative specifier resolve to ANY file?" check used by the
+     * node/commonjs relative-missing TS2307 gate. It is intentionally MORE permissive than
+     * [resolveModuleSpecifierStrictRelative] (which only tries `.ts/.tsx/.d.ts`): a `.js`/`.jsx`
+     * sibling resolves as an untyped module, a `.tsx`/`.jsx` sibling resolves (with a TS6142, not
+     * TS2307), and a `./`-prefixed @filename key must still match an unprefixed normalized path.
+     * Missing any of these would FP TS2307 on a module TypeScript actually resolves.
+     */
+    private fun resolveRelativeIncludingIndex(specifier: String, contextFileName: String): String? {
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
+        val rawDir = contextFileName.substringBeforeLast('/', "")
+        val dir = if (rawDir.isEmpty() && contextFileName.startsWith("/")) "" else rawDir
+        val spec = specifier.trimEnd('/')
+        val basePath = if (dir.isEmpty()) {
+            if (contextFileName.startsWith("/")) "/${spec.removePrefix("./")}" else spec
+        } else "$dir/${spec.removePrefix("./")}"
+        val normalized = normalizePath(basePath)
+        // Strip a trailing JS-ish extension so `./foo.js` can also resolve to `foo.ts`.
+        val stem = when {
+            normalized.endsWith(".js") -> normalized.removeSuffix(".js")
+            normalized.endsWith(".jsx") -> normalized.removeSuffix(".jsx")
+            normalized.endsWith(".mjs") -> normalized.removeSuffix(".mjs")
+            normalized.endsWith(".cjs") -> normalized.removeSuffix(".cjs")
+            else -> normalized
+        }
+        val exts = listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json", ".mts", ".cts", ".mjs", ".cjs")
+        for (s in listOf(stem, "$stem/index")) {
+            for (e in exts) {
+                val cand = "$s$e"
+                if (cand in fileResults) return cand
+                val noPrefix = cand.removePrefix("./")
+                if (noPrefix in fileResults) return noPrefix
+                val withPrefix = if (cand.startsWith("/")) cand else "./$noPrefix"
+                if (withPrefix in fileResults) return withPrefix
+            }
+        }
+        return null
+    }
+
+    /**
+     * True when the source line containing [pos] — or the line immediately above it — carries a
+     * `@ts-expect-error` or `@ts-ignore` suppression directive. Used to suppress the node/commonjs
+     * relative-missing TS2307 (we don't model directive-based suppression generally, so a narrow
+     * line-scan keeps this gate from FP'ing on deliberately-unresolved imports).
+     */
+    private fun hasTsErrorSuppressionAbove(pos: Int, source: String): Boolean {
+        if (pos < 0 || pos > source.length) return false
+        // Start of the current line.
+        var lineStart = pos
+        while (lineStart > 0 && source[lineStart - 1] != '\n') lineStart--
+        // The current line text (up to its newline).
+        var lineEnd = pos
+        while (lineEnd < source.length && source[lineEnd] != '\n') lineEnd++
+        val currentLine = source.substring(lineStart, lineEnd)
+        if (currentLine.contains("@ts-expect-error") || currentLine.contains("@ts-ignore")) return true
+        // The previous line (the common placement for @ts-expect-error).
+        if (lineStart <= 1) return false
+        var prevStart = lineStart - 1
+        while (prevStart > 0 && source[prevStart - 1] != '\n') prevStart--
+        val prevLine = source.substring(prevStart, (lineStart - 1).coerceAtLeast(prevStart))
+        return prevLine.contains("@ts-expect-error") || prevLine.contains("@ts-ignore")
+    }
+
     /** Normalize a path by resolving `..` and `.` segments. */
     private fun normalizePath(path: String): String {
         val parts = path.split('/')
@@ -20543,6 +20611,30 @@ class Checker(
                         if (resolveModuleSpecifierStrictRelative(moduleName, fileName) == null
                             && moduleName !in ambientModuleNames
                             && moduleName !in dtsFileBaseNames
+                        ) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
+                    } else if (isRelative && !moduleName.endsWith(".json")
+                        && options.module == ModuleKind.CommonJS
+                        && options.moduleResolution == null
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                    ) {
+                        // B98: relative specifier under DEFAULT node resolution with an
+                        // explicit `@module: commonjs` and no path/root config. The target
+                        // must resolve within the compilation — a direct file OR a directory
+                        // index (`./foo/index.ts`). When nothing matches and no ambient module
+                        // / .d.ts shadows it, emit TS2307. Index-aware resolution
+                        // (resolveRelativeIncludingIndex) keeps directory imports FP-safe.
+                        // Gated to explicit commonjs (not the default null module) to bound the
+                        // FP surface; node16/nodenext/bundler use richer rules we don't model.
+                        if (resolveRelativeIncludingIndex(moduleName, fileName) == null
+                            && moduleName !in ambientModuleNames
+                            && moduleName !in dtsFileBaseNames
+                            && !hasTsErrorSuppressionAbove(specifier.pos, source)
                         ) {
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
