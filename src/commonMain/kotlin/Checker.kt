@@ -1091,6 +1091,8 @@ class Checker(
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
         checkOverloadSignatureCompatibility()
+        // 64h1b. B98.r38: TS2384 across merged namespace blocks (ambient/non-ambient overloads).
+        checkCrossNamespaceOverloadAmbient()
         // 64h2. B76.1: TS1235 — namespace declarations only allowed at the top
         // level of a namespace or module (not inside function bodies, blocks, etc.).
         checkNamespaceTopLevelOnly()
@@ -59369,6 +59371,65 @@ interface DataView {
             try {
                 checkOverloadsInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /**
+     * TS2384 across MERGED namespace blocks: when two identifier-named `namespace M {…}` blocks
+     * declare overloads of the same function with disagreeing ambient-ness — effective ambient =
+     * the block's `declare` (a `declare namespace` makes its contents ambient) OR the function's
+     * own `declare` — emit TS2384 on each declaration whose ambient-ness differs from the FIRST.
+     * Gated to functions spanning ≥2 distinct blocks (single-block overload groups are handled by
+     * the namespace-recursing `checkOverloadsInStatements`).
+     */
+    private fun checkCrossNamespaceOverloadAmbient() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val nsBlocks = mutableMapOf<String, MutableList<ModuleDeclaration>>()
+            for (stmt in result.sourceFile.statements) {
+                val nm = (stmt as? ModuleDeclaration)?.name
+                if (stmt is ModuleDeclaration && nm is Identifier && nm.text != "global") {
+                    nsBlocks.getOrPut(nm.text) { mutableListOf() }.add(stmt)
+                }
+            }
+            for ((_, blocks) in nsBlocks) {
+                if (blocks.size < 2) continue
+                // funcName -> list of (decl, effectiveAmbient, blockIndex)
+                val byName = mutableMapOf<String, MutableList<Triple<FunctionDeclaration, Boolean, Int>>>()
+                blocks.forEachIndexed { bi, block ->
+                    val blockAmbient = ModifierFlag.Declare in block.modifiers
+                    val body = block.body as? ModuleBlock ?: return@forEachIndexed
+                    for (s in body.statements) {
+                        if (s is FunctionDeclaration && s.name != null) {
+                            val amb = blockAmbient || ModifierFlag.Declare in s.modifiers
+                            byName.getOrPut(s.name!!.text) { mutableListOf() }.add(Triple(s, amb, bi))
+                        }
+                    }
+                }
+                for ((_, decls) in byName) {
+                    if (decls.size < 2) continue
+                    if (decls.map { it.third }.distinct().size < 2) continue // not cross-block
+                    val firstAmbient = decls.first().second
+                    if (decls.all { it.second == firstAmbient }) continue
+                    for ((decl, amb, _) in decls) {
+                        if (amb == firstAmbient) continue
+                        val nameNode = decl.name ?: continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Overload signatures must all be ambient or non-ambient.",
+                            category = DiagnosticCategory.Error,
+                            code = 2384,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = nameNode.text.length,
+                        ))
+                    }
+                }
+            }
         }
     }
 
