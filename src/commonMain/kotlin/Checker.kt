@@ -10030,6 +10030,10 @@ class Checker(
                             buildDottedName(expr)?.let { "[$it]" }
                         }
                         is Identifier -> "[${expr.text}]"
+                        // B98.r58: literal computed name `["a"]` / `[0]` — a late-bound
+                        // stable member name TypeScript DOES check for TS2564.
+                        is StringLiteralNode -> "[\"${expr.text}\"]"
+                        is NumericLiteralNode -> "[${expr.text}]"
                         is BinaryExpression -> {
                             // Assignment-like inside computed name (rare, e.g. `[x = 0]`) — use source text between brackets
                             val closeIdx = source.indexOf(']', expr.pos)
@@ -20311,6 +20315,17 @@ class Checker(
                     // String names are wrapped in quotes in messages: ''0'' for '0'
                     val quotedDisplay = "'${nameNode.text}'"
                     quotedDisplay to nameNode.text
+                }
+                is ComputedPropertyName -> {
+                    // B98.r58: literal computed name `["a"]` / `[0]` is a late-bound
+                    // stable member name; display `["a"]`, group by the inner literal
+                    // value (so two `["a"]` — or `a` and `["a"]` — collide). Non-literal
+                    // computed names (`[x]`, `[Symbol.iterator]`) are NOT duplicate-checkable.
+                    when (val e = nameNode.expression) {
+                        is StringLiteralNode -> "[\"${e.text}\"]" to e.text
+                        is NumericLiteralNode -> "[${e.text}]" to normalizeNumericKey(e.text)
+                        else -> null
+                    }
                 }
                 else -> null
             }
