@@ -64202,7 +64202,39 @@ interface DataView {
                         }
                     }
                 }
-                is TypeAliasDeclaration -> checkConstraintsInTypeNode(stmt.type, source, fileName)
+                is TypeAliasDeclaration -> {
+                    // B98a (round 82): for a generic alias whose body is an import-type
+                    // (`type Bar<T> = import('./m').Foo<T>`), push Bar's OWN type params into
+                    // scope so the args resolve to Bar's (unconstrained) TypeParams — only then
+                    // does `checkConstraintsForTypeArgs` see argType = TypeParam (not errorType)
+                    // and fire TS2344 when Foo's constraint isn't satisfied. Narrow gate
+                    // (`stmt.type is ImportType`) → no impact on other type-alias constraint checks.
+                    val tps = stmt.typeParameters
+                    if (stmt.type is ImportType && !tps.isNullOrEmpty()) {
+                        val savedTpScope = currentTypeParamScope
+                        val savedTpDecls = currentTypeParamDecls
+                        try {
+                            val scope = (savedTpScope?.toMutableMap() ?: mutableMapOf())
+                            val decls = savedTpDecls.toMutableMap()
+                            for (tp in tps) {
+                                val p = typeParamInternCache.getOrPut(tp.pos) {
+                                    Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
+                                }
+                                tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+                                scope[tp.name.text] = p
+                                decls[tp.name.text] = tp  // for the TS2208 hint position
+                            }
+                            currentTypeParamScope = scope
+                            currentTypeParamDecls = decls
+                            checkConstraintsInTypeNode(stmt.type, source, fileName)
+                        } finally {
+                            currentTypeParamScope = savedTpScope
+                            currentTypeParamDecls = savedTpDecls
+                        }
+                    } else {
+                        checkConstraintsInTypeNode(stmt.type, source, fileName)
+                    }
+                }
                 is ModuleDeclaration -> {
                     (stmt.body as? ModuleBlock)?.let { checkConstraintsInStatements(it.statements, source, fileName) }
                 }
@@ -64466,13 +64498,29 @@ interface DataView {
                 node.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
             }
             is ParenthesizedType -> checkConstraintsInTypeNode(node.type, source, fileName)
+            is ImportType -> {
+                // B98a (round 82): `import('./mod').Foo<T>` — constraint-check the type args
+                // against the cross-file generic `Foo` (available in `globals` via the init-time
+                // cross-file merge). The enclosing type alias's own type params must be in scope
+                // for the args to resolve — see the TypeAliasDeclaration ImportType scope push.
+                val qualName = (node.qualifier as? Identifier)?.text
+                val importArgs = node.typeArguments
+                if (qualName != null && !importArgs.isNullOrEmpty()) {
+                    checkConstraintsForTypeArgs(qualName, importArgs, source, fileName, emitTypeParamHint = true)
+                    importArgs.forEach { checkConstraintsInTypeNode(it, source, fileName) }
+                }
+            }
             else -> {}
         }
     }
 
     private fun checkConstraintsForTypeArgs(
         typeName: String, typeArgs: List<TypeNode>,
-        source: String, fileName: String
+        source: String, fileName: String,
+        // B98a: when true (import-type path only), a failing UNCONSTRAINED-TypeParam arg also
+        // gets a TS2208 "might need an `extends X` constraint" hint at its declaration. Gated
+        // off for the TypeReference path to avoid changing its existing TS2344 baselines.
+        emitTypeParamHint: Boolean = false,
     ) {
         // Skip built-in generics (Array, Promise, etc.)
         if (typeName in BUILTIN_GENERICS) return
@@ -64571,6 +64619,26 @@ interface DataView {
                 val message = "Type '$argDisplay' does not satisfy the constraint '$constraintDisplay'."
                 val chain = mutableListOf<String>()
                 val relatedInfo = mutableListOf<Diagnostic>()
+
+                // B98a: TS2208 hint for an unconstrained-TypeParam arg (import-type path only).
+                if (emitTypeParamHint && argType is Type.TypeParam && argType.constraint == null) {
+                    val argName = ((argNode as? TypeReference)?.typeName as? Identifier)?.text
+                    val tpDecl = argName?.let { currentTypeParamDecls[it] }
+                    if (tpDecl != null) {
+                        val tpPos = tpDecl.name.pos
+                        val (tl, tc) = getLineAndCharacterOfPosition(source, tpPos)
+                        relatedInfo.add(Diagnostic(
+                            message = "This type parameter might need an `extends $constraintDisplay` constraint.",
+                            category = DiagnosticCategory.Message,
+                            code = 2208,
+                            fileName = fileName,
+                            line = tl,
+                            character = tc,
+                            start = tpPos,
+                            length = tpDecl.name.text.length,
+                        ))
+                    }
+                }
 
                 // Add elaboration for missing properties (structural Object vs Object)
                 var emittedMissing = false
