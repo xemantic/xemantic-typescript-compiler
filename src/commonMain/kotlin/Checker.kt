@@ -37929,8 +37929,17 @@ interface DataView {
                 if (ModifierFlag.Declare !in stmt.modifiers) continue
                 val nameNode = stmt.name as? StringLiteralNode ?: continue
                 val modulePath = nameNode.text
-                if (modulePath.startsWith("./") || modulePath.startsWith("../") ||
-                    modulePath.startsWith(".\\") || modulePath.startsWith("..\\")) {
+                // A module name is "relative" (per TS isExternalModuleNameRelative) if it is
+                // path-relative (`./`, `../`) OR a rooted disk path (POSIX/UNC `/`/`\`, or a
+                // drive-letter root `c:/`, `c:\`, or bare `c:`). B98.r10: `declare module "b:/block"`
+                // is rooted (TS2436) but `declare module "b:block"` is NOT (drive-letter without a
+                // following slash → not rooted, no error).
+                val isRelative = modulePath.startsWith("./") || modulePath.startsWith("../") ||
+                    modulePath.startsWith(".\\") || modulePath.startsWith("..\\")
+                val isRooted = modulePath.startsWith("/") || modulePath.startsWith("\\") ||
+                    (modulePath.length >= 2 && modulePath[1] == ':' && modulePath[0].isLetter() &&
+                        (modulePath.length == 2 || modulePath[2] == '/' || modulePath[2] == '\\'))
+                if (isRelative || isRooted) {
                     val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "Ambient module declaration cannot specify relative module name.",
