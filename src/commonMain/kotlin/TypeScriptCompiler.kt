@@ -438,6 +438,35 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS5009: outDir set + 2+ input source files that do not share a common
+        // filesystem root → no common subdirectory can be computed. TypeScript
+        // pops the file name and compares path component 0 (the root): two posix-
+        // absolute or relative paths always share root "/", but two different
+        // Windows drives (A:/foo vs B:/foo) — or A:/ vs a:/ under case-sensitive
+        // file names — differ at component 0, so the common subdirectory is empty.
+        // File-less diagnostic. Keyed on the drive prefix only (posix-absolute and
+        // relative paths all map to "/") so legitimate same-root multi-dir layouts
+        // (e.g. /a/x.ts + /b/y.ts, common dir "/") never trip it.
+        if (options.outDir != null) {
+            val sourceFileNames = parsed.files.mapNotNull { f ->
+                val n = f.fileName
+                if ((n.endsWith(".ts") || n.endsWith(".tsx")) && !n.endsWith(".d.ts") &&
+                    "/node_modules/" !in n && !n.startsWith("node_modules/")) n else null
+            }
+            if (sourceFileNames.size >= 2) {
+                val roots = sourceFileNames.map { n ->
+                    if (n.length >= 2 && n[1] == ':' && n[0].isLetter()) n.substring(0, 2) else "/"
+                }.toSet()
+                if (roots.size > 1) {
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find the common subdirectory path for the input files.",
+                        category = DiagnosticCategory.Error,
+                        code = 5009,
+                    ))
+                }
+            }
+        }
+
         // TS5070: resolveJsonModule with classic moduleResolution
         // Classic is the default for module=none/amd/umd/system
         var emitted5070 = false
