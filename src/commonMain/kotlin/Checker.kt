@@ -21044,23 +21044,26 @@ class Checker(
                         ) {
                             // B98.r21: a relative specifier resolving to an untyped `.js` sibling
                             // (present in raw input but not bound — no `allowJs`) is NOT a missing
-                            // module; under noImplicitAny TypeScript reports TS7016 (implicit-any
-                            // module) instead of TS2307. Pure SWAP gated on noImplicitAny + a known
-                            // JS sibling — every other case keeps the existing TS2307.
-                            val jsSibling = if (options.noImplicitAny || options.strict)
-                                resolveRelativeJsSibling(moduleName, fileName) else null
+                            // module: TypeScript resolves it as an implicit-`any` module. Under
+                            // noImplicitAny it reports TS7016; otherwise it is silently `any` (NO
+                            // diagnostic). Either way TS2307 is wrong — suppress it when a JS sibling
+                            // exists. The TS2307 path is untouched when no JS sibling exists (FP-safe).
+                            val jsSibling = resolveRelativeJsSibling(moduleName, fileName)
                             if (jsSibling != null) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
-                                diagnostics.add(Diagnostic(
-                                    message = "Could not find a declaration file for module '$moduleName'. '$jsSibling' implicitly has an 'any' type.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 7016,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = specifier.pos,
-                                    length = moduleName.length + 2, // +2 for quotes (matches emitTS2307)
-                                ))
+                                if (options.noImplicitAny || options.strict) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Could not find a declaration file for module '$moduleName'. '$jsSibling' implicitly has an 'any' type.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 7016,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = specifier.pos,
+                                        length = moduleName.length + 2, // +2 for quotes (matches emitTS2307)
+                                    ))
+                                }
+                                // else: untyped `any` module, no diagnostic.
                             } else {
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
