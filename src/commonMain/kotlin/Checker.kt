@@ -33163,6 +33163,10 @@ interface DataView {
                         return true
                     }
                 }
+                // Cross-file `import m = require('./mod'); m.x` where `mod` has
+                // `export const x`. The alias `m` binds as SymbolFlags.Alias (not
+                // Module), so the Module gate above misses it.
+                if (isAliasConstExport(objSymbol, propName, fileName)) return true
             }
         }
         // Check interface/class readonly property members via type system
@@ -33209,6 +33213,32 @@ interface DataView {
         if (decls.any { it is SetAccessor }) return false
         if (decls.any { it is GetAccessor }) return true
         return decls.any { it is PropertyDeclaration && ModifierFlag.Readonly in it.modifiers }
+    }
+
+    /** Cross-file: `import m = require('./mod'); m.x` where `mod` has
+     *  `export const x`. The alias `m` binds as SymbolFlags.Alias (not Module),
+     *  so [isConstExport]'s ModuleDeclaration-body walk (and the synthetic module
+     *  symbol's empty declarations) never see it. Resolve the import-equals
+     *  specifier to the target file and check whether [propName] is an
+     *  `export const` there. FP-safe: only fires for a genuine `import = require`
+     *  alias resolving to a file whose named export is a `const` declaration; a
+     *  `let`/`var` export fails the `ConstKeyword` gate. */
+    private fun isAliasConstExport(aliasSymbol: Symbol, propName: String, fileName: String?): Boolean {
+        if (!aliasSymbol.flags.hasAny(SymbolFlags.Alias)) return false
+        val spec = getImportEqualsSpecifier(aliasSymbol) ?: return false
+        val targetFile = (if (fileName != null) resolveModuleSpecifierRelative(spec, fileName) else null)
+            ?: resolveModuleSpecifier(spec, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        for (stmt in targetResult.sourceFile.statements) {
+            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword &&
+                ModifierFlag.Export in stmt.modifiers) {
+                for (vd in stmt.declarationList.declarations) {
+                    val n = vd.name
+                    if (n is Identifier && n.text == propName) return true
+                }
+            }
+        }
+        return false
     }
 
     /** Check if a namespace/module exports a name as a const variable. */
@@ -33299,9 +33329,10 @@ interface DataView {
                 val arg = unwrapped.argumentExpression
                 if (arg is StringLiteralNode && unwrapped.expression is Identifier) {
                     val objName = (unwrapped.expression as Identifier).text
-                    val objSymbol = globals[objName]
-                    if (objSymbol != null && objSymbol.flags.hasAny(SymbolFlags.Module) &&
-                        isConstExport(objSymbol, arg.text)) {
+                    val objSymbol = globals[objName] ?: fileResults[fileName]?.locals?.get(objName)
+                    if (objSymbol != null &&
+                        ((objSymbol.flags.hasAny(SymbolFlags.Module) && isConstExport(objSymbol, arg.text)) ||
+                         isAliasConstExport(objSymbol, arg.text, fileName))) {
                         emitTS2540(arg.text, arg.pos, (arg.rawText ?: arg.text).length + 2, source, fileName)
                     }
                 }
