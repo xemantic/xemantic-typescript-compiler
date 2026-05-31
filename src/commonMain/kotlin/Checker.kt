@@ -13426,6 +13426,39 @@ class Checker(
         }
     }
 
+    /**
+     * TS2864: `class C implements number {}` — a class cannot implement a
+     * primitive type. The implemented type expression is a keyword-identifier
+     * (`number`/`string`/`boolean`/`bigint`/`symbol`); emit at the identifier
+     * span. Gated on the name NOT being shadowed by a user-declared value
+     * (e.g. `class string {}`), so a legitimately-named object type is exempt.
+     */
+    private fun emitTS2864ForPrimitiveImplements(
+        clause: HeritageClause,
+        scope: NameScope,
+        source: String,
+        fileName: String,
+    ) {
+        if (clause.token != SyntaxKind.ImplementsKeyword) return
+        val primitiveKeywords = setOf("number", "string", "boolean", "bigint", "symbol")
+        for (type in clause.types) {
+            val ident = type.expression as? Identifier ?: continue
+            if (ident.text !in primitiveKeywords) continue
+            if (scope.has(ident.text)) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, ident.pos)
+            diagnostics.add(Diagnostic(
+                message = "A class cannot implement a primitive type like '${ident.text}'. It can only implement other named object types.",
+                category = DiagnosticCategory.Error,
+                code = 2864,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = ident.pos,
+                length = ident.text.length,
+            ))
+        }
+    }
+
     private fun checkUnresolvedInStatements(
         statements: List<Statement>,
         parentScope: NameScope,
@@ -13802,6 +13835,7 @@ class Checker(
                     tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                 }
                 stmt.heritageClauses?.forEach { clause ->
+                    emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
                     for (type in clause.types) {
                         // 17.209: For `implements <bareTypeParam>` (e.g. `class C<T>
                         // implements T {}`), TypeScript treats T as a TYPE-position
@@ -14729,6 +14763,7 @@ class Checker(
                 expr.name?.let { classScope.names.add(it.text) }
                 expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
                 expr.heritageClauses?.forEach { clause ->
+                    emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
                     for (type in clause.types) {
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
                         checkHeritageTypeArgCount(type, classScope, source, fileName)
