@@ -61757,17 +61757,34 @@ interface DataView {
         var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
             sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
         }
-        // If not found locally, check base class
-        if (stringIndexSig == null && stmt is ClassDeclaration) {
-            val baseName = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                ?.types?.firstOrNull()?.expression
-                ?.let { (it as? Identifier)?.text }
-            if (baseName != null) {
-                val baseSymbol = globals[baseName]
-                val baseDecl = baseSymbol?.declarations?.filterIsInstance<ClassDeclaration>()?.firstOrNull()
-                stringIndexSig = baseDecl?.members?.filterIsInstance<IndexSignature>()?.firstOrNull { sig ->
+        // If not found locally, check the heritage base(s). B98.r19: also handles
+        // `interface D extends C` (InterfaceDeclaration stmt) and a base that is a class OR
+        // an interface — so an inherited `[s: string]: T` index signature is checked against
+        // the derived's own properties (e.g. `interface D extends C { y: string }` where
+        // `class C { [s:string]: number }` → `y` not assignable → TS2411).
+        if (stringIndexSig == null && (stmt is ClassDeclaration || stmt is InterfaceDeclaration)) {
+            val baseNames: List<String> = when (stmt) {
+                is ClassDeclaration -> stmt.heritageClauses
+                    ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                is InterfaceDeclaration -> stmt.heritageClauses
+                    ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                else -> emptyList()
+            }
+            for (baseName in baseNames) {
+                val baseSymbol = globals[baseName] ?: continue
+                val baseMembers: List<ClassElement> = baseSymbol.declarations.flatMap { d ->
+                    when (d) {
+                        is ClassDeclaration -> d.members
+                        is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                        else -> emptyList()
+                    }
+                }
+                stringIndexSig = baseMembers.filterIsInstance<IndexSignature>().firstOrNull { sig ->
                     sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
                 }
+                if (stringIndexSig != null) break
             }
         }
         val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
