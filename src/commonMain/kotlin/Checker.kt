@@ -64120,6 +64120,7 @@ interface DataView {
                 // Build a synthetic ClassDeclaration check by inlining the logic.
                 // Easier: walk members and run the same heritage-aware override check.
                 checkClassExprPropertyOverrides(expr, source, fileName)
+                checkClassExprAbstractImpl(expr, source, fileName)
                 // Recurse into nested member bodies.
                 for (member in expr.members) {
                     when (member) {
@@ -64145,6 +64146,72 @@ interface DataView {
             is NonNullExpression -> checkPropertyOverrideInExpr(expr.expression, source, fileName, enclosingNs)
             else -> {}
         }
+    }
+
+    /**
+     * TS2653: a non-abstract class EXPRESSION (`var C = class extends Abstract {}`) must implement
+     * every inherited abstract member. (The class-declaration analog is TS2515, not yet
+     * implemented.) Walks the base-class chain collecting abstract members not implemented by a
+     * concrete declaration anywhere between the abstract declaration and this class expression,
+     * and reports the FIRST unimplemented one at the `class` keyword. Bare-Identifier bases only.
+     */
+    private fun checkClassExprAbstractImpl(classExpr: ClassExpression, source: String, fileName: String) {
+        val extendsClause = classExpr.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return
+        val baseExpr = extendsClause.types.firstOrNull()?.expression as? Identifier ?: return
+        val baseSym = globals[baseExpr.text] ?: return
+        if (!isAbstractClass(baseSym)) return
+
+        fun memberName(m: ClassElement): String? = when (m) {
+            is PropertyDeclaration -> (m.name as? Identifier)?.text
+            is MethodDeclaration -> (m.name as? Identifier)?.text
+            is GetAccessor -> (m.name as? Identifier)?.text
+            is SetAccessor -> (m.name as? Identifier)?.text
+            else -> null
+        }
+
+        // Member names implemented by a CONCRETE declaration (the class expr is the most-derived).
+        val implemented = mutableSetOf<String>()
+        for (m in classExpr.members) {
+            val n = memberName(m) ?: continue
+            if (!isMemberAbstract(m)) implemented.add(n)
+        }
+        // Walk the base chain (most-derived base first); first declaration of a name wins.
+        val seen = mutableSetOf<String>()
+        val unimplemented = mutableListOf<Pair<String, String>>() // (member, declaring class)
+        val visited = mutableSetOf<Int>()
+        var cur: Symbol? = baseSym
+        while (cur != null && visited.add(cur.id)) {
+            val cd = cur.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: break
+            val cdName = cd.name?.text ?: ""
+            for (m in cd.members) {
+                val n = memberName(m) ?: continue
+                if (n in seen) continue
+                seen.add(n)
+                if (isMemberAbstract(m)) {
+                    if (n !in implemented) unimplemented.add(n to cdName)
+                } else {
+                    implemented.add(n)
+                }
+            }
+            val baseExt = cd.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            val baseIdent = baseExt?.types?.firstOrNull()?.expression as? Identifier
+            cur = baseIdent?.let { globals[it.text] }
+        }
+        if (unimplemented.isEmpty()) return
+        val (member, declClass) = unimplemented.first()
+        // Squiggle the `class` keyword (length 5).
+        val classKwPos = source.indexOf("class", classExpr.pos).let { if (it in classExpr.pos..(classExpr.pos + 4)) it else classExpr.pos }
+        val (line, character) = getLineAndCharacterOfPosition(source, classKwPos)
+        diagnostics.add(Diagnostic(
+            message = "Non-abstract class expression does not implement inherited abstract member '$member' from class '$declClass'.",
+            category = DiagnosticCategory.Error,
+            code = 2653,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = classKwPos,
+            length = 5,
+        ))
     }
 
     private fun checkClassExprPropertyOverrides(classExpr: ClassExpression, source: String, fileName: String) {
