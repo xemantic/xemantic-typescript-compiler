@@ -83643,7 +83643,76 @@ interface DataView {
                     }
                 }
             }
+            // B98.r56: `export { X }` INSIDE an ambient `declare module "m" { ... }`
+            // block where X is NOT declared in the block but IS a real outer/global
+            // declaration → TS2661. (X declared inside the block, e.g.
+            // `namespace X {} export { X }`, is a legal local export → skipped.)
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if (stmt.name !is StringLiteralNode) continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                val blockLocals = collectModuleBlockLocalNames(body)
+                for (s in body.statements) {
+                    if (s !is ExportDeclaration) continue
+                    if (s.moduleSpecifier != null) continue
+                    val named = s.exportClause as? NamedExports ?: continue
+                    val stmtTypeOnly = s.isTypeOnly
+                    for (spec in named.elements) {
+                        if (stmtTypeOnly || spec.isTypeOnly) continue
+                        val exportedName = (spec.propertyName ?: spec.name).text
+                        if (exportedName in blockLocals) continue
+                        val isOuterReal = exportedName in KNOWN_GLOBALS ||
+                            result.locals[exportedName]?.declarations?.any { it !is ExportSpecifier } == true ||
+                            globals[exportedName]?.declarations?.any { it !is ExportSpecifier } == true
+                        if (!isOuterReal) continue
+                        val nameNode = spec.propertyName ?: spec.name
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot export '$exportedName'. Only local declarations can be exported from a module.",
+                            category = DiagnosticCategory.Error,
+                            code = 2661,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = exportedName.length,
+                        ))
+                    }
+                }
+            }
         }
+    }
+
+    /** Names declared directly inside an ambient module block via a genuine
+     *  declaration (not an ExportSpecifier re-export). Used to distinguish a legal
+     *  local `export { X }` from a non-local one (TS2661). */
+    private fun collectModuleBlockLocalNames(body: ModuleBlock): Set<String> {
+        val names = mutableSetOf<String>()
+        for (stmt in body.statements) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    (d.name as? Identifier)?.text?.let { names.add(it) }
+                }
+                is FunctionDeclaration -> stmt.name?.text?.let { names.add(it) }
+                is ClassDeclaration -> stmt.name?.text?.let { names.add(it) }
+                is InterfaceDeclaration -> names.add(stmt.name.text)
+                is TypeAliasDeclaration -> names.add(stmt.name.text)
+                is EnumDeclaration -> names.add(stmt.name.text)
+                is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { names.add(it) }
+                is ImportEqualsDeclaration -> names.add(stmt.name.text)
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause
+                    clause?.name?.text?.let { names.add(it) }
+                    when (val nb = clause?.namedBindings) {
+                        is NamespaceImport -> nb.name.text.let { names.add(it) }
+                        is NamedImports -> for (e in nb.elements) names.add(e.name.text)
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+        }
+        return names
     }
 
     // TS8xxx: TypeScript syntax in JavaScript files
