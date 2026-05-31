@@ -795,8 +795,23 @@ class TypeScriptCompiler {
             // Single-file compilation
             val file = parsed.files[0]
 
-            // emitDeclarationOnly: produce source echo only, no JS output
+            // emitDeclarationOnly: produce source echo only, no JS output — but still
+            // parse/bind/check in declarationOnly mode so declaration-emit diagnostics
+            // (TS4025/TS4081/TS2304/TS1210) are reported. Mirrors the multi-file path
+            // (which runs the checker with declarationOnly = true).
             if (options.emitDeclarationOnly) {
+                val edoParser = Parser(file.content, file.fileName,
+                    topLevelAwait = options.effectiveModule.let { m ->
+                        m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+                            m == ModuleKind.Preserve || m == ModuleKind.System
+                    },
+                    noImplicitAny = options.noImplicitAny || options.strict)
+                val edoSourceFile = edoParser.parse()
+                diagnostics.addAll(edoParser.getDiagnostics())
+                val edoBinder = Binder(options)
+                val edoBinderResult = edoBinder.bind(edoSourceFile)
+                val edoChecker = Checker(options, listOf(edoBinderResult), declarationOnly = true)
+                diagnostics.addAll(edoChecker.getDiagnostics())
                 return CompilationResult(
                     fileName = fileName,
                     sourceEchoes = listOf(fileName to file.content),
