@@ -836,6 +836,8 @@ class Checker(
         checkDefaultImports()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
+        // 14c'. Check for imports from `@types/...` packages (TS6137)
+        checkTypesPackageImports()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
         // 16. Check call expression argument counts (TS2554)
@@ -22615,6 +22617,49 @@ class Checker(
      * Note: TS2614 (similar but with "Did you mean to use default import?") is handled
      * in checkDefaultImports() for the case where the module HAS a default export.
      */
+    /**
+     * TS6137: "Cannot import type declaration files. Consider importing 'X'
+     * instead of '@types/X'." — purely syntactic: any import/export module
+     * specifier literally beginning with `@types/` should reference the bare
+     * package name instead. Suggested name unmangles the scoped-package form
+     * (`babel__core` → `@babel/core`). FP-safe: no real code imports literally
+     * from `@types/...` (TypeScript's own resolver rejects it).
+     */
+    private fun checkTypesPackageImports() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val spec = when (stmt) {
+                    is ImportDeclaration -> stmt.moduleSpecifier as? StringLiteralNode
+                    is ExportDeclaration -> stmt.moduleSpecifier as? StringLiteralNode
+                    is ImportEqualsDeclaration ->
+                        (stmt.moduleReference as? ExternalModuleReference)?.expression as? StringLiteralNode
+                    else -> null
+                } ?: continue
+                val moduleName = spec.text
+                if (!moduleName.startsWith("@types/")) continue
+                val withoutPrefix = moduleName.removePrefix("@types/")
+                val suggestion = if (withoutPrefix.contains("__")) {
+                    "@" + withoutPrefix.replaceFirst("__", "/")
+                } else withoutPrefix
+                val start = spec.pos
+                val length = (spec.rawText?.length ?: spec.text.length) + 2
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot import type declaration files. Consider importing '$suggestion' instead of '$moduleName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 6137,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
     private fun checkNamedImportExistence() {
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
