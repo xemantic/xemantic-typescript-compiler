@@ -33060,6 +33060,39 @@ interface DataView {
         ))
     }
 
+    /**
+     * TS2542: `obj.prop = v` where `prop` is not an explicit member of `obj`'s type
+     * but resolves through a `readonly` string index signature. (TS2540 covers the
+     * explicit-readonly-member case; this covers the index-signature case.)
+     */
+    private fun emitTS2542IfReadonlyIndexWrite(expr: PropertyAccessExpression, source: String, fileName: String) {
+        try {
+            val objType = getTypeOfExpression(expr.expression)
+            if (objType === anyType || objType === errorType) return
+            // Must resolve via the index signature, not an explicit member.
+            if (getPropertyOfType(objType, expr.name.text) != null) return
+            val idx: IndexInfo? = when (objType) {
+                is Type.Interface -> objType.stringIndexInfo
+                is Type.Object -> objType.stringIndexInfo
+                else -> null
+            }
+            if (idx == null || !idx.isReadonly) return
+            val start = expr.pos
+            val length = expressionTrueEnd(expr) - expr.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Index signature in type '${typeToString(objType)}' only permits reading.",
+                category = DiagnosticCategory.Error,
+                code = 2542,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) {}
+    }
+
     /** Check if an assignment target is a readonly property and emit TS2540. */
     private fun checkReadonlyAssignmentTarget(target: Expression, source: String, fileName: String) {
         val unwrapped = unwrapParens(target)
@@ -33067,6 +33100,8 @@ interface DataView {
             is PropertyAccessExpression -> {
                 if (isReadonlyPropertyAccess(unwrapped, fileName)) {
                     emitTS2540(unwrapped.name.text, unwrapped.name.pos, unwrapped.name.text.length, source, fileName)
+                } else {
+                    emitTS2542IfReadonlyIndexWrite(unwrapped, source, fileName)
                 }
             }
             is ElementAccessExpression -> {
