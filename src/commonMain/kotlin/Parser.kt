@@ -5435,7 +5435,7 @@ class Parser(
             } else {
                 value
             }.let { v -> if (!valueTrailing.isNullOrEmpty()) v.withTrailingComments(valueTrailing) else v }
-            return PropertyAssignment(name = name, initializer = valueWithComments, pos = pos, end = getEnd(), leadingComments = comments)
+            return PropertyAssignment(name = name, initializer = valueWithComments, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments)
         }
 
         // Shorthand: { name } or { name = default }
