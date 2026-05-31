@@ -2465,14 +2465,23 @@ class Checker(
                 collectRefs(init, enumDecl.name.text, memberNames, refs)
                 for ((refExpr, refName) in refs) {
                     val refIdx = order[refName] ?: continue
+                    val start = refExpr.pos
+                    val length = expressionTrueEnd(refExpr) - start
+                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
                     if (refIdx > myIdx) {
-                        val start = refExpr.pos
-                        val length = expressionTrueEnd(refExpr) - start
-                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
                         diagnostics.add(Diagnostic(
                             message = "A member initializer in a enum declaration cannot reference " +
                                 "members declared after it, including members defined in other enums.",
                             category = DiagnosticCategory.Error, code = 2651,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = length,
+                        ))
+                    } else if (refIdx == myIdx) {
+                        // B98.r14: an enum member initializer referencing ITSELF (`A = A`,
+                        // `B = E.B`, `C = E["C"]`, `D = 1 + D`) is a use-before-assignment → TS2565.
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$refName' is used before being assigned.",
+                            category = DiagnosticCategory.Error, code = 2565,
                             fileName = fileName, line = line, character = ch,
                             start = start, length = length,
                         ))
