@@ -21981,10 +21981,14 @@ class Checker(
             }
         }
 
-        // Check each `declare module "X"` in non-.d.ts module files as an augmentation.
+        // Check each `declare module "X"` in module files as an augmentation.
+        // TS2665 (augmenting an untyped module) is checked for ALL module files,
+        // including `.d.ts` module files (a `.d.ts` with `export {}` is a module and
+        // its `declare module "X"` is an augmentation). TS2664 ("cannot be found")
+        // remains gated to non-`.d.ts` module files (the existing behaviour).
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
+            val isDts = isDtsFile(fileName)
             if (!isModuleFile(result.sourceFile.statements)) continue
             val source = result.sourceFile.text
 
@@ -21993,6 +21997,25 @@ class Checker(
                 val name = stmt.name
                 if (name !is StringLiteralNode) continue
                 val moduleName = name.text
+
+                // TS2665: the augmented module resolves ONLY to an untyped JS file.
+                val untypedJsPath = resolveUntypedJsModuleForAugmentation(moduleName)
+                if (untypedJsPath != null) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Invalid module name in augmentation. Module '$moduleName' resolves to an untyped module at '$untypedJsPath', which cannot be augmented.",
+                        category = DiagnosticCategory.Error,
+                        code = 2665,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = name.pos,
+                        length = moduleName.length + 2,
+                    ))
+                    continue
+                }
+
+                if (isDts) continue
 
                 // Use the directory-aware resolver so relative augmentation specifiers
                 // (`./a`, `../dir/a`) resolve against the augmenting file's directory.
@@ -22051,6 +22074,29 @@ class Checker(
                 (!isRelative && fileBase.endsWith("/$baseName"))) return true
         }
         return false
+    }
+
+    /**
+     * TS2665 helper: if bare module [specifier] has NO typed resolution (no `.ts`/`.d.ts`)
+     * but a `node_modules` JS file for it IS present in the raw input set (untyped — parsed
+     * but not bound, so absent from [fileResults]), return that JS path. Used to flag
+     * `declare module "X"` augmentations of untyped modules ("...resolves to an untyped
+     * module at '<path>', which cannot be augmented."). Returns null otherwise so a typed
+     * or genuinely-missing module never trips it (the latter stays TS2664).
+     */
+    private fun resolveUntypedJsModuleForAugmentation(specifier: String): String? {
+        if (allInputFileNames.isEmpty()) return null
+        // Only bare (node_modules) specifiers — relative augmentation of untyped JS is
+        // not exercised by the current baselines and would widen the FP surface.
+        if (specifier.startsWith(".") || specifier.startsWith("/")) return null
+        // A typed resolution (to a .ts/.d.ts) means the module is NOT untyped.
+        if (resolveModuleSpecifier(specifier, null) != null) return null
+        for (e in listOf("js", "jsx", "mjs", "cjs")) {
+            for (cand in listOf("/node_modules/$specifier/index.$e", "/node_modules/$specifier.$e")) {
+                if (cand in allInputFileNames && cand !in fileResults) return cand
+            }
+        }
+        return null
     }
 
     // -----------------------------------------------------------------------
