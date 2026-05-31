@@ -214,10 +214,12 @@ class Checker(
     private var deepInstantiationBailed: Boolean = false
 
     /**
-     * B98.r26: per-program set of tslib helper names already reported missing via TS2343. Mirrors
-     * TypeScript's `requestedExternalEmitHelpers` bitmask — each helper-missing error is reported
-     * exactly ONCE per program (at the first construct needing it), then suppressed everywhere.
-     * Declared before init so it is non-null while the check pipeline runs.
+     * B98.r26/r28: set of `<tslibInstallKey>|<helperName>` pairs already reported missing via
+     * TS2343. The `__awaiter`/`__generator` missing-helper error fires exactly ONCE per resolved
+     * tslib install (key from [resolveTslibDedupKey]) — a single shared /node_modules/tslib dedups
+     * program-wide (`tslibMissingHelper`), while distinct per-package installs each report
+     * (`tslibMultipleMissingHelper`). Declared before init so it is non-null while the check
+     * pipeline runs.
      */
     private val reportedMissingTslibHelpers: MutableSet<String> = mutableSetOf()
 
@@ -46849,19 +46851,27 @@ interface DataView {
                 stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
             }
         }
-        val tslibResult = ambientTslibResult ?: if (isClassicResolution2) {
-            binderResults.firstOrNull { it.sourceFile.fileName.contains("tslib") }
+        // ALL candidate tslib module files (a multi-package program may have several distinct
+        // node_modules/tslib installs — `tslibMultipleMissingHelper`). The first is used for the
+        // (identical-across-installs) export set; each file resolves to its OWN nearest tslib for
+        // per-install dedup keying (see resolveTslibDedupKey).
+        val allTslibResults: List<BinderResult> = if (ambientTslibResult != null) {
+            listOf(ambientTslibResult)
+        } else if (isClassicResolution2) {
+            binderResults.filter { it.sourceFile.fileName.contains("tslib") }
         } else {
-            binderResults.firstOrNull { result ->
+            binderResults.filter { result ->
                 val fn = result.sourceFile.fileName
                 (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
             }
-        } ?: return
+        }
+        val tslibResult = allTslibResults.firstOrNull() ?: return
         // Get what tslib exports
         val tslibExports = getTslibExports(tslibResult.sourceFile)
 
         val isEs5Target = options.target <= ScriptTarget.ES5
         val hasDecorators = options.experimentalDecorators || options.emitDecoratorMetadata
+        val hasAmbientTslib = ambientTslibResult != null
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -46870,11 +46880,47 @@ interface DataView {
             val isModule = isModuleFile(result.sourceFile.statements)
             if (!isModule) continue
             val source = result.sourceFile.text
+            // Per-program-wide-per-tslib-install dedup key: TS2343 for a given helper fires ONCE
+            // per resolved tslib install (verified against `tslibMissingHelper` — one shared
+            // /node_modules/tslib → one report — vs `tslibMultipleMissingHelper` — two installs →
+            // one report each).
+            val tslibKey = resolveTslibDedupKey(fileName, allTslibResults, hasAmbientTslib)
 
             for (stmt in result.sourceFile.statements) {
-                checkStmtForMissingHelper(stmt, source, fileName, tslibExports, isEs5Target, hasDecorators)
+                checkStmtForMissingHelper(stmt, source, fileName, tslibExports, isEs5Target, hasDecorators, tslibKey)
             }
         }
+    }
+
+    /**
+     * Returns a dedup key identifying which tslib install [fileName] resolves to. For node
+     * resolution this is the nearest enclosing `<dir>/node_modules/tslib` (so files under
+     * `/package1` and `/package2` get distinct keys when each has its own install). Ambient /
+     * classic tslib applies program-wide → a single shared key.
+     */
+    private fun resolveTslibDedupKey(
+        fileName: String,
+        candidates: List<BinderResult>,
+        hasAmbientTslib: Boolean,
+    ): String {
+        if (hasAmbientTslib) return "ambient"
+        var best = ""
+        var bestLen = -1
+        for (tr in candidates) {
+            val tfn = tr.sourceFile.fileName
+            val nmIdx = tfn.lastIndexOf("/node_modules/")
+            if (nmIdx < 0) {
+                // classic resolution (tslib not under node_modules) → program-wide fallback key.
+                if (bestLen < 0) best = tfn
+                continue
+            }
+            val baseDir = tfn.substring(0, nmIdx + 1) // e.g. "/package1/"
+            if (fileName.startsWith(baseDir) && baseDir.length > bestLen) {
+                best = tfn
+                bestLen = baseDir.length
+            }
+        }
+        return if (best.isEmpty()) "global" else best
     }
 
     private fun checkStmtForMissingHelper(
@@ -46884,6 +46930,7 @@ interface DataView {
         tslibExports: Set<String>,
         isEs5Target: Boolean,
         hasDecorators: Boolean,
+        tslibKey: String = "global",
     ) {
         when (stmt) {
             is ExportDeclaration -> {
@@ -46945,6 +46992,14 @@ interface DataView {
                 }
             }
             is FunctionDeclaration -> {
+                // Object-rest binding pattern in a parameter (`function f({ a, ...rest }) {}`) needs
+                // __rest below ES2018 (where object rest/spread became native) — mirrors the
+                // transformer's `< ES2018` downlevel gate.
+                if (options.effectiveTarget < ScriptTarget.ES2018) {
+                    for (p in stmt.parameters) {
+                        checkBindingForMissingHelper(p.name, source, fileName, tslibExports)
+                    }
+                }
                 // async function * f() → needs __asyncGenerator, __await, and __generator (ES5)
                 if (ModifierFlag.Async in stmt.modifiers && stmt.asteriskToken) {
                     // TypeScript reports the diagnostic at the function name position (not the '*')
@@ -46973,12 +47028,14 @@ interface DataView {
                     val namePos = stmt.name?.pos
                     if (namePos != null) {
                         val nameLen = stmt.name!!.text.length
-                        if ("__awaiter" !in tslibExports && "__awaiter" !in reportedMissingTslibHelpers) {
-                            reportedMissingTslibHelpers.add("__awaiter")
+                        val awaiterKey = "$tslibKey|__awaiter"
+                        if ("__awaiter" !in tslibExports && awaiterKey !in reportedMissingTslibHelpers) {
+                            reportedMissingTslibHelpers.add(awaiterKey)
                             emitTS2343("__awaiter", namePos, nameLen, source, fileName)
                         }
-                        if (isEs5Target && "__generator" !in tslibExports && "__generator" !in reportedMissingTslibHelpers) {
-                            reportedMissingTslibHelpers.add("__generator")
+                        val generatorKey = "$tslibKey|__generator"
+                        if (isEs5Target && "__generator" !in tslibExports && generatorKey !in reportedMissingTslibHelpers) {
+                            reportedMissingTslibHelpers.add(generatorKey)
                             emitTS2343("__generator", namePos, nameLen, source, fileName)
                         }
                     }
