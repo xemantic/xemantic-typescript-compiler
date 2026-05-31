@@ -20741,7 +20741,11 @@ class Checker(
                 && options.moduleSuffixes.isNullOrEmpty()
             ) {
                 val dynSpecs = mutableListOf<StringLiteralNode>()
-                collectDynamicImportSpecifiers(result.sourceFile.statements, dynSpecs)
+                // In JS-like files (.js/.jsx/.cjs/.mjs) TypeScript also treats `require("…")` calls
+                // as CommonJS module references (even when `require` is a local parameter, as in
+                // `noCrashOnParameterNamedRequire`). For .ts files `require` is an ordinary call, so
+                // we only collect it for JS files to avoid FPs on `.ts` with a `declare function require`.
+                collectDynamicImportSpecifiers(result.sourceFile.statements, dynSpecs, includeRequire = isJsLikeFileName(fileName))
                 for (spec in dynSpecs) {
                     val mod = spec.text
                     if (!mod.startsWith("./") && !mod.startsWith("../")) continue
@@ -20766,88 +20770,93 @@ class Checker(
      * the B98.r3 relative-dynamic-import TS2307 check. Non-string-literal args (`import(someVar)`)
      * are ignored.
      */
-    private fun collectDynamicImportSpecifiers(statements: List<Statement>, out: MutableList<StringLiteralNode>) {
-        for (s in statements) collectDynImportInStatement(s, out)
+    private fun collectDynamicImportSpecifiers(
+        statements: List<Statement>, out: MutableList<StringLiteralNode>, includeRequire: Boolean = false,
+    ) {
+        for (s in statements) collectDynImportInStatement(s, out, includeRequire)
     }
 
-    private fun collectDynImportInStatement(stmt: Statement, out: MutableList<StringLiteralNode>) {
+    private fun collectDynImportInStatement(stmt: Statement, out: MutableList<StringLiteralNode>, includeRequire: Boolean) {
         when (stmt) {
-            is ExpressionStatement -> collectDynImportInExpr(stmt.expression, out)
+            is ExpressionStatement -> collectDynImportInExpr(stmt.expression, out, includeRequire)
             is VariableStatement -> stmt.declarationList.declarations.forEach {
-                it.initializer?.let { init -> collectDynImportInExpr(init, out) }
+                it.initializer?.let { init -> collectDynImportInExpr(init, out, includeRequire) }
             }
-            is ReturnStatement -> stmt.expression?.let { collectDynImportInExpr(it, out) }
-            is ThrowStatement -> stmt.expression?.let { collectDynImportInExpr(it, out) }
-            is ExportAssignment -> collectDynImportInExpr(stmt.expression, out)
-            is Block -> collectDynamicImportSpecifiers(stmt.statements, out)
+            is ReturnStatement -> stmt.expression?.let { collectDynImportInExpr(it, out, includeRequire) }
+            is ThrowStatement -> stmt.expression?.let { collectDynImportInExpr(it, out, includeRequire) }
+            is ExportAssignment -> collectDynImportInExpr(stmt.expression, out, includeRequire)
+            is Block -> collectDynamicImportSpecifiers(stmt.statements, out, includeRequire)
             is IfStatement -> {
-                collectDynImportInExpr(stmt.expression, out)
-                collectDynImportInStatement(stmt.thenStatement, out)
-                stmt.elseStatement?.let { collectDynImportInStatement(it, out) }
+                collectDynImportInExpr(stmt.expression, out, includeRequire)
+                collectDynImportInStatement(stmt.thenStatement, out, includeRequire)
+                stmt.elseStatement?.let { collectDynImportInStatement(it, out, includeRequire) }
             }
-            is WhileStatement -> { collectDynImportInExpr(stmt.expression, out); collectDynImportInStatement(stmt.statement, out) }
-            is DoStatement -> { collectDynImportInExpr(stmt.expression, out); collectDynImportInStatement(stmt.statement, out) }
-            is ForStatement -> collectDynImportInStatement(stmt.statement, out)
-            is ForOfStatement -> collectDynImportInStatement(stmt.statement, out)
-            is ForInStatement -> collectDynImportInStatement(stmt.statement, out)
-            is LabeledStatement -> collectDynImportInStatement(stmt.statement, out)
+            is WhileStatement -> { collectDynImportInExpr(stmt.expression, out, includeRequire); collectDynImportInStatement(stmt.statement, out, includeRequire) }
+            is DoStatement -> { collectDynImportInExpr(stmt.expression, out, includeRequire); collectDynImportInStatement(stmt.statement, out, includeRequire) }
+            is ForStatement -> collectDynImportInStatement(stmt.statement, out, includeRequire)
+            is ForOfStatement -> collectDynImportInStatement(stmt.statement, out, includeRequire)
+            is ForInStatement -> collectDynImportInStatement(stmt.statement, out, includeRequire)
+            is LabeledStatement -> collectDynImportInStatement(stmt.statement, out, includeRequire)
             is TryStatement -> {
-                collectDynamicImportSpecifiers(stmt.tryBlock.statements, out)
-                stmt.catchClause?.block?.statements?.let { collectDynamicImportSpecifiers(it, out) }
-                stmt.finallyBlock?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                collectDynamicImportSpecifiers(stmt.tryBlock.statements, out, includeRequire)
+                stmt.catchClause?.block?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
+                stmt.finallyBlock?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
             }
             is SwitchStatement -> stmt.caseBlock.forEach { clause ->
                 when (clause) {
-                    is CaseClause -> collectDynamicImportSpecifiers(clause.statements, out)
-                    is DefaultClause -> collectDynamicImportSpecifiers(clause.statements, out)
+                    is CaseClause -> collectDynamicImportSpecifiers(clause.statements, out, includeRequire)
+                    is DefaultClause -> collectDynamicImportSpecifiers(clause.statements, out, includeRequire)
                     else -> {}
                 }
             }
-            is FunctionDeclaration -> stmt.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+            is FunctionDeclaration -> stmt.body?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
             else -> {}
         }
     }
 
-    private fun collectDynImportInExpr(expr: Expression, out: MutableList<StringLiteralNode>) {
-        if (expr is CallExpression && (expr.expression as? Identifier)?.text == "import" && expr.arguments.size == 1) {
-            (expr.arguments[0] as? StringLiteralNode)?.let { out.add(it) }
-            return
+    private fun collectDynImportInExpr(expr: Expression, out: MutableList<StringLiteralNode>, includeRequire: Boolean) {
+        if (expr is CallExpression && expr.arguments.size == 1) {
+            val callee = (expr.expression as? Identifier)?.text
+            if (callee == "import" || (includeRequire && callee == "require")) {
+                (expr.arguments[0] as? StringLiteralNode)?.let { out.add(it) }
+                return
+            }
         }
         when (expr) {
-            is CallExpression -> { collectDynImportInExpr(expr.expression, out); expr.arguments.forEach { collectDynImportInExpr(it, out) } }
-            is PropertyAccessExpression -> collectDynImportInExpr(expr.expression, out)
-            is ElementAccessExpression -> { collectDynImportInExpr(expr.expression, out); collectDynImportInExpr(expr.argumentExpression, out) }
+            is CallExpression -> { collectDynImportInExpr(expr.expression, out, includeRequire); expr.arguments.forEach { collectDynImportInExpr(it, out, includeRequire) } }
+            is PropertyAccessExpression -> collectDynImportInExpr(expr.expression, out, includeRequire)
+            is ElementAccessExpression -> { collectDynImportInExpr(expr.expression, out, includeRequire); collectDynImportInExpr(expr.argumentExpression, out, includeRequire) }
             is ArrowFunction -> when (val body = expr.body) {
-                is Expression -> collectDynImportInExpr(body, out)
-                is Block -> collectDynamicImportSpecifiers(body.statements, out)
+                is Expression -> collectDynImportInExpr(body, out, includeRequire)
+                is Block -> collectDynamicImportSpecifiers(body.statements, out, includeRequire)
                 else -> {}
             }
-            is FunctionExpression -> collectDynamicImportSpecifiers(expr.body.statements, out)
-            is AwaitExpression -> collectDynImportInExpr(expr.expression, out)
-            is YieldExpression -> expr.expression?.let { collectDynImportInExpr(it, out) }
-            is ParenthesizedExpression -> collectDynImportInExpr(expr.expression, out)
-            is ConditionalExpression -> { collectDynImportInExpr(expr.condition, out); collectDynImportInExpr(expr.whenTrue, out); collectDynImportInExpr(expr.whenFalse, out) }
-            is NewExpression -> { collectDynImportInExpr(expr.expression, out); expr.arguments?.forEach { collectDynImportInExpr(it, out) } }
-            is SpreadElement -> collectDynImportInExpr(expr.expression, out)
-            is ArrayLiteralExpression -> expr.elements.forEach { collectDynImportInExpr(it, out) }
-            is PrefixUnaryExpression -> collectDynImportInExpr(expr.operand, out)
-            is PostfixUnaryExpression -> collectDynImportInExpr(expr.operand, out)
+            is FunctionExpression -> collectDynamicImportSpecifiers(expr.body.statements, out, includeRequire)
+            is AwaitExpression -> collectDynImportInExpr(expr.expression, out, includeRequire)
+            is YieldExpression -> expr.expression?.let { collectDynImportInExpr(it, out, includeRequire) }
+            is ParenthesizedExpression -> collectDynImportInExpr(expr.expression, out, includeRequire)
+            is ConditionalExpression -> { collectDynImportInExpr(expr.condition, out, includeRequire); collectDynImportInExpr(expr.whenTrue, out, includeRequire); collectDynImportInExpr(expr.whenFalse, out, includeRequire) }
+            is NewExpression -> { collectDynImportInExpr(expr.expression, out, includeRequire); expr.arguments?.forEach { collectDynImportInExpr(it, out, includeRequire) } }
+            is SpreadElement -> collectDynImportInExpr(expr.expression, out, includeRequire)
+            is ArrayLiteralExpression -> expr.elements.forEach { collectDynImportInExpr(it, out, includeRequire) }
+            is PrefixUnaryExpression -> collectDynImportInExpr(expr.operand, out, includeRequire)
+            is PostfixUnaryExpression -> collectDynImportInExpr(expr.operand, out, includeRequire)
             is BinaryExpression -> {
                 // Iterative right-spine walk — a naive recursive descent StackOverflows on the
                 // deeply-nested `a+b+c+…` chain in binderBinaryExpressionStress (see walker gotcha).
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    collectDynImportInExpr(current.right, out)
+                    collectDynImportInExpr(current.right, out, includeRequire)
                     current = current.left
                 }
-                collectDynImportInExpr(current, out)
+                collectDynImportInExpr(current, out, includeRequire)
             }
             is ObjectLiteralExpression -> expr.properties.forEach { prop ->
                 when (prop) {
-                    is PropertyAssignment -> collectDynImportInExpr(prop.initializer, out)
-                    is MethodDeclaration -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
-                    is GetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
-                    is SetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                    is PropertyAssignment -> collectDynImportInExpr(prop.initializer, out, includeRequire)
+                    is MethodDeclaration -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
+                    is GetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
+                    is SetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out, includeRequire) }
                     else -> {}
                 }
             }
