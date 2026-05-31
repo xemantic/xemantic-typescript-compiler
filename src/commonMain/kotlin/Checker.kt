@@ -1147,6 +1147,8 @@ class Checker(
         checkVerbatimModuleSyntax()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
+        // 69b. Check bare `import("./m")` used as a type where m has no `export =` (TS1340)
+        checkImportTypeUsedAsType()
         // 70. Check property used before initialization (TS2729)
         checkPropertyUseBeforeInit()
         // 71. Check downlevelIteration requirement (TS2802)
@@ -80298,6 +80300,113 @@ interface DataView {
             start = typeNode.typeName.pos,
             length = name.length,
         ))
+    }
+
+    // TS1340: a bare `import("./m")` type reference (no `.qualifier`, not
+    // `typeof`) refers to the MODULE (a namespace of exports), not a type — unless
+    // the module is `export = <type>`. Used as a type, it's TS1340 "Module './m'
+    // does not refer to a type, but is used as a type here. Did you mean 'typeof
+    // import('./m')'?". `typeof import(...)` parses to a TypeQuery (not recursed),
+    // and `import(...).Foo` has a non-null qualifier (skipped), so both stay valid.
+    // -----------------------------------------------------------------------
+    private fun checkImportTypeUsedAsType() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) checkImportTypeInStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun checkImportTypeInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) visitBareImportType(d.type, source, fileName)
+            is FunctionDeclaration -> {
+                stmt.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+                visitBareImportType(stmt.type, source, fileName)
+            }
+            is TypeAliasDeclaration -> visitBareImportType(stmt.type, source, fileName)
+            is ClassDeclaration -> for (m in stmt.members) checkImportTypeInMember(m, source, fileName)
+            is InterfaceDeclaration -> for (m in stmt.members) checkImportTypeInMember(m, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { checkImportTypeInStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkImportTypeInMember(member: Node, source: String, fileName: String) {
+        when (member) {
+            is PropertyDeclaration -> visitBareImportType(member.type, source, fileName)
+            is MethodDeclaration -> {
+                member.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+                visitBareImportType(member.type, source, fileName)
+            }
+            is GetAccessor -> visitBareImportType(member.type, source, fileName)
+            is SetAccessor -> member.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+            is Constructor -> member.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+            is IndexSignature -> visitBareImportType(member.type, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun visitBareImportType(type: TypeNode?, source: String, fileName: String) {
+        if (type == null) return
+        when (type) {
+            is ImportType -> {
+                if (type.qualifier == null && !type.isTypeOf && type.typeArguments.isNullOrEmpty()) {
+                    val spec = ((type.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+                    if (spec != null) {
+                        val targetFile = resolveModuleSpecifierRelative(spec, fileName)
+                            ?: resolveModuleSpecifier(spec, null)
+                        val targetResult = targetFile?.let { fileResults[it] }
+                        if (targetResult != null &&
+                            targetResult.sourceFile.statements.none { it is ExportAssignment && it.isExportEquals }) {
+                            val closeParen = source.indexOf(')', type.pos)
+                            val length = if (closeParen > type.pos) closeParen + 1 - type.pos else spec.length + 9
+                            val (line, character) = getLineAndCharacterOfPosition(source, type.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Module '$spec' does not refer to a type, but is used as a type here. Did you mean 'typeof import('$spec')'?",
+                                category = DiagnosticCategory.Error,
+                                code = 1340,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = type.pos,
+                                length = length,
+                            ))
+                        }
+                    }
+                }
+                type.typeArguments?.forEach { visitBareImportType(it, source, fileName) }
+            }
+            is UnionType -> type.types.forEach { visitBareImportType(it, source, fileName) }
+            is IntersectionType -> type.types.forEach { visitBareImportType(it, source, fileName) }
+            is ParenthesizedType -> visitBareImportType(type.type, source, fileName)
+            is ArrayType -> visitBareImportType(type.elementType, source, fileName)
+            is TupleType -> type.elements.forEach { visitBareImportType(it, source, fileName) }
+            is TypeReference -> type.typeArguments?.forEach { visitBareImportType(it, source, fileName) }
+            is FunctionType -> {
+                type.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+                visitBareImportType(type.type, source, fileName)
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { visitBareImportType(it.type, source, fileName) }
+                visitBareImportType(type.type, source, fileName)
+            }
+            is ConditionalType -> {
+                visitBareImportType(type.checkType, source, fileName)
+                visitBareImportType(type.extendsType, source, fileName)
+                visitBareImportType(type.trueType, source, fileName)
+                visitBareImportType(type.falseType, source, fileName)
+            }
+            is IndexedAccessType -> {
+                visitBareImportType(type.objectType, source, fileName)
+                visitBareImportType(type.indexType, source, fileName)
+            }
+            is TypeOperator -> visitBareImportType(type.type, source, fileName)
+            is RestType -> visitBareImportType(type.type, source, fileName)
+            is OptionalType -> visitBareImportType(type.type, source, fileName)
+            is NamedTupleMember -> visitBareImportType(type.type, source, fileName)
+            else -> {} // TypeQuery (typeof import(...) is valid) and leaf types: do not recurse
+        }
     }
 
     // TS2802: Type can only be iterated through when using --downlevelIteration
