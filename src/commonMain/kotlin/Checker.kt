@@ -949,6 +949,8 @@ class Checker(
         if (options.target <= ScriptTarget.ES5) {
             checkPrivateIdentifiersTarget()
         }
+        // 35c. Check WeakMap/WeakSet name collisions with downlevel private-field emit (TS18027)
+        checkWeakMapWeakSetCollision()
         // 36. Check import declarations with modifiers (TS1191)
         checkImportModifiers()
         // 36b. B18.3 v3: Pre-populate the ambient-cyclic-base-class set so TS2449
@@ -36089,6 +36091,117 @@ interface DataView {
             val source = result.sourceFile.text
             checkPrivateIdentifiersInStatements(result.sourceFile.statements, source, fileName)
         }
+    }
+
+    /**
+     * TS18027: when a private identifier (`#x`) is emitted DOWNLEVEL (target
+     * ES2015..ES2021 — native private fields arrived in ES2022), the compiler
+     * synthesizes `new WeakMap()` / `new WeakSet()` references that resolve up the
+     * scope chain. A local binding of `WeakMap`/`WeakSet` in the same scope as a
+     * class with private members shadows the global → "Compiler reserves name 'X'
+     * when emitting private identifier downlevel." Conservative scope model:
+     * only the SAME immediate statement list (a binding and a private-field class
+     * as direct siblings) — unambiguously in scope, zero FP. Cross-scope-closure
+     * collisions are a false-negative (acceptable).
+     */
+    private fun checkWeakMapWeakSetCollision() {
+        if (options.target < ScriptTarget.ES2015 || options.target >= ScriptTarget.ES2022) return
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            walkWeakMapCollisionInList(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
+        }
+    }
+
+    private fun walkWeakMapCollisionInList(statements: List<Statement>, source: String, fileName: String) {
+        if (statements.any { statementHasPrivateFieldClass(it) }) {
+            for (stmt in statements) {
+                for (nameNode in collectWeakMapWeakSetBindings(stmt)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Compiler reserves name '${nameNode.text}' when emitting private identifier downlevel.",
+                        category = DiagnosticCategory.Error,
+                        code = 18027,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = nameNode.pos,
+                        length = nameNode.text.length,
+                    ))
+                }
+            }
+        }
+        for (stmt in statements) {
+            for (childList in weakMapChildStatementLists(stmt)) {
+                walkWeakMapCollisionInList(childList, source, fileName)
+            }
+        }
+    }
+
+    private fun statementHasPrivateFieldClass(stmt: Statement): Boolean {
+        val members = when (stmt) {
+            is ClassDeclaration -> stmt.members
+            is VariableStatement -> stmt.declarationList.declarations
+                .firstNotNullOfOrNull { (it.initializer as? ClassExpression)?.members }
+            is ExpressionStatement -> (stmt.expression as? ClassExpression)?.members
+            else -> null
+        } ?: return false
+        return members.any { m ->
+            val n = when (m) {
+                is PropertyDeclaration -> m.name as? Identifier
+                is MethodDeclaration -> m.name as? Identifier
+                is GetAccessor -> m.name as? Identifier
+                is SetAccessor -> m.name as? Identifier
+                else -> null
+            }
+            n != null && n.text.startsWith("#")
+        }
+    }
+
+    private fun collectWeakMapWeakSetBindings(stmt: Statement): List<Identifier> {
+        val result = mutableListOf<Identifier>()
+        fun consider(id: Identifier?) {
+            if (id != null && (id.text == "WeakMap" || id.text == "WeakSet")) result.add(id)
+        }
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) consider(d.name as? Identifier)
+            is FunctionDeclaration -> consider(stmt.name)
+            is ClassDeclaration -> consider(stmt.name)
+            else -> {}
+        }
+        return result
+    }
+
+    private fun weakMapChildStatementLists(stmt: Statement): List<List<Statement>> = when (stmt) {
+        is FunctionDeclaration -> listOfNotNull(stmt.body?.statements)
+        is Block -> listOf(stmt.statements)
+        is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { listOf(it.statements) } ?: emptyList()
+        is IfStatement -> listOf(listOf(stmt.thenStatement)) + (stmt.elseStatement?.let { listOf(listOf(it)) } ?: emptyList())
+        is ForStatement -> listOf(listOf(stmt.statement))
+        is ForInStatement -> listOf(listOf(stmt.statement))
+        is ForOfStatement -> listOf(listOf(stmt.statement))
+        is WhileStatement -> listOf(listOf(stmt.statement))
+        is DoStatement -> listOf(listOf(stmt.statement))
+        is LabeledStatement -> listOf(listOf(stmt.statement))
+        is TryStatement -> listOfNotNull(
+            stmt.tryBlock.statements, stmt.catchClause?.block?.statements, stmt.finallyBlock?.statements
+        )
+        is SwitchStatement -> stmt.caseBlock.flatMap { clause ->
+            when (clause) {
+                is CaseClause -> listOf(clause.statements)
+                is DefaultClause -> listOf(clause.statements)
+                else -> emptyList()
+            }
+        }
+        is ClassDeclaration -> stmt.members.mapNotNull { m ->
+            when (m) {
+                is MethodDeclaration -> m.body?.statements
+                is Constructor -> m.body?.statements
+                is GetAccessor -> m.body?.statements
+                is SetAccessor -> m.body?.statements
+                else -> null
+            }
+        }
+        else -> emptyList()
     }
 
     private fun checkPrivateIdentifiersInStatements(statements: List<Statement>, source: String, fileName: String) {
