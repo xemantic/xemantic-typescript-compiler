@@ -869,6 +869,9 @@ class Checker(
         if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
             checkImplicitThis()
         }
+        // 21d. TS2526: a `this` TYPE used outside a class/interface member (e.g. a type
+        // predicate `x is this` in an OBJECT-LITERAL method). Always runs (not strict-gated).
+        checkThisTypeInObjectLiterals()
         // 22b. Check for `this` directly inside namespace/module bodies (TS2331 + TS2683).
         // Always runs — TS2331 is a structural error (`this` in namespace body has no
         // meaningful binding), and TypeScript pairs it with TS2683 at the same position.
@@ -29927,6 +29930,121 @@ interface DataView {
      * @param shadowFunctionPos when non-null, the position of the function that shadows
      *   an outer typed `this` (for the related TS2738 diagnostic)
      */
+    // -----------------------------------------------------------------------
+    // TS2526: `this` type outside a class/interface member (B98b, round 82)
+    // -----------------------------------------------------------------------
+    /** A `this` TYPE (ThisType node) is only valid inside a non-static class/interface member.
+     *  Used as an actual type elsewhere — most commonly a type predicate `x is this` in an
+     *  OBJECT-LITERAL method — it's TS2526. Narrow + FP-safe: only fires for a ThisType in an
+     *  object-literal method/accessor return-type predicate's asserted TYPE (NOT the predicate
+     *  SUBJECT `this is X`, which is the OK polymorphic-this form). Class/interface members are
+     *  never visited, so valid `this` types there are untouched. */
+    private fun checkThisTypeInObjectLiterals() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            result.sourceFile.statements.forEach { walkThisTypeStmt(it, source, fileName) }
+        }
+    }
+
+    private fun walkThisTypeStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> stmt.declarationList.declarations.forEach { d ->
+                d.initializer?.let { walkThisTypeExpr(it, source, fileName) }
+            }
+            is ExpressionStatement -> walkThisTypeExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkThisTypeExpr(it, source, fileName) }
+            is Block -> stmt.statements.forEach { walkThisTypeStmt(it, source, fileName) }
+            is IfStatement -> {
+                walkThisTypeStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkThisTypeStmt(it, source, fileName) }
+            }
+            is ForStatement -> walkThisTypeStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkThisTypeStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkThisTypeStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkThisTypeStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkThisTypeStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkThisTypeExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is MethodDeclaration -> {
+                        checkThisTypePredicate(prop.type, source, fileName)
+                        prop.body?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+                    }
+                    is GetAccessor -> {
+                        checkThisTypePredicate(prop.type, source, fileName)
+                        prop.body?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+                    }
+                    is SetAccessor -> prop.body?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+                    is PropertyAssignment -> walkThisTypeExpr(prop.initializer, source, fileName)
+                    is SpreadAssignment -> walkThisTypeExpr(prop.expression, source, fileName)
+                    else -> {}
+                }
+            }
+            is ParenthesizedExpression -> walkThisTypeExpr(expr.expression, source, fileName)
+            is CallExpression -> { walkThisTypeExpr(expr.expression, source, fileName); expr.arguments.forEach { walkThisTypeExpr(it, source, fileName) } }
+            is NewExpression -> { walkThisTypeExpr(expr.expression, source, fileName); expr.arguments?.forEach { walkThisTypeExpr(it, source, fileName) } }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkThisTypeExpr(it, source, fileName) }
+            is BinaryExpression -> {
+                // Iterative (worklist) to avoid StackOverflow on deeply-nested chains
+                // (e.g. binderBinaryExpressionStress); a crash here would abort JS emit.
+                val work = ArrayDeque<Expression>()
+                work.addLast(expr)
+                while (work.isNotEmpty()) {
+                    when (val cur = work.removeLast()) {
+                        is BinaryExpression -> { work.addLast(cur.left); work.addLast(cur.right) }
+                        else -> walkThisTypeExpr(cur, source, fileName)
+                    }
+                }
+            }
+            is ConditionalExpression -> { walkThisTypeExpr(expr.whenTrue, source, fileName); walkThisTypeExpr(expr.whenFalse, source, fileName) }
+            is ArrowFunction -> when (val b = expr.body) {
+                is Block -> b.statements.forEach { walkThisTypeStmt(it, source, fileName) }
+                is Expression -> walkThisTypeExpr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.statements?.forEach { walkThisTypeStmt(it, source, fileName) }
+            is AsExpression -> walkThisTypeExpr(expr.expression, source, fileName)
+            is SpreadElement -> walkThisTypeExpr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Emit TS2526 if [type] is a type predicate whose asserted type is (or contains) a `this`. */
+    private fun checkThisTypePredicate(type: TypeNode?, source: String, fileName: String) {
+        val pred = type as? TypePredicate ?: return
+        val thisPos = findThisTypePos(pred.type) ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, thisPos)
+        diagnostics.add(Diagnostic(
+            message = "A 'this' type is available only in a non-static member of a class or interface.",
+            category = DiagnosticCategory.Error,
+            code = 2526,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = thisPos,
+            length = 4,
+        ))
+    }
+
+    /** Position of a `this` ThisType node directly or shallowly nested in [node] (union/array/paren). */
+    private fun findThisTypePos(node: TypeNode?): Int? = when (node) {
+        is ThisType -> node.pos
+        is ParenthesizedType -> findThisTypePos(node.type)
+        is ArrayType -> findThisTypePos(node.elementType)
+        is UnionType -> node.types.firstNotNullOfOrNull { findThisTypePos(it) }
+        is IntersectionType -> node.types.firstNotNullOfOrNull { findThisTypePos(it) }
+        else -> null
+    }
+
     private fun checkImplicitThis() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
