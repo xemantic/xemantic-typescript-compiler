@@ -370,6 +370,20 @@ class TypeScriptCompiler {
                 code = 5069,
             ))
         }
+        // TS5069: declarationDir without declaration/composite — squiggles the tsconfig key.
+        if (options.declarationDir != null && !options.declaration && !options.composite) {
+            val ddPos = tsconfigPos["declarationdir"]
+            diagnostics.add(Diagnostic(
+                message = "Option 'declarationDir' cannot be specified without specifying option 'declaration' or option 'composite'.",
+                category = DiagnosticCategory.Error,
+                code = 5069,
+                fileName = ddPos?.fileName,
+                line = ddPos?.keyLine,
+                character = ddPos?.keyCharacter,
+                start = ddPos?.keyStart,
+                length = ddPos?.keyLength,
+            ))
+        }
         // TS5069: mapRoot without sourceMap or declarationMap
         if (options.mapRoot != null && !options.sourceMap) {
             diagnostics.add(Diagnostic(
