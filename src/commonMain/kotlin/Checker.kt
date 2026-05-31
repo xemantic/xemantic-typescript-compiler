@@ -78518,9 +78518,15 @@ interface DataView {
             val source = result.sourceFile.text
             currentFileLocals = result.locals
             currentCheckFileName = fileName
+            // Per-file snapshot: the VariableStatement branch records literal-typed
+            // locals into currentLocalTypes (so `const t = true; x >= t` can resolve
+            // `t`); restore afterwards so entries never leak across files.
+            val savedLocalTypes = currentLocalTypes
+            currentLocalTypes = currentLocalTypes.toMutableMap()
             try {
                 checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) { }
+            currentLocalTypes = savedLocalTypes
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -78536,6 +78542,20 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
+                    // Record literal-typed locals so later arithmetic/comparison checks
+                    // in this scope can resolve a bare-identifier operand (e.g.
+                    // `const t = true; onethree >= t`). Gated to a literal initializer
+                    // (unambiguous type) and no overriding annotation. Mirrors the
+                    // existing currentLocalTypes convention: WIDEN the literal (3 →
+                    // number) and SKIP null/undefined initializers (they widen to `any`
+                    // in non-strict mode — otherwise `var x = null; 3 + x` FP's TS2365).
+                    val declName = (decl.name as? Identifier)?.text
+                    val lit = if (declName != null && decl.type == null) {
+                        decl.initializer?.let { literalTypeOfExpression(it) }
+                    } else null
+                    if (lit != null && lit !== nullType && lit !== undefinedType) {
+                        currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+                    }
                 }
             }
             is ReturnStatement -> stmt.expression?.let { checkArithmeticInExpr(it, source, fileName) }
@@ -78914,8 +78934,19 @@ interface DataView {
             // Comparison: both must be comparable types (string, number, bigint, any, enum)
             val leftComparable = isComparableType(leftType)
             val rightComparable = isComparableType(rightType)
-            if (leftComparable && rightComparable) return
-            emitTs2365(expr, op, leftType, rightType, source, fileName)
+            if (!leftComparable || !rightComparable) {
+                emitTs2365(expr, op, leftType, rightType, source, fileName)
+                return
+            }
+            // Both individually comparable — but `<`/`<=`/`>`/`>=` additionally
+            // requires the two operands to be in the SAME primitive category
+            // (`number` ⇎ `string` ⇎ `boolean`). e.g. `1 < true` is invalid.
+            // Display the WIDENED category name (TypeScript shows 'number', not '1 | 3').
+            val lc = comparabilityCategory(leftType)
+            val rc = comparabilityCategory(rightType)
+            if (lc != null && rc != null && lc != rc) {
+                emitTs2365(expr, op, leftType, rightType, source, fileName, lc, rc)
+            }
         }
     }
 
@@ -78982,6 +79013,29 @@ interface DataView {
         return false
     }
 
+    /**
+     * The relational-comparability category of a primitive operand, or null when
+     * the type is `any` / bigint / object / heterogeneous-union — anything where
+     * a cross-category TS2365 would risk a false positive. Two operands of
+     * DIFFERENT non-null categories (`number` ⇎ `string` ⇎ `boolean`) cannot be
+     * compared with `<`/`<=`/`>`/`>=`. The returned string doubles as the widened
+     * display name TypeScript uses in the TS2365 message ('number', not '1 | 3').
+     * bigint is deliberately excluded (returns null) — number-vs-bigint relational
+     * comparability is uncertain, so we never emit for it.
+     */
+    private fun comparabilityCategory(type: Type): String? {
+        if (type is Type.Union) {
+            if (type.types.isEmpty()) return null
+            val first = comparabilityCategory(type.types[0]) ?: return null
+            return if (type.types.all { comparabilityCategory(it) == first }) first else null
+        }
+        if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral)) return "number"
+        if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return "number"
+        if (type.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)) return "string"
+        if (type.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) return "boolean"
+        return null
+    }
+
     /** For TS2365 "Operator X cannot be applied to types 'A' and 'B'", display the
      *  LITERAL form of literal operands (number `3`, null, undefined) rather than
      *  the widened type. Matches TypeScript's baseline behavior. */
@@ -79004,10 +79058,13 @@ interface DataView {
         }
     }
 
-    private fun emitTs2365(expr: BinaryExpression, op: SyntaxKind, leftType: Type, rightType: Type, source: String, fileName: String) {
+    private fun emitTs2365(
+        expr: BinaryExpression, op: SyntaxKind, leftType: Type, rightType: Type, source: String, fileName: String,
+        leftDisplayOverride: String? = null, rightDisplayOverride: String? = null,
+    ) {
         val opText = getOperatorText(op)
-        val leftStr = ts2365OperandDisplay(expr.left, leftType)
-        val rightStr = ts2365OperandDisplay(expr.right, rightType)
+        val leftStr = leftDisplayOverride ?: ts2365OperandDisplay(expr.left, leftType)
+        val rightStr = rightDisplayOverride ?: ts2365OperandDisplay(expr.right, rightType)
         val start = expr.left.pos
         val length = expressionTrueEnd(expr.right) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
