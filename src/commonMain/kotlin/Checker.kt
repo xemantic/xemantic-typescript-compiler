@@ -1192,6 +1192,8 @@ class Checker(
         // 80. B98.r7: TS1206 "Decorators are not valid here." for parameter decorators
         // under standard (non-experimental) decorators — parameter decorators are invalid.
         checkInvalidParameterDecorators()
+        // 81. B98.r8: TS6053 "File 'X' not found." for missing `/// <reference path>` targets.
+        checkReferencePathsExist()
         } // end if (!declarationOnly)
     }
 
@@ -4118,6 +4120,86 @@ class Checker(
             }
         }
         return null
+    }
+
+    /**
+     * B98.r8: Does a `/// <reference path="X" />` directive's target file [refPath] resolve to a
+     * file in the program (fileResults)? Reference paths are resolved relative to the containing
+     * file's directory. Permissive (probes many extensions + `./`-prefix variants) so it biases
+     * toward FINDING a file — a false-negative (missing a file that exists) would FP a spurious
+     * TS6053, which is worse than missing a genuine TS6053. Used by [checkReferencePathsExist].
+     */
+    private fun referencePathResolves(refPath: String, contextFileName: String): Boolean {
+        val rawDir = contextFileName.substringBeforeLast('/', "")
+        val dir = if (rawDir.isEmpty() && contextFileName.startsWith("/")) "" else rawDir
+        val basePath = when {
+            refPath.startsWith("/") -> refPath
+            dir.isEmpty() -> if (contextFileName.startsWith("/")) "/$refPath" else refPath
+            else -> "$dir/$refPath"
+        }
+        val normalized = normalizePath(basePath)
+        val stem = when {
+            normalized.endsWith(".js") -> normalized.removeSuffix(".js")
+            normalized.endsWith(".jsx") -> normalized.removeSuffix(".jsx")
+            normalized.endsWith(".mjs") -> normalized.removeSuffix(".mjs")
+            normalized.endsWith(".cjs") -> normalized.removeSuffix(".cjs")
+            else -> normalized
+        }
+        val exts = listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json", ".mts", ".cts", ".mjs", ".cjs")
+        for (e in exts) {
+            val cand = "$stem$e"
+            if (cand in fileResults) return true
+            val noPrefix = cand.removePrefix("./")
+            if (noPrefix in fileResults) return true
+            if (!cand.startsWith("/") && "./$noPrefix" in fileResults) return true
+        }
+        return false
+    }
+
+    /**
+     * B98.r8: TS6053 "File 'X' not found." for `/// <reference path="X" />` directives whose
+     * target file is absent from the program. Reference directives are only recognized in the
+     * file's LEADING trivia (before the first statement); we scan from the top and stop at the
+     * first real-code line. Squiggle covers the path content (without quotes). Skips `types=`/`lib=`
+     * directives (different resolution). Permissive resolver → no FP on valid sibling references.
+     *
+     * NOTE: the regex is a LOCAL val — a `private val` declared mid-file would be null during the
+     * `init {}` check pipeline (property-initialization-order gotcha) → NPE → checker abort.
+     */
+    private fun checkReferencePathsExist() {
+        val referencePathRegex = Regex("""^\s*///\s*<reference\s+path\s*=\s*(["'])([^"']+)\1\s*/?>""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            var offset = 0
+            for (line in source.lineSequence()) {
+                val trimmed = line.trimStart()
+                if (trimmed.isNotEmpty() && !trimmed.startsWith("//")) break
+                val m = referencePathRegex.find(line)
+                if (m != null) {
+                    val refPath = m.groupValues[2]
+                    // Skip harness-internal dot-directories (`/.lib/react16.d.ts`, `/.ts/`, …) —
+                    // TypeScript's test harness resolves these from its own lib fixtures that our
+                    // program never loads, so flagging them would FP (e.g. react16.d.ts references).
+                    if (refPath.startsWith("/.")) { offset += line.length + 1; continue }
+                    if (!referencePathResolves(refPath, fileName)) {
+                        val groupStart = offset + m.groups[2]!!.range.first
+                        val (l, c) = getLineAndCharacterOfPosition(source, groupStart)
+                        diagnostics.add(Diagnostic(
+                            message = "File '$refPath' not found.",
+                            category = DiagnosticCategory.Error,
+                            code = 6053,
+                            fileName = fileName,
+                            line = l,
+                            character = c,
+                            start = groupStart,
+                            length = refPath.length,
+                        ))
+                    }
+                }
+                offset += line.length + 1
+            }
+        }
     }
 
     /**
