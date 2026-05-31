@@ -44,6 +44,14 @@ class Checker(
      * filtered to the assigned subset.
      */
     private val assignedFileNames: Set<String>? = null,
+    /**
+     * All RAW input file names from the program — including `.js`/`.jsx` files that were
+     * parsed-but-not-bound (no `allowJs`, so absent from [fileResults]). Used by the
+     * relative-import TS7016 check to tell "module resolves to an untyped JS sibling"
+     * (→ TS7016 under noImplicitAny) apart from "module resolves to nothing" (→ TS2307).
+     * Empty for single-file / declaration-only checks (no JS siblings to consider).
+     */
+    private val allInputFileNames: Set<String> = emptySet(),
 ) {
     /** Merged symbol tables from all files (global scope). */
     private val globals: SymbolTable = symbolTable()
@@ -4136,6 +4144,43 @@ class Checker(
                 if (noPrefix in fileResults) return noPrefix
                 val withPrefix = if (cand.startsWith("/")) cand else "./$noPrefix"
                 if (withPrefix in fileResults) return withPrefix
+            }
+        }
+        return null
+    }
+
+    /**
+     * B98.r21: Does a RELATIVE [specifier] resolve to an untyped `.js`/`.jsx`/`.cjs`/`.mjs` sibling
+     * that is present in the RAW input file set ([allInputFileNames]) but NOT in [fileResults]
+     * (i.e. parsed-but-not-bound because `allowJs` is off)? Returns the resolved JS file path, or
+     * null. TypeScript resolves such an import to an implicit-`any` module (TS7016 under
+     * noImplicitAny) rather than failing it (TS2307). Mirrors the directory-context resolution of
+     * [resolveRelativeIncludingIndex] but probes only JS-ish extensions against the raw set.
+     */
+    private fun resolveRelativeJsSibling(specifier: String, contextFileName: String): String? {
+        if (allInputFileNames.isEmpty()) return null
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
+        val rawDir = contextFileName.substringBeforeLast('/', "")
+        val dir = if (rawDir.isEmpty() && contextFileName.startsWith("/")) "" else rawDir
+        val spec = specifier.trimEnd('/')
+        val basePath = if (dir.isEmpty()) {
+            if (contextFileName.startsWith("/")) "/${spec.removePrefix("./")}" else spec
+        } else "$dir/${spec.removePrefix("./")}"
+        val normalized = normalizePath(basePath)
+        val stem = when {
+            normalized.endsWith(".js") -> normalized.removeSuffix(".js")
+            normalized.endsWith(".jsx") -> normalized.removeSuffix(".jsx")
+            normalized.endsWith(".mjs") -> normalized.removeSuffix(".mjs")
+            normalized.endsWith(".cjs") -> normalized.removeSuffix(".cjs")
+            else -> normalized
+        }
+        val jsExts = listOf(".js", ".jsx", ".cjs", ".mjs")
+        for (s in listOf(stem, "$stem/index")) {
+            for (e in jsExts) {
+                val cand = "$s$e"
+                if (cand in allInputFileNames && cand !in fileResults) return cand
+                val noPrefix = cand.removePrefix("./")
+                if (noPrefix in allInputFileNames && noPrefix !in fileResults) return noPrefix
             }
         }
         return null
@@ -20997,7 +21042,28 @@ class Checker(
                             && moduleName !in dtsFileBaseNames
                             && !hasTsErrorSuppressionAbove(specifier.pos, source)
                         ) {
-                            emitTS2307(specifier, moduleName, source, fileName)
+                            // B98.r21: a relative specifier resolving to an untyped `.js` sibling
+                            // (present in raw input but not bound — no `allowJs`) is NOT a missing
+                            // module; under noImplicitAny TypeScript reports TS7016 (implicit-any
+                            // module) instead of TS2307. Pure SWAP gated on noImplicitAny + a known
+                            // JS sibling — every other case keeps the existing TS2307.
+                            val jsSibling = if (options.noImplicitAny || options.strict)
+                                resolveRelativeJsSibling(moduleName, fileName) else null
+                            if (jsSibling != null) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Could not find a declaration file for module '$moduleName'. '$jsSibling' implicitly has an 'any' type.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 7016,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = specifier.pos,
+                                    length = moduleName.length + 2, // +2 for quotes (matches emitTS2307)
+                                ))
+                            } else {
+                                emitTS2307(specifier, moduleName, source, fileName)
+                            }
                         }
                     } else if (moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative) {
                         // Non-relative .json imports (resolved via node_modules or path mapping)

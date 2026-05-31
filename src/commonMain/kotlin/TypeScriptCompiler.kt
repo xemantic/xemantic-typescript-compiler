@@ -1218,7 +1218,8 @@ class TypeScriptCompiler {
             // Phase 2: Bind all files and create shared checker
             val binder = Binder(options)
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
-            val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames)
+            val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                allInputFileNames = parsed.files.map { it.fileName }.toSet())
             diagnostics.addAll(checker.getDiagnostics())
 
             if (options.isolatedDeclarations) {
