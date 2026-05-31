@@ -901,6 +901,10 @@ class Checker(
         if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
             checkImplicitThis()
         }
+        // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
+        // only through this-transparent constructs / arrow bodies) accesses a property of
+        // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
+        checkModuleTopLevelThis()
         // 21d. TS2526: a `this` TYPE used outside a class/interface member (e.g. a type
         // predicate `x is this` in an OBJECT-LITERAL method). Always runs (not strict-gated).
         checkThisTypeInObjectLiterals()
@@ -31127,6 +31131,146 @@ interface DataView {
         is UnionType -> node.types.firstNotNullOfOrNull { findThisTypePos(it) }
         is IntersectionType -> node.types.firstNotNullOfOrNull { findThisTypePos(it) }
         else -> null
+    }
+
+    /**
+     * TS2532: in an ES MODULE, top-level `this` is `undefined`. A property/element access
+     * `this.X` / `this[…]` reached from module top level through ONLY this-TRANSPARENT
+     * constructs (statements, var initializers, arrow bodies, parens, calls, operators, …)
+     * — i.e. NEVER crossing a `this`-rebinding boundary (function/method/constructor/accessor/
+     * class/object-literal-method) — accesses a property of `undefined`. Fires regardless of
+     * strictNullChecks (module top-level `this` is the `undefined` type). FP-safe BY
+     * CONSTRUCTION: the walker never recurses into a `this`-rebinding boundary, so it can only
+     * reach a genuine module-level `this`. Gated on ES-module FORMAT (a CommonJS module's
+     * top-level `this` is `module.exports`, NOT undefined) and `isModuleFile` (scripts have a
+     * global `this`).
+     */
+    private fun checkModuleTopLevelThis() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            if (!isModuleFile(result.sourceFile.statements)) continue
+            if (!isESModuleFormat(options, fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkModuleThisStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun walkModuleThisStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkModuleThisExpr(it, source, fileName) }
+            is ExpressionStatement -> walkModuleThisExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkModuleThisExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkModuleThisExpr(it, source, fileName) }
+            is IfStatement -> {
+                walkModuleThisExpr(stmt.expression, source, fileName)
+                walkModuleThisStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkModuleThisStmt(it, source, fileName) }
+            }
+            is Block -> stmt.statements.forEach { walkModuleThisStmt(it, source, fileName) }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkModuleThisExpr(it, source, fileName) }
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> walkModuleThisExpr(i, source, fileName) } }
+                stmt.condition?.let { walkModuleThisExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkModuleThisExpr(it, source, fileName) }
+                walkModuleThisStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> { walkModuleThisExpr(stmt.expression, source, fileName); walkModuleThisStmt(stmt.statement, source, fileName) }
+            is ForOfStatement -> { walkModuleThisExpr(stmt.expression, source, fileName); walkModuleThisStmt(stmt.statement, source, fileName) }
+            is WhileStatement -> { walkModuleThisExpr(stmt.expression, source, fileName); walkModuleThisStmt(stmt.statement, source, fileName) }
+            is DoStatement -> { walkModuleThisStmt(stmt.statement, source, fileName); walkModuleThisExpr(stmt.expression, source, fileName) }
+            is SwitchStatement -> {
+                walkModuleThisExpr(stmt.expression, source, fileName)
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> { walkModuleThisExpr(c.expression, source, fileName); c.statements.forEach { walkModuleThisStmt(it, source, fileName) } }
+                    is DefaultClause -> c.statements.forEach { walkModuleThisStmt(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkModuleThisStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkModuleThisStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkModuleThisStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> walkModuleThisStmt(stmt.statement, source, fileName)
+            is ExportAssignment -> walkModuleThisExpr(stmt.expression, source, fileName)
+            // FunctionDeclaration / ClassDeclaration / ModuleDeclaration / Interface / Enum:
+            // a `this`-rebinding (or this-irrelevant) boundary — do NOT recurse.
+            else -> {}
+        }
+    }
+
+    private fun walkModuleThisExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val recv = expr.expression
+                if (recv is Identifier && recv.text == "this") emitModuleThisUndefined(recv, source, fileName)
+                else walkModuleThisExpr(recv, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                val recv = expr.expression
+                if (recv is Identifier && recv.text == "this") emitModuleThisUndefined(recv, source, fileName)
+                else walkModuleThisExpr(recv, source, fileName)
+                walkModuleThisExpr(expr.argumentExpression, source, fileName)
+            }
+            is ParenthesizedExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is ArrowFunction -> when (val b = expr.body) {
+                // Arrows preserve the lexical (module) `this` — still transparent.
+                is Block -> b.statements.forEach { walkModuleThisStmt(it, source, fileName) }
+                is Expression -> walkModuleThisExpr(b, source, fileName)
+                else -> {}
+            }
+            is CallExpression -> { walkModuleThisExpr(expr.expression, source, fileName); expr.arguments.forEach { walkModuleThisExpr(it, source, fileName) } }
+            is NewExpression -> { walkModuleThisExpr(expr.expression, source, fileName); expr.arguments?.forEach { walkModuleThisExpr(it, source, fileName) } }
+            is BinaryExpression -> {
+                // Iterative left-spine to survive deeply-nested `a + b + c + …` chains.
+                var node: Expression = expr
+                while (node is BinaryExpression) { walkModuleThisExpr(node.right, source, fileName); node = node.left }
+                walkModuleThisExpr(node, source, fileName)
+            }
+            is PrefixUnaryExpression -> walkModuleThisExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkModuleThisExpr(expr.operand, source, fileName)
+            is ConditionalExpression -> { walkModuleThisExpr(expr.condition, source, fileName); walkModuleThisExpr(expr.whenTrue, source, fileName); walkModuleThisExpr(expr.whenFalse, source, fileName) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkModuleThisExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkModuleThisExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkModuleThisExpr(p.expression, source, fileName)
+                else -> {} // method/accessor/shorthand → boundary or n/a
+            }
+            is SpreadElement -> walkModuleThisExpr(expr.expression, source, fileName)
+            is AsExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkModuleThisExpr(it, source, fileName) }
+            is TemplateExpression -> expr.templateSpans.forEach { walkModuleThisExpr(it.expression, source, fileName) }
+            is CommaListExpression -> expr.elements.forEach { walkModuleThisExpr(it, source, fileName) }
+            is TaggedTemplateExpression -> {
+                walkModuleThisExpr(expr.tag, source, fileName)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach { walkModuleThisExpr(it.expression, source, fileName) }
+            }
+            is DeleteExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is VoidExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkModuleThisExpr(expr.expression, source, fileName)
+            // Identifier (bare `this` with no property access → no TS2532), FunctionExpression,
+            // ClassExpression, literals → boundary or no `this.X` reachable; do NOT recurse.
+            else -> {}
+        }
+    }
+
+    private fun emitModuleThisUndefined(thisNode: Node, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, thisNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Object is possibly 'undefined'.",
+            category = DiagnosticCategory.Error,
+            code = 2532,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = thisNode.pos,
+            length = 4, // "this"
+        ))
     }
 
     private fun checkImplicitThis() {
