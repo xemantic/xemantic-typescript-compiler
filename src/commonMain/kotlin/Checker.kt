@@ -20712,7 +20712,13 @@ class Checker(
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
-                    // simplified for paths, symlinks, json, index resolution; causes FPs.
+                    // simplified for paths, symlinks, json, index resolution; causes FPs. The
+                    // bare-specifier-missing case (B98.r2 attempt, reverted round 83) is NOT
+                    // surgically tractable: even with @types/node_modules/builtin guards it FP'd on
+                    // symlinked deps (moduleResolutionWithSymlinks), untyped modules
+                    // (extendsUntypedModule), absolute-path specifiers (checkJsxNotSetError '/foo'),
+                    // and some scoped packages — all rooted in the resolver's inability to model
+                    // node_modules layout / untyped .js / symlinks.
                 } else {
                     if (isSideEffectImport) {
                         emitTS2882(specifier, moduleName, source, fileName)
