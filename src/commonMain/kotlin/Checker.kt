@@ -905,6 +905,10 @@ class Checker(
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
         checkModuleTopLevelThis()
+        // 21c''. TS2523 / TS2524: `yield` / `await` in a parameter initializer
+        // (incl. destructuring binding-pattern element defaults). Purely syntactic
+        // grammar check (zero-FP) -- never recurses into a nested fn/arrow/class boundary.
+        checkParamInitializerForbidden()
         // 21d. TS2526: a `this` TYPE used outside a class/interface member (e.g. a type
         // predicate `x is this` in an OBJECT-LITERAL method). Always runs (not strict-gated).
         checkThisTypeInObjectLiterals()
@@ -31270,6 +31274,274 @@ interface DataView {
             character = character,
             start = thisNode.pos,
             length = 4, // "this"
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2523 / TS2524: `yield` / `await` expressions cannot appear in a
+    // parameter initializer. Mirrors TypeScript's parameter-initializer grammar
+    // check. Purely syntactic -- a `yield`/`await` reachable in a parameter's
+    // initializer (or a binding-pattern element default) WITHOUT crossing a
+    // function/class boundary is always a grammar error -> zero-FP.
+    //
+    // Dedup is done with a LOCAL set threaded through the walk (NOT an instance
+    // field): the whole check pipeline runs in `init {}`, where a property declared
+    // after `init` is still null (the documented Kotlin init-order trap), so an
+    // instance MutableSet would NPE and abort every file's checking. The dedup key
+    // is (code | trimmed-source-line-text): a self-importing file's content can be
+    // duplicated into one SourceFile by the program builder, so the same grammar
+    // error would otherwise be reported at two offsets on identical lines; keying
+    // on the line text (not the offset) collapses the copies, matching TypeScript
+    // (one report per offending keyword occurrence).
+    // -----------------------------------------------------------------------
+    private fun checkParamInitializerForbidden() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val emitted = HashSet<String>()
+            for (stmt in result.sourceFile.statements) walkParamForbiddenStmt(stmt, source, fileName, emitted)
+        }
+    }
+
+    private fun walkParamForbiddenStmt(stmt: Statement, source: String, fileName: String, emitted: MutableSet<String>) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                walkParamForbiddenParameters(stmt.parameters, source, fileName, emitted)
+                stmt.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) walkParamForbiddenClassMember(m, source, fileName, emitted)
+            is ModuleDeclaration -> stmt.body?.let { body ->
+                if (body is ModuleBlock) body.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
+            is ExpressionStatement -> walkParamForbiddenExprForFns(stmt.expression, source, fileName, emitted)
+            is ReturnStatement -> stmt.expression?.let { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
+            is Block -> stmt.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            is IfStatement -> {
+                walkParamForbiddenStmt(stmt.thenStatement, source, fileName, emitted)
+                stmt.elseStatement?.let { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is ForStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is ForInStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is ForOfStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is WhileStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is DoStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+                stmt.catchClause?.block?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+                stmt.finallyBlock?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is LabeledStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
+            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
+                is CaseClause -> c.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+                is DefaultClause -> c.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkParamForbiddenClassMember(member: ClassElement, source: String, fileName: String, emitted: MutableSet<String>) {
+        when (member) {
+            is MethodDeclaration -> {
+                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
+                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is Constructor -> {
+                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
+                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is GetAccessor -> {
+                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
+                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is SetAccessor -> {
+                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
+                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkParamForbiddenExprForFns(expr: Expression, source: String, fileName: String, emitted: MutableSet<String>) {
+        when (expr) {
+            is FunctionExpression -> {
+                walkParamForbiddenParameters(expr.parameters, source, fileName, emitted)
+                expr.body.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+            }
+            is ArrowFunction -> {
+                walkParamForbiddenParameters(expr.parameters, source, fileName, emitted)
+                when (val b = expr.body) {
+                    is Block -> b.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
+                    is Expression -> walkParamForbiddenExprForFns(b, source, fileName, emitted)
+                    else -> {}
+                }
+            }
+            is ClassExpression -> for (m in expr.members) walkParamForbiddenClassMember(m, source, fileName, emitted)
+            is ParenthesizedExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            is CallExpression -> { walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted); expr.arguments.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) } }
+            is NewExpression -> { walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted); expr.arguments?.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) } }
+            is BinaryExpression -> {
+                var node: Expression = expr
+                while (node is BinaryExpression) { walkParamForbiddenExprForFns(node.right, source, fileName, emitted); node = node.left }
+                walkParamForbiddenExprForFns(node, source, fileName, emitted)
+            }
+            is ConditionalExpression -> { walkParamForbiddenExprForFns(expr.condition, source, fileName, emitted); walkParamForbiddenExprForFns(expr.whenTrue, source, fileName, emitted); walkParamForbiddenExprForFns(expr.whenFalse, source, fileName, emitted) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkParamForbiddenExprForFns(p.initializer, source, fileName, emitted)
+                is SpreadAssignment -> walkParamForbiddenExprForFns(p.expression, source, fileName, emitted)
+                is MethodDeclaration -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
+                is GetAccessor -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
+                is SetAccessor -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
+                else -> {}
+            }
+            is PrefixUnaryExpression -> walkParamForbiddenExprForFns(expr.operand, source, fileName, emitted)
+            is PostfixUnaryExpression -> walkParamForbiddenExprForFns(expr.operand, source, fileName, emitted)
+            is SpreadElement -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            is AsExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            is NonNullExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            is TypeAssertionExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            is SatisfiesExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
+            else -> {}
+        }
+    }
+
+    private fun walkParamForbiddenParameters(parameters: List<Parameter>, source: String, fileName: String, emitted: MutableSet<String>) {
+        for (param in parameters) {
+            // A binding-pattern parameter stores its default on the BindingElement,
+            // not on Parameter.initializer; walkParamForbiddenBindingName covers it.
+            param.initializer?.let {
+                walkParamInitForbidden(it, source, fileName, emitted)
+                walkParamForbiddenExprForFns(it, source, fileName, emitted)
+            }
+            walkParamForbiddenBindingName(param.name, source, fileName, emitted)
+        }
+    }
+
+    private fun walkParamForbiddenBindingName(name: Expression, source: String, fileName: String, emitted: MutableSet<String>) {
+        when (name) {
+            is ObjectBindingPattern -> for (el in name.elements) walkParamForbiddenBindingElement(el, source, fileName, emitted)
+            is ArrayBindingPattern -> for (el in name.elements) (el as? BindingElement)?.let { walkParamForbiddenBindingElement(it, source, fileName, emitted) }
+            else -> {}
+        }
+    }
+
+    private fun walkParamForbiddenBindingElement(el: BindingElement, source: String, fileName: String, emitted: MutableSet<String>) {
+        el.initializer?.let {
+            walkParamInitForbidden(it, source, fileName, emitted)
+            walkParamForbiddenExprForFns(it, source, fileName, emitted)
+        }
+        walkParamForbiddenBindingName(el.name, source, fileName, emitted)
+    }
+
+    private fun walkParamInitForbidden(expr: Expression, source: String, fileName: String, emitted: MutableSet<String>) {
+        when (expr) {
+            is AwaitExpression -> {
+                val kw = paramForbiddenKeywordPos(expr.pos, "await", source)
+                emitParamInitForbidden(kw, expressionTrueEnd(expr) - kw, 2524, "'await' expressions cannot be used in a parameter initializer.", source, fileName, emitted)
+                walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            }
+            is YieldExpression -> {
+                val kw = paramForbiddenKeywordPos(expr.pos, "yield", source)
+                // TS spans only the `yield` keyword (5 chars) for TS2523.
+                emitParamInitForbidden(kw, 5, 2523, "'yield' expressions cannot be used in a parameter initializer.", source, fileName, emitted)
+                expr.expression?.let { walkParamInitForbidden(it, source, fileName, emitted) }
+            }
+            // Parser-recovery shape: inside a GENERATOR's parameter list `yield` is NOT a
+            // yield-context keyword, so `{ foo = yield "a" }` parses `yield` as a bare
+            // Identifier and the operand (`"a"`) is dropped. TypeScript's grammar checker
+            // reports this dangling-keyword-then-operand juxtaposition as TS2524 (verified
+            // against the test's .errors.txt baseline, which carries TS2524 at BOTH the
+            // `await import(...)` and the `yield "a"` positions). FP-safe: a bare
+            // `yield`/`await` Identifier IMMEDIATELY followed (skipping spaces/tabs) by an
+            // operand-start char is never legal -- a real variable named `yield`/`await` is
+            // followed by a delimiter/operator/EOF, never an operand-start. 5-char span.
+            is Identifier -> if (expr.text == "yield" || expr.text == "await") {
+                val kwEnd = expr.pos + expr.text.length
+                var p = kwEnd
+                while (p < source.length && (source[p] == ' ' || source[p] == '\t')) p++
+                if (p < source.length && p > kwEnd && isParamForbiddenOperandStart(source[p])) {
+                    emitParamInitForbidden(expr.pos, expr.text.length, 2524, "'await' expressions cannot be used in a parameter initializer.", source, fileName, emitted)
+                }
+            }
+            is ParenthesizedExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is CallExpression -> { walkParamInitForbidden(expr.expression, source, fileName, emitted); expr.arguments.forEach { walkParamInitForbidden(it, source, fileName, emitted) } }
+            is NewExpression -> { walkParamInitForbidden(expr.expression, source, fileName, emitted); expr.arguments?.forEach { walkParamInitForbidden(it, source, fileName, emitted) } }
+            is PropertyAccessExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is ElementAccessExpression -> { walkParamInitForbidden(expr.expression, source, fileName, emitted); walkParamInitForbidden(expr.argumentExpression, source, fileName, emitted) }
+            is BinaryExpression -> {
+                var node: Expression = expr
+                while (node is BinaryExpression) { walkParamInitForbidden(node.right, source, fileName, emitted); node = node.left }
+                walkParamInitForbidden(node, source, fileName, emitted)
+            }
+            is PrefixUnaryExpression -> walkParamInitForbidden(expr.operand, source, fileName, emitted)
+            is PostfixUnaryExpression -> walkParamInitForbidden(expr.operand, source, fileName, emitted)
+            is ConditionalExpression -> { walkParamInitForbidden(expr.condition, source, fileName, emitted); walkParamInitForbidden(expr.whenTrue, source, fileName, emitted); walkParamInitForbidden(expr.whenFalse, source, fileName, emitted) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkParamInitForbidden(it, source, fileName, emitted) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkParamInitForbidden(p.initializer, source, fileName, emitted)
+                is SpreadAssignment -> walkParamInitForbidden(p.expression, source, fileName, emitted)
+                else -> {}
+            }
+            is SpreadElement -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is AsExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is NonNullExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is TypeAssertionExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is SatisfiesExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is TemplateExpression -> expr.templateSpans.forEach { walkParamInitForbidden(it.expression, source, fileName, emitted) }
+            is CommaListExpression -> expr.elements.forEach { walkParamInitForbidden(it, source, fileName, emitted) }
+            is TaggedTemplateExpression -> {
+                walkParamInitForbidden(expr.tag, source, fileName, emitted)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach { walkParamInitForbidden(it.expression, source, fileName, emitted) }
+            }
+            is DeleteExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is VoidExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            is TypeOfExpression -> walkParamInitForbidden(expr.expression, source, fileName, emitted)
+            else -> {}
+        }
+    }
+
+    /**
+     * [pos] may include leading trivia before the `await`/`yield` keyword. Search
+     * forward for the literal keyword so the squiggle column matches TypeScript's.
+     */
+    private fun paramForbiddenKeywordPos(pos: Int, keyword: String, source: String): Int {
+        val idx = source.indexOf(keyword, pos)
+        if (idx >= pos && idx <= pos + 8) return idx
+        var p = pos
+        while (p < source.length && (source[p] == ' ' || source[p] == '\t' || source[p] == '\n' || source[p] == '\r')) p++
+        return p
+    }
+
+    /**
+     * Does [c] begin a primary-expression operand (used to recognize the dropped operand
+     * after a recovery-parsed bare `yield`/`await` Identifier)? Conservative: quotes,
+     * digits, `(`/`[`/`{`, identifier-start chars. Newline / operators / delimiters
+     * excluded so a legitimate variable named `yield`/`await` never trips this.
+     */
+    private fun isParamForbiddenOperandStart(c: Char): Boolean =
+        c == '"' || c == '\'' || c == '`' || c.isDigit() ||
+            c == '(' || c == '[' || c == '{' ||
+            c == '_' || c == '$' || c.isLetter()
+
+    private fun emitParamInitForbidden(start: Int, length: Int, code: Int, message: String, source: String, fileName: String, emitted: MutableSet<String>) {
+        var lineStart = start
+        while (lineStart > 0 && source[lineStart - 1] != '\n') lineStart--
+        var lineEnd = start
+        while (lineEnd < source.length && source[lineEnd] != '\n') lineEnd++
+        val key = code.toString() + "|" + source.substring(lineStart, lineEnd).trim()
+        if (!emitted.add(key)) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length.coerceAtLeast(1),
         ))
     }
 
