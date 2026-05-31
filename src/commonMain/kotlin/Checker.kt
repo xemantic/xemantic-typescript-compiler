@@ -45141,6 +45141,35 @@ interface DataView {
                     }
                 }
             }
+            // B98.r62: TS2531 — for `class X extends null`, the `super` reference has
+            // type `null`, so any `super.prop` property access is "Object is possibly
+            // 'null'." (under strictNullChecks). Walk every method/accessor/constructor
+            // body for `super.X` positions. Distinct from `super(...)` (TS17005 above):
+            // collectSuperPropertyAccessPositions matches ONLY `super.X` receivers.
+            if (strictNullChecks) {
+                for (member in members) {
+                    val body = when (member) {
+                        is MethodDeclaration -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        is Constructor -> member.body
+                        else -> null
+                    } ?: continue
+                    for ((superPos, len) in collectSuperPropAccessInStmts(body.statements)) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, superPos)
+                        diagnostics.add(Diagnostic(
+                            message = "Object is possibly 'null'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2531,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = superPos,
+                            length = len,
+                        ))
+                    }
+                }
+            }
             // TS2417: "Class static side 'typeof C' incorrectly extends base class static side 'null'"
             // fires only when the class is declaration-merged with an interface of the same name.
             // Without the merged interface, TypeScript suppresses this error (see classExtendsNull /
@@ -45808,6 +45837,46 @@ interface DataView {
 
     /** B51.5: Collect `super.X` PropertyAccessExpression positions (start, length)
      *  within an expression. Used for TS17011 emission in `super(super.X())` patterns. */
+    /** Walk a method/constructor body's statements for `super.X` property-access
+     *  positions (via [collectSuperPropertyAccessPositions]). Used by the
+     *  `class extends null` TS2531 check. */
+    private fun collectSuperPropAccessInStmts(stmts: List<Statement>): List<Pair<Int, Int>> {
+        val out = mutableListOf<Pair<Int, Int>>()
+        fun fromExpr(e: Expression?) { e?.let { out.addAll(collectSuperPropertyAccessPositions(it)) } }
+        fun walkStmt(s: Statement) {
+            when (s) {
+                is ExpressionStatement -> fromExpr(s.expression)
+                is ReturnStatement -> fromExpr(s.expression)
+                is ThrowStatement -> fromExpr(s.expression)
+                is VariableStatement -> s.declarationList.declarations.forEach { fromExpr(it.initializer) }
+                is IfStatement -> { fromExpr(s.expression); walkStmt(s.thenStatement); s.elseStatement?.let { walkStmt(it) } }
+                is Block -> s.statements.forEach { walkStmt(it) }
+                is ForStatement -> walkStmt(s.statement)
+                is ForInStatement -> { fromExpr(s.expression); walkStmt(s.statement) }
+                is ForOfStatement -> { fromExpr(s.expression); walkStmt(s.statement) }
+                is WhileStatement -> { fromExpr(s.expression); walkStmt(s.statement) }
+                is DoStatement -> { fromExpr(s.expression); walkStmt(s.statement) }
+                is SwitchStatement -> {
+                    fromExpr(s.expression)
+                    for (c in s.caseBlock) when (c) {
+                        is CaseClause -> { fromExpr(c.expression); c.statements.forEach { walkStmt(it) } }
+                        is DefaultClause -> c.statements.forEach { walkStmt(it) }
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    s.tryBlock.statements.forEach { walkStmt(it) }
+                    s.catchClause?.block?.statements?.forEach { walkStmt(it) }
+                    s.finallyBlock?.statements?.forEach { walkStmt(it) }
+                }
+                is LabeledStatement -> walkStmt(s.statement)
+                else -> {}
+            }
+        }
+        stmts.forEach { walkStmt(it) }
+        return out
+    }
+
     private fun collectSuperPropertyAccessPositions(expr: Expression?): List<Pair<Int, Int>> {
         val out = mutableListOf<Pair<Int, Int>>()
         fun walk(e: Expression?) {
