@@ -21051,6 +21051,30 @@ class Checker(
                         }
                     }
                     val isClassicResolution = effectiveModuleRes !in setOf("node", "node10", "node16", "nodenext", "bundler")
+                    // B98.r61: TS2834 — under node16/nodenext in ESM format, a relative
+                    // import MUST carry an explicit file extension (`./foo.js`); an
+                    // extensionless relative specifier (`./pkg`, `./node_modules/pkg`)
+                    // does not implicitly resolve to `index.js`. Non-relative (bare)
+                    // specifiers are exempt. ESM detection via isESModuleFormat consults
+                    // the nearest package.json `"type"` (so a `"type":"module"` root makes
+                    // a plain `.ts` ESM); a CJS-mode nodenext `.ts` allows extensionless.
+                    if (isRelative && effectiveModuleRes in setOf("node16", "nodenext") &&
+                        !moduleName.endsWith(".json") && isESModuleFormat(options, fileName)) {
+                        val lastSeg = moduleName.substringAfterLast('/')
+                        if (lastSeg.isNotEmpty() && !lastSeg.contains('.')) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Consider adding an extension to the import path.",
+                                category = DiagnosticCategory.Error,
+                                code = 2834,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = specifier.pos,
+                                length = moduleName.length + 2,
+                            ))
+                        }
+                    }
                     if (isSideEffectImport) {
                         // Side-effect imports: TS2882
                         if (isRelative) {
