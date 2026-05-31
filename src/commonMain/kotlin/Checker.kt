@@ -62358,6 +62358,9 @@ interface DataView {
                 for ((name, sym) in globals) {
                     if (isAbstractClass(sym)) abstractClasses.add(name)
                 }
+                // Cross-file: a default/named import bound to an abstract class adds its local
+                // alias name (e.g. `import A from "./a"` where a.ts `export default abstract class`).
+                collectImportedAbstractClassAliases(result.sourceFile.statements, fileName, abstractClasses)
                 // Build type alias map for `typeof X` resolution through aliases.
                 val typeAliases = mutableMapOf<String, TypeNode>()
                 collectTypeAliases(result.sourceFile.statements, typeAliases)
@@ -62367,6 +62370,44 @@ interface DataView {
                 collectTypeofAbstractVars(result.sourceFile.statements, abstractClasses, typeAliases, typeofAbstractVars)
                 checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses, typeofAbstractVars)
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /**
+     * Adds the local alias name of any default/named import bound to an abstract class to
+     * [abstractClasses], so `new A()` on a cross-file-imported abstract class fires TS2511.
+     * Relative specifiers only; type-only imports skipped (a type-only `new` is a different error).
+     */
+    private fun collectImportedAbstractClassAliases(
+        stmts: List<Statement>,
+        fileName: String,
+        abstractClasses: MutableSet<String>,
+    ) {
+        for (stmt in stmts) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            if (clause.isTypeOnly) continue
+            val moduleName = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
+            val resolved = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+            val targetFile = fileResults[resolved]?.sourceFile ?: continue
+            // `import A from "./a"` — default-exported abstract class.
+            clause.name?.let { defaultName ->
+                val isDefaultAbstract = targetFile.statements.any {
+                    it is ClassDeclaration && ModifierFlag.Default in it.modifiers && ModifierFlag.Abstract in it.modifiers
+                }
+                if (isDefaultAbstract) abstractClasses.add(defaultName.text)
+            }
+            // `import { Foo } from "./a"` — named-exported abstract class.
+            (clause.namedBindings as? NamedImports)?.elements?.forEach { spec ->
+                if (spec.isTypeOnly) return@forEach
+                val srcName = (spec.propertyName ?: spec.name).text
+                val isNamedAbstract = targetFile.statements.any {
+                    it is ClassDeclaration && it.name?.text == srcName &&
+                        ModifierFlag.Export in it.modifiers && ModifierFlag.Abstract in it.modifiers
+                }
+                if (isNamedAbstract) abstractClasses.add(spec.name.text)
+            }
         }
     }
 
