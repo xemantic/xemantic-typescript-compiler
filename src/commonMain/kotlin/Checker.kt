@@ -40203,6 +40203,14 @@ interface DataView {
         when (stmt) {
             is VariableStatement -> for (decl in stmt.declarationList.declarations) {
                 decl.initializer?.let { walkB94InExpr(it, source, fileName) }
+                // B98.r40: `let {[k]: x} = {}` — destructuring an empty object literal
+                // with a non-literal computed key fires TS2537 (the `{}` source type has
+                // no index signature). Mirrors the param-default `{}` case below.
+                val b94pat = decl.name as? ObjectBindingPattern
+                val b94init = decl.initializer
+                if (b94pat != null && decl.type == null && b94init is ObjectLiteralExpression && b94init.properties.isEmpty()) {
+                    emitB94ForComputedKeyPattern(b94pat, source, fileName)
+                }
             }
             is ExpressionStatement -> walkB94InExpr(stmt.expression, source, fileName)
             is ReturnStatement -> stmt.expression?.let { walkB94InExpr(it, source, fileName) }
@@ -40416,6 +40424,34 @@ interface DataView {
                     length = length,
                 ))
             }
+        }
+    }
+
+    /** B98.r40: TS2537 element loop for an empty-`{}`-destructured ObjectBindingPattern. */
+    private fun emitB94ForComputedKeyPattern(pattern: ObjectBindingPattern, source: String, fileName: String) {
+        for (element in pattern.elements) {
+            val computed = element.propertyName as? ComputedPropertyName ?: continue
+            val indexExpr = computed.expression
+            if (isLiteralComputedKeyExpr(indexExpr)) continue
+            val indexType = try { getTypeOfExpression(indexExpr) } catch (_: Throwable) { continue }
+            if (indexType === errorType || indexType === anyType) continue
+            val widened = getWidenedLiteralType(indexType)
+            val typeDisplay = typeToString(widened)
+            if (typeDisplay.isEmpty()) continue
+            val start = indexExpr.pos
+            val length = expressionTrueEnd(indexExpr) - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '{}' has no matching index signature for type '$typeDisplay'.",
+                category = DiagnosticCategory.Error,
+                code = 2537,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 
