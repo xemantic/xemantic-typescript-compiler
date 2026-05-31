@@ -69213,6 +69213,39 @@ interface DataView {
                     }
                 }
                 // === Namespace/Module property access ===
+                // B98.r52: `import x = require('./m')` / `import x from './m'` resolving to
+                // `export = <value>` whose type is an ANONYMOUS object (e.g.
+                // `declare var server: { (): connectExport; foo: Date }` / `var x = {...}`).
+                // The alias isn't a Module/Variable symbol so all other paths bail, but the
+                // resolved value type is a concrete anonymous Type.Object we can check for a
+                // genuinely-missing property. Tightly gated: anonymous (symbol == null, not
+                // Interface/Reference), no index signatures, a real shape, property absent.
+                if (identSymbol.flags.hasAny(SymbolFlags.Alias) &&
+                    isPropertyAccessShape && propName.isNotEmpty() &&
+                    propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
+                    try {
+                        val aliasType = getTypeOfSymbol(identSymbol)
+                        if (aliasType is Type.Object && aliasType !is Type.Reference &&
+                            aliasType !is Type.Interface && aliasType.symbol == null) {
+                            resolveStructuredTypeMembers(aliasType)
+                            val hasShape = !aliasType.properties.isNullOrEmpty() ||
+                                !aliasType.callSignatures.isNullOrEmpty() ||
+                                !aliasType.constructSignatures.isNullOrEmpty()
+                            if (hasShape && aliasType.stringIndexInfo == null && aliasType.numberIndexInfo == null &&
+                                (aliasType.properties == null || aliasType.properties!!.none { it.name.isEmpty() }) &&
+                                getPropertyOfType(aliasType, propName) == null) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$propName' does not exist on type '${typeToString(aliasType)}'.",
+                                    category = DiagnosticCategory.Error, code = 2339,
+                                    fileName = fileName, line = line, character = character,
+                                    start = diagStart, length = diagLength,
+                                ))
+                                return
+                            }
+                        }
+                    } catch (_: StackOverflowError) { /* fall through to bail */ }
+                }
                 // Skip import aliases — can't reliably resolve imported module exports
                 if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
                 if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
