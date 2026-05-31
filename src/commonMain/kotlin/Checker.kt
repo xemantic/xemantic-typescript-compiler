@@ -22587,7 +22587,14 @@ class Checker(
                         // Only check relative imports — non-relative imports might resolve incorrectly
                         // (e.g. npm packages with complex node_modules resolution)
                         if (!moduleName.startsWith("./") && !moduleName.startsWith("../")) continue
-                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+                        // Scoped `.js`/`.jsx` → `.ts`/`.tsx` fallback: a relative import written with
+                        // an explicit `.js` extension (`import { X } from "./utils.js"`) resolves to
+                        // the `.ts` source. resolveModuleSpecifierRelative deliberately avoids `.js`
+                        // globally (FP-prone), so retry with the extension stripped here only.
+                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName)
+                            ?: ((if (moduleName.endsWith(".js")) resolveModuleSpecifierRelative(moduleName.removeSuffix(".js"), fileName) else null)
+                                ?: (if (moduleName.endsWith(".jsx")) resolveModuleSpecifierRelative(moduleName.removeSuffix(".jsx"), fileName) else null))
+                            ?: continue
                         val targetResult = fileResults[resolvedFile] ?: continue
                         val targetFile = targetResult.sourceFile
 
@@ -22705,7 +22712,44 @@ class Checker(
                                             relatedInformation = relatedInfo,
                                         ))
                                     }
-                                    else -> emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                                    else -> {
+                                        // TS2724 (spelling) when a close exported-member name exists,
+                                        // else plain TS2305.
+                                        val suggestion = getSpellingSuggestionFromNames(importedName, allExports)
+                                        if (suggestion != null) {
+                                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                            // Related TS2728 "'suggestion' is declared here." at the
+                                            // suggested member's declaration in the target module.
+                                            val declPos = getLocalDeclarationPos(targetFile, suggestion)
+                                            val relatedInfo = if (declPos != null) {
+                                                val targetSrc = targetResult.sourceFile.text
+                                                val (dLine, dChar) = getLineAndCharacterOfPosition(targetSrc, declPos.first)
+                                                listOf(Diagnostic(
+                                                    message = "'$suggestion' is declared here.",
+                                                    category = DiagnosticCategory.Message,
+                                                    code = 2728,
+                                                    fileName = resolvedFile,
+                                                    line = dLine,
+                                                    character = dChar,
+                                                    start = declPos.first,
+                                                    length = declPos.second,
+                                                ))
+                                            } else emptyList()
+                                            diagnostics.add(Diagnostic(
+                                                message = "'\"$moduleName\"' has no exported member named '$importedName'. Did you mean '$suggestion'?",
+                                                category = DiagnosticCategory.Error,
+                                                code = 2724,
+                                                fileName = fileName,
+                                                line = line,
+                                                character = character,
+                                                start = nameNode.pos,
+                                                length = nameNode.text.length,
+                                                relatedInformation = relatedInfo,
+                                            ))
+                                        } else {
+                                            emitTs2305(source, fileName, moduleName, importedName, nameNode)
+                                        }
+                                    }
                                 }
                             }
                         }
