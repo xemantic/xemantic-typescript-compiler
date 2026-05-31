@@ -20727,6 +20727,131 @@ class Checker(
                     }
                 }
             }
+            // B98.r3: relative dynamic-import `import('./x')` specifiers that resolve to nothing.
+            // Walks all statements collecting StringLiteralNode args of `import(...)` calls; for each
+            // RELATIVE specifier the index-aware resolver can't find, emits TS2307. Bare specifiers
+            // are deliberately NOT checked (the B98.r2 dead-end — node_modules/untyped-.js/symlink
+            // FPs). Gated to no path/baseUrl/rootDirs config + !noResolve to bound the FP surface;
+            // applies to single-file too (where a relative target can never resolve).
+            if (!options.noResolve
+                && options.paths.isNullOrEmpty()
+                && options.baseUrl == null
+                && options.rootDirs.isNullOrEmpty()
+                && options.rootDir == null
+                && options.moduleSuffixes.isNullOrEmpty()
+            ) {
+                val dynSpecs = mutableListOf<StringLiteralNode>()
+                collectDynamicImportSpecifiers(result.sourceFile.statements, dynSpecs)
+                for (spec in dynSpecs) {
+                    val mod = spec.text
+                    if (!mod.startsWith("./") && !mod.startsWith("../")) continue
+                    if (mod.endsWith(".json")) continue
+                    if (resolveRelativeIncludingIndex(mod, fileName) == null
+                        && mod !in ambientModuleNames
+                        && mod !in dtsFileBaseNames
+                        && !hasTsErrorSuppressionAbove(spec.pos, source)
+                    ) {
+                        emitTS2307(spec, mod, source, fileName)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Collect the string-literal specifiers of every dynamic `import("...")` call reachable from
+     * [statements] into [out]. Mirrors the Emitter's `expressionContainsDynamicImport` traversal
+     * (incl. the iterative BinaryExpression right-spine walk required to survive deeply-nested
+     * `a+b+c+…` chains) but ACCUMULATES the specifier nodes instead of returning a boolean. Used by
+     * the B98.r3 relative-dynamic-import TS2307 check. Non-string-literal args (`import(someVar)`)
+     * are ignored.
+     */
+    private fun collectDynamicImportSpecifiers(statements: List<Statement>, out: MutableList<StringLiteralNode>) {
+        for (s in statements) collectDynImportInStatement(s, out)
+    }
+
+    private fun collectDynImportInStatement(stmt: Statement, out: MutableList<StringLiteralNode>) {
+        when (stmt) {
+            is ExpressionStatement -> collectDynImportInExpr(stmt.expression, out)
+            is VariableStatement -> stmt.declarationList.declarations.forEach {
+                it.initializer?.let { init -> collectDynImportInExpr(init, out) }
+            }
+            is ReturnStatement -> stmt.expression?.let { collectDynImportInExpr(it, out) }
+            is ThrowStatement -> stmt.expression?.let { collectDynImportInExpr(it, out) }
+            is ExportAssignment -> collectDynImportInExpr(stmt.expression, out)
+            is Block -> collectDynamicImportSpecifiers(stmt.statements, out)
+            is IfStatement -> {
+                collectDynImportInExpr(stmt.expression, out)
+                collectDynImportInStatement(stmt.thenStatement, out)
+                stmt.elseStatement?.let { collectDynImportInStatement(it, out) }
+            }
+            is WhileStatement -> { collectDynImportInExpr(stmt.expression, out); collectDynImportInStatement(stmt.statement, out) }
+            is DoStatement -> { collectDynImportInExpr(stmt.expression, out); collectDynImportInStatement(stmt.statement, out) }
+            is ForStatement -> collectDynImportInStatement(stmt.statement, out)
+            is ForOfStatement -> collectDynImportInStatement(stmt.statement, out)
+            is ForInStatement -> collectDynImportInStatement(stmt.statement, out)
+            is LabeledStatement -> collectDynImportInStatement(stmt.statement, out)
+            is TryStatement -> {
+                collectDynamicImportSpecifiers(stmt.tryBlock.statements, out)
+                stmt.catchClause?.block?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                stmt.finallyBlock?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+            }
+            is SwitchStatement -> stmt.caseBlock.forEach { clause ->
+                when (clause) {
+                    is CaseClause -> collectDynamicImportSpecifiers(clause.statements, out)
+                    is DefaultClause -> collectDynamicImportSpecifiers(clause.statements, out)
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+            else -> {}
+        }
+    }
+
+    private fun collectDynImportInExpr(expr: Expression, out: MutableList<StringLiteralNode>) {
+        if (expr is CallExpression && (expr.expression as? Identifier)?.text == "import" && expr.arguments.size == 1) {
+            (expr.arguments[0] as? StringLiteralNode)?.let { out.add(it) }
+            return
+        }
+        when (expr) {
+            is CallExpression -> { collectDynImportInExpr(expr.expression, out); expr.arguments.forEach { collectDynImportInExpr(it, out) } }
+            is PropertyAccessExpression -> collectDynImportInExpr(expr.expression, out)
+            is ElementAccessExpression -> { collectDynImportInExpr(expr.expression, out); collectDynImportInExpr(expr.argumentExpression, out) }
+            is ArrowFunction -> when (val body = expr.body) {
+                is Expression -> collectDynImportInExpr(body, out)
+                is Block -> collectDynamicImportSpecifiers(body.statements, out)
+                else -> {}
+            }
+            is FunctionExpression -> collectDynamicImportSpecifiers(expr.body.statements, out)
+            is AwaitExpression -> collectDynImportInExpr(expr.expression, out)
+            is YieldExpression -> expr.expression?.let { collectDynImportInExpr(it, out) }
+            is ParenthesizedExpression -> collectDynImportInExpr(expr.expression, out)
+            is ConditionalExpression -> { collectDynImportInExpr(expr.condition, out); collectDynImportInExpr(expr.whenTrue, out); collectDynImportInExpr(expr.whenFalse, out) }
+            is NewExpression -> { collectDynImportInExpr(expr.expression, out); expr.arguments?.forEach { collectDynImportInExpr(it, out) } }
+            is SpreadElement -> collectDynImportInExpr(expr.expression, out)
+            is ArrayLiteralExpression -> expr.elements.forEach { collectDynImportInExpr(it, out) }
+            is PrefixUnaryExpression -> collectDynImportInExpr(expr.operand, out)
+            is PostfixUnaryExpression -> collectDynImportInExpr(expr.operand, out)
+            is BinaryExpression -> {
+                // Iterative right-spine walk — a naive recursive descent StackOverflows on the
+                // deeply-nested `a+b+c+…` chain in binderBinaryExpressionStress (see walker gotcha).
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    collectDynImportInExpr(current.right, out)
+                    current = current.left
+                }
+                collectDynImportInExpr(current, out)
+            }
+            is ObjectLiteralExpression -> expr.properties.forEach { prop ->
+                when (prop) {
+                    is PropertyAssignment -> collectDynImportInExpr(prop.initializer, out)
+                    is MethodDeclaration -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                    is GetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                    is SetAccessor -> prop.body?.statements?.let { collectDynamicImportSpecifiers(it, out) }
+                    else -> {}
+                }
+            }
+            else -> {}
         }
     }
 
