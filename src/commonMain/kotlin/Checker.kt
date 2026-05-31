@@ -71391,6 +71391,36 @@ interface DataView {
                     ))
                 }
             }
+            // TS2349: calling a class instance produced by `new X()` — `(new X())()`.
+            // The result of a `new` expression is always a (non-callable) object
+            // instance, so a callee that unwraps to a NewExpression with no call
+            // signatures is unambiguously not callable. Gated tightly to the
+            // NewExpression-callee shape so it never trips on the "empty Type.Object
+            // from incomplete resolution" trap (a real class instance genuinely has
+            // no call signatures regardless of how completely we resolved it).
+            if (!firedTs6234 && (calleeType is Type.Object || calleeType is Type.Interface)) {
+                var core: Expression = calleeExpr
+                while (core is ParenthesizedExpression) core = core.expression
+                if (core is NewExpression) {
+                    val displayType = typeToString(getApparentType(calleeType))
+                    val start = calleeExpr.pos
+                    val length = expressionTrueEnd(calleeExpr) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "This expression is not callable.",
+                            category = DiagnosticCategory.Error,
+                            code = 2349,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                            messageChain = listOf("  Type '$displayType' has no call signatures."),
+                        ))
+                    }
+                }
+            }
             return
         }
         // 16.4: Instantiate signature when explicit type arguments are provided
