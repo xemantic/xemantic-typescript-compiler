@@ -1104,6 +1104,9 @@ class Checker(
         checkExportSpecifierLocality()
         // 68. Check import declaration conflicts with local (TS2440)
         checkImportConflictsWithLocal()
+        // 68b. B98.r17: TS2440 for `import X = ns.ref` inside a namespace conflicting with a
+        //      `var X` declared in ANOTHER block of the same merged namespace.
+        checkNamespaceImportVarConflict()
         // 68z (B61.5h). TS1473: Import declarations only allowed at top level of module
         checkImportNotAtTopLevel()
         // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
@@ -81440,6 +81443,76 @@ interface DataView {
             }
             is LabeledStatement -> walkForNestedImports(stmt.statement, source, fileName, topLevel = false)
             else -> {}
+        }
+    }
+
+    /**
+     * B98.r17: TS2440 "Import declaration conflicts with local declaration of 'X'." for an
+     * `import X = <internal-ns-ref>` (NOT `require(...)`) declared inside a namespace block whose
+     * name X collides with a `var/let/const X` declared in ANOTHER block of the SAME merged
+     * namespace. The file-level `checkImportConflictsWithLocal` never recurses into namespace
+     * bodies, so cross-block conflicts inside a merged namespace were missed. Only conflicts with
+     * VARIABLES (internal aliases declaration-merge with class/function/enum, so those don't count).
+     */
+    private fun checkNamespaceImportVarConflict() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkNsImportVarConflictInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkNsImportVarConflictInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        val nsGroups = mutableMapOf<String, MutableList<ModuleDeclaration>>()
+        for (stmt in stmts) {
+            if (stmt is ModuleDeclaration) {
+                (stmt.name as? Identifier)?.let { nsGroups.getOrPut(it.text) { mutableListOf() }.add(stmt) }
+                (stmt.body as? ModuleBlock)?.let { checkNsImportVarConflictInStatements(it.statements, source, fileName) }
+            }
+        }
+        for ((_, blocks) in nsGroups) {
+            // Merge var names across all blocks of this same-named namespace.
+            val varNames = mutableSetOf<String>()
+            for (block in blocks) {
+                val body = block.body as? ModuleBlock ?: continue
+                for (s in body.statements) if (s is VariableStatement) {
+                    for (decl in s.declarationList.declarations) (decl.name as? Identifier)?.let { varNames.add(it.text) }
+                }
+            }
+            if (varNames.isEmpty()) continue
+            for (block in blocks) {
+                val body = block.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s !is ImportEqualsDeclaration) continue
+                    if (s.isTypeOnly) continue
+                    if (s.moduleReference is ExternalModuleReference) continue   // `require(...)` is a different conflict
+                    val name = s.name.text
+                    if (name !in varNames) continue
+                    // ImportEqualsDeclaration.pos points at `import`; back up over the
+                    // `export` modifier (parser drops it from pos) so the squiggle covers
+                    // the whole `export import X = …;` statement.
+                    var stmtStart = s.pos
+                    if (ModifierFlag.Export in s.modifiers) {
+                        var p = s.pos
+                        while (p > 0 && source[p - 1].isWhitespace()) p--
+                        if (p >= 6 && source.substring(p - 6, p) == "export") stmtStart = p - 6
+                    }
+                    val endIdx = source.indexOf(';', stmtStart)
+                    val stmtLen = if (endIdx >= 0) endIdx - stmtStart + 1 else (s.end - stmtStart).coerceAtLeast(name.length)
+                    val (line, character) = getLineAndCharacterOfPosition(source, stmtStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Import declaration conflicts with local declaration of '$name'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2440,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = stmtStart,
+                        length = stmtLen,
+                    ))
+                }
+            }
         }
     }
 
