@@ -82556,11 +82556,11 @@ interface DataView {
                 if (stmt !is ExportDeclaration) continue
                 // Only check `export { X }` without `from "..."` (re-exports from modules are fine)
                 if (stmt.moduleSpecifier != null) continue
-                if (stmt.isTypeOnly) continue
+                val stmtTypeOnly = stmt.isTypeOnly
                 val namedExports = stmt.exportClause as? NamedExports ?: continue
 
                 for (spec in namedExports.elements) {
-                    if (spec.isTypeOnly) continue
+                    val specTypeOnly = stmtTypeOnly || spec.isTypeOnly
                     val exportedName = (spec.propertyName ?: spec.name).text
                     // Check if locally declared (not just aliased by the export itself)
                     val localSymbol = locals[exportedName]
@@ -82569,14 +82569,51 @@ interface DataView {
                         val hasRealDecl = localSymbol.declarations.any { it !is ExportSpecifier }
                         if (hasRealDecl) continue
                     }
-                    // The name was not locally declared — check if it's a global or known global
-                    if (exportedName == "undefined" || exportedName in globals || exportedName in KNOWN_GLOBALS) {
-                        val nameNode = spec.propertyName ?: spec.name
+                    val nameNode = spec.propertyName ?: spec.name
+                    // `globals` is over-merged and the binder also binds the export specifier's own
+                    // name into it, so a bare `name in globals` is fooled by the export itself.
+                    // Require a REAL (non-ExportSpecifier) global declaration, or a KNOWN_GLOBALS hit.
+                    val globalSym = globals[exportedName]
+                    val isGlobal = exportedName == "undefined" ||
+                        exportedName in KNOWN_GLOBALS ||
+                        (globalSym != null && globalSym.declarations.any { it !is ExportSpecifier })
+                    if (isGlobal) {
+                        // export { Global } (value re-export of a global) → TS2661. TypeScript does
+                        // NOT emit this for a type-only re-export, so skip those.
+                        if (specTypeOnly) continue
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
                             message = "Cannot export '$exportedName'. Only local declarations can be exported from a module.",
                             category = DiagnosticCategory.Error,
                             code = 2661,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = exportedName.length,
+                        ))
+                    } else {
+                        // The exported name resolves to NOTHING (not a real local, not a global) →
+                        // TS2304 "Cannot find name", or TS2552 with a spelling suggestion. Candidates
+                        // are this file's real local declarations (type-eligible only for a type-only
+                        // export). Conservative: a cross-file/over-merged name lands in `globals` and
+                        // is handled above, so this branch only fires for genuinely-undeclared names
+                        // (e.g. `export type { RoomInterface }` when the type is `RoomInterfae`).
+                        val candidates = LinkedHashSet<String>()
+                        for ((symName, sym) in locals) {
+                            if (sym.declarations.none { it !is ExportSpecifier }) continue
+                            if (specTypeOnly && !sym.flags.hasAny(SymbolFlags.Type)) continue
+                            candidates.add(symName)
+                        }
+                        val suggestion = getSpellingSuggestionFromNames(exportedName, candidates)
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        val msg = if (suggestion != null)
+                            "Cannot find name '$exportedName'. Did you mean '$suggestion'?"
+                        else "Cannot find name '$exportedName'."
+                        diagnostics.add(Diagnostic(
+                            message = msg,
+                            category = DiagnosticCategory.Error,
+                            code = if (suggestion != null) 2552 else 2304,
                             fileName = fileName,
                             line = line,
                             character = character,
