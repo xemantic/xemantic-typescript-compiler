@@ -15503,7 +15503,7 @@ class Checker(
                         // Module flag, which the augmentation merge may have set on x).
                         if (leftSym != null && leftSym.flags.hasAny(SymbolFlags.Alias)) {
                             val spec = getImportEqualsSpecifier(leftSym)
-                            if (spec != null && ambientModuleExportEqualsIsValueOnly(spec)) {
+                            if (spec != null && ambientModuleExportEqualsIsValueOnly(spec, fileName)) {
                                 emitTS2503(lname, leftmost, source, fileName)
                                 return
                             }
@@ -82217,7 +82217,7 @@ interface DataView {
                 if (body.statements.any { it is ExportAssignment && it.isExportEquals }) continue
                 // An augmentation with no declarations to merge isn't worth flagging.
                 if (body.statements.isEmpty()) continue
-                if (!ambientModuleExportEqualsIsValueOnly(specifier)) continue
+                if (!ambientModuleExportEqualsIsValueOnly(specifier, augFile)) continue
                 val (line, character) = getLineAndCharacterOfPosition(augSource, nameNode.pos)
                 diagnostics.add(Diagnostic(
                     message = "Cannot augment module '$specifier' because it resolves to a non-module entity.",
@@ -82240,7 +82240,24 @@ interface DataView {
      * module block — making it a non-module entity (no namespace meaning).
      * Used for TS2671 (illegal augmentation) and TS2503 (`x.A` namespace use).
      */
-    private fun ambientModuleExportEqualsIsValueOnly(specifier: String): Boolean {
+    private fun ambientModuleExportEqualsIsValueOnly(specifier: String, contextFile: String? = null): Boolean {
+        // B98.r55: relative specifier — the DEFINITION is a separate file (not an
+        // ambient `declare module` block) with a top-level `export = name` whose
+        // target is declared ONLY as `var`/`function` at file level. Resolve the
+        // specifier relative to the augmentation/import file and check that file.
+        if (contextFile != null && (specifier.startsWith("./") || specifier.startsWith("../"))) {
+            val targetFile = resolveModuleSpecifierRelative(specifier, contextFile)
+            val targetResult = targetFile?.let { fileResults[it] }
+            if (targetResult != null) {
+                for (s in targetResult.sourceFile.statements) {
+                    if (s is ExportAssignment && s.isExportEquals) {
+                        val expr = s.expression as? Identifier ?: continue
+                        if (isNameValueOnlyInFile(expr.text, targetResult.sourceFile)) return true
+                    }
+                }
+            }
+            return false
+        }
         for (result in binderResults) {
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ModuleDeclaration) continue
@@ -82255,6 +82272,28 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /** File-level analog of [isNameValueOnlyInBlock]: true when [name] is declared
+     *  at the top level of [file] ONLY as a value (`var`/`function`) and NOT as any
+     *  namespace/type entity. Used for the relative-specifier `export = name` case. */
+    private fun isNameValueOnlyInFile(name: String, file: SourceFile): Boolean {
+        var hasValue = false
+        var hasNsOrType = false
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement ->
+                    if (stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) hasValue = true
+                is FunctionDeclaration -> if (stmt.name?.text == name) hasValue = true
+                is ClassDeclaration -> if (stmt.name?.text == name) hasNsOrType = true
+                is InterfaceDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is TypeAliasDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is EnumDeclaration -> if (stmt.name.text == name) hasNsOrType = true
+                is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == name) hasNsOrType = true
+                else -> {}
+            }
+        }
+        return hasValue && !hasNsOrType
     }
 
     /**
