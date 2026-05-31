@@ -33011,6 +33011,9 @@ interface DataView {
             is FunctionExpression -> {
                 checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableMapOf())
             }
+            // TS1538: braced `\u{...}` regex escapes require the u/v flag. This
+            // per-file walker already reaches every expression position; reuse it.
+            is RegularExpressionLiteralNode -> emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
             else -> {}
         }
     }
@@ -33061,6 +33064,36 @@ interface DataView {
             start = operand.pos,
             length = expressionTrueEnd(operand) - operand.pos,
         ))
+    }
+
+    /**
+     * TS1538: an `\u{...}` extended-unicode escape in a regex literal is only
+     * valid when the `u` or `v` flag is set. Purely syntactic scan of the raw
+     * token text. FP-safe: TypeScript ALWAYS errors on braced-unicode without
+     * u/v (invalid regex grammar) — so this can never regress a passing test.
+     */
+    private fun emitTS1538ForRegexUnicodeEscapes(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+        val flags = text.substring(lastSlash + 1)
+        if (flags.contains('u') || flags.contains('v')) return
+        // `(?<!\\)` skips an escaped backslash (`\\u{...}` is a literal `u{...}`).
+        for (m in Regex("""(?<!\\)\\u\{[0-9a-fA-F]+}""").findAll(text)) {
+            if (m.range.first >= lastSlash) continue // never (flags are alphabetic), defensive
+            val absPos = node.pos + m.range.first
+            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+            diagnostics.add(Diagnostic(
+                message = "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
+                category = DiagnosticCategory.Error,
+                code = 1538,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = absPos,
+                length = m.value.length,
+            ))
+        }
     }
 
     /** Check if a property access targets a readonly property. */
