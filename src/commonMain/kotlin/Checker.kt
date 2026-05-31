@@ -64279,6 +64279,28 @@ interface DataView {
 
                     // Skip if base member has multiple declarations (overloads)
                     if (basePropSymbol.declarations.size > 1) {
+                        // B98.r30: a base accessor PAIR (get+set, 2 declarations) overridden by a
+                        // derived DATA property is a kind mismatch → TS2610. The overload-handling
+                        // path below otherwise `continue`s past every multi-declaration base member,
+                        // so the shape-diagnostic for an accessor-pair base never fires there.
+                        if (member is PropertyDeclaration &&
+                            clause.token == SyntaxKind.ExtendsKeyword &&
+                            basePropSymbol.declarations.all { it is GetAccessor || it is SetAccessor } &&
+                            basePropSymbol.declarations.none { isMemberAbstract(it) }) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, member.name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'$memberName' is defined as an accessor in class '$baseTypeName', " +
+                                    "but is overridden here in '$className' as an instance property.",
+                                category = DiagnosticCategory.Error,
+                                code = 2610,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = member.name.pos,
+                                length = memberName.length,
+                            ))
+                            continue
+                        }
                         // B86.13: predicate-overload mismatch. When the base member is an
                         // OVERLOAD SET and at least one overload's return type is a non-asserting
                         // type predicate (e.g. `every<S extends T>(...): this is S[]`), a derived
@@ -64341,6 +64363,24 @@ interface DataView {
                     // the getter already emitted — baseline expects one TS2423 per accessor override).
                     val isSetAccessorWithGet = member is SetAccessor &&
                         classDecl.members.any { it is GetAccessor && (it.name as? Identifier)?.text == memberName }
+                    // TS2610/TS2611 (accessor<->property kind mismatch) are emitted once per accessor
+                    // pair and SUPPRESS the parallel TS2416 — a kind mismatch is the whole error.
+                    if (shapeDiag != null && (shapeDiag.first == 2610 || shapeDiag.first == 2611)) {
+                        if (!isSetAccessorWithGet) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = shapeDiag.second,
+                                category = DiagnosticCategory.Error,
+                                code = shapeDiag.first,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameNode.pos,
+                                length = memberName.length,
+                            ))
+                        }
+                        continue
+                    }
                     if (shapeDiag != null && !isSetAccessorWithGet) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
@@ -64471,6 +64511,15 @@ interface DataView {
      * when no shape mismatch applies. Takes priority over TS2416 because TypeScript emits these
      * specific codes instead of the generic "not assignable" message.
      */
+    /** True when a class member declaration carries the `abstract` modifier. */
+    private fun isMemberAbstract(node: Node): Boolean = when (node) {
+        is PropertyDeclaration -> ModifierFlag.Abstract in node.modifiers
+        is MethodDeclaration -> ModifierFlag.Abstract in node.modifiers
+        is GetAccessor -> ModifierFlag.Abstract in node.modifiers
+        is SetAccessor -> ModifierFlag.Abstract in node.modifiers
+        else -> false
+    }
+
     private fun classMemberShapeMismatchDiagnostic(
         baseDecl: Node,
         derivedMember: ClassElement,
@@ -64497,17 +64546,35 @@ interface DataView {
         // TS2423: base function → derived accessor
         // TS2425: base property → derived function
         // TS2426: base accessor → derived function
-        // TS2610/TS2611: related but different (get-only vs set-only override) — not handled here.
+        // TS2610: base accessor → derived property
+        // TS2611: base property → derived accessor
         val code = when {
             baseKind == "function" && derivedKind == "accessor" -> 2423
             baseKind == "property" && derivedKind == "function" -> 2425
             baseKind == "accessor" && derivedKind == "function" -> 2426
+            baseKind == "accessor" && derivedKind == "property" -> 2610
+            baseKind == "property" && derivedKind == "accessor" -> 2611
             else -> return null
         }
         // TS2425 is class-property-vs-class-method runtime conflict (instance field shadows
         // prototype method). Interfaces don't have prototype semantics — function-typed
         // properties are structurally compatible with method declarations under `implements`.
         if (code == 2425 && isImplements) return null
+        // TS2610/TS2611 are class-inheritance (extends) only; under `implements` an interface's
+        // accessor and property are structurally interchangeable, so no kind-mismatch error.
+        if ((code == 2610 || code == 2611) && isImplements) return null
+        // An ABSTRACT base member may be implemented in the derived class as EITHER a property or
+        // an accessor — that is not a kind-mismatch (e.g. `abstract get readonlyProp()` implemented
+        // as `readonlyProp!: string`). Only concrete base members trigger TS2610/TS2611.
+        if ((code == 2610 || code == 2611) && isMemberAbstract(baseDecl)) return null
+        if (code == 2610) {
+            return code to "'$memberName' is defined as an accessor in class '$baseTypeName', " +
+                "but is overridden here in '$derivedClassName' as an instance property."
+        }
+        if (code == 2611) {
+            return code to "'$memberName' is defined as a property in class '$baseTypeName', " +
+                "but is overridden here in '$derivedClassName' as an accessor."
+        }
         val baseWord = "instance member $baseKind"
         val derivedWord = "instance member $derivedKind"
         val msg = "Class '$baseTypeName' defines $baseWord '$memberName', " +
