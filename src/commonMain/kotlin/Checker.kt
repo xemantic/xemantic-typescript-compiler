@@ -69981,6 +69981,28 @@ interface DataView {
     }
 
     /**
+     * True for `this.X` (single-level) where `X` is a member of the lexically-enclosing class
+     * (top of [callWalkerClassStack]) declared as a definitively implicit/explicit `any` data
+     * property — explicit `: any`, or no annotation AND no initializer. A narrow gate for TS2347
+     * ("Untyped function calls may not accept type arguments") so `this.foo<T>()` with `foo: any`
+     * fires (e.g. `invokingNonGenericMethodWithTypeArguments2`).
+     */
+    private fun isImplicitAnyThisMember(expr: Expression): Boolean {
+        if (expr !is PropertyAccessExpression) return false
+        val receiver = expr.expression
+        if (receiver !is Identifier || receiver.text != "this") return false
+        val propName = (expr.name as? Identifier)?.text ?: return false
+        val classSym = callWalkerClassStack.lastOrNull() ?: return false
+        val classDecl = classSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return false
+        val member = classDecl.members.firstOrNull {
+            it is PropertyDeclaration && (it.name as? Identifier)?.text == propName
+        } as? PropertyDeclaration ?: return false
+        val ann = member.type
+        if (ann is KeywordTypeNode && ann.kind == SyntaxKind.AnyKeyword) return true
+        return ann == null && member.initializer == null
+    }
+
+    /**
      * 16.4ey: TS2345 for tagged template substitutions whose type doesn't match the
      * tag function's parameter. The tag's first parameter is `TemplateStringsArray`
      * (bound to the static parts); substitutions map to parameters[1..N]. Narrow:
@@ -70097,7 +70119,8 @@ interface DataView {
         // initializer — definitively implicit-any. Broader "calleeType === anyType" is
         // unsafe: our checker resolves many callees to `any` due to incomplete inference,
         // so a universal emission would regress heavily.
-        if (!expr.typeArguments.isNullOrEmpty() && isImplicitAnyVarChain(expr.expression)) {
+        if (!expr.typeArguments.isNullOrEmpty() &&
+            (isImplicitAnyVarChain(expr.expression) || isImplicitAnyThisMember(expr.expression))) {
             val start = expr.pos
             val length = expressionTrueEnd(expr) - start
             if (length > 0) {
