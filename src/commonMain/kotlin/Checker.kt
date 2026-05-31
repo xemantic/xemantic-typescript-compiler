@@ -60947,6 +60947,13 @@ interface DataView {
     // TS2507: Type is not a constructor function type
     // -----------------------------------------------------------------------
 
+    /** Renders a heritage base expression as a dotted name, e.g. `abc.XYZ` for `class C extends abc.XYZ`. */
+    private fun heritageExprToString(expr: Expression): String = when (expr) {
+        is Identifier -> expr.text
+        is PropertyAccessExpression -> heritageExprToString(expr.expression) + "." + expr.name.text
+        else -> ""
+    }
+
     private fun checkNonConstructorExtends() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -60989,6 +60996,37 @@ interface DataView {
                         it.token == SyntaxKind.ExtendsKeyword
                     } ?: continue
                     val baseExpr = extendsClause.types.firstOrNull()?.expression ?: continue
+                    // B98.r31: TS2675 — a class cannot extend a base class whose effective
+                    // constructor is declared `private` (the subclass could never call super()).
+                    // A `protected` constructor is fine (subclasses may extend). Resolves both
+                    // bare-Identifier (`extends Foo`) and qualified (`extends abc.XYZ`) bases.
+                    run {
+                        val baseClassSym = when (baseExpr) {
+                            is Identifier -> globals[baseExpr.text]
+                            is PropertyAccessExpression -> resolveQualifiedValueSymbol(baseExpr)
+                            else -> null
+                        }
+                        if (baseClassSym != null && baseClassSym.declarations.any { it is ClassDeclaration }) {
+                            val ctorVis = findEffectiveConstructorVisibility(baseClassSym)
+                            if (ctorVis != null && ctorVis.first == ModifierFlag.Private) {
+                                val baseDisplay = heritageExprToString(baseExpr)
+                                val start = baseExpr.pos
+                                val length = (expressionTrueEnd(baseExpr) - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot extend a class '$baseDisplay'. Class constructor is marked as private.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2675,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                                return@run
+                            }
+                        }
+                    }
                     // 17.199: TS2507 for `extends Ns.x` where Ns is a namespace
                     // and x is a primitive var. PropertyAccessExpression with
                     // Identifier receiver, look up Ns in globals as a Module
