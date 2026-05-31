@@ -63178,6 +63178,10 @@ interface DataView {
 
         val derivedName = ifaceDecl.name.text
 
+        // B98.r25: multi-base inherited index-signature conflict (TS2430). Runs BEFORE the
+        // own-member early-return below so it fires for `interface E extends A, D {}` (empty body).
+        checkMultiBaseIndexSigConflicts(ifaceDecl, extendsClauses, derivedName, source, fileName)
+
         // Collect derived interface's property types from AST
         val derivedProps = mutableMapOf<String, TypeNode>()
         // B63.3: Also collect derived methods for arity-based TS2430.
@@ -63329,6 +63333,101 @@ interface DataView {
             getTypeFromTypeNode(typeNode)
         } catch (_: StackOverflowError) {
             null
+        }
+    }
+
+    /**
+     * B98.r25: TS2430 for a multi-base interface whose inherited index signature (taken from the
+     * FIRST base that declares one, mirroring TypeScript's resolution order) is incompatible with
+     * a LATER base's same-kind index signature. e.g. `interface E extends A, D {}` where
+     * `A` has `[s:string]: number` and `D` has `[s:string]: string` → E inherits `number` (from A)
+     * which is not assignable to D's `string` → "Interface 'E' incorrectly extends interface 'D'."
+     * Reads index signatures straight from base AST declarations (single- or multi-decl interfaces).
+     * Conservative: only fires when both value types resolve to a non-error/non-any type and the
+     * structural relation says NOT assignable, so the documented incomplete-comparison gaps cannot
+     * manufacture a false TS2430. One TS2430 per (base, first-conflicting-kind).
+     */
+    private fun checkMultiBaseIndexSigConflicts(
+        ifaceDecl: InterfaceDeclaration,
+        extendsClauses: List<HeritageClause>,
+        derivedName: String,
+        source: String,
+        fileName: String,
+    ) {
+        // Own index-sig value node per kind (declared directly on this interface declaration).
+        fun ownIndexNode(kind: SyntaxKind): TypeNode? =
+            ifaceDecl.members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+                (sig.parameters.firstOrNull()?.type as? KeywordTypeNode)?.kind == kind
+            }?.type
+        // A base's index-sig value node per kind (searches all of the base symbol's declarations).
+        fun baseIndexNode(baseSym: Symbol, kind: SyntaxKind): TypeNode? {
+            for (d in baseSym.declarations) {
+                val members: List<ClassElement> = when (d) {
+                    is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                    is ClassDeclaration -> d.members
+                    else -> emptyList()
+                }
+                members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+                    (sig.parameters.firstOrNull()?.type as? KeywordTypeNode)?.kind == kind
+                }?.type?.let { return it }
+            }
+            return null
+        }
+        // Resolve the extends bases (in source order) to (name, symbol).
+        val bases = mutableListOf<Pair<String, Symbol>>()
+        for (clause in extendsClauses) {
+            for (typeExpr in clause.types) {
+                val bn = when (val tn = typeExpr.expression) {
+                    is Identifier -> tn.text
+                    is PropertyAccessExpression -> (tn.name as? Identifier)?.text
+                    else -> null
+                } ?: continue
+                val bs = when (val tn = typeExpr.expression) {
+                    is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
+                    else -> globals[bn]
+                } ?: continue
+                if (!bs.flags.hasAny(SymbolFlags.Interface)) continue
+                bases.add(bn to bs)
+            }
+        }
+        if (bases.size < 2 && ownIndexNode(SyntaxKind.StringKeyword) == null
+            && ownIndexNode(SyntaxKind.NumberKeyword) == null) return
+
+        for ((kind, kindName) in listOf(
+            SyntaxKind.StringKeyword to "string", SyntaxKind.NumberKeyword to "number")
+        ) {
+            // E's effective index value: own if declared, else the FIRST base that declares one.
+            val basesWithSig = bases.mapNotNull { (n, s) -> baseIndexNode(s, kind)?.let { Triple(n, s, it) } }
+            val ownNode = ownIndexNode(kind)
+            val effectiveNode = ownNode ?: basesWithSig.firstOrNull()?.third ?: continue
+            val effectiveSourceBase = if (ownNode != null) null else basesWithSig.firstOrNull()?.first
+            val effectiveType = getTypeFromTypeNode(effectiveNode)
+            if (effectiveType === errorType || effectiveType === anyType) continue
+            for ((baseName, _, baseNode) in basesWithSig) {
+                if (baseName == effectiveSourceBase) continue
+                val baseType = getTypeFromTypeNode(baseNode)
+                if (baseType === errorType || baseType === anyType) continue
+                if (!checkTypeRelatedTo(effectiveType, baseType, assignableRelation)) {
+                    val effDisplay = formatTypeForDisplay(effectiveNode) ?: typeToString(effectiveType)
+                    val baseDisplay = formatTypeForDisplay(baseNode) ?: typeToString(baseType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, ifaceDecl.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Interface '$derivedName' incorrectly extends interface '$baseName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2430,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = ifaceDecl.name.pos,
+                        length = derivedName.length,
+                        messageChain = listOf(
+                            "  '$kindName' index signatures are incompatible.",
+                            "    Type '$effDisplay' is not assignable to type '$baseDisplay'.",
+                        ),
+                    ))
+                    return // one TS2430 per interface for this conflict family (matches baseline)
+                }
+            }
         }
     }
 
