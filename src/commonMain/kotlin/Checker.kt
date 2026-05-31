@@ -32913,6 +32913,7 @@ interface DataView {
                     }
                     // Check readonly property (TS2540)
                     checkReadonlyAssignmentTarget(operand, source, fileName)
+                    emitTS2357IfInvalidIncDecTarget(expr.operand, source, fileName)
                 }
                 checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
             }
@@ -32924,6 +32925,7 @@ interface DataView {
                     }
                     // Check readonly property (TS2540)
                     checkReadonlyAssignmentTarget(operand, source, fileName)
+                    emitTS2357IfInvalidIncDecTarget(expr.operand, source, fileName)
                 }
                 checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
             }
@@ -32984,6 +32986,42 @@ interface DataView {
         var e = expr
         while (e is ParenthesizedExpression) e = e.expression
         return e
+    }
+
+    /**
+     * TS2357: the operand of `++`/`--` must be a variable or property access.
+     * Mirrors TypeScript's `checkReferenceExpression` — after skipping the
+     * value-preserving outer expressions (parens, `!`, `as`, `<T>`, satisfies),
+     * the core must be an Identifier / PropertyAccess / ElementAccess; otherwise
+     * (literal, binary, call, …) it is not a valid reference target. Squiggle
+     * spans the ORIGINAL operand (with its wrappers). FP-safe: keyword
+     * identifiers (`this`, `null`, …) parse to Identifier here so they yield a
+     * false-negative, never a false-positive.
+     */
+    private fun emitTS2357IfInvalidIncDecTarget(operand: Expression, source: String, fileName: String) {
+        var core: Expression = operand
+        while (true) {
+            core = when (core) {
+                is ParenthesizedExpression -> core.expression
+                is NonNullExpression -> core.expression
+                is AsExpression -> core.expression
+                is TypeAssertionExpression -> core.expression
+                is SatisfiesExpression -> core.expression
+                else -> break
+            }
+        }
+        if (core is Identifier || core is PropertyAccessExpression || core is ElementAccessExpression) return
+        val (line, character) = getLineAndCharacterOfPosition(source, operand.pos)
+        diagnostics.add(Diagnostic(
+            message = "The operand of an increment or decrement operator must be a variable or a property access.",
+            category = DiagnosticCategory.Error,
+            code = 2357,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = operand.pos,
+            length = expressionTrueEnd(operand) - operand.pos,
+        ))
     }
 
     /** Check if a property access targets a readonly property. */
