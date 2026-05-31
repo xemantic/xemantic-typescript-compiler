@@ -17379,11 +17379,34 @@ class Checker(
                 // B67.7: TS1194 "Export declarations are not permitted in a namespace."
                 // for `export { x };` (no specifier) inside a namespace body. Squiggle
                 // covers the entire statement source span.
-                // NOTE: `export { x } from "X"` and `export * from X` cases are deferred —
-                // they parse with a moduleSpecifier that's tricky to disambiguate from
-                // parser-recovery synthetic literals (see B67.5 revert in PLAN-PHASE-4).
                 if (!inNamespace) return
-                if (stmt.moduleSpecifier != null) return
+                val spec = stmt.moduleSpecifier
+                if (spec != null) {
+                    // B98.r6: `export { x } from "mod"` / `export * from "mod"` inside an
+                    // identifier-named namespace ALSO emits TS1194 — but the squiggle lands
+                    // on the module specifier. CRITICAL: our parser synthesizes a recovery
+                    // StringLiteralNode for `export * from Aaa` (bare identifier — TS1141
+                    // "String literal expected." fires there, NOT TS1194). Disambiguate by
+                    // checking the raw source: a REAL string literal starts with `"`/`'` at
+                    // `spec.pos`; the recovery literal points at the bare identifier (no
+                    // quote). This is the B67.5-revert blocker resolved.
+                    if (spec !is StringLiteralNode) return
+                    if (spec.pos !in 0 until source.length) return
+                    val ch0 = source[spec.pos]
+                    if (ch0 != '"' && ch0 != '\'') return
+                    val (sl, sc) = getLineAndCharacterOfPosition(source, spec.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Export declarations are not permitted in a namespace.",
+                        category = DiagnosticCategory.Error,
+                        code = 1194,
+                        fileName = fileName,
+                        line = sl,
+                        character = sc,
+                        start = spec.pos,
+                        length = (spec.rawText?.length ?: spec.text.length) + 2,
+                    ))
+                    return
+                }
                 val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                 // Find statement end: scan forward from pos for the close-paren / semi.
                 // Use a conservative span by re-scanning the source slice for the next
