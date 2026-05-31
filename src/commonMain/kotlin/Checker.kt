@@ -61787,6 +61787,75 @@ interface DataView {
                 if (stringIndexSig != null) break
             }
         }
+
+        // B98.r20: TS2413 — when a type has BOTH a number and a string index signature
+        // (own or inherited), the number index value type must be assignable to the
+        // string index value type (because `obj[0]` is also `obj["0"]`). Emit at the
+        // type name. Gated to ANONYMOUS object-literal value types on both sides so the
+        // structural comparison is reliable (named/Reference values are skipped — those
+        // have the documented incomplete-comparison FP surface). The number index sig is
+        // own-first then inherited from extends bases (mirroring the string lookup above);
+        // the string sig is the already-resolved own-or-inherited `stringIndexSig`.
+        if (stmt is ClassDeclaration || stmt is InterfaceDeclaration) {
+            val typeName: Identifier? = when (stmt) {
+                is ClassDeclaration -> stmt.name
+                is InterfaceDeclaration -> stmt.name
+                else -> null
+            }
+            var effNumberSig = numberIndexSig
+            val effStringSig = stringIndexSig
+            if (effNumberSig == null && typeName != null) {
+                val baseNames: List<String> = when (stmt) {
+                    is ClassDeclaration -> stmt.heritageClauses
+                        ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                    is InterfaceDeclaration -> stmt.heritageClauses
+                        ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                    else -> emptyList()
+                }
+                for (baseName in baseNames) {
+                    val baseSymbol = globals[baseName] ?: continue
+                    val baseMembers: List<ClassElement> = baseSymbol.declarations.flatMap { d ->
+                        when (d) {
+                            is ClassDeclaration -> d.members
+                            is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                            else -> emptyList()
+                        }
+                    }
+                    effNumberSig = baseMembers.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+                        sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
+                    }
+                    if (effNumberSig != null) break
+                }
+            }
+            val numValNode = effNumberSig?.type
+            val strValNode = effStringSig?.type
+            if (numValNode != null && strValNode != null && typeName != null) {
+                val numValType = getTypeFromTypeNode(numValNode)
+                val strValType = getTypeFromTypeNode(strValNode)
+                val isAnonObj = { t: Type -> t is Type.Object && t !is Type.Interface && t !is Type.Reference }
+                if (isAnonObj(numValType) && isAnonObj(strValType) &&
+                    !checkTypeRelatedTo(numValType, strValType, assignableRelation)) {
+                    val numDisplay = if (numValNode is TypeLiteral && numValNode.members.isEmpty()) "{}"
+                        else formatTypeForDisplay(numValNode) ?: typeToString(numValType)
+                    val strDisplay = if (strValNode is TypeLiteral && strValNode.members.isEmpty()) "{}"
+                        else formatTypeForDisplay(strValNode) ?: typeToString(strValType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, typeName.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'number' index type '$numDisplay' is not assignable to 'string' index type '$strDisplay'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2413,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = typeName.pos,
+                        length = typeName.text.length,
+                    ))
+                }
+            }
+        }
+
         val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
         if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
 
