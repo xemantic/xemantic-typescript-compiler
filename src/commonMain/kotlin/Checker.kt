@@ -32900,6 +32900,19 @@ interface DataView {
         try {
             val objectType = getTypeOfExpression(objExpr)
             if (objectType === anyType || objectType === errorType) return false
+            // B98.r24: intersection-property writes. `x: A & B; x.p = v` is a TS2540 error only
+            // when `p` is readonly in EVERY constituent that declares it — a single writable
+            // constituent (a plain field, or a member with a setter) makes the whole property
+            // writable. Getter-only (no setter) and `readonly`-modifier members count as readonly.
+            if (objectType is Type.Intersection) {
+                var seen = false
+                for (c in objectType.types) {
+                    val cp = getPropertyOfType(c, propName) ?: continue
+                    seen = true
+                    if (!isReadonlyAccessOrModifier(cp)) return false
+                }
+                return seen
+            }
             val prop = getPropertyOfType(objectType, propName) ?: return false
             return isReadonlySymbol(prop)
         } catch (_: StackOverflowError) {
@@ -32915,6 +32928,18 @@ interface DataView {
                 else -> false
             }
         }
+    }
+
+    /**
+     * B98.r24: write-disallowed test for a single property symbol, used by the intersection
+     * branch of [isReadonlyPropertyAccess]. A SetAccessor makes it writable; a GetAccessor with
+     * no setter is read-only; a `readonly` field/property is read-only; a plain field is writable.
+     */
+    private fun isReadonlyAccessOrModifier(symbol: Symbol): Boolean {
+        val decls = symbol.declarations
+        if (decls.any { it is SetAccessor }) return false
+        if (decls.any { it is GetAccessor }) return true
+        return decls.any { it is PropertyDeclaration && ModifierFlag.Readonly in it.modifiers }
     }
 
     /** Check if a namespace/module exports a name as a const variable. */
