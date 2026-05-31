@@ -1189,6 +1189,9 @@ class Checker(
         // 79. B63.30: Check parameter decorators on constructor parameters whose 2nd-param
         // signature requires `string | symbol` (not `undefined`) — emit TS1239
         checkParameterDecoratorsOnConstructor()
+        // 80. B98.r7: TS1206 "Decorators are not valid here." for parameter decorators
+        // under standard (non-experimental) decorators — parameter decorators are invalid.
+        checkInvalidParameterDecorators()
         } // end if (!declarationOnly)
     }
 
@@ -1266,6 +1269,88 @@ class Checker(
                     stmt.finallyBlock?.let { walkParameterDecoratorChecks(it.statements, source, fileName) }
                 }
                 is LabeledStatement -> walkParameterDecoratorChecks(listOf(stmt.statement), source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * B98.r7: TS1206 "Decorators are not valid here." for PARAMETER decorators under
+     * standard (non-experimental) decorators. In TypeScript 5.0+ the default decorator
+     * mode is the TC39 standard, where parameter decorators are not supported at all —
+     * `nodeCanBeDecorated(legacyDecorators=false, parameter)` is false, so the checker's
+     * grammar pass reports TS1206 on the first token (the `@`) of the parameter's first
+     * decorator. Class/method/accessor/property/field decorators stay valid → we only
+     * flag PARAMETERS. Gated to `!experimentalDecorators`; an explicit `@experimentalDecorators`
+     * (or tsconfig `experimentalDecorators`) flag suppresses it.
+     */
+    private fun checkInvalidParameterDecorators() {
+        if (options.experimentalDecorators) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkInvalidParamDecorators(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun emitInvalidParamDecorators(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            val dec = param.decorators?.firstOrNull() ?: continue
+            if (dec.pos !in 0 until source.length) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, dec.pos)
+            diagnostics.add(Diagnostic(
+                message = "Decorators are not valid here.",
+                category = DiagnosticCategory.Error,
+                code = 1206,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = dec.pos,
+                length = 1,
+            ))
+        }
+    }
+
+    private fun walkInvalidParamDecorators(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    for (member in stmt.members) {
+                        when (member) {
+                            is Constructor -> { emitInvalidParamDecorators(member.parameters, source, fileName); member.body?.let { walkInvalidParamDecorators(it.statements, source, fileName) } }
+                            is MethodDeclaration -> { emitInvalidParamDecorators(member.parameters, source, fileName); member.body?.let { walkInvalidParamDecorators(it.statements, source, fileName) } }
+                            is GetAccessor -> { emitInvalidParamDecorators(member.parameters, source, fileName); member.body?.let { walkInvalidParamDecorators(it.statements, source, fileName) } }
+                            is SetAccessor -> { emitInvalidParamDecorators(member.parameters, source, fileName); member.body?.let { walkInvalidParamDecorators(it.statements, source, fileName) } }
+                            else -> {}
+                        }
+                    }
+                }
+                is FunctionDeclaration -> { emitInvalidParamDecorators(stmt.parameters, source, fileName); stmt.body?.let { walkInvalidParamDecorators(it.statements, source, fileName) } }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkInvalidParamDecorators(it.statements, source, fileName) }
+                is Block -> walkInvalidParamDecorators(stmt.statements, source, fileName)
+                is IfStatement -> {
+                    walkInvalidParamDecorators(listOf(stmt.thenStatement), source, fileName)
+                    stmt.elseStatement?.let { walkInvalidParamDecorators(listOf(it), source, fileName) }
+                }
+                is ForStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
+                is ForInStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
+                is ForOfStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
+                is WhileStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
+                is DoStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> walkInvalidParamDecorators(clause.statements, source, fileName)
+                        is DefaultClause -> walkInvalidParamDecorators(clause.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is TryStatement -> {
+                    walkInvalidParamDecorators(stmt.tryBlock.statements, source, fileName)
+                    stmt.catchClause?.block?.let { walkInvalidParamDecorators(it.statements, source, fileName) }
+                    stmt.finallyBlock?.let { walkInvalidParamDecorators(it.statements, source, fileName) }
+                }
+                is LabeledStatement -> walkInvalidParamDecorators(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
         }
