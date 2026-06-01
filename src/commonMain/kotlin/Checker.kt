@@ -19825,6 +19825,66 @@ class Checker(
                             ))
                         }
                     }
+                    // TS2687: all declarations of a merged INSTANCE member must have identical
+                    // modifiers (visibility / readonly / optional). Only instance Property/Method
+                    // members are compared — static members live on the static side and have no
+                    // interface partner (so a static-vs-instance same-name pair must NOT trip this).
+                    val memberSigs = mutableMapOf<String, MutableList<Pair<String, NameNode>>>()
+                    for (d in group) {
+                        val members: List<ClassElement> = when (val s = d.stmt) {
+                            is InterfaceDeclaration -> s.members
+                            is ClassDeclaration -> s.members
+                            else -> emptyList()
+                        }
+                        for (m in members) {
+                            val nameNode: NameNode
+                            val modifiers: Set<ModifierFlag>
+                            val optional: Boolean
+                            when (m) {
+                                is PropertyDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
+                                is MethodDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
+                                else -> continue
+                            }
+                            if (ModifierFlag.Static in modifiers) continue
+                            val text = when (nameNode) {
+                                is Identifier -> nameNode.text
+                                is StringLiteralNode -> nameNode.text
+                                is NumericLiteralNode -> nameNode.text
+                                else -> continue
+                            }
+                            if (text.isEmpty() || text == "new") continue
+                            val vis = when {
+                                ModifierFlag.Private in modifiers -> "private"
+                                ModifierFlag.Protected in modifiers -> "protected"
+                                else -> "public"
+                            }
+                            val sig = "$vis|${ModifierFlag.Readonly in modifiers}|$optional"
+                            memberSigs.getOrPut(text) { mutableListOf() }.add(sig to nameNode)
+                        }
+                    }
+                    for ((memberName, entries) in memberSigs) {
+                        if (entries.size >= 2 && entries.map { it.first }.distinct().size > 1) {
+                            for ((_, nameNode) in entries) {
+                                val start = nameNode.pos
+                                val nameLen = when (nameNode) {
+                                    is Identifier -> nameNode.text.length
+                                    is StringLiteralNode -> nameNode.text.length + 2
+                                    else -> nameNode.end - nameNode.pos
+                                }
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "All declarations of '$memberName' must have identical modifiers.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2687,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = nameLen,
+                                ))
+                            }
+                        }
+                    }
                 }
             }
 
