@@ -33883,6 +33883,11 @@ interface DataView {
                         }
                     } catch (_: StackOverflowError) { /* circular type */ }
                 }
+                // B98.r84: TS2704 (read-only property) / TS2542 (read-only index
+                // signature) for `delete obj.readonlyProp` / `delete obj[key]`.
+                // Independent of strictNullChecks (unlike TS2790). Reuses the readonly
+                // helpers from the assignment-target path.
+                checkDeleteReadonlyOperand(inner, source, fileName)
                 if (!isPropertyRef) {
                     // TS2703: operand must be property reference
                     val start = inner.pos
@@ -34493,6 +34498,74 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /**
+     * B98.r84: A `delete` operand that is a read-only property (TS2704) or resolves
+     * through a read-only index signature (TS2542). Mirrors the readonly detection of
+     * the assignment-target path; squiggle spans the whole property/element access.
+     * FP-safe: `delete` of a read-only target is always a TS error, so a passing test
+     * with this shape already carries the diagnostic.
+     */
+    private fun checkDeleteReadonlyOperand(inner: Expression, source: String, fileName: String) {
+        when (inner) {
+            is PropertyAccessExpression -> {
+                if (isReadonlyPropertyAccess(inner, fileName)) {
+                    emitDeleteReadonlyDiag(inner, 2704,
+                        "The operand of a 'delete' operator cannot be a read-only property.", source, fileName)
+                    return
+                }
+                try {
+                    val objType = getTypeOfExpression(inner.expression)
+                    if (objType === anyType || objType === errorType) return
+                    if (getPropertyOfType(objType, inner.name.text) != null) return
+                    val idx = stringIndexInfoOfType(objType) ?: return
+                    if (idx.isReadonly) emitDeleteReadonlyDiag(inner, 2542,
+                        "Index signature in type '${typeToString(objType)}' only permits reading.", source, fileName)
+                } catch (_: StackOverflowError) {}
+            }
+            is ElementAccessExpression -> {
+                val arg = inner.argumentExpression
+                if (arg !is StringLiteralNode) return
+                try {
+                    val objType = getTypeOfExpression(inner.expression)
+                    if (objType === anyType || objType === errorType) return
+                    val prop = getPropertyOfType(objType, arg.text)
+                    if (prop != null) {
+                        if (isReadonlySymbol(prop)) emitDeleteReadonlyDiag(inner, 2704,
+                            "The operand of a 'delete' operator cannot be a read-only property.", source, fileName)
+                        return
+                    }
+                    val idx = stringIndexInfoOfType(objType) ?: return
+                    if (idx.isReadonly) emitDeleteReadonlyDiag(inner, 2542,
+                        "Index signature in type '${typeToString(objType)}' only permits reading.", source, fileName)
+                } catch (_: StackOverflowError) {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun stringIndexInfoOfType(objType: Type): IndexInfo? = when (objType) {
+        is Type.Interface -> objType.stringIndexInfo
+        is Type.Object -> objType.stringIndexInfo
+        else -> null
+    }
+
+    private fun emitDeleteReadonlyDiag(inner: Expression, code: Int, message: String, source: String, fileName: String) {
+        val start = inner.pos
+        val length = expressionTrueEnd(inner) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /** Emit TS2540 for assignment to a readonly property. */
