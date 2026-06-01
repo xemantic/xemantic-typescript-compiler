@@ -22906,6 +22906,69 @@ class Checker(
                     }
                 }
 
+                // B98.r85: `import { X } from "./a"` where "./a" uses `export = <class
+                // or function>`, esModuleInterop is active (true / default — NOT
+                // explicitly false), and output is CJS (not ESM). A named import cannot
+                // be synthesized from an export=class/function module; the valid forms
+                // are `import X = require(...)` or a default import. Emits TS2616 (TS
+                // importer) / TS2597 (JS importer) per named specifier + one TS2497 at
+                // the specifier. Disjoint from the isPlainValue TS2616 branch (plain
+                // variable), the explicitly-false TS2617/2596/2598 branch, the TS2305
+                // namespace-member branch (getExportEqualsMemberNames non-null), and the
+                // ESM-output TS2595 branch (isEsmOutput) — all gated mutually exclusive.
+                if (hasExportEquals && options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
+                    !isEsmOutputForEquals && namedBindingsEM is NamedImports &&
+                    getExportEqualsMemberNames(targetFile, targetResult) == null) {
+                    val exportEqStmtR85 = targetFile.statements.firstOrNull {
+                        it is ExportAssignment && it.isExportEquals
+                    } as? ExportAssignment
+                    val exportEqExprR85 = exportEqStmtR85?.expression
+                    val targetSymR85 = (exportEqExprR85 as? Identifier)?.let { targetResult.locals[it.text] }
+                    if (targetSymR85 != null && targetSymR85.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)) {
+                        val importerIsJsR85 = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                            fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+                        var anyEmittedR85 = false
+                        for (importSpecifier in namedBindingsEM.elements) {
+                            if (importSpecifier.isTypeOnly) continue
+                            val nameNode = importSpecifier.propertyName ?: importSpecifier.name
+                            val importedName = nameNode.text
+                            if (importedName == "default") continue
+                            val nameStart = nameNode.pos
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                            val (code, message) = if (importerIsJsR85) 2597 to
+                                "'$importedName' can only be imported by using a 'require' call or by using a default import."
+                            else 2616 to
+                                "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or a default import."
+                            diagnostics.add(Diagnostic(
+                                message = message,
+                                category = DiagnosticCategory.Error,
+                                code = code,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameStart,
+                                length = importedName.length,
+                            ))
+                            anyEmittedR85 = true
+                        }
+                        if (anyEmittedR85) {
+                            val specStart = specifier.pos
+                            val specLength = moduleName.length + 2
+                            val (line, character) = getLineAndCharacterOfPosition(source, specStart)
+                            diagnostics.add(Diagnostic(
+                                message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
+                                category = DiagnosticCategory.Error,
+                                code = 2497,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = specStart,
+                                length = specLength,
+                            ))
+                        }
+                    }
+                }
+
                 // TS2497: `import * as X from` against an `export =` module in an ESM
                 // output format (ES2015+, ESNext, Preserve) requires
                 // allowSyntheticDefaultImports (already guarded at the top of this
