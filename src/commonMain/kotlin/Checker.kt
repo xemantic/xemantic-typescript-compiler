@@ -1097,6 +1097,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64d2. Check object-rest source types (TS2700)
         checkObjectRestSpreadTypes()
+        // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
+        checkIncDecTypeParamOperands()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
         // 64e2. Check property type incompatible with base type (TS2416)
@@ -80093,6 +80095,219 @@ interface DataView {
         type is Type.Union -> type.types.any { spreadSourceHasNullish(it) }
         type is Type.Intersection -> type.types.any { spreadSourceHasNullish(it) }
         else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2356: "An arithmetic operand must be of type 'any', 'number', 'bigint'
+    // or an enum type." — for a `++`/`--` whose operand is typed as an
+    // UNCONSTRAINED generic type parameter (e.g. `class C<T> { a!: T; foo() {
+    // this.a++ } }`). An unconstrained `T` can be instantiated with a
+    // non-arithmetic type, so the increment is never sound.
+    //
+    // AST-level + FP-firewalled: we only flag an operand that is `this.X`
+    // (where X is a class property annotated as a bare unconstrained type
+    // parameter) or a bare local identifier annotated as one. The annotation
+    // must be a bare `TypeReference` to a type-parameter NAME with no type args,
+    // and the type parameter must be unconstrained (constraint == null) — a
+    // numeric-constrained `T extends number` is legitimately incrementable
+    // (false negative, never a false positive). Constrained-non-numeric type
+    // params (`T extends string`) are a deliberate FN to keep zero FP.
+    // -----------------------------------------------------------------------
+
+    private fun checkIncDecTypeParamOperands() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try {
+                incDecScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), emptySet())
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun unconstrainedTpNames(tps: List<TypeParameter>?): Set<String> =
+        tps?.filter { it.constraint == null }?.map { it.name.text }?.toSet() ?: emptySet()
+
+    private fun isBareTypeParamRef(typeNode: TypeNode?, tparams: Set<String>): Boolean {
+        val tr = typeNode as? TypeReference ?: return false
+        if (!tr.typeArguments.isNullOrEmpty()) return false
+        val name = (tr.typeName as? Identifier)?.text ?: return false
+        return name in tparams
+    }
+
+    /** Collect names of local vars (incl. for-init) annotated as a bare
+     *  unconstrained type-param. Does NOT descend into nested function/class
+     *  bodies (their locals belong to their own scope). */
+    private fun collectTpLocals(stmts: List<Statement>, tparams: Set<String>, into: MutableSet<String>) {
+        for (stmt in stmts) collectTpLocalsStmt(stmt, tparams, into)
+    }
+
+    private fun collectTpLocalsStmt(stmt: Statement, tparams: Set<String>, into: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text
+                if (n != null && isBareTypeParamRef(d.type, tparams)) into.add(n)
+            }
+            is Block -> collectTpLocals(stmt.statements, tparams, into)
+            is IfStatement -> {
+                collectTpLocalsStmt(stmt.thenStatement, tparams, into)
+                stmt.elseStatement?.let { collectTpLocalsStmt(it, tparams, into) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    val n = (d.name as? Identifier)?.text
+                    if (n != null && isBareTypeParamRef(d.type, tparams)) into.add(n)
+                }
+                collectTpLocalsStmt(stmt.statement, tparams, into)
+            }
+            is ForInStatement -> collectTpLocalsStmt(stmt.statement, tparams, into)
+            is ForOfStatement -> collectTpLocalsStmt(stmt.statement, tparams, into)
+            is WhileStatement -> collectTpLocalsStmt(stmt.statement, tparams, into)
+            is DoStatement -> collectTpLocalsStmt(stmt.statement, tparams, into)
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                collectTpLocals(cs, tparams, into)
+            }
+            is TryStatement -> {
+                collectTpLocals(stmt.tryBlock.statements, tparams, into)
+                stmt.catchClause?.let { collectTpLocals(it.block.statements, tparams, into) }
+                stmt.finallyBlock?.let { collectTpLocals(it.statements, tparams, into) }
+            }
+            is LabeledStatement -> collectTpLocalsStmt(stmt.statement, tparams, into)
+            else -> {}
+        }
+    }
+
+    private fun incDecHandleBody(body: Block, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>) {
+        val tpLocals = mutableSetOf<String>()
+        collectTpLocals(body.statements, tparams, tpLocals)
+        incDecScanStatements(body.statements, source, fileName, tparams, tpProps, tpLocals)
+    }
+
+    private fun incDecScanStatements(stmts: List<Statement>, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>, tpLocals: Set<String>) {
+        for (stmt in stmts) incDecScanStatement(stmt, source, fileName, tparams, tpProps, tpLocals)
+    }
+
+    private fun incDecScanStatement(stmt: Statement, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>, tpLocals: Set<String>) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                val newTp = tparams + unconstrainedTpNames(stmt.typeParameters)
+                val props = stmt.members.filterIsInstance<PropertyDeclaration>()
+                    .filter { isBareTypeParamRef(it.type, newTp) }
+                    .mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { incDecHandleBody(it, source, fileName, newTp + unconstrainedTpNames(m.typeParameters), props) }
+                    is Constructor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
+                    is GetAccessor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
+                    is SetAccessor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
+                    is PropertyDeclaration -> m.initializer?.let { incDecCheckExpr(it, source, fileName, emptySet(), emptySet()) }
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.let { incDecHandleBody(it, source, fileName, tparams + unconstrainedTpNames(stmt.typeParameters), emptySet()) }
+            is ExpressionStatement -> incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+            is ReturnStatement -> stmt.expression?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+            is ThrowStatement -> stmt.expression?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+            is Block -> incDecScanStatements(stmt.statements, source, fileName, tparams, tpProps, tpLocals)
+            is IfStatement -> {
+                incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
+                incDecScanStatement(stmt.thenStatement, source, fileName, tparams, tpProps, tpLocals)
+                stmt.elseStatement?.let { incDecScanStatement(it, source, fileName, tparams, tpProps, tpLocals) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
+                (stmt.initializer as? Expression)?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+                stmt.condition?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+                stmt.incrementor?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+                incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals)
+            }
+            is ForInStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
+            is ForOfStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
+            is WhileStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
+            is DoStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
+            is SwitchStatement -> {
+                incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
+                for (c in stmt.caseBlock) {
+                    val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                    incDecScanStatements(cs, source, fileName, tparams, tpProps, tpLocals)
+                }
+            }
+            is TryStatement -> {
+                incDecScanStatements(stmt.tryBlock.statements, source, fileName, tparams, tpProps, tpLocals)
+                stmt.catchClause?.let { incDecScanStatements(it.block.statements, source, fileName, tparams, tpProps, tpLocals) }
+                stmt.finallyBlock?.let { incDecScanStatements(it.statements, source, fileName, tparams, tpProps, tpLocals) }
+            }
+            is LabeledStatement -> incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { incDecScanStatements(it.statements, source, fileName, tparams, tpProps, tpLocals) }
+            else -> {}
+        }
+    }
+
+    /** Recursively check expressions for `++`/`--` on a type-param-typed
+     *  operand. Stops at nested function/class boundaries (handled by the
+     *  statement walker with their own scope). */
+    private fun incDecCheckExpr(expr: Expression, source: String, fileName: String, tpProps: Set<String>, tpLocals: Set<String>) {
+        when (expr) {
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    emitTS2356IfTypeParamOperand(expr.operand, source, fileName, tpProps, tpLocals)
+                }
+                incDecCheckExpr(expr.operand, source, fileName, tpProps, tpLocals)
+            }
+            is PostfixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    emitTS2356IfTypeParamOperand(expr.operand, source, fileName, tpProps, tpLocals)
+                }
+                incDecCheckExpr(expr.operand, source, fileName, tpProps, tpLocals)
+            }
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    incDecCheckExpr(cur.right, source, fileName, tpProps, tpLocals)
+                    cur = cur.left
+                }
+                incDecCheckExpr(cur, source, fileName, tpProps, tpLocals)
+            }
+            is ParenthesizedExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is CallExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); expr.arguments.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
+            is NewExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); expr.arguments?.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
+            is PropertyAccessExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is ElementAccessExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.argumentExpression, source, fileName, tpProps, tpLocals) }
+            is ConditionalExpression -> { incDecCheckExpr(expr.condition, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.whenTrue, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.whenFalse, source, fileName, tpProps, tpLocals) }
+            is ArrayLiteralExpression -> expr.elements.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
+            is SpreadElement -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is AsExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is NonNullExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is TypeAssertionExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            is SatisfiesExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
+            else -> {}
+        }
+    }
+
+    private fun emitTS2356IfTypeParamOperand(operand: Expression, source: String, fileName: String, tpProps: Set<String>, tpLocals: Set<String>) {
+        var core: Expression = operand
+        while (core is ParenthesizedExpression) core = core.expression
+        val isTpOperand = when (core) {
+            is Identifier -> core.text in tpLocals
+            is PropertyAccessExpression -> (core.expression as? Identifier)?.text == "this" && core.name.text in tpProps
+            else -> false
+        }
+        if (!isTpOperand) return
+        val start = core.pos
+        val length = expressionTrueEnd(core) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.",
+            category = DiagnosticCategory.Error,
+            code = 2356,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     // TS2362/TS2363 arithmetic operator type checking — deferred.
