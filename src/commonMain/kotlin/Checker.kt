@@ -26804,6 +26804,8 @@ interface DataView {
                 if (isAlwaysFalsyExpr(stmt.expression)) {
                     emitTS2873(stmt.expression, source, fileName)
                 }
+                // Also scan nested `!x` (always-falsy operand) inside the condition.
+                scanForNotFalsy(stmt.expression, source, fileName)
                 checkEnumReferenceFalsyCondition(stmt.expression, source, fileName)
                 // Walk the if-else chain: only flag always-truthy conditions that are
                 // UNREACHABLE because a preceding branch was always-truthy
@@ -26814,6 +26816,7 @@ interface DataView {
                     if (isAlwaysFalsyExpr(elseStmt.expression)) {
                         emitTS2873(elseStmt.expression, source, fileName)
                     }
+                    scanForNotFalsy(elseStmt.expression, source, fileName)
                     if (prevTruthy) {
                         checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
                     }
@@ -26843,8 +26846,14 @@ interface DataView {
             }
             is ForInStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is ForOfStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> {
+                scanForNotFalsy(stmt.expression, source, fileName)
+                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                scanForNotFalsy(stmt.expression, source, fileName)
+                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
+            }
             is SwitchStatement -> for (c in stmt.caseBlock) {
                 val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
                 checkAlwaysTruthyInStatements(clauseStmts, source, fileName)
@@ -26963,7 +26972,16 @@ interface DataView {
                     for (span in t.templateSpans) checkAlwaysTruthyInExpr(span.expression, source, fileName)
                 }
             }
-            is PrefixUnaryExpression -> checkAlwaysTruthyInExpr(expr.operand, source, fileName)
+            is PrefixUnaryExpression -> {
+                // The operand of a logical-not `!` is in a truthiness-test
+                // position, so an always-falsy operand (e.g. `!void 0`, `!null`)
+                // fires TS2873 just like a condition. (`null`/`undefined`/`void`
+                // are always falsy regardless of strict mode.)
+                if (expr.operator == SyntaxKind.Exclamation && isAlwaysFalsyExpr(expr.operand)) {
+                    emitTS2873(expr.operand, source, fileName)
+                }
+                checkAlwaysTruthyInExpr(expr.operand, source, fileName)
+            }
             is PostfixUnaryExpression -> checkAlwaysTruthyInExpr(expr.operand, source, fileName)
             is SpreadElement -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
             is AwaitExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
@@ -27100,6 +27118,44 @@ interface DataView {
      * Check if an expression is always falsy (e.g. `void x`).
      * TypeScript emits TS2873 for such expressions in `if` conditions.
      */
+    /**
+     * Recursively emit TS2873 for any `!x` (logical not) whose operand is
+     * always falsy (`void …`, `null`, `undefined`). The operand of `!` is a
+     * truthiness-test position no matter where the `!` appears, so this is
+     * scanned inside condition expressions (if/while/do) which the
+     * always-truthy walker does not otherwise descend into. FP-safe by
+     * construction: TypeScript always flags these (the operand can only ever
+     * be falsy). The recursion stays inside value-transparent / operator
+     * wrappers and stops at function/class boundaries.
+     */
+    private fun scanForNotFalsy(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.Exclamation && isAlwaysFalsyExpr(expr.operand)) {
+                    emitTS2873(expr.operand, source, fileName)
+                }
+                scanForNotFalsy(expr.operand, source, fileName)
+            }
+            is BinaryExpression -> {
+                // iterative left spine to avoid StackOverflow on long chains
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    scanForNotFalsy(cur.right, source, fileName)
+                    cur = cur.left
+                }
+                scanForNotFalsy(cur, source, fileName)
+            }
+            is ParenthesizedExpression -> scanForNotFalsy(expr.expression, source, fileName)
+            is PostfixUnaryExpression -> scanForNotFalsy(expr.operand, source, fileName)
+            is ConditionalExpression -> {
+                scanForNotFalsy(expr.condition, source, fileName)
+                scanForNotFalsy(expr.whenTrue, source, fileName)
+                scanForNotFalsy(expr.whenFalse, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
     private fun isAlwaysFalsyExpr(expr: Expression): Boolean {
         return when (expr) {
             is VoidExpression -> true
