@@ -15293,6 +15293,43 @@ class Checker(
      * Purely syntactic (operator kind) → FP-safe: no valid computed name is a bare
      * `a in b` / `a < b` / `a === b`.
      */
+    /**
+     * B98.r91: TS2690/TS2693 — a PURE-TYPE name (a `type` alias or `interface`, with
+     * no value-side declaration) used as a computed property name in a type literal
+     * (`type T = { [K]: number }`). When the type literal has a SINGLE member (a
+     * mistaken mapped type) → TS2690 with a "Did you mean '<TP> in K'?" hint (TP = "K",
+     * or "P" when the name is itself "K"); otherwise → TS2693 (no hint). FP firewall:
+     * the name must resolve to a symbol whose declarations are ALL TypeAlias/Interface
+     * (so `const K1 = Symbol()` — a value — is skipped; a class/enum/var is skipped).
+     */
+    private fun emitTS2690Or2693ForTypeOnlyComputedName(name: NameNode, memberCount: Int, source: String, fileName: String) {
+        if (name !is ComputedPropertyName) return
+        val id = name.expression as? Identifier ?: return
+        val sym = fileResults[fileName]?.locals?.get(id.text) ?: globals[id.text] ?: return
+        if (sym.declarations.isEmpty()) return
+        if (!sym.declarations.all { it is TypeAliasDeclaration || it is InterfaceDeclaration }) return
+        val start = id.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        if (memberCount == 1) {
+            val freshTP = if (id.text == "K") "P" else "K"
+            diagnostics.add(Diagnostic(
+                message = "'${id.text}' only refers to a type, but is being used as a value here. Did you mean to use '$freshTP in ${id.text}'?",
+                category = DiagnosticCategory.Error,
+                code = 2690,
+                fileName = fileName, line = line, character = character,
+                start = start, length = id.text.length,
+            ))
+        } else {
+            diagnostics.add(Diagnostic(
+                message = "'${id.text}' only refers to a type, but is being used as a value here.",
+                category = DiagnosticCategory.Error,
+                code = 2693,
+                fileName = fileName, line = line, character = character,
+                start = start, length = id.text.length,
+            ))
+        }
+    }
+
     private fun emitTS2464IfBooleanComputedName(name: NameNode, source: String, fileName: String) {
         if (name !is ComputedPropertyName) return
         val expr = name.expression as? BinaryExpression ?: return
@@ -15451,6 +15488,11 @@ class Checker(
                     when (member) {
                         is PropertyDeclaration -> {
                             checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            // B98.r91: a type-only name (`type`/`interface`) used as a type-literal
+                            // computed property name (`{ [K]: number }`) is TS2690 (single-member —
+                            // a mistaken mapped type, with a "Did you mean '<TP> in K'?" hint) or
+                            // TS2693 (multi-member). Emit before the value-resolution walk below.
+                            emitTS2690Or2693ForTypeOnlyComputedName(member.name, type.members.size, source, fileName)
                             // 17.229: ComputedPropertyName whose expression is a regular
                             // Identifier should resolve in the value-position scope
                             // (mirrors class-member walker at ~10357). Without this,
@@ -15462,6 +15504,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            emitTS2690Or2693ForTypeOnlyComputedName(member.name, type.members.size, source, fileName)
                             if (member.name is ComputedPropertyName) {
                                 checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
                             }
