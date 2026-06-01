@@ -31549,11 +31549,95 @@ interface DataView {
         for (param in parameters) {
             // A binding-pattern parameter stores its default on the BindingElement,
             // not on Parameter.initializer; walkParamForbiddenBindingName covers it.
-            param.initializer?.let {
-                walkParamInitForbidden(it, source, fileName, emitted)
-                walkParamForbiddenExprForFns(it, source, fileName, emitted)
+            param.initializer?.let { init ->
+                walkParamInitForbidden(init, source, fileName, emitted)
+                walkParamForbiddenExprForFns(init, source, fileName, emitted)
+                // TS2372: a simple-identifier parameter's default initializer must not
+                // reference the parameter itself (`function f(x = x)` / `(b = b.toString())`).
+                // FP-safe: a reference to the own name inside the own initializer (not crossing
+                // a nested function/class boundary) is always a self-reference grammar error.
+                (param.name as? Identifier)?.text?.let { pname ->
+                    findParamSelfRef(init, pname)?.let { refPos ->
+                        emitParamInitForbidden(refPos, pname.length, 2372,
+                            "Parameter '$pname' cannot reference itself.", source, fileName, emitted)
+                    }
+                }
             }
             walkParamForbiddenBindingName(param.name, source, fileName, emitted)
+        }
+    }
+
+    /**
+     * Returns the source position of the first reference to [name] inside a parameter's
+     * default initializer [expr], or null. Recurses through value-transparent wrappers but
+     * STOPS at nested function/arrow/class boundaries (a closure that reads the param is a
+     * deferred read, not an init-time self-reference) and only descends into the BASE of a
+     * property access (`obj.x`'s `.x` property name is not a reference). BinaryExpression is
+     * flattened iteratively (deep `a+b+…` chains) while preserving source order.
+     */
+    private fun findParamSelfRef(expr: Expression, name: String): Int? {
+        when (expr) {
+            is Identifier -> return if (expr.text == name) expr.pos else null
+            is ParenthesizedExpression -> return findParamSelfRef(expr.expression, name)
+            is PropertyAccessExpression -> return findParamSelfRef(expr.expression, name)
+            is ElementAccessExpression -> return findParamSelfRef(expr.expression, name) ?: findParamSelfRef(expr.argumentExpression, name)
+            is CallExpression -> {
+                findParamSelfRef(expr.expression, name)?.let { return it }
+                for (a in expr.arguments) findParamSelfRef(a, name)?.let { return it }
+                return null
+            }
+            is NewExpression -> {
+                findParamSelfRef(expr.expression, name)?.let { return it }
+                expr.arguments?.forEach { findParamSelfRef(it, name)?.let { return it } }
+                return null
+            }
+            is BinaryExpression -> {
+                val rights = ArrayDeque<Expression>()
+                var node: Expression = expr
+                while (node is BinaryExpression) { rights.addFirst(node.right); node = node.left }
+                findParamSelfRef(node, name)?.let { return it }
+                for (r in rights) findParamSelfRef(r, name)?.let { return it }
+                return null
+            }
+            is ConditionalExpression -> {
+                findParamSelfRef(expr.condition, name)?.let { return it }
+                findParamSelfRef(expr.whenTrue, name)?.let { return it }
+                return findParamSelfRef(expr.whenFalse, name)
+            }
+            is PrefixUnaryExpression -> return findParamSelfRef(expr.operand, name)
+            is PostfixUnaryExpression -> return findParamSelfRef(expr.operand, name)
+            is ArrayLiteralExpression -> { for (e in expr.elements) findParamSelfRef(e, name)?.let { return it }; return null }
+            is ObjectLiteralExpression -> {
+                for (p in expr.properties) {
+                    val hit = when (p) {
+                        is PropertyAssignment -> findParamSelfRef(p.initializer, name)
+                        is SpreadAssignment -> findParamSelfRef(p.expression, name)
+                        is ShorthandPropertyAssignment -> if (p.name.text == name) p.name.pos else p.objectAssignmentInitializer?.let { findParamSelfRef(it, name) }
+                        else -> null // method / accessor → boundary
+                    }
+                    if (hit != null) return hit
+                }
+                return null
+            }
+            is SpreadElement -> return findParamSelfRef(expr.expression, name)
+            is AsExpression -> return findParamSelfRef(expr.expression, name)
+            is NonNullExpression -> return findParamSelfRef(expr.expression, name)
+            is TypeAssertionExpression -> return findParamSelfRef(expr.expression, name)
+            is SatisfiesExpression -> return findParamSelfRef(expr.expression, name)
+            is AwaitExpression -> return findParamSelfRef(expr.expression, name)
+            is YieldExpression -> return expr.expression?.let { findParamSelfRef(it, name) }
+            is DeleteExpression -> return findParamSelfRef(expr.expression, name)
+            is VoidExpression -> return findParamSelfRef(expr.expression, name)
+            is TypeOfExpression -> return findParamSelfRef(expr.expression, name)
+            is TemplateExpression -> { for (s in expr.templateSpans) findParamSelfRef(s.expression, name)?.let { return it }; return null }
+            is CommaListExpression -> { for (e in expr.elements) findParamSelfRef(e, name)?.let { return it }; return null }
+            is TaggedTemplateExpression -> {
+                findParamSelfRef(expr.tag, name)?.let { return it }
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach { findParamSelfRef(it.expression, name)?.let { return it } }
+                return null
+            }
+            // FunctionExpression / ArrowFunction / ClassExpression / literals → boundary; do not recurse.
+            else -> return null
         }
     }
 
