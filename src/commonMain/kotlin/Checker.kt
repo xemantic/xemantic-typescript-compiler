@@ -18736,6 +18736,72 @@ class Checker(
             // that merges with a class of the same name (the class's implicit static
             // `prototype` conflicts).
             checkClassNamespacePrototypeConflict(result.sourceFile.statements, source, fileName)
+            // B98.r82: TS2699 (+ TS2300 for the method form) for a `static prototype`
+            // class member, which conflicts with the constructor function's built-in
+            // `Function.prototype`.
+            checkStaticPrototypeMembers(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B98.r82: A `static prototype` member of a class conflicts with the implicit
+     * `Function.prototype` of the constructor function. Emits TS2699 at the member
+     * name for any static member named `prototype` (property OR method form), plus an
+     * additional TS2300 "Duplicate identifier 'prototype'." when the member is a
+     * METHOD (the field form `static prototype;` gets only TS2699 — matches TS).
+     * FP-safe: a `static prototype` is never valid TypeScript, so any class with this
+     * shape already carries these diagnostics in its baseline.
+     */
+    private fun checkStaticPrototypeMembers(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    val className = stmt.name?.text ?: "(Anonymous class)"
+                    for (member in stmt.members) {
+                        val isStatic: Boolean
+                        val nameNode: NameNode?
+                        when (member) {
+                            is PropertyDeclaration -> { isStatic = ModifierFlag.Static in member.modifiers; nameNode = member.name }
+                            is MethodDeclaration -> { isStatic = ModifierFlag.Static in member.modifiers; nameNode = member.name }
+                            is GetAccessor -> { isStatic = ModifierFlag.Static in member.modifiers; nameNode = member.name }
+                            is SetAccessor -> { isStatic = ModifierFlag.Static in member.modifiers; nameNode = member.name }
+                            else -> { isStatic = false; nameNode = null }
+                        }
+                        if (!isStatic) continue
+                        val id = nameNode as? Identifier ?: continue
+                        if (id.text != "prototype") continue
+                        val start = id.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        if (member is MethodDeclaration) {
+                            diagnostics.add(Diagnostic(
+                                message = "Duplicate identifier 'prototype'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2300,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = 9,
+                            ))
+                        }
+                        diagnostics.add(Diagnostic(
+                            message = "Static property 'prototype' conflicts with built-in property 'Function.prototype' of constructor function '$className'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2699,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = 9,
+                        ))
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val body = stmt.body
+                    if (body is ModuleBlock) checkStaticPrototypeMembers(body.statements, source, fileName)
+                }
+                else -> {}
+            }
         }
     }
 
