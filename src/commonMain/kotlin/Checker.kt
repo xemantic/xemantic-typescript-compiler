@@ -13393,6 +13393,16 @@ class Checker(
         fun has(name: String): Boolean =
             name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
 
+        /**
+         * True if [name] is bound in a NON-ROOT scope — i.e. a genuine local shadow
+         * (parameter / local var / block binding), NOT the global itself. The root file
+         * scope (parent == null) seeds KNOWN_GLOBALS into [names], so plain [has] cannot
+         * distinguish "global NaN" from "a local NaN parameter". Used by the TS2845
+         * NaN-comparison check to fire only for the true global.
+         */
+        fun hasLocalShadow(name: String): Boolean =
+            parent != null && (name in names || parent.hasLocalShadow(name))
+
         /** Returns true if [name] is a type parameter in this scope or any ancestor scope. */
         fun isTypeParam(name: String): Boolean =
             name in typeParamNames || parent?.isTypeParam(name) == true
@@ -14724,6 +14734,74 @@ class Checker(
         finally { checkDepth-- }
     }
 
+    /**
+     * TS2845: comparing anything with the global `NaN` via `==`/`!=`/`===`/`!==` is a
+     * constant condition — equality is always 'false', inequality always 'true'. Fires
+     * when EITHER operand (after unwrapping parentheses) is the global `NaN` identifier.
+     * `scope.has("NaN")` is true only when a local binding (parameter / var) shadows the
+     * global, in which case the comparison is meaningful and no error is emitted (matches
+     * TypeScript — see `nanEquality.ts` t1/t2/t3 which take `NaN` as a parameter). Squiggle
+     * spans the whole binary expression. Hooked into the scope-aware TS2304 expression
+     * walker so shadowing is detected for free.
+     */
+    private fun checkNaNComparison(expr: BinaryExpression, scope: NameScope, source: String, fileName: String) {
+        val op = expr.operator
+        val isNeq = op == SyntaxKind.ExclamationEqualsEquals || op == SyntaxKind.ExclamationEquals
+        val isEq = op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.EqualsEquals
+        if (!isEq && !isNeq) return
+        val leftNaN = isGlobalNaNOperand(expr.left, scope)
+        val rightNaN = isGlobalNaNOperand(expr.right, scope)
+        if (!leftNaN && !rightNaN) return
+        val verdict = if (isNeq) "true" else "false"
+        val start = expr.pos
+        val end = expressionTrueEnd(expr)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // TS1369 "Did you mean 'Number.isNaN(x)'?" related info — only when EXACTLY ONE
+        // operand is NaN (when both are NaN there is no meaningful suggestion). The text
+        // uses the other operand's entity-name (`x`, `a.b`) or `...` for non-entity-name
+        // expressions (e.g. `y[0][1]`); inequality operators get a leading `!`.
+        val related: List<Diagnostic> = if (leftNaN != rightNaN) {
+            val other = unwrapParensExpr(if (leftNaN) expr.right else expr.left)
+            val nameText = entityNameTextOrNull(other) ?: "..."
+            val prefix = if (isNeq) "!" else ""
+            val oStart = other.pos
+            val (oLine, oChar) = getLineAndCharacterOfPosition(source, oStart)
+            listOf(Diagnostic(
+                message = "Did you mean '${prefix}Number.isNaN($nameText)'?",
+                category = DiagnosticCategory.Message,
+                code = 1369,
+                fileName = fileName,
+                line = oLine,
+                character = oChar,
+                start = oStart,
+                length = (expressionTrueEnd(other) - oStart).coerceAtLeast(1),
+            ))
+        } else emptyList()
+        diagnostics.add(Diagnostic(
+            message = "This condition will always return '$verdict'.",
+            category = DiagnosticCategory.Error,
+            code = 2845,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = (end - start).coerceAtLeast(1),
+            relatedInformation = related,
+        ))
+    }
+
+    private fun isGlobalNaNOperand(operand: Expression, scope: NameScope): Boolean {
+        val e = unwrapParensExpr(operand)
+        return e is Identifier && e.text == "NaN" && !scope.hasLocalShadow("NaN")
+    }
+
+    /** Entity-name text of an expression (`x`, `a.b.c`), or null for non-entity-name forms. */
+    private fun entityNameTextOrNull(e: Expression): String? = when (e) {
+        is Identifier -> e.text
+        is PropertyAccessExpression -> entityNameTextOrNull(e.expression)?.let { "$it.${e.name.text}" }
+        else -> null
+    }
+
     private fun checkUnresolvedInExprCore(
         expr: Expression,
         scope: NameScope,
@@ -14755,6 +14833,7 @@ class Checker(
             is BinaryExpression -> {
                 var current: Expression = expr
                 while (current is BinaryExpression) {
+                    checkNaNComparison(current, scope, source, fileName)
                     checkUnresolvedInExpr(current.right, scope, source, fileName)
                     current = current.left
                 }
