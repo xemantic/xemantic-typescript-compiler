@@ -6423,6 +6423,33 @@ class Parser(
 
     // ── Type parsing (parse to discard) ─────────────────────────────────────
 
+    /**
+     * TS1385/1386 (union) / TS1387/1388 (intersection): a FunctionType / ConstructorType
+     * used as a DIRECT union/intersection member must be parenthesized. A *parenthesized*
+     * function/ctor type parses as a [ParenthesizedType] (not a bare FunctionType/
+     * ConstructorType), so the legal `string | (() => void)` shape never trips this.
+     * [startPos] is the source position right after the preceding `|`/`&` (or the leading
+     * one); the squiggle runs to the member's end (`scanner.getPrevTokenEnd()`, valid only
+     * immediately after the member is parsed).
+     */
+    private fun reportUnparenthesizedFnTypeInUnionOrIntersection(member: TypeNode, startPos: Int, inUnion: Boolean) {
+        val code: Int
+        val kindWord: String
+        when (member) {
+            is FunctionType -> { code = if (inUnion) 1385 else 1387; kindWord = "Function" }
+            is ConstructorType -> { code = if (inUnion) 1386 else 1388; kindWord = "Constructor" }
+            else -> return
+        }
+        val ctxWord = if (inUnion) "a union" else "an intersection"
+        val endPos = scanner.getPrevTokenEnd()
+        reportError(
+            "$kindWord type notation must be parenthesized when used in $ctxWord type.",
+            code = code,
+            overrideStart = startPos,
+            overrideLength = (endPos - startPos).coerceAtLeast(1),
+        )
+    }
+
     private fun parseType(): TypeNode {
         val pos = getPos()
         // Assertion predicate: asserts x [is T]
@@ -6439,8 +6466,10 @@ class Parser(
         }
         // TypeScript allows leading `|` before the first union member:
         //   type A = | string | number;  →  union type
-        parseOptional(SyntaxKind.Bar)
+        val hadLeadingBar = parseOptional(SyntaxKind.Bar)
+        val firstUnionMemberStart = if (hadLeadingBar) scanner.getPrevTokenEnd() else -1
         var type = parseIntersectionOrHigherType()
+        if (hadLeadingBar) reportUnparenthesizedFnTypeInUnionOrIntersection(type, firstUnionMemberStart, inUnion = true)
         // Type predicate: X is T (valid as function return type annotations)
         // After parsing X as a type reference, if the next token is `is`, consume it
         // and parse the actual predicate type. Since we erase all types, the exact
@@ -6459,7 +6488,10 @@ class Parser(
         if (token == SyntaxKind.Bar) {
             val types = mutableListOf(type)
             while (parseOptional(SyntaxKind.Bar)) {
-                types.add(parseIntersectionOrHigherType())
+                val memberStart = scanner.getPrevTokenEnd()
+                val member = parseIntersectionOrHigherType()
+                reportUnparenthesizedFnTypeInUnionOrIntersection(member, memberStart, inUnion = true)
+                types.add(member)
             }
             type = UnionType(types = types, pos = pos, end = getEnd())
         }
@@ -6487,12 +6519,17 @@ class Parser(
         val pos = getPos()
         // TypeScript allows leading `&` before the first intersection member:
         //   type B = & { x: number };    →  intersection type
-        parseOptional(SyntaxKind.Ampersand)
+        val hadLeadingAmp = parseOptional(SyntaxKind.Ampersand)
+        val firstAmpMemberStart = if (hadLeadingAmp) scanner.getPrevTokenEnd() else -1
         var type = parseNonUnionType()
+        if (hadLeadingAmp) reportUnparenthesizedFnTypeInUnionOrIntersection(type, firstAmpMemberStart, inUnion = false)
         if (token == SyntaxKind.Ampersand) {
             val types = mutableListOf(type)
             while (parseOptional(SyntaxKind.Ampersand)) {
-                types.add(parseNonUnionType())
+                val memberStart = scanner.getPrevTokenEnd()
+                val member = parseNonUnionType()
+                reportUnparenthesizedFnTypeInUnionOrIntersection(member, memberStart, inUnion = false)
+                types.add(member)
             }
             type = IntersectionType(types = types, pos = pos, end = getEnd())
         }
