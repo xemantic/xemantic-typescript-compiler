@@ -64092,6 +64092,31 @@ interface DataView {
         }
     }
 
+    /**
+     * B98.r88: A string-literal property name is treated as a NUMERIC name (subject
+     * to a number index signature) iff it round-trips through JS Number→String:
+     * `String(+name) === name`. Mirrors the emitter's `jsNumberString`. Conservative
+     * for very large integers (>= 9.2e18) — returns a form that won't match a plain
+     * integer name, so it's classified as non-numeric (FP-safe).
+     */
+    private fun isCanonicalNumericPropertyName(text: String): Boolean {
+        val d = text.toDoubleOrNull() ?: return false
+        return jsNumberStringForName(d) == text
+    }
+
+    private fun jsNumberStringForName(d: Double): String {
+        if (d.isNaN() || d.isInfinite()) return d.toString()
+        if (d == kotlin.math.floor(d) && kotlin.math.abs(d) < 9.2e18) return d.toLong().toString()
+        val s = d.toString()
+        val eIdx = s.indexOf('E')
+        if (eIdx < 0) return s
+        val mantissa = s.substring(0, eIdx)
+        val exp = s.substring(eIdx + 1).toInt()
+        val expStr = if (exp >= 0) "e+$exp" else "e$exp"
+        val cleanMantissa = mantissa.trimEnd('0').trimEnd('.')
+        return "$cleanMantissa$expStr"
+    }
+
     private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
         // 17.159: Handle TypeAliasDeclaration whose body is a TypeLiteral — surface
         // index-sig diagnostics for `type X<T> = { [k: T]: ... }` patterns. The
@@ -64184,23 +64209,39 @@ interface DataView {
         if (numberIndexType != null && numberIndexType !== anyType && numberIndexType !== errorType) {
             for (member in members) {
                 if (member !is PropertyDeclaration) continue
-                val nameNode = member.name as? NumericLiteralNode ?: continue
+                // B98.r88: a property name is "numeric" (subject to the number index
+                // signature) when it is a NumericLiteralNode OR a string-literal name
+                // that round-trips through JS Number→String (`String(+name) === name`),
+                // e.g. "1", "-2.5", "1.2e-20", "Infinity", "NaN". Display + span differ:
+                // numeric → bare text; string-literal → quoted, span includes the quotes.
+                val rawName = member.name
+                val displayName: String
+                val nameStart: Int
+                val nameSpanLen: Int
+                when (rawName) {
+                    is NumericLiteralNode -> { displayName = rawName.text; nameStart = rawName.pos; nameSpanLen = rawName.text.length }
+                    is StringLiteralNode -> {
+                        if (!isCanonicalNumericPropertyName(rawName.text)) continue
+                        displayName = "\"${rawName.text}\""; nameStart = rawName.pos; nameSpanLen = rawName.text.length + 2
+                    }
+                    else -> continue
+                }
                 val propTypeNode = member.type ?: continue
                 val propType = getTypeFromTypeNode(propTypeNode)
                 if (propType === anyType || propType === errorType) continue
                 if (!checkTypeRelatedTo(propType, numberIndexType, assignableRelation)) {
                     val propTypeDisplay = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
                     val indexTypeDisplay = typeToString(numberIndexType)
-                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
                     diagnostics.add(Diagnostic(
-                        message = "Property '${nameNode.text}' of type '$propTypeDisplay' is not assignable to 'number' index type '$indexTypeDisplay'.",
+                        message = "Property '$displayName' of type '$propTypeDisplay' is not assignable to 'number' index type '$indexTypeDisplay'.",
                         category = DiagnosticCategory.Error,
                         code = 2411,
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = nameNode.pos,
-                        length = nameNode.text.length,
+                        start = nameStart,
+                        length = nameSpanLen,
                     ))
                 }
             }
