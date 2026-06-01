@@ -926,6 +926,9 @@ class Checker(
         // meaningful binding), and TypeScript pairs it with TS2683 at the same position.
         // Independent of `noImplicitThis` / `strict`.
         checkThisInNamespaceBodies()
+        // B98.r83: TS2332 + TS2683 for `this` referenced in an enum-member initializer
+        // (`enum E { A = this }`), top-level or nested inside a namespace.
+        checkThisInEnumMembers()
         // 23. Check duplicate object literal properties (TS1117)
         checkDuplicateObjectLiteralProperties()
         // 23b. Check tuple destructuring bounds (TS2493) for empty-literal sources
@@ -32791,6 +32794,116 @@ interface DataView {
             message = "'this' cannot be referenced in a module or namespace body.",
             category = DiagnosticCategory.Error,
             code = 2331,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 4,
+        ))
+        if (emitTs2683) {
+            diagnostics.add(Diagnostic(
+                message = "'this' implicitly has type 'any' because it does not have a type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 2683,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = 4,
+            ))
+        }
+    }
+
+    /**
+     * B98.r83: `this` referenced directly in an enum-member initializer
+     * (`enum E { A = this }`) is TS2332 "'this' cannot be referenced in current
+     * location." + (unless `@strict: false`) TS2683 implicit-any. Mirrors the
+     * namespace-body walker but emits TS2332 (not TS2331). Recurses into namespace
+     * bodies to reach nested enums. Skips function/class/arrow boundaries (those
+     * rebind `this`) → FP-safe: a bare `this` in an enum initializer is always
+     * illegal in TypeScript.
+     */
+    private fun checkThisInEnumMembers() {
+        val emitTs2683 = !options.strictExplicitlyFalse
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkStmtForEnumThis(stmt, source, fileName, emitTs2683)
+        }
+    }
+
+    private fun walkStmtForEnumThis(stmt: Statement, source: String, fileName: String, emitTs2683: Boolean) {
+        when (stmt) {
+            is EnumDeclaration -> for (m in stmt.members) {
+                m.initializer?.let { collectEnumThisInExpr(it, source, fileName, emitTs2683) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach {
+                walkStmtForEnumThis(it, source, fileName, emitTs2683)
+            }
+            else -> {}
+        }
+    }
+
+    private fun collectEnumThisInExpr(expr: Expression, source: String, fileName: String, emitTs2683: Boolean) {
+        when (expr) {
+            is Identifier -> if (expr.text == "this") emitEnumThisErrors(expr, source, fileName, emitTs2683)
+            is PropertyAccessExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is ElementAccessExpression -> {
+                collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+                collectEnumThisInExpr(expr.argumentExpression, source, fileName, emitTs2683)
+            }
+            is BinaryExpression -> {
+                val rightStack = ArrayDeque<Expression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
+                collectEnumThisInExpr(cur, source, fileName, emitTs2683)
+                while (rightStack.isNotEmpty()) collectEnumThisInExpr(rightStack.removeLast(), source, fileName, emitTs2683)
+            }
+            is CallExpression -> {
+                collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+                for (a in expr.arguments) collectEnumThisInExpr(a, source, fileName, emitTs2683)
+            }
+            is NewExpression -> {
+                collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+                expr.arguments?.let { for (a in it) collectEnumThisInExpr(a, source, fileName, emitTs2683) }
+            }
+            is ParenthesizedExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is PrefixUnaryExpression -> collectEnumThisInExpr(expr.operand, source, fileName, emitTs2683)
+            is PostfixUnaryExpression -> collectEnumThisInExpr(expr.operand, source, fileName, emitTs2683)
+            is ConditionalExpression -> {
+                collectEnumThisInExpr(expr.condition, source, fileName, emitTs2683)
+                collectEnumThisInExpr(expr.whenTrue, source, fileName, emitTs2683)
+                collectEnumThisInExpr(expr.whenFalse, source, fileName, emitTs2683)
+            }
+            is AsExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is TypeAssertionExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is SatisfiesExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is NonNullExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is ArrayLiteralExpression -> expr.elements.forEach { collectEnumThisInExpr(it, source, fileName, emitTs2683) }
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> collectEnumThisInExpr(prop.initializer, source, fileName, emitTs2683)
+                is SpreadAssignment -> collectEnumThisInExpr(prop.expression, source, fileName, emitTs2683)
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { collectEnumThisInExpr(it.expression, source, fileName, emitTs2683) }
+            is SpreadElement -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is DeleteExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is VoidExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is TypeOfExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            is CommaListExpression -> expr.elements.forEach { collectEnumThisInExpr(it, source, fileName, emitTs2683) }
+            // ArrowFunction / FunctionExpression / ClassExpression: rebind `this` — skip.
+            else -> {}
+        }
+    }
+
+    private fun emitEnumThisErrors(thisExpr: Identifier, source: String, fileName: String, emitTs2683: Boolean) {
+        val start = thisExpr.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'this' cannot be referenced in current location.",
+            category = DiagnosticCategory.Error,
+            code = 2332,
             fileName = fileName,
             line = line,
             character = character,
