@@ -1099,6 +1099,8 @@ class Checker(
         checkObjectRestSpreadTypes()
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
         checkIncDecTypeParamOperands()
+        // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
+        checkGenericIndexWrite()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
         // 64e2. Check property type incompatible with base type (TS2416)
@@ -80302,6 +80304,173 @@ interface DataView {
             message = "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.",
             category = DiagnosticCategory.Error,
             code = 2356,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2862: "Type 'T' is generic and can only be indexed for reading." — for
+    // writing to an indexed access `target[key] = value` whose receiver is typed
+    // as a generic type parameter. The instantiated type is unknown, so the
+    // write is unsound. A numeric-LITERAL index (`target[1] = …`) is the one
+    // allowed form (array/tuple element write), so it is exempt.
+    //
+    // AST-level + FP-firewalled: the receiver must be a parameter / local / this
+    // property annotated as a bare `TypeReference` to a CONSTRAINED type
+    // parameter in scope (a constrained `T` is a generic object type). The
+    // message carries the type-parameter NAME (not the variable name). TypeScript
+    // emits TS2862 for exactly this shape, so a passing test matching the gate
+    // would already carry it (can only help / be neutral).
+    // -----------------------------------------------------------------------
+
+    private fun bareTypeParamRefName(typeNode: TypeNode?, tparams: Set<String>): String? {
+        val tr = typeNode as? TypeReference ?: return null
+        if (!tr.typeArguments.isNullOrEmpty()) return null
+        val name = (tr.typeName as? Identifier)?.text ?: return null
+        return if (name in tparams) name else null
+    }
+
+    private fun constrainedTpNames(tps: List<TypeParameter>?): Set<String> =
+        tps?.filter { it.constraint != null }?.map { it.name.text }?.toSet() ?: emptySet()
+
+    private fun collectParamTpRefs(params: List<Parameter>, tparams: Set<String>): Map<String, String> {
+        val m = mutableMapOf<String, String>()
+        for (p in params) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            bareTypeParamRefName(p.type, tparams)?.let { m[n] = it }
+        }
+        return m
+    }
+
+    private fun collectTpLocalsMap(stmts: List<Statement>, tparams: Set<String>, into: MutableMap<String, String>) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text
+                if (n != null) bareTypeParamRefName(d.type, tparams)?.let { into[n] = it }
+            }
+            is Block -> collectTpLocalsMap(stmt.statements, tparams, into)
+            is IfStatement -> { collectTpLocalsMapStmt(stmt.thenStatement, tparams, into); stmt.elseStatement?.let { collectTpLocalsMapStmt(it, tparams, into) } }
+            is ForStatement -> { (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> val n = (d.name as? Identifier)?.text; if (n != null) bareTypeParamRefName(d.type, tparams)?.let { into[n] = it } }; collectTpLocalsMapStmt(stmt.statement, tparams, into) }
+            is ForInStatement -> collectTpLocalsMapStmt(stmt.statement, tparams, into)
+            is ForOfStatement -> collectTpLocalsMapStmt(stmt.statement, tparams, into)
+            is WhileStatement -> collectTpLocalsMapStmt(stmt.statement, tparams, into)
+            is DoStatement -> collectTpLocalsMapStmt(stmt.statement, tparams, into)
+            is LabeledStatement -> collectTpLocalsMapStmt(stmt.statement, tparams, into)
+            else -> {}
+        }
+    }
+    private fun collectTpLocalsMapStmt(stmt: Statement, tparams: Set<String>, into: MutableMap<String, String>) = collectTpLocalsMap(listOf(stmt), tparams, into)
+
+    private fun checkGenericIndexWrite() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try { gIdxScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptyMap(), emptyMap()) } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun gIdxHandleBody(body: Block, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, paramRefs: Map<String, String>) {
+        val refs = paramRefs.toMutableMap()
+        collectTpLocalsMap(body.statements, tparams, refs)
+        gIdxScanStatements(body.statements, source, fileName, tparams, tpProps, refs)
+    }
+
+    private fun gIdxScanStatements(stmts: List<Statement>, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, refs: Map<String, String>) {
+        for (stmt in stmts) gIdxScanStatement(stmt, source, fileName, tparams, tpProps, refs)
+    }
+
+    private fun gIdxScanStatement(stmt: Statement, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, refs: Map<String, String>) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                val newTp = tparams + constrainedTpNames(stmt.typeParameters)
+                val props = mutableMapOf<String, String>()
+                for (m in stmt.members) if (m is PropertyDeclaration) { val n = (m.name as? Identifier)?.text; if (n != null) bareTypeParamRefName(m.type, newTp)?.let { props[n] = it } }
+                for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { val mtp = newTp + constrainedTpNames(m.typeParameters); gIdxHandleBody(it, source, fileName, mtp, props, collectParamTpRefs(m.parameters, mtp)) }
+                    is Constructor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, collectParamTpRefs(m.parameters, newTp)) }
+                    is GetAccessor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, emptyMap()) }
+                    is SetAccessor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, collectParamTpRefs(m.parameters, newTp)) }
+                    is PropertyDeclaration -> m.initializer?.let { gIdxCheckExpr(it, source, fileName, emptyMap(), emptyMap()) }
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.let { val ftp = tparams + constrainedTpNames(stmt.typeParameters); gIdxHandleBody(it, source, fileName, ftp, emptyMap(), collectParamTpRefs(stmt.parameters, ftp)) }
+            is ExpressionStatement -> gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+            is ReturnStatement -> stmt.expression?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+            is ThrowStatement -> stmt.expression?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+            is Block -> gIdxScanStatements(stmt.statements, source, fileName, tparams, tpProps, refs)
+            is IfStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.thenStatement, source, fileName, tparams, tpProps, refs); stmt.elseStatement?.let { gIdxScanStatement(it, source, fileName, tparams, tpProps, refs) } }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
+                (stmt.initializer as? Expression)?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+                stmt.condition?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+                stmt.incrementor?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+                gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs)
+            }
+            is ForInStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
+            is ForOfStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
+            is WhileStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
+            is DoStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
+            is SwitchStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; gIdxScanStatements(cs, source, fileName, tparams, tpProps, refs) } }
+            is TryStatement -> { gIdxScanStatements(stmt.tryBlock.statements, source, fileName, tparams, tpProps, refs); stmt.catchClause?.let { gIdxScanStatements(it.block.statements, source, fileName, tparams, tpProps, refs) }; stmt.finallyBlock?.let { gIdxScanStatements(it.statements, source, fileName, tparams, tpProps, refs) } }
+            is LabeledStatement -> gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { gIdxScanStatements(it.statements, source, fileName, tparams, tpProps, refs) }
+            else -> {}
+        }
+    }
+
+    private fun gIdxCheckExpr(expr: Expression, source: String, fileName: String, tpProps: Map<String, String>, refs: Map<String, String>) {
+        when (expr) {
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    if (cur.operator == SyntaxKind.Equals) emitTS2862IfGenericIndexWrite(cur.left, source, fileName, tpProps, refs)
+                    gIdxCheckExpr(cur.right, source, fileName, tpProps, refs)
+                    cur = cur.left
+                }
+                gIdxCheckExpr(cur, source, fileName, tpProps, refs)
+            }
+            is ParenthesizedExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
+            is CallExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); expr.arguments.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
+            is NewExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); expr.arguments?.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
+            is PropertyAccessExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
+            is ElementAccessExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); gIdxCheckExpr(expr.argumentExpression, source, fileName, tpProps, refs) }
+            is ConditionalExpression -> { gIdxCheckExpr(expr.condition, source, fileName, tpProps, refs); gIdxCheckExpr(expr.whenTrue, source, fileName, tpProps, refs); gIdxCheckExpr(expr.whenFalse, source, fileName, tpProps, refs) }
+            is ArrayLiteralExpression -> expr.elements.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
+            is SpreadElement -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
+            is PrefixUnaryExpression -> gIdxCheckExpr(expr.operand, source, fileName, tpProps, refs)
+            is PostfixUnaryExpression -> gIdxCheckExpr(expr.operand, source, fileName, tpProps, refs)
+            is AsExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
+            is NonNullExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
+            else -> {}
+        }
+    }
+
+    private fun emitTS2862IfGenericIndexWrite(lhs: Expression, source: String, fileName: String, tpProps: Map<String, String>, refs: Map<String, String>) {
+        var target: Expression = lhs
+        while (target is ParenthesizedExpression) target = target.expression
+        val ea = target as? ElementAccessExpression ?: return
+        if (ea.argumentExpression is NumericLiteralNode) return  // numeric-literal index is the allowed write form
+        val recv = ea.expression
+        val tpName = when (recv) {
+            is Identifier -> refs[recv.text]
+            is PropertyAccessExpression -> if ((recv.expression as? Identifier)?.text == "this") tpProps[recv.name.text] else null
+            else -> null
+        } ?: return
+        val start = ea.pos
+        val length = expressionTrueEnd(ea) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$tpName' is generic and can only be indexed for reading.",
+            category = DiagnosticCategory.Error,
+            code = 2862,
             fileName = fileName,
             line = line,
             character = character,
