@@ -71223,6 +71223,25 @@ interface DataView {
                     // (falls through to the `getTypeOfSymbol(identSymbol)` branch below).
                     val exports = identSymbol.exports
                     if (exports != null) {
+                        // B98.r92: VALUE access `Foo2.Bar` where `Bar` in Foo2 is a
+                        // NON-exported nested namespace (value-side hidden) plus an
+                        // exported `interface Bar` (type-only). `isNameExportedFromNamespace`
+                        // returns true (interface export / Module flag), suppressing the
+                        // error — but for a value access neither is reachable → TS2339.
+                        // Narrow gate: non-ambient enclosing ns + a hidden (non-exported)
+                        // nested namespace of that name + NO value-accessible export.
+                        if (isPropertyAccessShape && propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+                            propName !in RUNTIME_PROPERTIES &&
+                            shouldEmitTs2339ForHiddenNamespaceMember(identSymbol, propName)) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type 'typeof $identName'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                            return
+                        }
                         if (isNameExportedFromNamespace(identSymbol, propName)) return
                         // Enum members are always accessible on the enum type
                         if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
@@ -71935,6 +71954,45 @@ interface DataView {
             ts2576SquiggleStart = fullStart,
             ts2576SquiggleLength = fullLength,
         )
+    }
+
+    /**
+     * B98.r92: True for the exact "value access of a hidden namespace member" shape —
+     * a NON-ambient namespace `nsSym` whose body declares `propName` as a NON-exported
+     * nested namespace (value-side hidden) with NO value-accessible export of that name
+     * (an exported `interface`/`type` sibling is type-only and does NOT make it
+     * value-accessible). For such an access TypeScript emits TS2339 even though
+     * `isNameExportedFromNamespace` returns true. FP firewall: requires BOTH a hidden
+     * (non-exported) namespace decl AND the absence of any exported value-side decl.
+     */
+    private fun shouldEmitTs2339ForHiddenNamespaceMember(nsSym: Symbol, propName: String): Boolean {
+        if (nsSym.flags.hasAny(SymbolFlags.NamespaceModule)) return false
+        var foundAny = false
+        var hasHiddenNamespace = false
+        var hasValueAccessibleExport = false
+        for (nsDecl in nsSym.declarations) {
+            val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock ?: continue
+            for (stmt in body.statements) {
+                when (stmt) {
+                    is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == propName) {
+                        foundAny = true
+                        if (ModifierFlag.Export in stmt.modifiers) hasValueAccessibleExport = true else hasHiddenNamespace = true
+                    }
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text == propName) {
+                            foundAny = true
+                            if (ModifierFlag.Export in stmt.modifiers) hasValueAccessibleExport = true
+                        }
+                    }
+                    is FunctionDeclaration -> if (stmt.name?.text == propName) { foundAny = true; if (ModifierFlag.Export in stmt.modifiers) hasValueAccessibleExport = true }
+                    is ClassDeclaration -> if (stmt.name?.text == propName) { foundAny = true; if (ModifierFlag.Export in stmt.modifiers) hasValueAccessibleExport = true }
+                    is EnumDeclaration -> if (stmt.name.text == propName) { foundAny = true; if (ModifierFlag.Export in stmt.modifiers) hasValueAccessibleExport = true }
+                    is ImportEqualsDeclaration -> if (stmt.name.text == propName) { foundAny = true; hasValueAccessibleExport = true }
+                    else -> {} // interface / type-alias: type-only, not value-accessible
+                }
+            }
+        }
+        return foundAny && hasHiddenNamespace && !hasValueAccessibleExport
     }
 
     /** Check if `propName` is exported from a namespace symbol. */
