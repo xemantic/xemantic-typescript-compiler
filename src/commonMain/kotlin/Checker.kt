@@ -916,6 +916,11 @@ class Checker(
         // IMPLEMENTATION signature (`function f([x]?: T) {}`). Purely syntactic
         // (binding-pattern name + questionToken + has-body) -> zero-FP.
         checkOptionalBindingPatternParams()
+        // B98.r89: TS1432/TS1378 — top-level `for await` / `await` is only allowed
+        // when the module supports TLA AND target >= ES2017. When the module is in the
+        // TLA set (parser produced top-level await nodes) but target < ES2017, those
+        // constructs are illegal.
+        checkTopLevelAwaitTargetGate()
         // 21c'''. TS2880: import assertions (`assert { ... }`) have been replaced by
         // import attributes (`with { ... }`). When the module target supports import
         // attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses
@@ -33088,6 +33093,136 @@ interface DataView {
             // ArrowFunction / FunctionExpression / ClassExpression: rebind `this` — skip.
             else -> {}
         }
+    }
+
+    /**
+     * B98.r89: TS1432 (top-level `for await`) / TS1378 (top-level `await` expression)
+     * are illegal when the module supports top-level await but target < ES2017.
+     * Walks top-level statements WITHOUT descending into function/method/arrow/class
+     * boundaries (those have their own async scope and are downleveled). FP-safe:
+     * fires only for the unique (module-in-TLA-set + target<ES2017) combination in
+     * which the parser permits top-level await but TypeScript forbids it.
+     */
+    private fun checkTopLevelAwaitTargetGate() {
+        val m = options.effectiveModule
+        val tlaModule = m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+            m == ModuleKind.Preserve || m == ModuleKind.System
+        if (!tlaModule || options.effectiveTarget >= ScriptTarget.ES2017) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkTlaStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun walkTlaStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration, is ClassDeclaration -> {} // own async scope
+            is ForOfStatement -> {
+                if (stmt.awaitModifier) {
+                    val awaitPos = source.indexOf("await", stmt.pos)
+                    val start = if (awaitPos in stmt.pos..(stmt.pos + 10)) awaitPos else stmt.pos
+                    emitTlaDiag(start, 1432,
+                        "Top-level 'for await' loops are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher.",
+                        source, fileName)
+                }
+                walkTlaExpr(stmt.expression, source, fileName)
+                walkTlaStmt(stmt.statement, source, fileName)
+            }
+            is ExpressionStatement -> walkTlaExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkTlaExpr(it, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { walkTlaExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkTlaExpr(it, source, fileName) }
+            is Block -> stmt.statements.forEach { walkTlaStmt(it, source, fileName) }
+            is IfStatement -> {
+                walkTlaExpr(stmt.expression, source, fileName)
+                walkTlaStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkTlaStmt(it, source, fileName) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { walkTlaExpr(it, source, fileName) }
+                stmt.condition?.let { walkTlaExpr(it, source, fileName) }
+                stmt.incrementor?.let { walkTlaExpr(it, source, fileName) }
+                walkTlaStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> { walkTlaExpr(stmt.expression, source, fileName); walkTlaStmt(stmt.statement, source, fileName) }
+            is WhileStatement -> { walkTlaExpr(stmt.expression, source, fileName); walkTlaStmt(stmt.statement, source, fileName) }
+            is DoStatement -> { walkTlaStmt(stmt.statement, source, fileName); walkTlaExpr(stmt.expression, source, fileName) }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkTlaStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkTlaStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkTlaStmt(it, source, fileName) }
+            }
+            is LabeledStatement -> walkTlaStmt(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                walkTlaExpr(stmt.expression, source, fileName)
+                for (c in stmt.caseBlock) when (c) {
+                    is CaseClause -> { walkTlaExpr(c.expression, source, fileName); c.statements.forEach { walkTlaStmt(it, source, fileName) } }
+                    is DefaultClause -> c.statements.forEach { walkTlaStmt(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkTlaExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is AwaitExpression -> {
+                emitTlaDiag(expr.pos, 1378,
+                    "Top-level 'await' expressions are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', 'node18', 'node20', 'nodenext', or 'preserve', and the 'target' option is set to 'es2017' or higher.",
+                    source, fileName)
+                walkTlaExpr(expr.expression, source, fileName)
+            }
+            is BinaryExpression -> {
+                val rs = ArrayDeque<Expression>(); var cur: Expression = expr
+                while (cur is BinaryExpression) { rs.addLast(cur.right); cur = cur.left }
+                walkTlaExpr(cur, source, fileName)
+                while (rs.isNotEmpty()) walkTlaExpr(rs.removeLast(), source, fileName)
+            }
+            is CallExpression -> { walkTlaExpr(expr.expression, source, fileName); for (a in expr.arguments) walkTlaExpr(a, source, fileName) }
+            is NewExpression -> { walkTlaExpr(expr.expression, source, fileName); expr.arguments?.forEach { walkTlaExpr(it, source, fileName) } }
+            is PropertyAccessExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> { walkTlaExpr(expr.expression, source, fileName); walkTlaExpr(expr.argumentExpression, source, fileName) }
+            is ParenthesizedExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkTlaExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> walkTlaExpr(expr.operand, source, fileName)
+            is ConditionalExpression -> { walkTlaExpr(expr.condition, source, fileName); walkTlaExpr(expr.whenTrue, source, fileName); walkTlaExpr(expr.whenFalse, source, fileName) }
+            is AsExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { walkTlaExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkTlaExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkTlaExpr(p.expression, source, fileName)
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkTlaExpr(it.expression, source, fileName) }
+            is SpreadElement -> walkTlaExpr(expr.expression, source, fileName)
+            is YieldExpression -> expr.expression?.let { walkTlaExpr(it, source, fileName) }
+            is VoidExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is TypeOfExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is DeleteExpression -> walkTlaExpr(expr.expression, source, fileName)
+            is CommaListExpression -> expr.elements.forEach { walkTlaExpr(it, source, fileName) }
+            // ArrowFunction / FunctionExpression / ClassExpression: own async scope — stop.
+            else -> {}
+        }
+    }
+
+    private fun emitTlaDiag(start: Int, code: Int, message: String, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 5,
+        ))
     }
 
     private fun emitEnumThisErrors(thisExpr: Identifier, source: String, fileName: String, emitTs2683: Boolean) {
