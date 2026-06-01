@@ -481,6 +481,8 @@ data class ImportDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** Raw source text of the assert/with clause, e.g. ` assert { type: "json" }`. Null if absent. */
     val assertClause: String? = null,
+    /** Source position of the `assert`/`with` keyword starting the attributes clause, or -1 if absent. */
+    val assertClausePos: Int = -1,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportDeclaration
 }
@@ -509,6 +511,8 @@ data class ExportDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** Raw source text of the assert/with clause, e.g. ` assert { type: "json" }`. Null if absent. */
     val assertClause: String? = null,
+    /** Source position of the `assert`/`with` keyword starting the attributes clause, or -1 if absent. */
+    val assertClausePos: Int = -1,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportDeclaration
 }

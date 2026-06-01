@@ -217,7 +217,13 @@ class Parser(
      * Returns the raw source text of the clause (including the keyword and braces),
      * or null if not present. Used to preserve assertions in esnext output.
      */
+    /** Set by [parseImportAttributes] to the source position of the `assert`/`with` keyword
+     *  of the most recently parsed clause, or -1 when none. Read at the call site immediately
+     *  after the call to capture it onto the declaration node. */
+    private var lastImportAttributesPos: Int = -1
+
     private fun parseImportAttributes(): String? {
+        lastImportAttributesPos = -1
         // `assert` is not a keyword — check as identifier value
         val isAssert = token == SyntaxKind.Identifier && scanner.getTokenValue() == "assert"
         val isWith = token == SyntaxKind.WithKeyword
@@ -233,7 +239,10 @@ class Parser(
                 SyntaxKind.CloseBrace -> {
                     depth--
                     nextToken()
-                    if (depth == 0) return source.substring(startPos, scanner.getTokenPos()).trimEnd()
+                    if (depth == 0) {
+                        lastImportAttributesPos = startPos
+                        return source.substring(startPos, scanner.getTokenPos()).trimEnd()
+                    }
                 }
                 else -> nextToken()
             }
@@ -2984,6 +2993,7 @@ class Parser(
         parseExpected(SyntaxKind.FromKeyword)
         val moduleSpec = parseStringLiteral()
         val assertClause = parseImportAttributes()
+        val assertClausePos = lastImportAttributesPos
         parseSemicolon()
         val trailing = trailingComments()
         return ImportDeclaration(
@@ -2994,6 +3004,7 @@ class Parser(
             end = getEnd(),
             leadingComments = comments,
             assertClause = assertClause,
+            assertClausePos = assertClausePos,
             trailingComments = trailing,
         )
     }
@@ -3150,6 +3161,7 @@ class Parser(
             }
             val spec = parseStringLiteral()
             val assertClauseNs = parseImportAttributes()
+            val assertClauseNsPos = lastImportAttributesPos
             parseSemicolon()
             return ExportDeclaration(
                 exportClause = nsExport,
@@ -3159,6 +3171,7 @@ class Parser(
                 end = getEnd(),
                 leadingComments = comments,
                 assertClause = assertClauseNs,
+                assertClausePos = assertClauseNsPos,
             )
         }
 
@@ -3172,6 +3185,7 @@ class Parser(
                 parseStringLiteral()
             } else null
             val assertClauseNamed = if (moduleSpec != null) parseImportAttributes() else null
+            val assertClauseNamedPos = if (moduleSpec != null) lastImportAttributesPos else -1
             parseSemicolon()
             return ExportDeclaration(
                 exportClause = namedExports,
@@ -3181,6 +3195,7 @@ class Parser(
                 end = getEnd(),
                 leadingComments = comments,
                 assertClause = assertClauseNamed,
+                assertClausePos = assertClauseNamedPos,
             )
         }
 
