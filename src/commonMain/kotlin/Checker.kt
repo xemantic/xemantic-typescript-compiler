@@ -1095,6 +1095,8 @@ class Checker(
         checkCallExpressionTypes()
         // 64d. Check arithmetic operator types (TS2362/TS2363)
         checkArithmeticOperandTypes()
+        // 64d2. Check object-rest source types (TS2700)
+        checkObjectRestSpreadTypes()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
         // 64e2. Check property type incompatible with base type (TS2416)
@@ -79991,6 +79993,107 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS2362/TS2363: Arithmetic operator type checking (Phase 4 item 14a)
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // TS2700: "Rest types may only be created from object types."
+    //
+    // An object rest binding `var {...rest} = source` requires `source` to be a
+    // valid spread source — an object/non-primitive/instantiable type, or a
+    // union/intersection whose members are ALL valid. A union/intersection that
+    // contains a non-object member such as `null`/`undefined` is invalid.
+    //
+    // FP-firewall: we only emit when the resolved source type is BOTH an invalid
+    // spread source AND involves null/undefined (the shapes the corpus
+    // exercises). This never fires on a primitive-only source (a false negative,
+    // not a false positive) and never on a mis-resolved-to-`any`/error source.
+    // -----------------------------------------------------------------------
+
+    private fun checkObjectRestSpreadTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                checkObjectRestInStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun checkObjectRestInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) checkObjectRestInStatement(stmt, source, fileName)
+    }
+
+    private fun checkObjectRestInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                val pattern = decl.name as? ObjectBindingPattern ?: continue
+                val rest = pattern.elements.firstOrNull { it.dotDotDotToken } ?: continue
+                val init = decl.initializer ?: continue
+                val srcType = try { getTypeOfExpression(init) } catch (_: Throwable) { continue }
+                if (!isValidSpreadSourceType(srcType) && spreadSourceHasNullish(srcType)) {
+                    val name = rest.name
+                    val start = name.pos
+                    val length = expressionTrueEnd(name) - start
+                    if (length <= 0) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Rest types may only be created from object types.",
+                        category = DiagnosticCategory.Error,
+                        code = 2700,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            is Block -> checkObjectRestInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                checkObjectRestInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { checkObjectRestInStatement(it, source, fileName) }
+            }
+            is ForStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            is DoStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkObjectRestInStatements(it.statements, source, fileName) }
+            is LabeledStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** A type is a valid object-rest/spread source iff it is object-like /
+     *  instantiable / any / unknown. Primitive intrinsics (incl.
+     *  null/undefined/void/never/literals) are not.
+     *
+     *  Union vs intersection differ to match TypeScript: a UNION source is
+     *  spread per-constituent with null/undefined filtered out first, so it is
+     *  valid when ANY constituent is object-like (`{n} | undefined` is fine —
+     *  only an all-nullish union like `null | undefined` is invalid). An
+     *  INTERSECTION must have EVERY member valid, so `({n}&{s}) & undefined` is
+     *  invalid. (Combined with the [spreadSourceHasNullish] gate, this only ever
+     *  emits on a nullish-containing source.) */
+    private fun isValidSpreadSourceType(type: Type): Boolean = when {
+        type === anyType || type === errorType || type === unknownType -> true
+        type is Type.Union -> type.types.any { isValidSpreadSourceType(it) }
+        type is Type.Intersection -> type.types.all { isValidSpreadSourceType(it) }
+        type is Type.Object || type is Type.Interface || type is Type.Reference || type is Type.TypeParam -> true
+        else -> false
+    }
+
+    /** True if [type] is, or (union/intersection) contains, null/undefined. */
+    private fun spreadSourceHasNullish(type: Type): Boolean = when {
+        type === nullType || type === undefinedType -> true
+        type is Type.Union -> type.types.any { spreadSourceHasNullish(it) }
+        type is Type.Intersection -> type.types.any { spreadSourceHasNullish(it) }
+        else -> false
+    }
 
     // TS2362/TS2363 arithmetic operator type checking — deferred.
     // Naive implementation causes 1300+ regressions because getTypeOfExpression
