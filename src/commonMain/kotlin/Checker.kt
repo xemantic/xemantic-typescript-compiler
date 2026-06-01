@@ -18851,6 +18851,83 @@ class Checker(
             // class member, which conflicts with the constructor function's built-in
             // `Function.prototype`.
             checkStaticPrototypeMembers(result.sourceFile.statements, source, fileName)
+            // B98.r93: TS2300 for a clodule (class + namespace merge) whose combined
+            // STATIC value space has a name declared with ≥2 distinct merge-kinds.
+            checkCloduleValueSpaceConflicts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B98.r93: In a clodule (a `class C` merged with one or more `namespace C` blocks)
+     * the STATIC value space combines the class's static members with the namespaces'
+     * exported value members. A name declared there with ≥2 DISTINCT merge-kinds
+     * (accessor / method / property from the class-static side; function / var from
+     * the namespace-export side) is a TS2300 "Duplicate identifier" — emitted at each
+     * occurrence's name. Same-kind groups (a get/set accessor pair, function/method
+     * overloads) are ONE kind → never flagged, so this is FP-safe. Instance members
+     * and type-only namespace exports (interface/type) are excluded.
+     */
+    private fun checkCloduleValueSpaceConflicts(statements: List<Statement>, source: String, fileName: String) {
+        val classByName = HashMap<String, ClassDeclaration>()
+        val modulesByName = HashMap<String, MutableList<ModuleDeclaration>>()
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.text?.let { classByName[it] = stmt }
+                is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { modulesByName.getOrPut(it) { mutableListOf() }.add(stmt) }
+                else -> {}
+            }
+        }
+        for ((name, cls) in classByName) {
+            val mods = modulesByName[name] ?: continue // not a clodule
+            // memberName -> list of (mergeKind, nameNode)
+            val occ = HashMap<String, MutableList<Pair<String, Identifier>>>()
+            for (m in cls.members) {
+                val isStatic: Boolean
+                val kind: String
+                val nameNode: NameNode?
+                when (m) {
+                    is GetAccessor -> { isStatic = ModifierFlag.Static in m.modifiers; kind = "accessor"; nameNode = m.name }
+                    is SetAccessor -> { isStatic = ModifierFlag.Static in m.modifiers; kind = "accessor"; nameNode = m.name }
+                    is MethodDeclaration -> { isStatic = ModifierFlag.Static in m.modifiers; kind = "method"; nameNode = m.name }
+                    is PropertyDeclaration -> { isStatic = ModifierFlag.Static in m.modifiers; kind = "property"; nameNode = m.name }
+                    else -> { isStatic = false; kind = ""; nameNode = null }
+                }
+                if (!isStatic) continue
+                val id = nameNode as? Identifier ?: continue
+                occ.getOrPut(id.text) { mutableListOf() }.add(kind to id)
+            }
+            for (mod in mods) {
+                val body = mod.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    when (s) {
+                        is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers) s.name?.let { occ.getOrPut(it.text) { mutableListOf() }.add("function" to it) }
+                        is VariableStatement -> if (ModifierFlag.Export in s.modifiers) for (d in s.declarationList.declarations) {
+                            (d.name as? Identifier)?.let { occ.getOrPut(it.text) { mutableListOf() }.add("var" to it) }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            for ((mname, list) in occ) {
+                if (list.map { it.first }.toSet().size < 2) continue
+                for ((_, id) in list) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate identifier '$mname'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2300,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = id.pos,
+                        length = mname.length,
+                    ))
+                }
+            }
+        }
+        // Recurse into namespace bodies for nested clodules.
+        for (stmt in statements) if (stmt is ModuleDeclaration) {
+            (stmt.body as? ModuleBlock)?.let { checkCloduleValueSpaceConflicts(it.statements, source, fileName) }
         }
     }
 
