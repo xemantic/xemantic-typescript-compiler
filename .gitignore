@@ -56,3 +56,4 @@ bin/
 /logs/
 /STOP-LOOP
 /scripts/__pycache__/
+*.orig
