@@ -909,6 +909,12 @@ class Checker(
         // (incl. destructuring binding-pattern element defaults). Purely syntactic
         // grammar check (zero-FP) -- never recurses into a nested fn/arrow/class boundary.
         checkParamInitializerForbidden()
+        // 21c'''. TS2880: import assertions (`assert { ... }`) have been replaced by
+        // import attributes (`with { ... }`). When the module target supports import
+        // attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses
+        // the deprecated `assert` keyword, emit at the keyword. Suppressed by
+        // `ignoreDeprecations`. Purely syntactic (parser records the clause keyword + pos).
+        checkImportAssertionsDeprecated()
         // 21d. TS2526: a `this` TYPE used outside a class/interface member (e.g. a type
         // predicate `x is this` in an OBJECT-LITERAL method). Always runs (not strict-gated).
         checkThisTypeInObjectLiterals()
@@ -31543,6 +31549,49 @@ interface DataView {
             start = start,
             length = length.coerceAtLeast(1),
         ))
+    }
+
+    /**
+     * TS2880: `import x from "y" assert { ... }` — import assertions have been replaced by
+     * import attributes (`with`). Fires only when the module target supports import
+     * attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses the
+     * deprecated `assert` keyword; suppressed entirely by `ignoreDeprecations`. Squiggle is
+     * the `assert` keyword (6 chars). Purely syntactic — the parser captures the clause
+     * keyword text and position — so this can never FP on a `with`-clause or non-attribute
+     * import. (For non-supporting module kinds TypeScript emits a different code we don't
+     * implement; leaving those silent matches current behaviour.)
+     */
+    private fun checkImportAssertionsDeprecated() {
+        if (options.ignoreDeprecations != null) return
+        val m = options.effectiveModule
+        val supportsAttributes = m == ModuleKind.ESNext || m == ModuleKind.NodeNext ||
+            m == ModuleKind.Node18 || m == ModuleKind.Node20 || m == ModuleKind.Preserve
+        if (!supportsAttributes) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val clause: String?
+                val pos: Int
+                when (stmt) {
+                    is ImportDeclaration -> { clause = stmt.assertClause; pos = stmt.assertClausePos }
+                    is ExportDeclaration -> { clause = stmt.assertClause; pos = stmt.assertClausePos }
+                    else -> continue
+                }
+                if (clause == null || pos < 0 || !clause.startsWith("assert")) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2880,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = pos,
+                    length = 6,
+                ))
+            }
+        }
     }
 
     private fun checkImplicitThis() {
