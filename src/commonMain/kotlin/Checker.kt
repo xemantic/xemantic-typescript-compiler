@@ -62089,6 +62089,47 @@ interface DataView {
                     }
                 }
             }
+            // B98.r87: TS2387/TS2388 — within a single overload GROUP (consecutive
+            // declarations terminated by an implementation signature), the overloads
+            // and impl must agree on static-ness. Flag each decl whose static-ness
+            // differs from the immediately-preceding decl IN THE SAME GROUP: TS2388
+            // "Function overload must not be static." if it is static, TS2387
+            // "Function overload must be static." if instance. An implementation (has
+            // body) terminates the group, so a later complete same-name overload set
+            // of the opposite static-ness (e.g. instance foo() set THEN static foo()
+            // set) does NOT cross-flag. Squiggle on the method name. FP-safe: mixing
+            // static/instance within one overload group is always a TS error.
+            if (decls.size >= 2) {
+                var prevStatic: Boolean? = null
+                for (cur in decls) {
+                    val curStatic = ModifierFlag.Static in cur.modifiers
+                    if (prevStatic != null && curStatic != prevStatic) {
+                        val nameNode = cur.name
+                        val nameText = when (nameNode) {
+                            is Identifier -> nameNode.text
+                            is StringLiteralNode -> nameNode.text
+                            else -> null
+                        }
+                        if (nameText != null) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            val (code, message) = if (curStatic) 2388 to "Function overload must not be static."
+                                else 2387 to "Function overload must be static."
+                            diagnostics.add(Diagnostic(
+                                message = message,
+                                category = DiagnosticCategory.Error,
+                                code = code,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameNode.pos,
+                                length = nameText.length,
+                            ))
+                        }
+                    }
+                    // An implementation signature (has body) ends the overload group.
+                    prevStatic = if (cur.body != null) null else curStatic
+                }
+            }
             val impl = decls.firstOrNull { it.body != null } ?: continue
             val overloads = decls.filter { it.body == null }
             if (overloads.isEmpty()) continue
