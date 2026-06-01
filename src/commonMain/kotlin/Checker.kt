@@ -80016,12 +80016,52 @@ interface DataView {
     }
 
     /** Check a binary expression for arithmetic type errors (TS2362/TS2363/TS2365). */
+    /**
+     * TS2358: `x instanceof Object` where `x`'s type is a primitive (or a union whose
+     * every constituent is a primitive) — instanceof's LHS must be `any`, an object type,
+     * or a type parameter. Conservative: only fires for a definitely-primitive LHS (the
+     * full TS rule is `isTypeAssignableToKind(left, Primitive)`); object / type-param /
+     * any / unknown LHS never trips it, so this is FP-safe. Squiggle is the LHS span.
+     */
+    private fun checkInstanceofLhsType(lhs: Expression, source: String, fileName: String) {
+        val t = getTypeOfExpression(lhs)
+        if (t === anyType || t === errorType || t === unknownType) return
+        if (!isPrimitiveInstanceofLhs(t)) return
+        val start = lhs.pos
+        val end = expressionTrueEnd(lhs)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.",
+            category = DiagnosticCategory.Error,
+            code = 2358,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = (end - start).coerceAtLeast(1),
+        ))
+    }
+
+    private fun isPrimitiveInstanceofLhs(t: Type): Boolean = when (t) {
+        is Type.Union -> t.types.isNotEmpty() && t.types.all { isPrimitiveInstanceofLhs(it) }
+        else -> t.flags.hasAny(
+            TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BigIntLike or
+                TypeFlags.BooleanLike or TypeFlags.ESSymbolLike
+        )
+    }
+
     private fun checkBinaryOperatorTypes(expr: BinaryExpression, source: String, fileName: String) {
         val op = expr.operator
         // 16.0: `in` operator — RHS must be an object-like type, not a primitive.
         // TypeScript emits TS2322 "Type 'X' is not assignable to type 'object'."
         if (op == SyntaxKind.InKeyword) {
             checkInOperatorRhs(expr.right, source, fileName)
+            return
+        }
+        // TS2358: the left-hand side of `instanceof` must be `any`, an object type, or a
+        // type parameter — a primitive (or a union of only primitives) is invalid.
+        if (op == SyntaxKind.InstanceOfKeyword) {
+            checkInstanceofLhsType(expr.left, source, fileName)
             return
         }
         // TS2367: "This comparison appears to be unintentional because the
