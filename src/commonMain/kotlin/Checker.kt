@@ -15287,6 +15287,40 @@ class Checker(
     }
 
     /**
+     * B98.r90: TS2464 — a computed property name whose expression is a definitely
+     * boolean-yielding operation (`in` / `instanceof` / a comparison or equality
+     * operator) is invalid (a computed property name must be string/number/symbol/any).
+     * Purely syntactic (operator kind) → FP-safe: no valid computed name is a bare
+     * `a in b` / `a < b` / `a === b`.
+     */
+    private fun emitTS2464IfBooleanComputedName(name: NameNode, source: String, fileName: String) {
+        if (name !is ComputedPropertyName) return
+        val expr = name.expression as? BinaryExpression ?: return
+        val booleanOp = expr.operator in setOf(
+            SyntaxKind.InKeyword, SyntaxKind.InstanceOfKeyword,
+            SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+            SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+            SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+            SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+        )
+        if (!booleanOp) return
+        val start = name.pos
+        val end = expressionTrueEnd(expr) + 1 // +1 for the closing `]`
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.",
+            category = DiagnosticCategory.Error,
+            code = 2464,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
      * 17.227: Narrow helper for the TS2702 alias-resolution branch. Used only
      * when [resolveAlias] returns the same Alias symbol (resolution failed via
      * the general paths) — looks for an `export default class X {}` /
@@ -15457,6 +15491,28 @@ class Checker(
                                 param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                             }
                             checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
+                        }
+                        // B98.r90: GetAccessor/SetAccessor in a type literal were not
+                        // walked, so a computed name's expression (e.g. the mistaken
+                        // `get [K in WAT]()`) never got TS2304, and a boolean-typed
+                        // computed name never got TS2464. Mirror the MethodDeclaration arm.
+                        is GetAccessor -> {
+                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            emitTS2464IfBooleanComputedName(member.name, source, fileName)
+                            if (member.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
+                            }
+                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                        }
+                        is SetAccessor -> {
+                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
+                            emitTS2464IfBooleanComputedName(member.name, source, fileName)
+                            if (member.name is ComputedPropertyName) {
+                                checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
+                            }
+                            for (param in member.parameters) {
+                                param.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+                            }
                         }
                         else -> {}
                     }
