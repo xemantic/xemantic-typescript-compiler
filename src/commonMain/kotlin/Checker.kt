@@ -793,6 +793,9 @@ class Checker(
         }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
+        // 40c. TS2395 export-consistency for merges inside string-named ambient
+        // modules in .d.ts files (the general path skips .d.ts files).
+        checkDtsAmbientModuleExportConsistency()
         // 10b. Check catch clause redeclaration (TS2492)
         checkCatchClauseRedeclarations()
         // 11. Check export assignment conflicts (TS2309)
@@ -18657,9 +18660,63 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check for duplicate identifiers: duplicate type parameters,
-     * duplicate function parameters, and duplicate declarations in the same scope.
+     * TS2395: "Individual declarations in merged declaration 'X' must be all
+     * exported or all local." inside a string-named ambient module
+     * (`declare module "foo" { … }`) in a .d.ts file. The general
+     * checkDuplicateIdentifiers path skips .d.ts files entirely (ambient merge
+     * rules differ), but the export-consistency rule for a value-space merge
+     * (function + instantiated namespace, etc.) still applies there. Scoped to
+     * string-named ambient modules in .d.ts to keep the FP surface tiny;
+     * non-.d.ts files are already covered by checkDuplicateDeclarations.
      */
+    private data class AmbientValueDecl(val name: String, val nameNode: Node, val exported: Boolean, val kind: String)
+
+    private fun checkDtsAmbientModuleExportConsistency() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    (stmt.body as? ModuleBlock)?.let { checkAmbientModuleValueExportConsistency(it.statements, source, fileName) }
+                }
+            }
+        }
+    }
+
+    private fun checkAmbientModuleValueExportConsistency(stmts: List<Statement>, source: String, fileName: String) {
+        val byName = linkedMapOf<String, MutableList<AmbientValueDecl>>()
+        for (s in stmts) when (s) {
+            is FunctionDeclaration -> s.name?.let { byName.getOrPut(it.text) { mutableListOf() }.add(AmbientValueDecl(it.text, it, ModifierFlag.Export in s.modifiers, "function")) }
+            is VariableStatement -> for (d in s.declarationList.declarations) (d.name as? Identifier)?.let { byName.getOrPut(it.text) { mutableListOf() }.add(AmbientValueDecl(it.text, it, ModifierFlag.Export in s.modifiers, "var")) }
+            is ClassDeclaration -> s.name?.let { byName.getOrPut(it.text) { mutableListOf() }.add(AmbientValueDecl(it.text, it, ModifierFlag.Export in s.modifiers, "class")) }
+            is EnumDeclaration -> byName.getOrPut(s.name.text) { mutableListOf() }.add(AmbientValueDecl(s.name.text, s.name, ModifierFlag.Export in s.modifiers, "enum"))
+            is ModuleDeclaration -> (s.name as? Identifier)?.let { if (isNamespaceInstantiated(s)) byName.getOrPut(it.text) { mutableListOf() }.add(AmbientValueDecl(it.text, it, ModifierFlag.Export in s.modifiers, "namespace")) }
+            else -> {}
+        }
+        for ((_, group) in byName) {
+            if (group.size < 2) continue
+            if (group.all { it.kind == "function" }) continue // pure overloads → TS2383, not TS2395
+            val exported = group.count { it.exported }
+            if (exported in 1 until group.size) {
+                for (d in group) {
+                    val start = d.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Individual declarations in merged declaration '${d.name}' must be all exported or all local.",
+                        category = DiagnosticCategory.Error,
+                        code = 2395,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = d.name.length,
+                    ))
+                }
+            }
+        }
+    }
+
     private fun checkDuplicateIdentifiers() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
