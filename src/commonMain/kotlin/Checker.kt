@@ -27545,6 +27545,59 @@ interface DataView {
         // Leaf: emit only when the operand's truthiness is actually being tested.
         if (!inTestPosition) return
         emitUncalledHelper(cur, body, source, fileName, extraBodies + andSiblings)
+        emitPromiseConditionHelper(cur, body, source, fileName, extraBodies + andSiblings)
+    }
+
+    /**
+     * TS2801: testing a non-nullable `Promise<T>` value for truthiness is always true (a
+     * Promise object is always defined). Emit "This condition will always return true since
+     * this 'Promise<T>' is always defined." + related TS2773 "Did you forget to use 'await'?".
+     * Mirrors `emitUncalledHelper` but for awaitable types instead of callable ones. Suppressed
+     * when the operand is a reference path (`p`, `obj.p`) that the then-body or a sibling
+     * `&&` operand references (matches TS — see `truthinessPromiseCoercion.ts` g()/h()); a
+     * call expression (`pf()`) has no reference path, so it is never suppressed. `!!p` / `!p`
+     * coerce to boolean and never reach this (PrefixUnary leaf is skipped). A nullable union
+     * (`null | Promise<T>`) is a `Type.Union`, not a bare `Type.Reference`, so it is skipped.
+     */
+    private fun emitPromiseConditionHelper(operand: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression>) {
+        var location: Expression = operand
+        while (location is ParenthesizedExpression) location = location.expression
+        if (location is PrefixUnaryExpression || location is BinaryExpression || location is AwaitExpression) return
+        val path = extractUncalledPath(location)
+        val type = (if (path != null && path.isNotEmpty()) resolveUncalledOperandType(location, path) else null)
+            ?: (try { getTypeOfExpression(location) } catch (_: Throwable) { return })
+        if (type === errorType || type === anyType || type === unknownType) return
+        if (type !is Type.Reference || type.target.symbol?.name != "Promise") return
+        if (typeIsPossiblyNullish(type)) return
+        if (path != null && path.isNotEmpty()) {
+            if (body != null && bodyReferencesPath(body, path)) return
+            if (extraBodies.any { expressionReferencesPath(it, path) }) return
+        }
+        val start = location.pos
+        val length = expressionTrueEnd(location) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val typeStr = typeToString(type)
+        diagnostics.add(Diagnostic(
+            message = "This condition will always return true since this '$typeStr' is always defined.",
+            category = DiagnosticCategory.Error,
+            code = 2801,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            relatedInformation = listOf(Diagnostic(
+                message = "Did you forget to use 'await'?",
+                category = DiagnosticCategory.Message,
+                code = 2773,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            )),
+        ))
     }
 
     private fun emitUncalledHelper(operand: Expression, body: Statement?, source: String, fileName: String, extraBodies: List<Expression> = emptyList()) {
