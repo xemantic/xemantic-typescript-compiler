@@ -912,6 +912,10 @@ class Checker(
         // (incl. destructuring binding-pattern element defaults). Purely syntactic
         // grammar check (zero-FP) -- never recurses into a nested fn/arrow/class boundary.
         checkParamInitializerForbidden()
+        // B98.r86: TS2463 — a binding-pattern parameter cannot be optional in an
+        // IMPLEMENTATION signature (`function f([x]?: T) {}`). Purely syntactic
+        // (binding-pattern name + questionToken + has-body) -> zero-FP.
+        checkOptionalBindingPatternParams()
         // 21c'''. TS2880: import assertions (`assert { ... }`) have been replaced by
         // import attributes (`with { ... }`). When the module target supports import
         // attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses
@@ -31749,6 +31753,132 @@ interface DataView {
             val source = result.sourceFile.text
             val emitted = HashSet<String>()
             for (stmt in result.sourceFile.statements) walkParamForbiddenStmt(stmt, source, fileName, emitted)
+        }
+    }
+
+    /**
+     * B98.r86: TS2463 — "A binding pattern parameter cannot be optional in an
+     * implementation signature." Fires for any function-like WITH A BODY (an
+     * implementation signature, not an overload signature) whose parameter has both
+     * a binding-pattern name (`{…}` / `[…]`) and a `?` token. Squiggle spans the
+     * binding pattern through its type annotation. Zero-FP: this exact shape is
+     * always illegal in TypeScript; overload signatures (no body) are exempt.
+     */
+    private fun checkOptionalBindingPatternParams() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkObpStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun emitTs2463ForImplParams(parameters: List<Parameter>, hasBody: Boolean, source: String, fileName: String) {
+        if (!hasBody) return
+        for (param in parameters) {
+            if (!param.questionToken) continue
+            if (param.typeFromJSDoc) continue
+            val n = param.name
+            if (n !is ObjectBindingPattern && n !is ArrayBindingPattern) continue
+            val start = n.pos
+            val end = if (param.type != null) param.type!!.end - 1 else (n.end)
+            val length = (end - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "A binding pattern parameter cannot be optional in an implementation signature.",
+                category = DiagnosticCategory.Error,
+                code = 2463,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    private fun walkObpStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                emitTs2463ForImplParams(stmt.parameters, stmt.body != null, source, fileName)
+                stmt.body?.statements?.forEach { walkObpStmt(it, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) walkObpClassMember(m, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkObpStmt(it, source, fileName) }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkObpExpr(it, source, fileName) }
+            is ExpressionStatement -> walkObpExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkObpExpr(it, source, fileName) }
+            is Block -> stmt.statements.forEach { walkObpStmt(it, source, fileName) }
+            is IfStatement -> {
+                walkObpStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkObpStmt(it, source, fileName) }
+            }
+            is ForStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is LabeledStatement -> walkObpStmt(stmt.statement, source, fileName)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkObpStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkObpStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkObpStmt(it, source, fileName) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
+                is CaseClause -> c.statements.forEach { walkObpStmt(it, source, fileName) }
+                is DefaultClause -> c.statements.forEach { walkObpStmt(it, source, fileName) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkObpClassMember(member: ClassElement, source: String, fileName: String) {
+        when (member) {
+            is MethodDeclaration -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+            is Constructor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+            is GetAccessor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+            is SetAccessor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+            is PropertyDeclaration -> member.initializer?.let { walkObpExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun walkObpExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is FunctionExpression -> { emitTs2463ForImplParams(expr.parameters, true, source, fileName); expr.body.statements.forEach { walkObpStmt(it, source, fileName) } }
+            is ArrowFunction -> {
+                emitTs2463ForImplParams(expr.parameters, true, source, fileName)
+                when (val b = expr.body) {
+                    is Block -> b.statements.forEach { walkObpStmt(it, source, fileName) }
+                    is Expression -> walkObpExpr(b, source, fileName)
+                    else -> {}
+                }
+            }
+            is ClassExpression -> for (m in expr.members) walkObpClassMember(m, source, fileName)
+            is ParenthesizedExpression -> walkObpExpr(expr.expression, source, fileName)
+            is CallExpression -> { walkObpExpr(expr.expression, source, fileName); expr.arguments.forEach { walkObpExpr(it, source, fileName) } }
+            is NewExpression -> { walkObpExpr(expr.expression, source, fileName); expr.arguments?.forEach { walkObpExpr(it, source, fileName) } }
+            is BinaryExpression -> {
+                var node: Expression = expr
+                while (node is BinaryExpression) { walkObpExpr(node.right, source, fileName); node = node.left }
+                walkObpExpr(node, source, fileName)
+            }
+            is ConditionalExpression -> { walkObpExpr(expr.condition, source, fileName); walkObpExpr(expr.whenTrue, source, fileName); walkObpExpr(expr.whenFalse, source, fileName) }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkObpExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> walkObpExpr(p.initializer, source, fileName)
+                is SpreadAssignment -> walkObpExpr(p.expression, source, fileName)
+                is MethodDeclaration -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+                is GetAccessor -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+                is SetAccessor -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
+                else -> {}
+            }
+            is SpreadElement -> walkObpExpr(expr.expression, source, fileName)
+            is AsExpression -> walkObpExpr(expr.expression, source, fileName)
+            is NonNullExpression -> walkObpExpr(expr.expression, source, fileName)
+            is AwaitExpression -> walkObpExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> walkObpExpr(expr.operand, source, fileName)
+            else -> {}
         }
     }
 
