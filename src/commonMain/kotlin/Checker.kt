@@ -59212,8 +59212,14 @@ interface DataView {
                     sym.valueDeclaration = prop
                     members[name] = sym
                     properties.add(sym)
-                    // Method type — create function type with call signature
-                    val returnType = prop.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                    // Method type — create function type with call signature.
+                    // B96-UNBLOCKER: when there's no explicit return annotation, infer the
+                    // return type from the body (mirrors arrow/fn-expr concise+block-body
+                    // inference) instead of defaulting to `any` — so an object-literal method
+                    // value can be checked against a typed target member's return type.
+                    val returnType = prop.type?.let { getTypeFromTypeNode(it) }
+                        ?: prop.body?.let { inferReturnTypeFromBody(it) }
+                        ?: anyType
                     val params = getParameterSymbols(prop.parameters)
                     val sig = Signature(
                         declaration = prop,
