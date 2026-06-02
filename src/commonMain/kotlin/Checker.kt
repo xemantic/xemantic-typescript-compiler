@@ -53838,9 +53838,13 @@ interface DataView {
             // value-type (TS2322/TS2741 + TS6501). Gated to `isAssignable` (the relation
             // WRONGLY passes for an index-sig-only target, which is why nothing fires today)
             // so it never double-emits with the downstream relation-failure block.
-            if (isAssignable && (init is ObjectLiteralExpression || init is ArrayLiteralExpression) &&
+            if ((init is ObjectLiteralExpression || init is ArrayLiteralExpression) &&
                 targetType is Type.Object &&
-                (targetType.stringIndexInfo != null || targetType.numberIndexInfo != null)) {
+                (targetType.stringIndexInfo != null || targetType.numberIndexInfo != null) &&
+                // Run when the relation PASSED (no coarse error to double), OR when the
+                // target is index-sig-ONLY (no named members → the relation-failure path
+                // emits no coarse error for it, so the per-value check is the sole emitter).
+                (isAssignable || targetType.members.isNullOrEmpty())) {
                 checkLiteralValuesAgainstIndexSignatures(init, targetType, source, fileName)
             }
             // Suppress the outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
@@ -55075,6 +55079,16 @@ interface DataView {
                         contextualType = savedContextual
                         lastMissingPropertyName = null
                         lastMissingIndexSigKind = null
+                        // B96-INDEXSIG (assignment path): per-property/element VALUE vs the
+                        // target's index-signature value-type (TS2322/TS2741 + TS6501).
+                        // Gated to an index-sig-ONLY target (empty members → the downstream
+                        // relation-failure block emits no coarse error for it, so no double-emit)
+                        // with an object/array-literal RHS. Mirrors the var-decl call site.
+                        if ((expr.right is ObjectLiteralExpression || expr.right is ArrayLiteralExpression) &&
+                            tt is Type.Object && tt.members.isNullOrEmpty() &&
+                            (tt.stringIndexInfo != null || tt.numberIndexInfo != null)) {
+                            checkLiteralValuesAgainstIndexSignatures(expr.right, tt, source, fileName)
+                        }
                         // 17.111: Mirror of 17.14a's PropertyAccess branch for plain
                         // Identifier-target assignment. canUseTypeEngine returns false
                         // when source lacks construct sigs but target requires them
