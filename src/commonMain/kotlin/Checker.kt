@@ -78366,6 +78366,49 @@ interface DataView {
                         }
                     }
                 }
+                // Round 96: BOTH params are bare `Type.TypeParam` whose constraints are
+                // concrete OBJECT types that differ — e.g. `<T,U extends {a:T;b:number}>(z:U)`
+                // vs `<T,U extends {a:T;b:string}>(z:U)`. TypeScript substitutes each U by its
+                // constraint and drills into the differing property (here `b`). Display keeps
+                // the target param bare (`U`) and renders the source param as its constraint,
+                // then a constraint-vs-constraint line, then the property drill. Gated to both
+                // sides being TypeParam with Object constraints AND a real drill-able mismatch
+                // (deeper != null), so every other param shape falls through unchanged.
+                run {
+                    val tgtTp = targetParamType as? Type.TypeParam
+                    val srcTp = sourceParamType as? Type.TypeParam
+                    if (tgtTp != null && srcTp != null) {
+                        val rawTgtCons = tgtTp.constraint
+                        val rawSrcCons = srcTp.constraint
+                        if (rawTgtCons != null && rawTgtCons !== errorType &&
+                            rawSrcCons != null && rawSrcCons !== errorType
+                        ) {
+                            fun refMapper2(t: Type.Object): TypeMapper? {
+                                val ref = t as? Type.Reference ?: return null
+                                val tps = ref.target.typeParameters ?: return null
+                                val args = ref.resolvedTypeArguments ?: return null
+                                if (tps.isEmpty() || tps.size != args.size) return null
+                                return createTypeMapper(tps, args)
+                            }
+                            val srcMapper = refMapper2(source)
+                            val tgtMapper = refMapper2(target)
+                            val tgtCons = if (tgtMapper != null) instantiateType(rawTgtCons, tgtMapper) else rawTgtCons
+                            val srcCons = if (srcMapper != null) instantiateType(rawSrcCons, srcMapper) else rawSrcCons
+                            if (srcCons is Type.Object && srcCons !is Type.TypeParam &&
+                                tgtCons is Type.Object && tgtCons !is Type.TypeParam
+                            ) {
+                                val deeper = getPropertyElaborationChain(tgtCons, srcCons)
+                                if (deeper != null) {
+                                    return listOf(
+                                        "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                                        "    Type '${typeToString(tgtTp)}' is not assignable to type '${typeToString(srcCons)}'.",
+                                        "      Type '${typeToString(tgtCons)}' is not assignable to type '${typeToString(srcCons)}'.",
+                                    ) + deeper.map { "      $it" }
+                                }
+                            }
+                        }
+                    }
+                }
                 // B70.1ext: When `targetParamType` is a literal type AND `sourceParamType`
                 // is a primitive of a DIFFERENT base (e.g. `'hi'` (StringLiteral) vs
                 // `number`), TypeScript widens the literal in the chain display:
