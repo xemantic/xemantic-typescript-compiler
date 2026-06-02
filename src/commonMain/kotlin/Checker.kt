@@ -2814,6 +2814,78 @@ class Checker(
         }
     }
 
+    /**
+     * B98.r119 (TS2449): a class's OWN name referenced — in an EAGERLY-evaluated
+     * position — inside one of its own decorators (the class decorator itself, or any
+     * member decorator) is a temporal-dead-zone use-before-declaration: decorators run
+     * as part of the class definition, before the class binding is initialized. So
+     * `@dec(C) class C {}` and `class C { @dec(C) m() {} }` error, but `@dec(() => C)`
+     * (a lazy un-invoked arrow that merely captures the name) is fine. An IIFE
+     * `@dec((() => C)())` invokes the arrow, making its body eager → error again.
+     * Squiggle = the class-name identifier; reuses [emitTS2449] (+ TS2728 "declared
+     * here"). FP-safe: fires only for the enclosing class's OWN name in an eager
+     * decorator position, which is always TS2449 in TypeScript.
+     */
+    private fun checkDecoratorSelfRef(
+        className: String, declPos: Int,
+        classDecorators: List<Decorator>?, members: List<ClassElement>,
+        source: String, fileName: String,
+    ) {
+        classDecorators?.forEach {
+            walkDecoratorForSelfRef(it.expression, className, declPos, source, fileName)
+        }
+        for (m in members) {
+            val memberDecorators: List<Decorator>? = when (m) {
+                is MethodDeclaration -> m.decorators
+                is PropertyDeclaration -> m.decorators
+                is GetAccessor -> m.decorators
+                is SetAccessor -> m.decorators
+                else -> null
+            }
+            memberDecorators?.forEach {
+                walkDecoratorForSelfRef(it.expression, className, declPos, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Descend an expression in EAGER (immediately-evaluated) position, emitting TS2449
+     * for any reference to [className]. Un-invoked arrow/function bodies are NOT
+     * descended (lazy); an arrow/function in a CallExpression's callee position IS
+     * invoked, so its (expression) body is descended eagerly.
+     */
+    private fun walkDecoratorForSelfRef(
+        e: Expression, className: String, declPos: Int, source: String, fileName: String,
+    ) {
+        fun rec(x: Expression) = walkDecoratorForSelfRef(x, className, declPos, source, fileName)
+        when (e) {
+            is Identifier -> if (e.text == className) emitTS2449(e, declPos, className, source, fileName)
+            is ParenthesizedExpression -> rec(e.expression)
+            is PropertyAccessExpression -> rec(e.expression)
+            is ElementAccessExpression -> { rec(e.expression); rec(e.argumentExpression) }
+            is CallExpression -> {
+                when (val callee = unwrapParensExpr(e.expression)) {
+                    // IIFE: the arrow/function is invoked, so an expression body runs eagerly.
+                    is ArrowFunction -> (callee.body as? Expression)?.let { rec(it) }
+                    is FunctionExpression -> {}  // block body — references are not expression-level
+                    else -> rec(e.expression)
+                }
+                e.arguments.forEach { rec(it) }
+            }
+            is NewExpression -> { rec(e.expression); e.arguments?.forEach { rec(it) } }
+            is BinaryExpression -> { rec(e.left); rec(e.right) }
+            is ConditionalExpression -> { rec(e.condition); rec(e.whenTrue); rec(e.whenFalse) }
+            is ArrayLiteralExpression -> e.elements.forEach { rec(it) }
+            is SpreadElement -> rec(e.expression)
+            is PrefixUnaryExpression -> rec(e.operand)
+            is PostfixUnaryExpression -> rec(e.operand)
+            is NonNullExpression -> rec(e.expression)
+            is AsExpression -> rec(e.expression)
+            // ArrowFunction / FunctionExpression NOT in callee position: lazy → skip.
+            else -> {}
+        }
+    }
+
     private fun findClassesForComputed(stmts: List<Statement>, source: String, fileName: String) {
         for (s in stmts) findClassesForComputedInStatement(s, source, fileName)
     }
@@ -2822,6 +2894,7 @@ class Checker(
         when (s) {
             is ClassDeclaration -> {
                 s.name?.let { checkComputedSelfRefMembers(it.text, it.pos, s.members, source, fileName) }
+                s.name?.let { checkDecoratorSelfRef(it.text, it.pos, s.decorators, s.members, source, fileName) }
                 findClassesForComputedInMembers(s.members, source, fileName)
             }
             is FunctionDeclaration -> s.body?.let { findClassesForComputed(it.statements, source, fileName) }
