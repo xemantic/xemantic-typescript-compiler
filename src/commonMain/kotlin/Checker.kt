@@ -15457,6 +15457,41 @@ class Checker(
     }
 
     /**
+     * B98.r115 (TS2464): an ENUM OBJECT used as a type-literal computed property name
+     * (`{ [Foo.Enum]: 0 }` / `{ [E]: 0 }`) has type `typeof Enum` — an object, never
+     * string/number/symbol/any → TS2464. An enum MEMBER (`E.A`) resolves to an
+     * EnumMember symbol (its declarations are EnumMember nodes, NOT EnumDeclaration),
+     * so it is correctly skipped (a numeric member is a valid number key, a string
+     * member a valid string key). FP-safe: fires only when the resolved symbol's
+     * declarations include an EnumDeclaration. A namespace merged-with-const-enum
+     * carries the ConstEnum flag but its declarations are ModuleDeclaration → skipped.
+     */
+    private fun emitTS2464IfEnumComputedName(name: NameNode, source: String, fileName: String) {
+        if (name !is ComputedPropertyName) return
+        val expr = name.expression
+        val sym = when (expr) {
+            is Identifier -> currentFileLocals?.get(expr.text) ?: globals[expr.text]
+            is PropertyAccessExpression -> resolveQualifiedValueSymbol(expr)
+            else -> return
+        } ?: return
+        if (resolveAlias(sym).declarations.none { it is EnumDeclaration }) return
+        val start = name.pos
+        val end = expressionTrueEnd(expr) + 1 // +1 for the closing `]`
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.",
+            category = DiagnosticCategory.Error,
+            code = 2464,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
      * 17.227: Narrow helper for the TS2702 alias-resolution branch. Used only
      * when [resolveAlias] returns the same Alias symbol (resolution failed via
      * the general paths) — looks for an `export default class X {}` /
@@ -15592,6 +15627,7 @@ class Checker(
                             // a mistaken mapped type, with a "Did you mean '<TP> in K'?" hint) or
                             // TS2693 (multi-member). Emit before the value-resolution walk below.
                             emitTS2690Or2693ForTypeOnlyComputedName(member.name, type.members.size, source, fileName)
+                            emitTS2464IfEnumComputedName(member.name, source, fileName)
                             // 17.229: ComputedPropertyName whose expression is a regular
                             // Identifier should resolve in the value-position scope
                             // (mirrors class-member walker at ~10357). Without this,
