@@ -787,6 +787,8 @@ class Checker(
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
         checkDtsImportEqualsAliasResolved()
+        // B98.r101: TS2367 for a const-literal compared to a different literal.
+        checkConstLiteralComparisons()
         // 9. Check JSX elements for missing type definitions (TS7026)
         // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
         // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
@@ -76978,17 +76980,229 @@ interface DataView {
     }
 
     /**
-     * TS2367: "This comparison appears to be unintentional because the types
-     * 'A' and 'B' have no overlap."
-     *
-     * Narrow scope: both sides must be `Type.Reference` sharing the same
-     * target interface with incompatible type arguments (e.g. `l == l2`
-     * where `l: List<number>`, `l2: List<string>`). Broader overlap rules
-     * (primitives, unions, literal members) are intentionally NOT checked
-     * here — each carries its own FP risk and would need a wider
-     * investigation. Mutual-assignability tests piggyback on the existing
-     * step (a) infrastructure in `structuredTypeRelatedTo`.
+     * B98.r101: TS2367 for a `const`-literal compared (`==`/`===`/`!=`/`!==`) to a
+     * DIFFERENT literal. A `const x = 0` (no annotation, bare literal initializer)
+     * keeps the literal type `0`, so `x == 1` is "This comparison appears to be
+     * unintentional because the types '0' and '1' have no overlap." A `let`/`var`
+     * (or annotated const) WIDENS to `number`, so those don't fire — which is exactly
+     * why `capturedLetConstInLoop5-8`'s `for (const x = 0; …) if (x == 1)` cases error
+     * but the `let`/`for-of`/`for-in` siblings don't. Purely AST-level + scope-aware
+     * (a `const` keeps its value immutably, so the comparison is always false →
+     * TS-correct, near-zero FP). Tracked names are removed in any inner scope that
+     * re-declares them (shadowing).
      */
+    private data class ConstLitInfo(val display: String, val key: String)
+
+    /** Extract a `const`-literal value from a bare literal initializer/operand. */
+    private fun constLiteralOf(expr: Expression?): ConstLitInfo? = when (expr) {
+        is NumericLiteralNode -> expr.text.toDoubleOrNull()?.let { ConstLitInfo(expr.text, "n:$it") }
+        is StringLiteralNode -> ConstLitInfo("\"${expr.text}\"", "s:${expr.text}")
+        is PrefixUnaryExpression ->
+            if (expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode) {
+                val num = (expr.operand as NumericLiteralNode).text
+                num.toDoubleOrNull()?.let { ConstLitInfo("-$num", "n:${-it}") }
+            } else null
+        else -> null
+    }
+
+    private fun checkConstLiteralComparisons() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
+            val source = result.sourceFile.text
+            walkConstLitStatements(result.sourceFile.statements, emptyMap(), source, fileName)
+        }
+    }
+
+    /** Build the const-literal map for this statement list, then walk each statement. */
+    private fun walkConstLitStatements(
+        stmts: List<Statement>, inherited: Map<String, ConstLitInfo>, source: String, fileName: String,
+    ) {
+        val scope = inherited.toMutableMap()
+        // A block-level `const`/`let`/`var` does NOT keep a usable literal type for
+        // TS2367 here — TypeScript widens a loop-BODY-captured block-scoped const
+        // (`while (…) { const x = 1; if (x == 2) … }` does NOT error, unlike a
+        // for-INITIALIZER const). So a block VariableStatement only SHADOWS (removes)
+        // any inherited for-init const-literal of the same name; it never adds one.
+        // (for-init consts are tracked in the ForStatement branch of walkConstLitStatement.)
+        for (stmt in stmts) {
+            if (stmt is VariableStatement) {
+                for (decl in stmt.declarationList.declarations) {
+                    (decl.name as? Identifier)?.text?.let { scope.remove(it) }
+                }
+            }
+        }
+        for (stmt in stmts) walkConstLitStatement(stmt, scope, source, fileName)
+    }
+
+    private fun walkConstLitStatement(
+        stmt: Statement, scope: Map<String, ConstLitInfo>, source: String, fileName: String,
+    ) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations)
+                d.initializer?.let { walkConstLitExpr(it, scope, source, fileName) }
+            is ExpressionStatement -> walkConstLitExpr(stmt.expression, scope, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkConstLitExpr(it, scope, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkConstLitExpr(it, scope, source, fileName) }
+            is IfStatement -> {
+                walkConstLitExpr(stmt.expression, scope, source, fileName)
+                walkConstLitStatement(stmt.thenStatement, scope, source, fileName)
+                stmt.elseStatement?.let { walkConstLitStatement(it, scope, source, fileName) }
+            }
+            is Block -> walkConstLitStatements(stmt.statements, scope, source, fileName)
+            is ForStatement -> {
+                // const-literals declared in the for-init are scoped to cond/incr/body.
+                val inner = scope.toMutableMap()
+                (stmt.initializer as? VariableDeclarationList)?.let { vdl ->
+                    val isConst = vdl.flags == SyntaxKind.ConstKeyword
+                    for (d in vdl.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        val lit = if (isConst && d.type == null) constLiteralOf(d.initializer) else null
+                        if (lit != null) inner[nm] = lit else inner.remove(nm)
+                    }
+                }
+                (stmt.initializer as? Expression)?.let { walkConstLitExpr(it, scope, source, fileName) }
+                stmt.condition?.let { walkConstLitExpr(it, inner, source, fileName) }
+                stmt.incrementor?.let { walkConstLitExpr(it, inner, source, fileName) }
+                walkConstLitStatement(stmt.statement, inner, source, fileName)
+            }
+            is ForInStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
+            is ForOfStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
+            is LabeledStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
+            is WhileStatement -> {
+                walkConstLitExpr(stmt.expression, scope, source, fileName)
+                walkConstLitStatement(stmt.statement, scope, source, fileName)
+            }
+            is DoStatement -> {
+                walkConstLitStatement(stmt.statement, scope, source, fileName)
+                walkConstLitExpr(stmt.expression, scope, source, fileName)
+            }
+            is SwitchStatement -> {
+                walkConstLitExpr(stmt.expression, scope, source, fileName)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            walkConstLitExpr(clause.expression, scope, source, fileName)
+                            walkConstLitStatements(clause.statements, scope, source, fileName)
+                        }
+                        is DefaultClause -> walkConstLitStatements(clause.statements, scope, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                walkConstLitStatements(stmt.tryBlock.statements, scope, source, fileName)
+                stmt.catchClause?.block?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
+                stmt.finallyBlock?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { fnBody ->
+                val inner = scope.toMutableMap()
+                for (p in stmt.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
+                walkConstLitStatements(fnBody.statements, inner, source, fileName)
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                walkConstLitStatements(it.statements, scope, source, fileName)
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
+                    is Constructor -> m.body?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { walkConstLitExpr(it, scope, source, fileName) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkConstLitExpr(
+        expr: Expression, scope: Map<String, ConstLitInfo>, source: String, fileName: String,
+    ) {
+        when (expr) {
+            is BinaryExpression -> {
+                // CLAUDE.md: walk the BinaryExpression LEFT spine ITERATIVELY (not
+                // recursively) — `binderBinaryExpressionStress`'s deep `a+b+c+…` chain
+                // StackOverflows a naive `walk(left); walk(right)` and a crash mid-check
+                // aborts JS emit (shows up as a JS-EMIT diff regression). Right children
+                // are shallow → recurse them.
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    val op = cur.operator
+                    if (op == SyntaxKind.EqualsEquals || op == SyntaxKind.ExclamationEquals ||
+                        op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.ExclamationEqualsEquals) {
+                        emitConstLitNoOverlap(cur, scope, source, fileName)
+                    }
+                    walkConstLitExpr(cur.right, scope, source, fileName)
+                    cur = cur.left
+                }
+                walkConstLitExpr(cur, scope, source, fileName)
+            }
+            is ParenthesizedExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
+            is PrefixUnaryExpression -> walkConstLitExpr(expr.operand, scope, source, fileName)
+            is PostfixUnaryExpression -> walkConstLitExpr(expr.operand, scope, source, fileName)
+            is ConditionalExpression -> {
+                walkConstLitExpr(expr.condition, scope, source, fileName)
+                walkConstLitExpr(expr.whenTrue, scope, source, fileName)
+                walkConstLitExpr(expr.whenFalse, scope, source, fileName)
+            }
+            is CallExpression -> {
+                walkConstLitExpr(expr.expression, scope, source, fileName)
+                expr.arguments.forEach { walkConstLitExpr(it, scope, source, fileName) }
+            }
+            is NewExpression -> expr.arguments?.forEach { walkConstLitExpr(it, scope, source, fileName) }
+            is PropertyAccessExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
+            is ElementAccessExpression -> {
+                walkConstLitExpr(expr.expression, scope, source, fileName)
+                walkConstLitExpr(expr.argumentExpression, scope, source, fileName)
+            }
+            is AsExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
+            is NonNullExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
+            is ArrowFunction -> {
+                val inner = scope.toMutableMap()
+                for (p in expr.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
+                when (val b = expr.body) {
+                    is Block -> walkConstLitStatements(b.statements, inner, source, fileName)
+                    is Expression -> walkConstLitExpr(b, inner, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                val inner = scope.toMutableMap()
+                for (p in expr.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
+                expr.body?.let { walkConstLitStatements(it.statements, inner, source, fileName) }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { walkConstLitExpr(it, scope, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** Emit TS2367 when an eq-comparison has a const-literal operand vs a different literal. */
+    private fun emitConstLitNoOverlap(
+        expr: BinaryExpression, scope: Map<String, ConstLitInfo>, source: String, fileName: String,
+    ) {
+        fun operandLit(e: Expression): ConstLitInfo? {
+            if (e is Identifier) return scope[e.text]
+            return constLiteralOf(e)
+        }
+        val leftHasConst = expr.left is Identifier && scope.containsKey((expr.left as Identifier).text)
+        val rightHasConst = expr.right is Identifier && scope.containsKey((expr.right as Identifier).text)
+        if (!leftHasConst && !rightHasConst) return
+        val l = operandLit(expr.left) ?: return
+        val r = operandLit(expr.right) ?: return
+        if (l.key == r.key) return  // same value → overlap, no error
+        val start = expr.pos
+        val length = expressionTrueEnd(expr.right) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This comparison appears to be unintentional because the types '${l.display}' and '${r.display}' have no overlap.",
+            category = DiagnosticCategory.Error, code = 2367,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+    }
+
     private fun checkEqualityComparisonNoOverlap(
         expr: BinaryExpression, source: String, fileName: String,
     ) {
