@@ -17580,6 +17580,7 @@ class Checker(
     private fun checkSubsequentVarTypes() {
         // Check file-level vars (in globals, which merges across files)
         checkSubsequentVarTypesInGlobals()
+        checkSubsequentVarTypesAcrossScriptFiles()
         // Check file-level and function-level vars per file
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -18401,6 +18402,95 @@ class Checker(
                     fileName = e.fileName,
                     line = line, character = character,
                     start = start, length = length,
+                    relatedInformation = relatedInfo,
+                ))
+            }
+        }
+    }
+
+    /**
+     * B98.r96: Cross-file TS2403 for a top-level `var X = <primitive>` declared in
+     * MULTIPLE SCRIPT `.ts` files with differing inferred primitive types. Script
+     * files share the global scope, so two top-level `var x` in different files are
+     * the SAME global variable — TypeScript requires every declaration to have the
+     * same type. The FIRST declaration (binderResults / @Filename order) establishes
+     * the canonical type; each later declaration whose type differs gets TS2403 + a
+     * TS6203 "'X' was also declared here." pointing at the FIRST declaration. A later
+     * declaration whose type MATCHES the first stays clean (e.g.
+     * `duplicateVarsAcrossFileBoundaries_3.ts` re-declares all three at the
+     * established types → zero errors).
+     *
+     * Distinct from [checkSubsequentVarTypesInGlobals] (the allowJs `.js`+`.ts`
+     * mixed-file pattern, which uses a different prior-`.js`-decl reporting model):
+     * this handles names whose declarations are ALL `.ts` (mixed names are deferred
+     * to that path). FP firewall: SCRIPT files only (no top-level import/export →
+     * not modules; the `_4`/`_5` import-equals files are skipped), `var` only, no
+     * annotation, primitive initializer (`isSimpleTypeForTs2403`), ≥2 distinct
+     * files, differing widened type strings. Two top-level `var x` in different
+     * script files with differing primitive types is unambiguously TS2403 (it is
+     * the same global) — TypeScript reports exactly this.
+     */
+    private fun checkSubsequentVarTypesAcrossScriptFiles() {
+        data class Entry(val decl: VariableDeclaration, val fileName: String, val source: String, val isJs: Boolean)
+        val byName = mutableMapOf<String, MutableList<Entry>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+            val hasModuleStmt = result.sourceFile.statements.any {
+                it is ImportDeclaration || it is ExportDeclaration ||
+                    it is ExportAssignment || it is ImportEqualsDeclaration
+            }
+            if (hasModuleStmt) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
+                for (decl in stmt.declarationList.declarations) {
+                    val name = (decl.name as? Identifier)?.text ?: continue
+                    if (decl.type != null) continue
+                    if (decl.initializer == null) continue
+                    byName.getOrPut(name) { mutableListOf() }.add(Entry(decl, fileName, source, isJs))
+                }
+            }
+        }
+        for ((name, entries) in byName) {
+            if (entries.size < 2) continue
+            // Defer mixed `.js`+`.ts` names to the allowJs path (different model).
+            if (entries.any { it.isJs }) continue
+            // Same-file redeclaration is handled by the per-file walker; require ≥2 files.
+            if (entries.map { it.fileName }.distinct().size < 2) continue
+            val first = entries[0]
+            val firstType = getVarDeclType(first.decl) ?: continue
+            if (!isSimpleTypeForTs2403(firstType)) continue
+            val firstTypeName = typeToString(firstType)
+            val firstNameNode = first.decl.name as? Identifier ?: continue
+            val (firstLine, firstChar) = getLineAndCharacterOfPosition(first.source, firstNameNode.pos)
+            for (e in entries.drop(1)) {
+                val declType = getVarDeclType(e.decl) ?: continue
+                if (!isSimpleTypeForTs2403(declType)) continue
+                if (declType === firstType) continue
+                val declTypeName = typeToString(declType)
+                if (declTypeName == firstTypeName) continue
+                val nameNode = e.decl.name as? Identifier ?: continue
+                val start = nameNode.pos
+                val (line, character) = getLineAndCharacterOfPosition(e.source, start)
+                val relatedInfo = listOf(Diagnostic(
+                    message = "'$name' was also declared here.",
+                    category = DiagnosticCategory.Message,
+                    code = 6203,
+                    fileName = first.fileName,
+                    line = firstLine, character = firstChar,
+                    start = firstNameNode.pos, length = firstNameNode.text.length,
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Subsequent variable declarations must have the same type.  Variable '$name' must be of type '$firstTypeName', but here has type '$declTypeName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2403,
+                    fileName = e.fileName,
+                    line = line, character = character,
+                    start = start, length = nameNode.text.length,
                     relatedInformation = relatedInfo,
                 ))
             }
