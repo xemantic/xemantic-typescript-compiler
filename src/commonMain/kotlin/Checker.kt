@@ -21973,6 +21973,36 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
+                    // B98.r107: a SINGLE-SEGMENT bare specifier (e.g. `"server"`, `"a"`) under
+                    // the DEFAULT (module == null) or ES-module-kind node10 resolution with NO
+                    // path/baseUrl/rootDirs/moduleSuffixes config CANNOT resolve to a plain
+                    // sibling source file — under node10 a bare specifier resolves only via
+                    // node_modules / an ambient `declare module "X"`. Our `resolveModuleSpecifier`
+                    // wrongly matches such a name to a sibling `.ts` by basename, so nothing fires;
+                    // TypeScript emits TS2307. The narrow gating keeps the FP surface tiny relative
+                    // to the reverted blanket B98.r2 attempt: single-segment-only (no `/` → excludes
+                    // scoped `@scope/pkg` and path-mapped specifiers), no `:` (excludes `node:` and
+                    // other protocol forms), non-classic, no node_modules package, no ambient module,
+                    // no `.d.ts` basename match, not a node builtin. Under classic/AMD/System the
+                    // earlier classic branch already owns bare-specifier TS2307.
+                    else if (!isRelative && !isClassicResolution
+                        && !moduleName.startsWith("/")
+                        && !moduleName.contains("/")
+                        && !moduleName.contains(":")
+                        && (options.module == null || options.module in ES_MODULE_KINDS)
+                        && options.moduleResolution == null
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                        && moduleName !in ambientModuleNames
+                        && moduleName !in dtsFileBaseNames
+                        && !hasNodeModulesPackage(moduleName)
+                        && moduleName !in NODE_BUILTIN_MODULES
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs. The
                     // bare-specifier-missing case (B98.r2 attempt, reverted round 83) is NOT
