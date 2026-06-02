@@ -75791,6 +75791,41 @@ interface DataView {
                                 ))
                                 break
                             }
+                        } else {
+                            // No named property is missing, but the named-class/interface arg may
+                            // still fail because the param requires an INDEX SIGNATURE the arg
+                            // lacks (e.g. `Biz(new Foo())` where `Biz(map: { [s:string]: IHandler })`).
+                            // Mirror the TS2322 path (Checker.kt:~56157): run the relation and, if
+                            // it failed solely on a missing index signature, emit TS2345 + chain.
+                            // FP-safe: `propertiesRelatedTo` only sets `lastMissingIndexSigKind`
+                            // for a nominal/function source vs a target index sig whose value type
+                            // is not any/unknown (the documented FP firewall).
+                            lastMissingIndexSigKind = null
+                            if (!checkTypeRelatedTo(argType, paramType, assignableRelation) &&
+                                lastMissingIndexSigKind != null) {
+                                val argTypeStr = typeToStringQualified(argType)
+                                val paramTypeStr = typeToStringQualified(paramType)
+                                val start = arg.pos
+                                val length = expressionTrueEnd(arg) - start
+                                if (length > 0) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    val chain = mutableListOf(
+                                        "  Index signature for type '$lastMissingIndexSigKind' is missing in type '${typeToString(argType)}'."
+                                    )
+                                    diagnostics.add(Diagnostic(
+                                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 2345,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = start,
+                                        length = length,
+                                        messageChain = chain,
+                                    ))
+                                    break
+                                }
+                            }
                         }
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
