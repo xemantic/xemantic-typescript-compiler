@@ -68568,6 +68568,45 @@ interface DataView {
             val derivedIsPrivate = dm.isPrivate
             val baseIsPrivate = isMemberPrivate(baseDecl)
 
+            // TS2415: ctor parameter-property override type-mismatch. A param-property
+            // (`constructor(public p?: T)`) is NOT in classDecl.members, so the TS2416
+            // override walk never type-checks it. An OPTIONAL param-property widens to
+            // `T | undefined` under strictNullChecks; if the base member `p: T` is
+            // non-nullable, `T | undefined` is not assignable → TypeScript reports a
+            // class-level extends failure (TS2415 at the class name), not a per-member
+            // TS2416. Narrow + FP-safe: only the optional-widening shape (the non-optional
+            // param type IS assignable to the base, but the added `undefined` breaks it),
+            // so the failing union constituent is exactly `undefined`.
+            if (dm.node is Constructor && strictNullChecks && !derivedIsPrivate && !baseIsPrivate) {
+                val param = (dm.node as Constructor).parameters.firstOrNull {
+                    (it.name as? Identifier)?.text == memberName && it.modifiers.isNotEmpty()
+                }
+                val paramType = param?.takeIf { it.questionToken }?.type?.let { getTypeFromTypeNode(it) }
+                val baseT = getTypeOfMemberDecl(baseDecl)
+                if (paramType != null && paramType !== anyType && baseT != null && baseT !== anyType &&
+                    checkTypeRelatedTo(paramType, baseT, assignableRelation) &&
+                    !checkTypeRelatedTo(undefinedType, baseT, assignableRelation)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                    val baseDisplay = typeToString(baseT)
+                    diagnostics.add(Diagnostic(
+                        message = "Class '$rawClassName' incorrectly extends base class '$baseName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2415,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = classNameNode.pos,
+                        length = rawClassName.length,
+                        messageChain = listOf(
+                            "  Types of property '$memberName' are incompatible.",
+                            "    Type '${typeToString(paramType)} | undefined' is not assignable to type '$baseDisplay'.",
+                            "      Type 'undefined' is not assignable to type '$baseDisplay'.",
+                        ),
+                    ))
+                    return true
+                }
+            }
+
             if (!derivedIsPrivate && !baseIsPrivate) continue
 
             val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
