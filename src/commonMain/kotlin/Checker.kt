@@ -53670,6 +53670,18 @@ interface DataView {
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
+            // B96-NESTED ext: a parenthesized/comma/assignment-WRAPPED object-literal init
+            // (NOT a direct object literal — those go through emitPerPropertyMismatches) vs a
+            // non-Array object target → nested per-property type check (e.g.
+            // `const x: Foo = (void 0, { a: q = { b: ({ c: { d: 42 } }) } })`).
+            if (init !is ObjectLiteralExpression && targetType is Type.Object &&
+                !(targetType is Type.Reference && targetType.target?.symbol?.name == "Array")) {
+                val unwrappedInit = unwrapToObjLitValue(init)
+                if (unwrappedInit is ObjectLiteralExpression &&
+                    checkNestedObjLitPropTypes(unwrappedInit, targetType, source, fileName)) {
+                    return // per-property diagnostics emitted — suppress the coarse var-decl TS2322
+                }
+            }
             // Class-Identifier-as-value with construct-sig target — `const foo: { new(): Foo } = Foo`.
             // canUseTypeEngine skips class-instance-vs-constructor comparisons, so this case
             // would otherwise fall through to the string fallback (no chain). Display the
@@ -78147,14 +78159,30 @@ interface DataView {
      *  drilling through union members (object-literal value → object constituent) and nested
      *  object literals. Emits TS2322 at the innermost mismatching property key for a
      *  primitive-vs-primitive mismatch. Gated to simple-checkable leaves → FP-safe. */
+    /** Unwrap parenthesized / comma-expression-RHS / assignment-RHS wrappers to reach the
+     *  underlying object literal — e.g. `(void 0, {…})` / `q = {…}` / `({…})` → `{…}`. */
+    private fun unwrapToObjLitValue(expr: Expression): Expression {
+        var e = expr
+        while (true) {
+            e = when {
+                e is ParenthesizedExpression -> e.expression
+                e is BinaryExpression && e.operator == SyntaxKind.Comma -> e.right
+                e is BinaryExpression && e.operator == SyntaxKind.Equals -> e.right
+                else -> return e
+            }
+        }
+    }
+
     private fun checkNestedObjLitPropTypes(
         objLit: ObjectLiteralExpression, targetType: Type, source: String, fileName: String,
-    ) {
-        val targetObj = targetType as? Type.Object ?: return
-        try { resolveStructuredTypeMembers(targetObj) } catch (_: StackOverflowError) { return }
+        viaUnion: Boolean = false,
+    ): Boolean {
+        var emitted = false
+        val targetObj = targetType as? Type.Object ?: return false
+        try { resolveStructuredTypeMembers(targetObj) } catch (_: StackOverflowError) { return false }
         for (prop in objLit.properties) {
             if (prop !is PropertyAssignment) continue
-            val value = prop.initializer ?: continue
+            val value = unwrapToObjLitValue(prop.initializer ?: continue)
             val nameNode = prop.name
             val propName = when (nameNode) {
                 is Identifier -> nameNode.text
@@ -78166,7 +78194,7 @@ interface DataView {
             if (tgtMemberType === anyType || tgtMemberType === errorType) continue
             if (value is ObjectLiteralExpression) {
                 val tgtObj = selectObjectConstituentForObjectLiteral(tgtMemberType) ?: continue
-                checkNestedObjLitPropTypes(value, tgtObj, source, fileName)
+                if (checkNestedObjLitPropTypes(value, tgtObj, source, fileName, viaUnion || tgtMemberType is Type.Union)) emitted = true
             } else {
                 val valueType = try { getTypeOfExpression(value) } catch (_: Throwable) { continue }
                 if (valueType === anyType || valueType === errorType) continue
@@ -78207,6 +78235,7 @@ interface DataView {
                                 start = keyPos2, length = keyLen2,
                                 relatedInformation = related,
                             ))
+                            emitted = true
                         }
                     }
                     continue
@@ -78221,6 +78250,16 @@ interface DataView {
                 }
                 if (keyLen <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, keyPos)
+                // TS6500 only on a DIRECT-property path (not when a union member was
+                // selected — matches TS, which omits it for union-disambiguated leaves).
+                val leafRelated = if (!viaUnion) {
+                    targetObj.members?.get(propName)?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { d ->
+                        listOf(d.copy(
+                            message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetObj)}'",
+                            code = 6500,
+                        ))
+                    } ?: emptyList()
+                } else emptyList()
                 diagnostics.add(Diagnostic(
                     message = "Type '${typeToString(getWidenedLiteralType(valueType))}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
                     category = DiagnosticCategory.Error,
@@ -78230,9 +78269,12 @@ interface DataView {
                     character = character,
                     start = keyPos,
                     length = keyLen,
+                    relatedInformation = leafRelated,
                 ))
+                emitted = true
             }
         }
+        return emitted
     }
 
     private fun checkArrayLiteralElementExcessProps(
