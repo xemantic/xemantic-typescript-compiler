@@ -5168,7 +5168,16 @@ class Checker(
             val isShorthandUnderscore = decl.name.startsWith("_") &&
                 decl.parentBindingPattern is ObjectBindingPattern &&
                 (decl.declNode as? BindingElement)?.propertyName == null
-            if (decl.name.startsWith("_") && !isShorthandUnderscore) continue
+            // B98.r122: a `_`-prefixed unused name is exempt from TS6133 ONLY for parameters,
+            // imports, and destructuring binding-elements (TypeScript's
+            // isValidUnusedLocalDeclaration). Namespaces, plain var/let/const, functions,
+            // classes, enums, type-aliases and interfaces are still reported. Shorthand-`_`
+            // destructuring stays in the list for TS6198 grouping (the 5283 gate below
+            // suppresses its individual TS6133).
+            val underscoreExempt = decl.name.startsWith("_") &&
+                (decl.isParameter || decl.parentImportDecl != null ||
+                    (decl.parentBindingPattern != null && !isShorthandUnderscore))
+            if (underscoreExempt) continue
             if (decl.isExported) continue
 
             if (decl.isParameter) {
@@ -5279,8 +5288,10 @@ class Checker(
             if (decl.parentBindingPattern != null && decl.parentBindingPattern in ts6198Patterns) continue
             // Skip declarations already handled by TS6192
             if (decl.parentImportDecl != null && decl.parentImportDecl in ts6192Imports) continue
-            // Underscore-prefixed names that made it through for TS6198 grouping: skip individual TS6133
-            if (decl.name.startsWith("_")) continue
+            // B98.r122: only `_`-prefixed destructuring elements that made it through for TS6198
+            // grouping skip individual TS6133. Namespaces / plain vars / functions / classes
+            // with a `_` prefix ARE reported (TS's isValidUnusedLocalDeclaration).
+            if (decl.name.startsWith("_") && decl.parentBindingPattern != null) continue
 
             val nameNode = decl.nameNode
             // For single-element destructuring, use the pattern span instead of the name
