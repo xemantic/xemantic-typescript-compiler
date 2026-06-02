@@ -78129,6 +78129,71 @@ interface DataView {
      * whose target is an array type with a resolvable element type. Also emits
      * TS2322 for primitive elements that aren't assignable to an Object element type.
      */
+    /** For an object-literal value, pick the single non-Array object-like constituent of a
+     *  (possibly union) target member type — e.g. `Bar | Bar[]` → `Bar`. Returns null when
+     *  ambiguous / no object constituent / the type is itself an Array. */
+    private fun selectObjectConstituentForObjectLiteral(t: Type): Type.Object? {
+        fun isArrayRef(x: Type) = x is Type.Reference && x.target?.symbol?.name == "Array"
+        if (isArrayRef(t)) return null
+        if (t is Type.Object) return t
+        if (t is Type.Union) {
+            val objs = t.types.filter { it is Type.Object && !isArrayRef(it) }
+            return objs.singleOrNull() as? Type.Object
+        }
+        return null
+    }
+
+    /** Recursively check an object literal's property VALUES against a target object type,
+     *  drilling through union members (object-literal value → object constituent) and nested
+     *  object literals. Emits TS2322 at the innermost mismatching property key for a
+     *  primitive-vs-primitive mismatch. Gated to simple-checkable leaves → FP-safe. */
+    private fun checkNestedObjLitPropTypes(
+        objLit: ObjectLiteralExpression, targetType: Type, source: String, fileName: String,
+    ) {
+        val targetObj = targetType as? Type.Object ?: return
+        try { resolveStructuredTypeMembers(targetObj) } catch (_: StackOverflowError) { return }
+        for (prop in objLit.properties) {
+            if (prop !is PropertyAssignment) continue
+            val value = prop.initializer ?: continue
+            val nameNode = prop.name
+            val propName = when (nameNode) {
+                is Identifier -> nameNode.text
+                is StringLiteralNode -> nameNode.text
+                is NumericLiteralNode -> nameNode.text
+                else -> continue
+            }
+            val tgtMemberType = getTargetPropertyType(targetObj, propName) ?: continue
+            if (tgtMemberType === anyType || tgtMemberType === errorType) continue
+            if (value is ObjectLiteralExpression) {
+                val tgtObj = selectObjectConstituentForObjectLiteral(tgtMemberType) ?: continue
+                checkNestedObjLitPropTypes(value, tgtObj, source, fileName)
+            } else {
+                val valueType = try { getTypeOfExpression(value) } catch (_: Throwable) { continue }
+                if (valueType === anyType || valueType === errorType) continue
+                if (!isSimpleCheckableType(valueType) || !isSimpleCheckableType(tgtMemberType)) continue
+                if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+                if (checkTypeRelatedTo(valueType, tgtMemberType, assignableRelation)) continue
+                val keyPos = nameNode.pos
+                val keyLen = when (nameNode) {
+                    is StringLiteralNode -> (nameNode.rawText?.length ?: nameNode.text.length) + 2
+                    else -> propName.length
+                }
+                if (keyLen <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, keyPos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(getWidenedLiteralType(valueType))}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = keyPos,
+                    length = keyLen,
+                ))
+            }
+        }
+    }
+
     private fun checkArrayLiteralElementExcessProps(
         init: Expression,
         targetType: Type,
@@ -78180,6 +78245,12 @@ interface DataView {
                         if (elemType is Type.Object && canUseTypeEngine(elemType, elementType)) {
                             checkExcessProperties(elem, elemType, elementType, elementDisplay, source, fileName)
                         }
+                        // Round 96: nested per-property TYPE mismatch for an array-element
+                        // object literal vs the element interface — including drilling through
+                        // a union member (`bar: Bar | Bar[]`, value `{prop:100}` → pick Bar) and
+                        // recursing into nested object literals. Emits TS2322 at the innermost
+                        // mismatching property key (matches TS — no TS6500 for this nested case).
+                        checkNestedObjLitPropTypes(elem, elementType, source, fileName)
                     }
                     is TypeAssertionExpression, is AsExpression -> {
                         // 17.81: Type-asserted element vs structured element-type — emit
