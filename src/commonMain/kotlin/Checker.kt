@@ -71883,7 +71883,25 @@ interface DataView {
         // RUNTIME_PROPERTIES exemption when the member actually exists on the
         // apparent type. This makes `s: string; s.length` pass (length is on String)
         // while `n: number; n.length` fires TS2339 (length is not on Number).
-        if (propName in RUNTIME_PROPERTIES) {
+        // B98.r99: the Function/Function.prototype-only runtime properties (`name`,
+        // `length`, `apply`, `bind`, `call`, `caller`, `arguments`, `prototype`) exist
+        // on a function/constructor VALUE but NOT on a class INSTANCE. So `this.name`
+        // inside an instance method of a base-less class that doesn't declare `name`
+        // is genuinely TS2339 (`detachedCommentAtStartOfFunctionBody1/2`). Don't take
+        // the blanket RUNTIME_PROPERTIES exemption for that shape; fall through to the
+        // normal member-existence check below. FP-safe: it still only emits when the
+        // property is genuinely ABSENT (the `prop != null` guard below returns silently
+        // if our resolution does surface it). Gated: instance `this`-access (not a
+        // static method, where `this` is the constructor and DOES have `.name`), a
+        // base-less class Type.Interface (no inheritance to provide the member).
+        val functionOnlyInstanceInvalid = propName == "name" || propName == "length" ||
+            propName == "apply" || propName == "bind" || propName == "call" ||
+            propName == "caller" || propName == "arguments" || propName == "prototype"
+        val thisInstanceFunctionPropReportable = isThisAccess && !inStaticClassMethod &&
+            functionOnlyInstanceInvalid && objectType is Type.Interface &&
+            objectType.baseTypes.isNullOrEmpty() &&
+            objectType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
+        if (propName in RUNTIME_PROPERTIES && !thisInstanceFunctionPropReportable) {
             if (displayTypeOverride == null) return
             if (getPropertyOfType(objectType, propName) != null) return
         }
