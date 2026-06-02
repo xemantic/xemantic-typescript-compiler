@@ -68177,6 +68177,56 @@ interface DataView {
                             ))
                             continue
                         }
+                        // A base accessor PAIR (get+set) overridden by a derived METHOD is both a
+                        // kind mismatch (TS2426) AND — since the method type `() => X` is not
+                        // assignable to the accessor's value type `X` — a TS2416. The overload
+                        // `continue` below otherwise skips every multi-declaration base member, so
+                        // neither fires there. Mirror the TS2610 gate (extends-only, all-accessor
+                        // base, non-abstract). Baseline order: TS2416 then TS2426 at the same span.
+                        if (member is MethodDeclaration &&
+                            clause.token == SyntaxKind.ExtendsKeyword &&
+                            basePropSymbol.declarations.all { it is GetAccessor || it is SetAccessor } &&
+                            basePropSymbol.declarations.none { isMemberAbstract(it) }) {
+                            val nameNode = member.name
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            val getterDecl = basePropSymbol.declarations.firstOrNull { it is GetAccessor }
+                                ?: basePropSymbol.declarations.first()
+                            val derivedType = getTypeOfMemberDecl(member)
+                            val basePropType = getTypeOfMemberDecl(getterDecl)
+                            if (derivedType != null && basePropType != null &&
+                                derivedType !== anyType && basePropType !== anyType &&
+                                !checkTypeRelatedTo(derivedType, basePropType, assignableRelation)) {
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2416,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameNode.pos,
+                                    length = memberName.length,
+                                    messageChain = listOf(
+                                        "  Type '${typeToString(derivedType)}' is not assignable to type '${typeToString(basePropType)}'.",
+                                    ),
+                                ))
+                            }
+                            val shapeDiag = classMemberShapeMismatchDiagnostic(
+                                getterDecl, member, memberName, baseTypeName, className, isImplements = false,
+                            )
+                            if (shapeDiag != null) {
+                                diagnostics.add(Diagnostic(
+                                    message = shapeDiag.second,
+                                    category = DiagnosticCategory.Error,
+                                    code = shapeDiag.first,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameNode.pos,
+                                    length = memberName.length,
+                                ))
+                            }
+                            continue
+                        }
                         // B86.13: predicate-overload mismatch. When the base member is an
                         // OVERLOAD SET and at least one overload's return type is a non-asserting
                         // type predicate (e.g. `every<S extends T>(...): this is S[]`), a derived
