@@ -53834,6 +53834,15 @@ interface DataView {
             // 16.0: Array literal initializer — contextual TS2353 for each object element
             // against the declared element type. `let x: { id: number }[] = [{ id: 1, name: "a" }]`.
             checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
+            // B96-INDEXSIG: per-property/element VALUE vs the target's index-signature
+            // value-type (TS2322/TS2741 + TS6501). Gated to `isAssignable` (the relation
+            // WRONGLY passes for an index-sig-only target, which is why nothing fires today)
+            // so it never double-emits with the downstream relation-failure block.
+            if (isAssignable && (init is ObjectLiteralExpression || init is ArrayLiteralExpression) &&
+                targetType is Type.Object &&
+                (targetType.stringIndexInfo != null || targetType.numberIndexInfo != null)) {
+                checkLiteralValuesAgainstIndexSignatures(init, targetType, source, fileName)
+            }
             // Suppress the outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
             // when the source is an array literal and the target is an array type.
             // Per-element TS2322/TS2353 from `checkArrayLiteralElementExcessProps` (or
@@ -76947,6 +76956,118 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * B96-INDEXSIG: object-literal / array-literal value vs target INDEX-SIGNATURE
+     * value-type, emitting per-value TS2322 (primitive mismatch) or TS2741 (named
+     * source missing a required prop of the index value type) + related TS6501
+     * "The expected type comes from this index signature." The relation engine passes
+     * an index-sig-only target trivially, so without this nothing fires for
+     * `{ [s:string]:number } = { p: "" }`. Tightly gated (see inline) to bound the
+     * ~228-index-sig-fixture FP surface.
+     */
+    private fun checkLiteralValuesAgainstIndexSignatures(
+        sourceLiteral: Expression,
+        targetType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        if (targetType !is Type.Object) return
+        try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { return }
+        val strIdx = targetType.stringIndexInfo
+        val numIdx = targetType.numberIndexInfo
+        if (strIdx == null && numIdx == null) return
+        val namedMembers = targetType.members?.keys ?: emptySet()
+
+        fun indexValueTrivial(t: Type?): Boolean =
+            t == null || t === anyType || t === unknownType || t === errorType
+
+        fun emitForValue(valuePosNode: Node, valueExpr: Expression, applicable: IndexInfo) {
+            val indexValueType = applicable.type
+            if (indexValueTrivial(indexValueType)) return
+            val valueType = try { getTypeOfExpression(valueExpr) } catch (_: StackOverflowError) { return }
+            if (valueType === anyType || valueType === unknownType || valueType === errorType) return
+            val idxDecl = applicable.declaration ?: return
+            val idxPos = idxDecl.pos
+            if (idxPos < 0) return
+            fun ts6501(): Diagnostic? {
+                val (declFile, declSource) = resolveDeclarationSourceFile(idxPos)
+                if (declFile == null || declSource == null) return null
+                val isLib = isLibFileName(declFile)
+                val (dl, dc) = if (isLib) Pair<Int?, Int?>(null, null)
+                    else getLineAndCharacterOfPosition(declSource, idxPos).let { Pair<Int?, Int?>(it.first, it.second) }
+                return Diagnostic(
+                    message = "The expected type comes from this index signature.",
+                    category = DiagnosticCategory.Message, code = 6501,
+                    fileName = declFile, line = dl, character = dc,
+                    start = idxPos, length = 1,
+                )
+            }
+            val pos = valuePosNode.pos
+            val spanLen = when (valuePosNode) {
+                is Identifier -> valuePosNode.text.length
+                is NumericLiteralNode -> valuePosNode.text.length
+                is StringLiteralNode -> valuePosNode.text.length + 2
+                else -> 1
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+            // TS2741: named source missing a required prop of the named index value type.
+            if (valueType is Type.Interface && indexValueType is Type.Interface) {
+                val missing = try { collectMissingProperties(valueType, indexValueType) }
+                    catch (_: StackOverflowError) { emptyList() }
+                if (missing.isNotEmpty() && !checkTypeRelatedTo(valueType, indexValueType, assignableRelation)) {
+                    val mpName = missing[0]
+                    val mpSym = try { getPropertyOfType(indexValueType, mpName) } catch (_: StackOverflowError) { null }
+                    val related = listOfNotNull(mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }, ts6501())
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$mpName' is missing in type '${typeToString(valueType)}' but required in type '${typeToString(indexValueType)}'.",
+                        category = DiagnosticCategory.Error, code = 2741,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = spanLen,
+                        relatedInformation = related,
+                    ))
+                }
+                return
+            }
+            // TS2322: PRIMITIVE source value not assignable to the index value type.
+            if (!isSimpleCheckableType(valueType)) return
+            if (checkTypeRelatedTo(valueType, indexValueType, assignableRelation)) return
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(getWidenedLiteralType(valueType))}' is not assignable to type '${typeToString(indexValueType)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = pos, length = spanLen,
+                relatedInformation = listOfNotNull(ts6501()),
+            ))
+        }
+
+        when (sourceLiteral) {
+            is ObjectLiteralExpression -> {
+                for (prop in sourceLiteral.properties) {
+                    if (prop !is PropertyAssignment) continue
+                    val value = prop.initializer ?: continue
+                    val nameNode = prop.name
+                    val (propName, isNumericKey) = when (nameNode) {
+                        is Identifier -> nameNode.text to false
+                        is StringLiteralNode -> nameNode.text to isCanonicalNumericPropertyName(nameNode.text)
+                        is NumericLiteralNode -> nameNode.text to true
+                        else -> continue
+                    }
+                    if (propName in namedMembers) continue
+                    val applicable = (if (isNumericKey) (numIdx ?: strIdx) else strIdx) ?: continue
+                    emitForValue(nameNode, value, applicable)
+                }
+            }
+            is ArrayLiteralExpression -> {
+                val applicable = numIdx ?: strIdx ?: return
+                for (elem in sourceLiteral.elements) {
+                    if (elem is SpreadElement || elem is OmittedExpression) continue
+                    emitForValue(elem, elem, applicable)
+                }
+            }
+            else -> {}
+        }
     }
 
     /**
