@@ -42506,15 +42506,18 @@ interface DataView {
 
     private fun walkB94InStmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
-            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
-                decl.initializer?.let { walkB94InExpr(it, source, fileName) }
-                // B98.r40: `let {[k]: x} = {}` — destructuring an empty object literal
-                // with a non-literal computed key fires TS2537 (the `{}` source type has
-                // no index signature). Mirrors the param-default `{}` case below.
-                val b94pat = decl.name as? ObjectBindingPattern
-                val b94init = decl.initializer
-                if (b94pat != null && decl.type == null && b94init is ObjectLiteralExpression && b94init.properties.isEmpty()) {
-                    emitB94ForComputedKeyPattern(b94pat, source, fileName)
+            is VariableStatement -> {
+                checkSelfRefComputedBindingKeyList(stmt.declarationList, source, fileName)
+                for (decl in stmt.declarationList.declarations) {
+                    decl.initializer?.let { walkB94InExpr(it, source, fileName) }
+                    // B98.r40: `let {[k]: x} = {}` — destructuring an empty object literal
+                    // with a non-literal computed key fires TS2537 (the `{}` source type has
+                    // no index signature). Mirrors the param-default `{}` case below.
+                    val b94pat = decl.name as? ObjectBindingPattern
+                    val b94init = decl.initializer
+                    if (b94pat != null && decl.type == null && b94init is ObjectLiteralExpression && b94init.properties.isEmpty()) {
+                        emitB94ForComputedKeyPattern(b94pat, source, fileName)
+                    }
                 }
             }
             is ExpressionStatement -> walkB94InExpr(stmt.expression, source, fileName)
@@ -42541,8 +42544,11 @@ interface DataView {
             }
             is ForStatement -> {
                 when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> init.declarations.forEach { d ->
-                        d.initializer?.let { walkB94InExpr(it, source, fileName) }
+                    is VariableDeclarationList -> {
+                        checkSelfRefComputedBindingKeyList(init, source, fileName)
+                        init.declarations.forEach { d ->
+                            d.initializer?.let { walkB94InExpr(it, source, fileName) }
+                        }
                     }
                     is Expression -> walkB94InExpr(init, source, fileName)
                     else -> {}
@@ -42552,10 +42558,12 @@ interface DataView {
                 walkB94InStmt(stmt.statement, source, fileName)
             }
             is ForInStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.let { checkSelfRefComputedBindingKeyList(it, source, fileName) }
                 walkB94InExpr(stmt.expression, source, fileName)
                 walkB94InStmt(stmt.statement, source, fileName)
             }
             is ForOfStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.let { checkSelfRefComputedBindingKeyList(it, source, fileName) }
                 walkB94InExpr(stmt.expression, source, fileName)
                 walkB94InStmt(stmt.statement, source, fileName)
             }
@@ -42757,6 +42765,54 @@ interface DataView {
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * `let {[a]: a} = ...` / `for (let {[a]: a} of ...)` — the computed property key `[a]`
+     * references the binding `a` being declared in the SAME let/const pattern, which is in
+     * the temporal dead zone → TS2448 "used before its declaration" (with a TS2728 "declared
+     * here" pointing at the binding name) + TS2538 (the self-reference resolves to `any`, which
+     * can't be a destructuring index key). `var` is hoisted (no TDZ), so it is excluded.
+     * FP-safe: only the exact `[x]: x` self-reference in a let/const binding pattern fires —
+     * a binding referencing its own name in its own computed key is always a TS error.
+     */
+    private fun checkSelfRefComputedBindingKeyList(declList: VariableDeclarationList, source: String, fileName: String) {
+        if (declList.flags != SyntaxKind.LetKeyword && declList.flags != SyntaxKind.ConstKeyword) return
+        for (decl in declList.declarations) {
+            val pat = decl.name as? ObjectBindingPattern ?: continue
+            for (element in pat.elements) {
+                val computed = element.propertyName as? ComputedPropertyName ?: continue
+                val keyIdent = computed.expression as? Identifier ?: continue
+                val bindName = element.name as? Identifier ?: continue
+                if (keyIdent.text != bindName.text) continue
+                val start = keyIdent.pos
+                val length = bindName.text.length
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                val (declLine, declChar) = getLineAndCharacterOfPosition(source, bindName.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Block-scoped variable '${bindName.text}' used before its declaration.",
+                    category = DiagnosticCategory.Error,
+                    code = 2448,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "'${bindName.text}' is declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 2728,
+                        fileName = fileName, line = declLine, character = declChar,
+                        start = bindName.pos, length = bindName.text.length,
+                    )),
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Type 'any' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error,
+                    code = 2538,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
         }
     }
 
