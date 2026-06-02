@@ -26160,6 +26160,9 @@ class Checker(
             "Array.includes" to ScriptTarget.ES2016,
             "ReadonlyArray.at" to ScriptTarget.ES2022,
             "ReadonlyArray.includes" to ScriptTarget.ES2016,
+            // Promise.finally is es2018; at es2015 target the Promise instance shape
+            // is { then, catch, [Symbol.toStringTag] } (matches TypeScript's lib subsetting).
+            "Promise.finally" to ScriptTarget.ES2018,
         )
 
         /**
@@ -26644,6 +26647,7 @@ interface Promise<T> {
     then(onfulfilled?: (value: T) => any, onrejected?: (reason: any) => any): any;
     catch(onrejected?: (reason: any) => any): any;
     finally(onfinally?: () => void): any;
+    readonly [Symbol.toStringTag]: string;
 }
 interface PromiseConstructor {
     new(executor: (resolve: (value: any) => void, reject: (reason?: any) => void) => void): Promise<any>;
@@ -54564,6 +54568,17 @@ interface DataView {
                         return // TS2353 emitted
                     }
                 }
+                // B96: deep per-property disambiguation of `return { ... }` against a
+                // UNION return type with a single clear object-like constituent. When it
+                // produces per-property diagnostics, suppress the coarse whole-object
+                // TS2322. (`errorOnUnionVsObjectShouldDeeplyDisambiguate` family.)
+                if (expr is ObjectLiteralExpression && sourceType is Type.Object &&
+                    sourceType !is Type.Interface && sourceType !is Type.Reference &&
+                    targetType is Type.Union &&
+                    tryDeepDisambiguateObjectVsUnion(expr, sourceType, targetType, source, fileName)
+                ) {
+                    return
+                }
                 // B87.4c (round 73): class-instance source → interface/class return-type
                 // missing-property — completes the TS2741/2739 feature for the RETURN
                 // position (uniform with assignment B87.4 / var-decl B87.4b / argument
@@ -56712,6 +56727,207 @@ interface DataView {
         return if (bestScore > 0) best else null
     }
 
+    /**
+     * B96: Deep per-property disambiguation for `return { ... }` where the declared
+     * return type is a UNION with a single clear object-like constituent (e.g.
+     * `Stuff | string` / `Stuff | Date`). TypeScript, instead of one coarse
+     * whole-object TS2322 against the union, drills into the chosen constituent and
+     * reports a per-property mismatch at the property VALUE. Specifically reproduces
+     * the `errorOnUnionVsObjectShouldDeeplyDisambiguate` family:
+     *  - a method/arrow value whose RETURN type doesn't match the member's return →
+     *    TS2322 at the return expression, with related TS6502 (the expected type
+     *    comes from the member's function-type signature) + TS1356 ("Did you mean to
+     *    mark this function as 'async'?") at the value function.
+     *  - a whole-function-type mismatch where the per-return missing-property chain is
+     *    interesting (method `a() { return [123] }` vs `() => Promise<number[]>`):
+     *    TS2322 `Type '() => number[]' is not assignable to type '() => Promise<...>'`
+     *    at the method NAME, with the missing-property chain, NO related infos.
+     *
+     * Returns true (and emits) only when it produced ≥1 per-property diagnostic; the
+     * caller then suppresses the coarse TS2322. Tightly gated: a single best object
+     * constituent that shares ALL of the object literal's property names, every
+     * source property is a method or arrow/function value, and the only mismatch is
+     * the function value's return type vs a function-typed member.
+     */
+    private fun tryDeepDisambiguateObjectVsUnion(
+        expr: ObjectLiteralExpression, sourceType: Type.Object, targetType: Type.Union,
+        source: String, fileName: String,
+    ): Boolean {
+        val best = findBestUnionConstituent(sourceType, targetType) as? Type.Interface ?: return false
+        resolveStructuredTypeMembers(best)
+        val srcNames = sourceType.properties?.map { it.name }?.toSet() ?: return false
+        if (srcNames.isEmpty()) return false
+        val bestNames = best.properties?.map { it.name }?.toSet() ?: return false
+        // Gate: the chosen constituent must contain EVERY source property name — i.e.
+        // this object literal is unambiguously aimed at this constituent. (Avoids
+        // firing when the literal partially matches several union members.)
+        if (!bestNames.containsAll(srcNames)) return false
+        // Gate: every other object-like constituent shares strictly FEWER names — the
+        // best must be the unique clear winner.
+        for (c in targetType.types) {
+            if (c === best || c !is Type.Object) continue
+            resolveStructuredTypeMembers(c)
+            val cNames = c.properties?.map { it.name }?.toSet() ?: emptySet()
+            if (srcNames.intersect(cNames).size >= srcNames.size) return false
+        }
+
+        data class PerProp(
+            val diagPos: Int, val diagLen: Int, val message: String,
+            val chain: List<String>, val related: List<Diagnostic>,
+        )
+        // Per-property carrier: name, the value-function source type, its return expr
+        // (if any), the value-function AST node (arrow/fn-expr for TS1356, null for a
+        // method), and the method-name span (pos<0 means not a method).
+        data class PropInfo(
+            val name: String, val srcFnType: Type, val retExpr: Expression?,
+            val valueFnNode: Node?, val methodNamePos: Int, val methodNameLen: Int,
+        )
+        val pending = mutableListOf<PerProp>()
+
+        for (prop in expr.properties) {
+            // Resolve the property name and the value's function-typed shape.
+            val info: PropInfo = when (prop) {
+                is PropertyAssignment -> {
+                    val n = getMemberName(prop.name) ?: return false
+                    val init = prop.initializer
+                    if (init !is ArrowFunction && init !is FunctionExpression) {
+                        // Non-function value — out of the supported shape; bail entirely.
+                        return false
+                    }
+                    val re: Expression? = when (init) {
+                        is ArrowFunction -> when (val b = init.body) {
+                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                            is Expression -> b
+                            else -> null
+                        }
+                        is FunctionExpression -> init.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        else -> null
+                    }
+                    val ft = try { getTypeOfExpression(init) } catch (_: Throwable) { return false }
+                    PropInfo(n, ft, re, init, -1, 0)
+                }
+                is MethodDeclaration -> {
+                    val n = getMemberName(prop.name) ?: return false
+                    val mn = prop.name
+                    val mPos = (mn as? Identifier)?.pos ?: prop.pos
+                    val mLen = (mn as? Identifier)?.text?.length ?: 1
+                    val re = prop.body?.statements?.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                    // Build the method's function type the same way getTypeOfObjectLiteral
+                    // does (a MethodDeclaration is not an Expression — no getTypeOfExpression).
+                    val returnType = prop.type?.let { getTypeFromTypeNode(it) }
+                        ?: prop.body?.let { inferReturnTypeFromBody(it) }
+                        ?: anyType
+                    val params = getParameterSymbols(prop.parameters)
+                    val sig = Signature(
+                        declaration = prop, parameters = params, resolvedReturnType = returnType,
+                        minArgumentCount = prop.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+                    )
+                    val ft = Type.Object()
+                    ft.callSignatures = listOf(sig)
+                    ft.properties = emptyList()
+                    PropInfo(n, ft, re, null, mPos, mLen)
+                }
+                else -> return false // spread / shorthand / accessors — out of shape
+            }
+            val name = info.name
+            val srcFnType = info.srcFnType
+            val retExpr = info.retExpr
+            val valueFnNode = info.valueFnNode
+            val methodNamePos = info.methodNamePos
+            val methodNameLen = info.methodNameLen
+
+            val memberSym = getPropertyOfType(best, name) ?: return false
+            val memberType = try { getTypeOfSymbol(memberSym) } catch (_: Throwable) { return false }
+            if (memberType !is Type.Object || memberType.callSignatures.isNullOrEmpty()) return false
+            val memberSig = memberType.callSignatures!!.first()
+            val memberReturn = memberSig.resolvedReturnType ?: return false
+            // The member's function-type declaration node (for TS6502 span + display).
+            val memberFnNode = memberSym.declarations.firstNotNullOfOrNull { d ->
+                when (d) {
+                    is PropertyDeclaration -> d.type as? FunctionType
+                    else -> null
+                }
+            }
+
+            if (srcFnType !is Type.Object || srcFnType.callSignatures.isNullOrEmpty()) return false
+            val srcSig = srcFnType.callSignatures!!.first()
+            val srcReturn = srcSig.resolvedReturnType ?: return false
+
+            // Compare the function values structurally. If they're assignable, nothing
+            // to report for this property.
+            if (checkTypeRelatedTo(srcFnType, memberType, assignableRelation)) continue
+
+            // Determine whether the source return is a SIMPLE primitive (arrow→Promise
+            // case: TS2322 at the value + TS6502 + TS1356) or a structural mismatch
+            // worth a missing-property chain (method `a` case: TS2322 at the name).
+            val srcRetSimple = isSimpleCheckableType(srcReturn)
+            // The whole-function-type display strings.
+            val srcFnDisplay = typeToString(srcFnType)
+            val tgtFnDisplay = memberFnNode?.let { formatTypeForDisplay(it) } ?: typeToString(memberType)
+
+            if (srcRetSimple && retExpr != null) {
+                // Arrow/method whose body returns a simple value (string/number/...)
+                // against a Promise-typed member return. TS2322 at the return expr.
+                val rStart = retExpr.pos
+                val rLen = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                val related = mutableListOf<Diagnostic>()
+                // TS6502 at the member's function-type signature node.
+                if (memberFnNode != null) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, memberFnNode.pos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Message, code = 6502,
+                        fileName = fileName, line = l, character = c,
+                        start = memberFnNode.pos,
+                        length = (memberFnNode.type.end - memberFnNode.pos).coerceAtLeast(1),
+                    ))
+                }
+                // TS1356 at the value function (arrow / function expression).
+                val fnPos = (valueFnNode as? ArrowFunction)?.pos ?: (valueFnNode as? FunctionExpression)?.pos
+                if (fnPos != null) {
+                    related.addAll(makeAsyncRelated(FuncRef(fnPos, 2), source, fileName))
+                }
+                pending.add(PerProp(
+                    diagPos = rStart, diagLen = rLen,
+                    message = "Type '${typeToString(srcReturn)}' is not assignable to type '${typeToString(memberReturn)}'.",
+                    chain = emptyList(), related = related,
+                ))
+            } else {
+                // Whole-function-type mismatch with a structural return mismatch
+                // (e.g. `() => number[]` vs `() => Promise<number[]>`). TS2322 at the
+                // method name (or value) with the missing-property chain. No related.
+                val chain = mutableListOf<String>()
+                if (srcReturn is Type.Object && memberReturn is Type.Object) {
+                    val missing = try { collectMissingProperties(srcReturn, memberReturn) }
+                        catch (_: Throwable) { emptyList() }
+                    if (missing.isNotEmpty()) {
+                        chain.add("  " + formatTs2740Message(typeToString(srcReturn), typeToString(memberReturn), missing))
+                    }
+                }
+                val (pos, len) = if (methodNamePos >= 0) methodNamePos to methodNameLen
+                    else (retExpr?.pos ?: prop.pos) to ((retExpr?.let { expressionTrueEnd(it) - it.pos } ?: 1).coerceAtLeast(1))
+                pending.add(PerProp(
+                    diagPos = pos, diagLen = len,
+                    message = "Type '$srcFnDisplay' is not assignable to type '$tgtFnDisplay'.",
+                    chain = chain, related = emptyList(),
+                ))
+            }
+        }
+
+        if (pending.isEmpty()) return false
+        for (p in pending) {
+            val (line, character) = getLineAndCharacterOfPosition(source, p.diagPos)
+            diagnostics.add(Diagnostic(
+                message = p.message,
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = p.diagPos, length = p.diagLen,
+                messageChain = p.chain, relatedInformation = p.related,
+            ))
+        }
+        return true
+    }
+
     /** B50.1: True for alias body types that are function-shaped: `FunctionType`,
      *  `ConstructorType`, `ParenthesizedType` around one of those, or `TypeLiteral`
      *  whose ONLY members are call signatures. The B50.1 substitution skips these
@@ -57833,7 +58049,18 @@ interface DataView {
             is Identifier -> name.text
             is StringLiteralNode -> name.text
             is NumericLiteralNode -> name.text
-            is ComputedPropertyName -> null // dynamic — can't resolve statically
+            // Well-known-symbol computed name `[Symbol.X]` → canonical key
+            // `"[Symbol.X]"` (matches TypeScript's display + member identity).
+            // This lets lib members like `readonly [Symbol.toStringTag]: string;`
+            // participate in structural / missing-property comparison. Other
+            // computed names stay dynamic (null — can't resolve statically).
+            is ComputedPropertyName -> {
+                val e = name.expression
+                if (e is PropertyAccessExpression) {
+                    val recv = e.expression
+                    if (recv is Identifier && recv.text == "Symbol") "[Symbol.${e.name.text}]" else null
+                } else null
+            }
             else -> null
         }
     }
@@ -68326,6 +68553,17 @@ interface DataView {
                     is TypeOfExpression -> stringType
                     is VoidExpression -> undefinedType
                     is DeleteExpression -> booleanType
+                    // B96-UNBLOCKER: `return [123]` infers the array-literal type
+                    // (`number[]`) so an object-literal method value can be checked
+                    // against a typed target member's return type. Only return a
+                    // CONCRETE result (non-any/error) so the `?: anyType` fallback is
+                    // unchanged for arrays whose element type can't be determined.
+                    is ArrayLiteralExpression -> {
+                        try {
+                            val t = getTypeOfArrayLiteral(expr)
+                            if (t !== anyType && t !== errorType) t else null
+                        } catch (_: Throwable) { null }
+                    }
                     is NewExpression -> {
                         // 17.156: mirror 17.154's FunctionExpression inference into the
                         // broader callable family (MethodDeclaration / FunctionDeclaration /
