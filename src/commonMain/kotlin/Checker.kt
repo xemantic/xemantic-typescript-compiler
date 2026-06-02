@@ -71865,6 +71865,52 @@ interface DataView {
     )
 
     /**
+     * B98.r124 (Blocker #1 substep): TS18047/18048/18049 for an element access `x[...]`
+     * whose BARE-IDENTIFIER receiver has a declared nullish-union type that SURVIVES flow
+     * narrowing at that position. Pairs with the for-in body NonNullable narrowing (Flow.kt)
+     * so `for (k in x) { x[k] }` does NOT fire (x narrowed to non-null inside the body) while
+     * `x[...]` outside the loop DOES. Consults `getNarrowedTypeForReferenceFollowLoopEntry`
+     * (loop-aware), so every guard we model (`if (x)`, `x != null`, truthy `&&`, for-in body,
+     * …) suppresses it. Gated to strictNullChecks + a non-`?.` access + a bare Identifier
+     * receiver whose declared type is a Union actually carrying a nullish constituent. The
+     * code/message follow which nullish members survive (both → 18049, null → 18047,
+     * undefined → 18048).
+     */
+    private fun emitTs1804xForNullishElementAccessReceiver(
+        expr: ElementAccessExpression, source: String, fileName: String,
+    ) {
+        if (!strictNullChecks) return
+        if (expr.questionDotToken) return
+        val recv = expr.expression as? Identifier ?: return
+        val declared = try { getTypeOfIdentifier(recv) } catch (_: StackOverflowError) { return }
+        if (declared === anyType || declared === errorType) return
+        if (declared !is Type.Union) return
+        if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
+        val narrowed = try {
+            getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
+        } catch (_: StackOverflowError) { return }
+        val hasNull = typeIncludesNull(narrowed)
+        val hasUndef = typeIncludesExplicitUndefined(narrowed)
+        if (!hasNull && !hasUndef) return
+        val (code, kind) = when {
+            hasNull && hasUndef -> 18049 to "'null' or 'undefined'"
+            hasNull -> 18047 to "'null'"
+            else -> 18048 to "'undefined'"
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, recv.pos)
+        diagnostics.add(Diagnostic(
+            message = "'${recv.text}' is possibly $kind.",
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = recv.pos,
+            length = recv.text.length,
+        ))
+    }
+
+    /**
      * 17.44: Walk a synthetic-paren receiver (or its inner expression) to find the
      * operand of the OUTERMOST `?.` access. For `a?.b<c>.d`, the receiver `(a?.b)`
      * peels to `PropertyAccessExpression(a, b, ?.)` whose operand is `a`. Returns
@@ -73334,6 +73380,7 @@ interface DataView {
         expr: ElementAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
         val arg = expr.argumentExpression
         // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
         // element-access indices that resolve to null/undefined. Mirrors TypeScript's

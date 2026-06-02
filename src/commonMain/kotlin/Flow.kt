@@ -431,6 +431,15 @@ class FlowGraphBuilder {
         joinAntecedent(postLoop, currentFlow)
         currentFlow = loopLabel
 
+        // B98.r124 (Blocker #1 substep): entering the for-in body implies the
+        // iterated object is non-null/undefined (a nullish value yields no
+        // iterations), so narrow the iterated expression to truthy within the body.
+        // FP-safe by construction — a FlowCondition only ever SUPPRESSES diagnostics
+        // (removes nullish constituents), never adds one. Scoped to the body: after
+        // the loop `currentFlow` is the postLoop branch label whose antecedents are
+        // the pre-loop flow + breaks, where the object keeps its declared nullish type.
+        currentFlow = newCondition(isTrue = true, expr = stmt.expression, antecedent = currentFlow)
+
         // The initializer is assigned each iteration.
         when (val init = stmt.initializer) {
             is VariableDeclarationList -> {
