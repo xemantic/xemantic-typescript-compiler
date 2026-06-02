@@ -127,6 +127,15 @@ class Checker(
          *  detection. */
         val relationSourceTargets = ArrayList<Int>()
         val relationTargetTargets = ArrayList<Int>()
+        /** Cycle-detection stack for the TS2403 structural type-identity comparator,
+         *  keyed on (sourceTarget.id, targetTarget.id). Lives in CheckerState so it is
+         *  non-null during the init-time check pipeline (Kotlin init-order). */
+        val ts2403IdentityStack = HashSet<Long>()
+        /** Positional sentinel binding for method/call-sig type params during TS2403
+         *  identity comparison: maps each signature's TypeParam.id → a shared positional
+         *  sentinel id (both signatures' i-th TP map to the same sentinel). */
+        val ts2403TpBinding = HashMap<Int, Int>()
+        var ts2403NextSentinel = 0
         /** Cache for `resolveGenericPropertyType(objType, propSym)` keyed on
          *  packed `(objType.id, propSym.id)`. Combined with `Type.Reference` interning
          *  (which makes logically-identical Refs share an id), this avoids the
@@ -574,6 +583,12 @@ class Checker(
      *  `parseBuiltinLib()` runs (Kotlin property init order — properties after the call
      *  site have default values during the call). */
     private val builtinLibDecls: MutableSet<Node> = mutableSetOf()
+    /** Member-declaration nodes (methods/props/accessors) inside built-in lib
+     *  interfaces/classes — used by the TS2403 structural-identity comparator to
+     *  distinguish user-declared members from lib-merged ones (Blocker #3 workaround:
+     *  a user `interface Promise<T>` merges with the lib `Promise<T>`, polluting its
+     *  member set; the comparator filters those out to compare only user members). */
+    private val builtinLibMemberDecls: MutableSet<Node> = mutableSetOf()
 
     /**
      * Parse and bind the built-in type declarations, returning the symbol table.
@@ -591,7 +606,16 @@ class Checker(
         // from `interface Array<T>` when `@target: es2015`). User-defined `interface
         // Array<T> extends ...` declarations are NOT in this set and pass through
         // unfiltered.
-        ast.statements.forEach { stmt -> builtinLibDecls.add(stmt) }
+        ast.statements.forEach { stmt ->
+            builtinLibDecls.add(stmt)
+            // Collect member-declaration nodes of lib interfaces/classes so the TS2403
+            // comparator can ignore them when a user interface of the same name merges.
+            when (stmt) {
+                is InterfaceDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                is ClassDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                else -> {}
+            }
+        }
         return Binder(options).bind(ast).locals
     }
 
@@ -18754,10 +18778,20 @@ class Checker(
         source: String, fileName: String,
     ) {
         val firstDecl = decls[0]
+        // AST-level pre-check: two declarations annotated with the SAME generic
+        // type-alias but DIFFERENT type arguments are TS2403 — decided purely from the
+        // annotation arguments WITHOUT expanding the alias body (the body may be a
+        // recursive mapped type, e.g. `FindConditions<T>`; expanding it is the
+        // "excessive stack depth" the test guards against). This runs first because the
+        // alias body often resolves to errorType/any, which the type-based path skips.
+        if (ts2403CheckAliasAnnotations(decls, varName, source, fileName)) return
         val firstType = getVarDeclType(firstDecl) ?: return
-        // Only check when the first type is simple (intrinsic, literal) — complex types
-        // need structural comparison which we can't do reliably via string comparison
-        if (!isSimpleTypeForTs2403(firstType)) return
+        // Two comparison modes: SIMPLE (intrinsic/literal/function — reliable string
+        // compare) and STRUCTURED (generic interface instantiations — recursive
+        // structural identity via ts2403TypesDiffer). Anything else → skip.
+        val firstSimple = isSimpleTypeForTs2403(firstType)
+        val firstStructured = isStructuredTypeForTs2403(firstType)
+        if (!firstSimple && !firstStructured) return
         val firstTypeName = typeToString(firstType)
         val firstIsExported = isVarDeclExported(firstDecl)
 
@@ -18766,10 +18800,19 @@ class Checker(
             // Skip when export status differs (TS2395 handles that case)
             if (isVarDeclExported(decl) != firstIsExported) continue
             val declType = getVarDeclType(decl) ?: continue
-            if (!isSimpleTypeForTs2403(declType)) continue
             if (firstType === declType) continue
             val declTypeName = typeToString(declType)
-            if (firstTypeName == declTypeName) continue
+            // Decide whether the two declarations have different types.
+            val differ: Boolean = when {
+                // SIMPLE↔SIMPLE: reliable string compare (existing behavior).
+                firstSimple && isSimpleTypeForTs2403(declType) -> firstTypeName != declTypeName
+                // STRUCTURED↔STRUCTURED: recursive structural identity (generic refs).
+                firstStructured && isStructuredTypeForTs2403(declType) ->
+                    firstTypeName != declTypeName && ts2403TypesDiffer(firstType, declType)
+                // Mixed simple/structured, or unsupported kind → conservatively skip.
+                else -> false
+            }
+            if (!differ) continue
             val nameNode = decl.name as? Identifier ?: continue
             val start = nameNode.pos
             val length = nameNode.text.length
@@ -18803,6 +18846,67 @@ class Checker(
                 relatedInformation = relatedInfo,
             ))
         }
+    }
+
+    /**
+     * AST-level TS2403 for var declarations annotated with the SAME generic type-alias
+     * but DIFFERENT type arguments (e.g. `var x: FindConditions<any>` then
+     * `var x: FindConditions<Entity>`). Decided from the annotation arguments' display
+     * strings WITHOUT expanding the alias body — the body may be a recursive mapped type
+     * (`noExcessiveStackDepthError`) and expanding it is exactly the stack-depth blowup
+     * to avoid. Returns true when it handled the group (emitting any errors), so the
+     * caller skips the type-based path.
+     */
+    private fun ts2403CheckAliasAnnotations(
+        decls: List<VariableDeclaration>, varName: String, source: String, fileName: String,
+    ): Boolean {
+        val firstRef = decls[0].type as? TypeReference ?: return false
+        val firstArgs = firstRef.typeArguments ?: return false
+        if (firstArgs.isEmpty()) return false
+        val aliasSym = resolveTypeNameToSymbol(firstRef.typeName) ?: return false
+        // Must be a GENERIC type alias (a TypeAliasDeclaration with type params).
+        val aliasDecl = aliasSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+        if (aliasDecl.typeParameters.isNullOrEmpty()) return false
+        val firstArgDisplays = firstArgs.map { formatTypeForDisplay(it) ?: return false }
+        val firstIsExported = isVarDeclExported(decls[0])
+        var handled = false
+        for (i in 1 until decls.size) {
+            val decl = decls[i]
+            if (isVarDeclExported(decl) != firstIsExported) continue
+            val ref = decl.type as? TypeReference ?: continue
+            // Must reference the SAME alias symbol.
+            val sym = resolveTypeNameToSymbol(ref.typeName) ?: continue
+            if (sym !== aliasSym) continue
+            handled = true
+            val args = ref.typeArguments ?: continue
+            // Different arg count, or any positional arg display differs → TS2403.
+            val argDisplays = args.mapNotNull { formatTypeForDisplay(it) }
+            if (argDisplays.size != args.size) continue  // an arg we can't render → skip
+            val differ = argDisplays.size != firstArgDisplays.size ||
+                argDisplays.indices.any { it >= firstArgDisplays.size || argDisplays[it] != firstArgDisplays[it] }
+            if (!differ) continue
+            val aliasName = (firstRef.typeName as? Identifier)?.text ?: continue
+            val firstDisplay = "$aliasName<${firstArgDisplays.joinToString(", ")}>"
+            val declDisplay = "$aliasName<${argDisplays.joinToString(", ")}>"
+            val nameNode = decl.name as? Identifier ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            val firstNameNode = decls[0].name as? Identifier
+            val relatedInfo = if (firstNameNode != null) {
+                val (fl, fc) = getLineAndCharacterOfPosition(source, firstNameNode.pos)
+                listOf(Diagnostic(
+                    message = "'$varName' was also declared here.",
+                    category = DiagnosticCategory.Message, code = 6203, fileName = fileName,
+                    line = fl, character = fc, start = firstNameNode.pos, length = firstNameNode.text.length,
+                ))
+            } else emptyList()
+            diagnostics.add(Diagnostic(
+                message = "Subsequent variable declarations must have the same type.  Variable '$varName' must be of type '$firstDisplay', but here has type '$declDisplay'.",
+                category = DiagnosticCategory.Error, code = 2403, fileName = fileName,
+                line = line, character = character, start = nameNode.pos, length = nameNode.text.length,
+                relatedInformation = relatedInfo,
+            ))
+        }
+        return handled
     }
 
     /** Get the type of a var declaration from its type annotation or initializer, widened. */
@@ -18896,6 +19000,351 @@ class Checker(
                 !type.callSignatures.isNullOrEmpty() || !type.constructSignatures.isNullOrEmpty()
             }
             else -> false
+        }
+    }
+
+    /**
+     * Whether a type is a generic-interface instantiation (or named interface) that
+     * the recursive structural-identity comparator [ts2403TypesDiffer] can handle.
+     * Excludes plain anonymous function objects (those go through the SIMPLE path).
+     */
+    private fun isStructuredTypeForTs2403(type: Type): Boolean {
+        return when (type) {
+            is Type.Reference -> {
+                // A real generic instantiation with resolved args, backed by a named
+                // class/interface symbol.
+                val sym = type.target.symbol
+                sym != null && sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) &&
+                    sym.name.isNotEmpty() && type.resolvedTypeArguments != null
+            }
+            else -> false
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // TS2403 structural type-identity (generic-interface var-decl consistency)
+    // ---------------------------------------------------------------------------
+    // Tri-state used by the recursive identity comparator: DIFFERENT triggers
+    // TS2403; IDENTICAL and UNKNOWN both suppress it (UNKNOWN = "couldn't decide
+    // reliably" → never emit, matching the pre-existing conservative behavior).
+    private enum class Ts2403Cmp { IDENTICAL, DIFFERENT, UNKNOWN }
+
+    /** Cycle-detection stack for [ts2403Identical] — keyed on (sourceTarget.id, targetTarget.id). */
+    private val ts2403IdentityStack get() = state.ts2403IdentityStack
+    private val ts2403TpBinding get() = state.ts2403TpBinding
+
+    /**
+     * Recursive structural TYPE-IDENTITY check used ONLY for the TS2403
+     * "subsequent variable declarations must have the same type" rule on generic
+     * interface instantiations (`var x: IPromise<string>` / `var x: Promise<string>`).
+     *
+     * This is NOT assignability — it is genuine identity, where:
+     *  - `any` is identical only to `any` (so `string` vs `any` → DIFFERENT);
+     *  - same-target generic refs require pairwise-identical type arguments;
+     *  - different-target refs are compared member-by-member, with each member's
+     *    type resolved IN that ref's interface scope (interface type-params already
+     *    substituted by [resolveGenericPropertyType]);
+     *  - method/call-signature-level type parameters are compared POSITIONALLY via
+     *    [ts2403TpBinding] sentinels (the i-th TP of sig A relates to the i-th of sig B);
+     *    a TypeParam is NEVER identical to `any`;
+     *  - self-referential recursion (`IPromise<U>` returning `IPromise<U>`) is broken by
+     *    the (targetA, targetB) cycle stack, which then compares the per-occurrence type
+     *    ARGUMENTS so swapped/differing recursive args are still detected.
+     *
+     * Returns UNKNOWN on anything it cannot resolve confidently (errorType, unresolved
+     * members, depth bail) so callers never emit a speculative TS2403.
+     */
+    private fun ts2403Identical(a: Type, b: Type, depth: Int): Ts2403Cmp {
+        if (a === b) return Ts2403Cmp.IDENTICAL
+        if (depth > 12) return Ts2403Cmp.UNKNOWN
+        // errorType / unresolved → can't decide.
+        if (a === errorType || b === errorType || a === unresolvedType || b === unresolvedType) {
+            return Ts2403Cmp.UNKNOWN
+        }
+        // Method/call-signature type parameters are compared POSITIONALLY (TypeScript's
+        // identity relation relates the i-th TP of sig A to the i-th TP of sig B). We
+        // bind each signature's TPs to a shared positional sentinel id in
+        // ts2403TpBinding (see ts2403SignatureIdentical). Two TypeParams are identical
+        // iff they resolve to the SAME sentinel. A TypeParam is NEVER identical to `any`
+        // (this is what makes `IPromise2<U,W>` differ from `Promise2<U,any>` in the
+        // callback-return 2nd position — the core of the promiseIdentity 'y' error).
+        if (a is Type.TypeParam || b is Type.TypeParam) {
+            val aSent = (a as? Type.TypeParam)?.let { ts2403TpBinding[it.id] }
+            val bSent = (b as? Type.TypeParam)?.let { ts2403TpBinding[it.id] }
+            // Both bound sentinels → identical iff same position.
+            if (a is Type.TypeParam && b is Type.TypeParam) {
+                if (aSent == null || bSent == null) return Ts2403Cmp.UNKNOWN
+                return if (aSent == bSent) Ts2403Cmp.IDENTICAL else Ts2403Cmp.DIFFERENT
+            }
+            // One TypeParam vs a concrete type (incl. `any`) → DIFFERENT.
+            return Ts2403Cmp.DIFFERENT
+        }
+        // Plain intrinsics (string/number/boolean/void/null/undefined/never/bigint/symbol):
+        // identical iff same intrinsic flag.
+        if (a is Type.Intrinsic && b is Type.Intrinsic) {
+            return if (a.flags == b.flags) Ts2403Cmp.IDENTICAL else Ts2403Cmp.DIFFERENT
+        }
+        // Literal types — compare by value/kind.
+        if (a is Type.StringLiteral && b is Type.StringLiteral) {
+            return if (a.value == b.value) Ts2403Cmp.IDENTICAL else Ts2403Cmp.DIFFERENT
+        }
+        if (a is Type.NumberLiteral && b is Type.NumberLiteral) {
+            return if (a.value == b.value) Ts2403Cmp.IDENTICAL else Ts2403Cmp.DIFFERENT
+        }
+        // One side intrinsic/literal, other is a structured object/ref → DIFFERENT.
+        val aStruct = a is Type.Object
+        val bStruct = b is Type.Object
+        if (aStruct != bStruct) return Ts2403Cmp.DIFFERENT
+        if (!aStruct) {
+            // Unions / intersections / typeparams already handled, or unhandled kind:
+            // be conservative.
+            return Ts2403Cmp.UNKNOWN
+        }
+        a as Type.Object; b as Type.Object
+        // Function-shaped objects (call signatures) — compare signatures structurally.
+        // Blocker #3 workaround: a member symbol of a lib-merged user interface (e.g.
+        // `Promise.then`) carries BOTH the user signature AND the lib signature, so its
+        // resolved type has extra call signatures. Filter to USER-declared signatures
+        // (drop those whose declaration node is a built-in lib member) so the comparison
+        // sees only what the user wrote.
+        val aCall = ts2403UserSigs(a.callSignatures)
+        val bCall = ts2403UserSigs(b.callSignatures)
+        if (!aCall.isNullOrEmpty() || !bCall.isNullOrEmpty()) {
+            if (aCall.isNullOrEmpty() != bCall.isNullOrEmpty()) return Ts2403Cmp.DIFFERENT
+            if (aCall!!.size != bCall!!.size) return Ts2403Cmp.DIFFERENT
+            var result = Ts2403Cmp.IDENTICAL
+            for (i in aCall.indices) {
+                when (ts2403SignatureIdentical(aCall[i], bCall[i], depth + 1)) {
+                    Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                    Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                    Ts2403Cmp.IDENTICAL -> {}
+                }
+            }
+            // Also require the (object's named) data members to agree if present —
+            // a function object plus extra props is rare here; compare members too.
+            return ts2403CombineWithMembers(a, b, depth, result)
+        }
+        // Both are generic references / named interfaces → compare via target symbol + members.
+        val aRef = a as? Type.Reference
+        val bRef = b as? Type.Reference
+        if (aRef != null && bRef != null && aRef.target === bRef.target) {
+            // Same target interface — type args must be pairwise identical.
+            val aArgs = aRef.resolvedTypeArguments
+            val bArgs = bRef.resolvedTypeArguments
+            if (aArgs == null || bArgs == null) return Ts2403Cmp.UNKNOWN
+            if (aArgs.size != bArgs.size) return Ts2403Cmp.DIFFERENT
+            var result = Ts2403Cmp.IDENTICAL
+            for (i in aArgs.indices) {
+                when (ts2403Identical(aArgs[i], bArgs[i], depth + 1)) {
+                    Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                    Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                    Ts2403Cmp.IDENTICAL -> {}
+                }
+            }
+            return result
+        }
+        // Different-target (or one-named-one-anonymous) structured comparison.
+        return ts2403StructuralMembers(a, b, depth)
+    }
+
+    /** Compare named/anonymous structured object members + index info under identity. */
+    private fun ts2403StructuralMembers(a: Type.Object, b: Type.Object, depth: Int): Ts2403Cmp {
+        // Cycle break: keep a stack keyed on the underlying named-type symbols (target
+        // ids) so a self-referential recursion (`IPromise<U>` whose `then` returns
+        // `IPromise<U>`) terminates. On RE-ENTRY of the same target pair, the recursive
+        // structural BODY is identical by assumption, but the type ARGUMENTS at this
+        // particular occurrence still differ between the two refs — and that difference
+        // is exactly where the TS2403 errors live (e.g. `IPromise2<U,W>` vs
+        // `Promise2<U,any>` in the callback return — W vs any). So on cycle, compare the
+        // refs' resolvedTypeArguments pairwise (args are leaf-ish: sentinel-bound TPs or
+        // concrete types — they do not re-enter the same ref pair) rather than blindly
+        // returning IDENTICAL.
+        val aRef = a as? Type.Reference
+        val bRef = b as? Type.Reference
+        val aKey = aRef?.target?.id ?: a.symbol?.id ?: a.id
+        val bKey = bRef?.target?.id ?: b.symbol?.id ?: b.id
+        val pair = (aKey.toLong() shl 32) or (bKey.toLong() and 0xFFFFFFFFL)
+        if (pair in ts2403IdentityStack) {
+            if (aRef != null && bRef != null) {
+                return ts2403CompareRefArgs(aRef, bRef, depth)
+            }
+            return Ts2403Cmp.IDENTICAL
+        }
+        ts2403IdentityStack.add(pair)
+        try {
+            // For two generic refs with different targets, identity is decided by the
+            // structural members; but if the targets share the same arity, also factor
+            // in the per-occurrence type-argument comparison (so `Promise2<U,any>` vs
+            // `IPromise2<U,W>` differs even when members happen to look alike).
+            val memberCmp = ts2403CompareMembers(a, b, depth)
+            if (memberCmp == Ts2403Cmp.DIFFERENT) return Ts2403Cmp.DIFFERENT
+            if (aRef != null && bRef != null) {
+                val argCmp = ts2403CompareRefArgs(aRef, bRef, depth)
+                if (argCmp == Ts2403Cmp.DIFFERENT) return Ts2403Cmp.DIFFERENT
+                if (argCmp == Ts2403Cmp.UNKNOWN || memberCmp == Ts2403Cmp.UNKNOWN) return Ts2403Cmp.UNKNOWN
+                return Ts2403Cmp.IDENTICAL
+            }
+            return memberCmp
+        } catch (_: StackOverflowError) {
+            return Ts2403Cmp.UNKNOWN
+        } finally {
+            ts2403IdentityStack.remove(pair)
+        }
+    }
+
+    /** Compare two refs' resolved type arguments pairwise under identity. */
+    private fun ts2403CompareRefArgs(aRef: Type.Reference, bRef: Type.Reference, depth: Int): Ts2403Cmp {
+        val aArgs = aRef.resolvedTypeArguments
+        val bArgs = bRef.resolvedTypeArguments
+        if (aArgs == null || bArgs == null) return Ts2403Cmp.UNKNOWN
+        if (aArgs.size != bArgs.size) return Ts2403Cmp.DIFFERENT
+        var result = Ts2403Cmp.IDENTICAL
+        for (i in aArgs.indices) {
+            when (ts2403Identical(aArgs[i], bArgs[i], depth + 1)) {
+                Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                Ts2403Cmp.IDENTICAL -> {}
+            }
+        }
+        return result
+    }
+
+    /** A member symbol that is declared ONLY in the built-in lib (no user declaration). */
+    private fun ts2403IsLibOnlyMember(sym: Symbol): Boolean {
+        val decls = sym.declarations
+        if (decls.isEmpty()) return false
+        return decls.all { it in builtinLibMemberDecls }
+    }
+
+    /**
+     * Filter call/construct signatures to USER-declared ones (drop those whose source
+     * declaration is a built-in lib member). If filtering would remove everything (a
+     * genuinely lib-only type), keep the original list so lib types still compare.
+     */
+    private fun ts2403UserSigs(sigs: List<Signature>?): List<Signature>? {
+        if (sigs.isNullOrEmpty()) return sigs
+        val userSigs = sigs.filter { sig ->
+            val d = sig.declaration
+            d == null || d !in builtinLibMemberDecls
+        }
+        return if (userSigs.isEmpty()) sigs else userSigs
+    }
+
+    private fun ts2403CompareMembers(a: Type.Object, b: Type.Object, depth: Int): Ts2403Cmp {
+        val aPropsRaw = try { getPropertiesOfType(a) } catch (_: Throwable) { return Ts2403Cmp.UNKNOWN }
+        val bPropsRaw = try { getPropertiesOfType(b) } catch (_: Throwable) { return Ts2403Cmp.UNKNOWN }
+        // Blocker #3 workaround: a user interface whose name collides with a built-in
+        // (e.g. `interface Promise<T>`) MERGES with the lib interface, so its member set
+        // is polluted with lib members (`catch`, `[Symbol.toStringTag]`, …). Compare only
+        // USER-declared members so `IPromise<string>` vs (user) `Promise<string>` are
+        // correctly seen as identical.
+        val aProps = aPropsRaw.filterNot { ts2403IsLibOnlyMember(it) }
+        val bProps = bPropsRaw.filterNot { ts2403IsLibOnlyMember(it) }
+        val aNames = aProps.map { it.name }.toSet()
+        val bNames = bProps.map { it.name }.toSet()
+        if (aNames != bNames) return Ts2403Cmp.DIFFERENT
+        var result = Ts2403Cmp.IDENTICAL
+        for (propSym in aProps) {
+            val bSym = bProps.find { it.name == propSym.name } ?: return Ts2403Cmp.DIFFERENT
+            val aMemberType = ts2403MemberType(a, propSym) ?: return Ts2403Cmp.UNKNOWN
+            val bMemberType = ts2403MemberType(b, bSym) ?: return Ts2403Cmp.UNKNOWN
+            when (ts2403Identical(aMemberType, bMemberType, depth + 1)) {
+                Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                Ts2403Cmp.IDENTICAL -> {}
+            }
+        }
+        return result
+    }
+
+    /** Resolve a member's type in the context of an object/reference, with interface args substituted. */
+    private fun ts2403MemberType(obj: Type.Object, propSym: Symbol): Type? {
+        // For generic references, resolveGenericPropertyType substitutes the interface
+        // type-args and resolves method signatures (method TPs kept as fresh TypeParams,
+        // which the comparator binds positionally — see ts2403SignatureIdentical).
+        resolveGenericPropertyType(obj, propSym)?.let { return it }
+        return try { getTypeOfSymbol(propSym) } catch (_: Throwable) { null }
+    }
+
+    private fun ts2403CombineWithMembers(a: Type.Object, b: Type.Object, depth: Int, soFar: Ts2403Cmp): Ts2403Cmp {
+        // For pure function-typed objects (no named data members) just return soFar.
+        val aProps = a.properties ?: emptyList()
+        val bProps = b.properties ?: emptyList()
+        if (aProps.isEmpty() && bProps.isEmpty()) return soFar
+        if (soFar == Ts2403Cmp.DIFFERENT) return soFar
+        val memberCmp = ts2403CompareMembers(a, b, depth)
+        return when {
+            memberCmp == Ts2403Cmp.DIFFERENT || soFar == Ts2403Cmp.DIFFERENT -> Ts2403Cmp.DIFFERENT
+            memberCmp == Ts2403Cmp.UNKNOWN || soFar == Ts2403Cmp.UNKNOWN -> Ts2403Cmp.UNKNOWN
+            else -> Ts2403Cmp.IDENTICAL
+        }
+    }
+
+    /**
+     * Compare two signatures under identity. Each signature's own type parameters are
+     * bound POSITIONALLY to a shared sentinel id in [ts2403TpBinding] (sa.tp[i] and
+     * sb.tp[i] both map to the same fresh sentinel), so a leftover TypeParam compares
+     * identical iff it is the same positional TP. Bindings are removed on exit so
+     * nested/sibling signatures don't leak.
+     */
+    private fun ts2403SignatureIdentical(sa: Signature, sb: Signature, depth: Int): Ts2403Cmp {
+        // Method/call-sig type-param ARITY must match (this is what makes a `then<U,W>`
+        // differ from a `then` — promiseIdentityWithAny2's x pair).
+        val aTps = sa.typeParameters ?: emptyList()
+        val bTps = sb.typeParameters ?: emptyList()
+        if (aTps.size != bTps.size) return Ts2403Cmp.DIFFERENT
+        if (sa.parameters.size != sb.parameters.size) return Ts2403Cmp.DIFFERENT
+        if (sa.minArgumentCount != sb.minArgumentCount) return Ts2403Cmp.DIFFERENT
+        // Bind each pair of positional TPs to a shared sentinel.
+        val boundKeys = mutableListOf<Int>()
+        for (i in aTps.indices) {
+            val sentinel = state.ts2403NextSentinel++
+            val aId = aTps[i].id
+            val bId = bTps[i].id
+            ts2403TpBinding[aId] = sentinel
+            ts2403TpBinding[bId] = sentinel
+            boundKeys.add(aId); boundKeys.add(bId)
+        }
+        try {
+            var result = Ts2403Cmp.IDENTICAL
+            for (i in sa.parameters.indices) {
+                val pa = try { getTypeOfSymbol(sa.parameters[i]) } catch (_: Throwable) { return Ts2403Cmp.UNKNOWN }
+                val pb = try { getTypeOfSymbol(sb.parameters[i]) } catch (_: Throwable) { return Ts2403Cmp.UNKNOWN }
+                when (ts2403Identical(pa, pb, depth + 1)) {
+                    Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                    Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                    Ts2403Cmp.IDENTICAL -> {}
+                }
+            }
+            val ra = sa.resolvedReturnType
+            val rb = sb.resolvedReturnType
+            if (ra == null || rb == null) return Ts2403Cmp.UNKNOWN
+            when (ts2403Identical(ra, rb, depth + 1)) {
+                Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
+                Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
+                Ts2403Cmp.IDENTICAL -> {}
+            }
+            return result
+        } finally {
+            for (k in boundKeys) ts2403TpBinding.remove(k)
+        }
+    }
+
+    /**
+     * Decide TS2403 for a pair of generic-interface (or otherwise structured) var-decl
+     * types. Returns true (emit TS2403) ONLY when the comparator is confident the two
+     * types are structurally DIFFERENT. IDENTICAL or UNKNOWN → false (suppress).
+     */
+    private fun ts2403TypesDiffer(a: Type, b: Type): Boolean {
+        ts2403IdentityStack.clear()
+        ts2403TpBinding.clear()
+        state.ts2403NextSentinel = 0
+        return try {
+            ts2403Identical(a, b, 0) == Ts2403Cmp.DIFFERENT
+        } catch (_: StackOverflowError) {
+            false
+        } finally {
+            ts2403IdentityStack.clear()
         }
     }
 
