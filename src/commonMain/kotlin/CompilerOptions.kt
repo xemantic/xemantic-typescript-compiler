@@ -179,6 +179,8 @@ data class CompilerOptions(
     val isolatedDeclarations: Boolean = false,
     val erasableSyntaxOnly: Boolean = false,
     val ignoreDeprecations: String? = null,
+    val allowImportingTsExtensions: Boolean = false,
+    val rewriteRelativeImportExtensions: Boolean = false,
     /**
      * Simulated TypeScript version for version-gated diagnostics (from `// @typeScriptVersion` test directive).
      * When set, options deprecated at version X emit TS5102/TS5108 ("removed") instead of TS5101/TS5107
@@ -546,6 +548,8 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "erasablesyntaxonly" -> options.copy(erasableSyntaxOnly = boolValue)
         "ignoredeprecations" -> options.copy(ignoreDeprecations = value.trim())
         "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
+        "allowimportingtsextensions" -> options.copy(allowImportingTsExtensions = boolValue)
+        "rewriterelativeimportextensions" -> options.copy(rewriteRelativeImportExtensions = boolValue)
         else -> options
     }
 }
