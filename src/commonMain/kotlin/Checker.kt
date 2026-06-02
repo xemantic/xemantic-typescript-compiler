@@ -61226,7 +61226,49 @@ interface DataView {
                 val ok = try {
                     checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
                 } catch (_: StackOverflowError) { return null }
-                if (!ok) return null
+                if (!ok) {
+                    // B98.r118: a PRIMITIVE arg whose inferred type fails the type
+                    // param's STRUCTURED constraint (a named interface or an anonymous
+                    // object literal — `foo<T extends Item>("abc", …)`,
+                    // `fill<B extends typeof A>(32)`). 16.4i already handles a
+                    // simple-checkable constraint (`T extends number`), so this is the
+                    // complementary case: constraint not simple-checkable and not a
+                    // Type.Reference (whose self-referential/instantiated display is
+                    // unreliable — e.g. `Comparable<T>`). Emit TS2345 at the failing
+                    // (first) arg with the constraint as the displayed parameter type,
+                    // then return null. The standard arg-check loop passes a bare-TP
+                    // param trivially (unconstrained apparent type `{}`), so this never
+                    // double-emits. FP-safe: a primitive that genuinely fails a
+                    // structured constraint is always TS2345 in TypeScript.
+                    if (source != null && fileName != null &&
+                        constraint !== anyType && constraint !== errorType &&
+                        isSimpleCheckableType(firstWidened) &&
+                        (constraint is Type.Interface ||
+                            (constraint is Type.Object && constraint !is Type.Reference &&
+                                !constraint.members.isNullOrEmpty() &&
+                                constraint.callSignatures.isNullOrEmpty() &&
+                                constraint.constructSignatures.isNullOrEmpty()))) {
+                        val arg = args[first.argIdx]
+                        if (arg !is SpreadElement) {
+                            val start = arg.pos
+                            val length = expressionTrueEnd(arg) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Argument of type '${typeToString(firstWidened)}' is not assignable to parameter of type '${typeToString(constraint)}'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2345,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                    return null
+                }
             }
 
             // 17.31b multi-arg conflict detection: scan subsequent candidates, find
@@ -80518,7 +80560,10 @@ interface DataView {
             else -> null
         }
         if (nameNode is StringLiteralNode && !isValidJsIdentifier(name)) {
-            return "\"$name\""
+            // TypeScript's type-display PRESERVES the source quote style of a
+            // non-identifier string-literal property name: `{ '': number; }` for a
+            // single-quoted source name, `{ "0": number; }` for a double-quoted one.
+            return if (nameNode.singleQuote) "'$name'" else "\"$name\""
         }
         return name
     }
