@@ -71301,6 +71301,43 @@ interface DataView {
                 tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
                 return
             }
+            // B98.r100 (structural-receiver TS2339, narrowest slice): a property access
+            // on a CAST receiver `(x as T).p` / `<T>x.p` where T resolves to a base-less,
+            // signature-less, index-signature-less NAMED Interface that lacks `p`. A cast
+            // is an EXPLICIT type assertion, so a missing member is unambiguously TS2339
+            // (`missingDomElement_UsingDomLib`: `(({}) as any as HTMLMissingElement).textContent`
+            // where `interface HTMLMissingElement {}`). `checkMemberAccessMissing` otherwise
+            // bails on non-Identifier receivers (the broad structural-receiver gap); this is
+            // the FP-safest decomposed slice — gated to a cast receiver + a simple named
+            // interface with no base/sigs/index (so apparent-type/Object.prototype members
+            // can't be missed) + propName not a RUNTIME_PROPERTY.
+            run {
+                var castInner: Expression = objectExpr
+                while (castInner is ParenthesizedExpression) castInner = castInner.expression
+                if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
+                    propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
+                    val castType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { null }
+                    if (castType is Type.Interface && castType !is Type.Reference && castType.symbol != null &&
+                        castType.baseTypes.isNullOrEmpty() &&
+                        castType.callSignatures.isNullOrEmpty() &&
+                        castType.constructSignatures.isNullOrEmpty() &&
+                        castType.stringIndexInfo == null && castType.numberIndexInfo == null) {
+                        try {
+                            resolveStructuredTypeMembers(castType)
+                            if (getPropertyOfType(castType, propName) == null) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "Property '$propName' does not exist on type '${typeToString(castType)}'.",
+                                    category = DiagnosticCategory.Error, code = 2339,
+                                    fileName = fileName, line = line, character = character,
+                                    start = diagStart, length = diagLength,
+                                ))
+                                return
+                            }
+                        } catch (_: StackOverflowError) { /* fall through */ }
+                    }
+                }
+            }
             // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
             // TS2339 with 'never' display. Walks the flow graph from the receiver
             // expression's recorded flow node; when narrowing collapses a Union
