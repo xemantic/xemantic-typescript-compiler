@@ -1292,6 +1292,9 @@ class TypeScriptCompiler {
             // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
             // resolves through an `exports` field that exposes no types entry.
             diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
+            // B98.r123 (TS2209): a package self-name import resolved through an `exports`
+            // entry pointing under `outDir`, where the project root is ambiguous.
+            diagnostics.addAll(checkAmbiguousSelfNameExportRoot(parsed.files, options))
 
             if (options.isolatedDeclarations) {
                 // Cross-file augmentation map: for each target file name (basename
@@ -1711,6 +1714,53 @@ private fun checkMissingTypesReferenceExports(files: List<SourceFileEntry>): Lis
             }
             offset += line.length + 1
         }
+    }
+    return diags
+}
+
+/**
+ * B98.r123 (TS2209): when a package self-name-imports through its own `exports` map and the
+ * matched entry points UNDER `outDir`, TypeScript must reverse-map that output path to a
+ * source file via the project root. With `outDir` set but `rootDir` unset and `composite`
+ * off, the root is determined by the common source directory — which is AMBIGUOUS when there
+ * is a single source file (nothing to pin the root against). Multiple source files spanning
+ * directories make it determinable (no error), as does an explicit `rootDir` or `composite`.
+ * Emits a program-level "The project root is ambiguous, but is required to resolve export map
+ * entry '.' in file 'package.json'. Supply the `rootDir` compiler option to disambiguate."
+ * FP-safe: gated on node16+ module + outDir-without-rootDir-without-composite + exactly one
+ * non-declaration source file + a real self-name import + an exports value referencing outDir.
+ */
+private fun checkAmbiguousSelfNameExportRoot(files: List<SourceFileEntry>, options: CompilerOptions): List<Diagnostic> {
+    val diags = mutableListOf<Diagnostic>()
+    val module = options.module
+    if (module != ModuleKind.Node16 && module != ModuleKind.Node18 &&
+        module != ModuleKind.Node20 && module != ModuleKind.NodeNext) return diags
+    if (options.outDir == null || options.rootDir != null || options.composite) return diags
+    val srcFiles = files.filter {
+        val fn = it.fileName
+        !fn.contains("/node_modules/") && !fn.endsWith(".d.ts") &&
+            (fn.endsWith(".ts") || fn.endsWith(".tsx") || fn.endsWith(".mts") || fn.endsWith(".cts"))
+    }
+    if (srcFiles.size != 1) return diags  // single source file → ambiguous common source dir
+    val outDirNorm = options.outDir!!.trimStart('.', '/').trimEnd('/')
+    if (outDirNorm.isEmpty()) return diags
+    for (f in files) {
+        val base = f.fileName.substringAfterLast('/')
+        if (base != "package.json" || f.fileName.contains("/node_modules/")) continue
+        val json = f.content
+        val name = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1) ?: continue
+        val exportsVal = extractJsonExportsValue(json) ?: continue
+        if (!exportsVal.contains(outDirNorm)) continue  // exports must point under outDir
+        val nameEsc = Regex.escape(name)
+        val hasSelfImport = Regex("""(?:\bfrom\s+|\bimport\s*\(\s*)(["'])$nameEsc(?:/[^"']*)?\1""")
+            .containsMatchIn(srcFiles[0].content)
+        if (!hasSelfImport) continue
+        diags.add(Diagnostic(
+            message = "The project root is ambiguous, but is required to resolve export map entry '.' in file '$base'. Supply the `rootDir` compiler option to disambiguate.",
+            category = DiagnosticCategory.Error,
+            code = 2209,
+            fileName = null,
+        ))
     }
     return diags
 }
