@@ -13555,6 +13555,21 @@ class Checker(
                 fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
             }
             fileScope.names.addAll(globalAugmentationNames)
+            // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
+            // value/namespace binding named "global" — it augments the global
+            // scope. The binder nonetheless binds it as a ModuleDeclaration symbol
+            // "global", which would otherwise make a bare `global` reference (e.g.
+            // `global.x`) resolvable and suppress TS2304/TS2552. Remove it UNLESS
+            // some declaration of "global" is a real binding (`var global` /
+            // `const global` / a non-`declare`-augmentation namespace).
+            val globalSym = result.locals["global"] ?: globals["global"]
+            if (globalSym != null && globalSym.declarations.isNotEmpty() &&
+                globalSym.declarations.all { d ->
+                    d is ModuleDeclaration && (d.name as? Identifier)?.text == "global" &&
+                        ModifierFlag.Declare in d.modifiers
+                }) {
+                fileScope.names.remove("global")
+            }
 
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
@@ -13636,7 +13651,14 @@ class Checker(
                 is ModuleDeclaration -> {
                     val name = stmt.name
                     when (name) {
-                        is Identifier -> scope.names.add(name.text)
+                        // `declare global { }` is a global-scope AUGMENTATION, not a
+                        // binding named "global" (GH#42209) — don't add it to scope so
+                        // a bare `global` reference reports TS2304/TS2552. (Paired with
+                        // the file-root removal in checkUnresolvedNames.)
+                        is Identifier ->
+                            if (!(name.text == "global" && ModifierFlag.Declare in stmt.modifiers)) {
+                                scope.names.add(name.text)
+                            }
                         // StringLiteralNode = `declare module "foo"` (ambient external module).
                         // These are NOT accessible as identifiers in code — don't add to scope.
                         // TypeScript reports TS2304 for uses of the unquoted name as a value.
@@ -25855,7 +25877,10 @@ class Checker(
             // NOT in KNOWN_GLOBALS — they require `@types/node` to be available.
             // TypeScript emits TS2591 (with "@types/node" hint) for unresolved
             // references; see `NODE_BUILTIN_GLOBALS_TS2591` below.
-            "exports", "global",
+            // NOTE: `global` is intentionally NOT here — it is NOT an ambient
+            // value in a module/script without `@types/node`; a bare `global.x`
+            // must report TS2304/TS2552 (GH#42209, spellingSuggestionGlobal*).
+            "exports",
             "__dirname", "__filename",
             "__non_webpack_require__",
             // Web Worker APIs
@@ -26004,7 +26029,8 @@ class Checker(
             "indexedDB", "structuredClone", "reportError",
             "WScript", "Windows",
             // require, module, process, Buffer — removed (see KNOWN_GLOBALS note).
-            "exports", "global",
+            // `global` removed too (see KNOWN_GLOBALS note — GH#42209).
+            "exports",
             "__dirname", "__filename", "__non_webpack_require__",
             "importScripts",
             "describe", "it", "test", "expect", "jest",
