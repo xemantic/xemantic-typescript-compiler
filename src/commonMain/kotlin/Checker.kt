@@ -54151,6 +54151,13 @@ interface DataView {
         if (name is ObjectBindingPattern) {
             checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
             checkDestructuringPrivateAccess(name, decl.initializer, source, fileName)
+            // B98.r120: `var { a } = { a: 1, b: 2 }` — a destructured object-LITERAL
+            // initializer is fresh, so any property NOT bound by the pattern is excess
+            // (TS2353). The binding pattern's implied target type has exactly the bound
+            // names, each `any`.
+            (decl.initializer as? ObjectLiteralExpression)?.let {
+                checkBindingPatternExcessProperties(name, it, source, fileName)
+            }
         }
         if (name !is Identifier) return
 
@@ -54825,6 +54832,58 @@ interface DataView {
      * patterns. Message format: `Property 'n' does not exist on type
      * '{ n: number; } | undefined'.`
      */
+    /**
+     * B98.r120 (TS2353): excess-property check for `var <ObjectBindingPattern> =
+     * <ObjectLiteral>`. The binding pattern's implied target type has exactly its
+     * bound property names (each `any`); a fresh object-literal initializer specifying
+     * any OTHER property is excess. Bails (no check) on a rest element, a non-simple
+     * binding name (computed/numeric/nested), or a non-simple initializer property
+     * (spread / computed name / accessor) so the analysis stays sound. FP-safe: this is
+     * exactly TypeScript's fresh-object excess rule for destructured literals.
+     */
+    private fun checkBindingPatternExcessProperties(
+        pattern: ObjectBindingPattern, init: ObjectLiteralExpression,
+        source: String, fileName: String,
+    ) {
+        // An EMPTY pattern `var {} = { x: 5 }` is not excess-checked by TypeScript.
+        if (pattern.elements.isEmpty()) return
+        val boundNames = mutableListOf<String>()
+        for (be in pattern.elements) {
+            if (be.dotDotDotToken) return  // rest absorbs any excess
+            val keyNode = be.propertyName ?: be.name
+            val key = when (keyNode) {
+                is Identifier -> keyNode.text
+                is StringLiteralNode -> keyNode.text
+                else -> return  // computed / numeric / nested binding name — bail
+            }
+            if (key !in boundNames) boundNames.add(key)
+        }
+        for (p in init.properties) {
+            when (p) {
+                is PropertyAssignment ->
+                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
+                is ShorthandPropertyAssignment -> {}
+                is MethodDeclaration ->
+                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
+                else -> return  // SpreadAssignment / accessor — bail (unsound)
+            }
+        }
+        val members: SymbolTable = mutableMapOf()
+        val props = mutableListOf<Symbol>()
+        for (n in boundNames) {
+            val sym = Symbol(SymbolFlags.Property, n)
+            symbolTypes[sym.id] = anyType
+            members[n] = sym
+            props.add(sym)
+        }
+        val target = Type.Object().also {
+            it.members = members
+            it.properties = props
+        }
+        val sourceType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        checkExcessProperties(init, sourceType, target, typeToString(target), source, fileName)
+    }
+
     private fun checkDestructuringFromNullableUnion(
         pattern: ObjectBindingPattern,
         initializer: Expression?,
