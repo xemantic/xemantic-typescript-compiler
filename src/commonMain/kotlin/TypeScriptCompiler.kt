@@ -1289,6 +1289,9 @@ class TypeScriptCompiler {
             val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
                 allInputFileNames = parsed.files.map { it.fileName }.toSet())
             diagnostics.addAll(checker.getDiagnostics())
+            // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
+            // resolves through an `exports` field that exposes no types entry.
+            diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
 
             if (options.isolatedDeclarations) {
                 // Cross-file augmentation map: for each target file name (basename
@@ -1653,6 +1656,96 @@ private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, B
         result[dir] = isModule
     }
     return result
+}
+
+/**
+ * B98.r121 (TS2688): A `/// <reference types="X" />` directive resolves `X` through its
+ * `node_modules/X/package.json`. When that package.json carries an `"exports"` field that
+ * exposes NO types entry (no `.d.ts` path and no `"types"`/`"typings"` condition inside
+ * exports), the types-reference cannot be resolved → "Cannot find type definition file for
+ * 'X'." A package with no `exports` field (resolution falls back to `types`/`typings`) is
+ * fine, as is one whose exports DO expose types. FP-safe: fires only for the exact
+ * exports-hides-types shape, against a package actually present in `node_modules/`.
+ */
+private fun checkMissingTypesReferenceExports(files: List<SourceFileEntry>): List<Diagnostic> {
+    val diags = mutableListOf<Diagnostic>()
+    val pkgJsonByName = mutableMapOf<String, String>()
+    val pkgRegex = Regex("""(?:^|/)node_modules/(@[^/]+/[^/]+|[^/]+)/package\.json$""")
+    for (f in files) {
+        pkgRegex.find(f.fileName)?.let { pkgJsonByName[it.groupValues[1]] = f.content }
+    }
+    if (pkgJsonByName.isEmpty()) return diags
+    val refRegex = Regex("""^\s*///\s*<reference\s+types\s*=\s*(["'])([^"']+)\1\s*/?>""")
+    for (f in files) {
+        val fn = f.fileName
+        if (fn.contains("/node_modules/")) continue
+        if (!(fn.endsWith(".ts") || fn.endsWith(".tsx") || fn.endsWith(".mts") || fn.endsWith(".cts"))) continue
+        val source = f.content
+        var offset = 0
+        for (line in source.lineSequence()) {
+            val trimmed = line.trimStart()
+            // Reference directives only appear in the leading comment block.
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("//")) break
+            val m = refRegex.find(line)
+            if (m != null) {
+                val refName = m.groupValues[2]
+                val pkgJson = pkgJsonByName[refName]
+                if (pkgJson != null && packageExportsHidesTypes(pkgJson)) {
+                    val nameStart = offset + m.groups[2]!!.range.first
+                    var ln = 1
+                    var lineStart = 0
+                    for (i in 0 until nameStart.coerceAtMost(source.length)) {
+                        if (source[i] == '\n') { ln++; lineStart = i + 1 }
+                    }
+                    diags.add(Diagnostic(
+                        message = "Cannot find type definition file for '$refName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2688,
+                        fileName = fn,
+                        line = ln,
+                        character = nameStart - lineStart + 1,
+                        start = nameStart,
+                        length = refName.length,
+                    ))
+                }
+            }
+            offset += line.length + 1
+        }
+    }
+    return diags
+}
+
+/** True when a package.json has an `"exports"` field that exposes no types entry. */
+private fun packageExportsHidesTypes(pkgJson: String): Boolean {
+    val exportsVal = extractJsonExportsValue(pkgJson) ?: return false
+    if (exportsVal.contains(".d.ts")) return false
+    if (Regex("\"(types|typings)\"\\s*:").containsMatchIn(exportsVal)) return false
+    return true
+}
+
+/** Extracts the raw text of the `"exports"` field's value (string or object) from a JSON blob. */
+private fun extractJsonExportsValue(json: String): String? {
+    val m = Regex("\"exports\"\\s*:\\s*").find(json) ?: return null
+    val i = m.range.last + 1
+    if (i >= json.length) return null
+    return when (json[i]) {
+        '"' -> {
+            val end = json.indexOf('"', i + 1)
+            if (end < 0) null else json.substring(i, end + 1)
+        }
+        '{' -> {
+            var depth = 0
+            var j = i
+            while (j < json.length) {
+                val ch = json[j]
+                if (ch == '{') depth++
+                else if (ch == '}') { depth--; if (depth == 0) { j++; break } }
+                j++
+            }
+            json.substring(i, j)
+        }
+        else -> null
+    }
 }
 
 /**
