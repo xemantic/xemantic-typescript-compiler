@@ -1146,6 +1146,10 @@ class Checker(
         checkOverloadSignatureCompatibility()
         // 64h1b. B98.r38: TS2384 across merged namespace blocks (ambient/non-ambient overloads).
         checkCrossNamespaceOverloadAmbient()
+        // 64h1c. B98.r98: TS2814/TS2813 for a function-with-body merging a non-ambient class
+        // ACROSS merged namespace blocks (`namespace M { export function f(){} }` +
+        // `namespace M { export class f {} }`).
+        checkCrossNamespaceFunctionClassMerge()
         // 64h2. B76.1: TS1235 — namespace declarations only allowed at the top
         // level of a namespace or module (not inside function bodies, blocks, etc.).
         checkNamespaceTopLevelOnly()
@@ -61865,6 +61869,97 @@ interface DataView {
                             character = character,
                             start = nameNode.pos,
                             length = nameNode.text.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * B98.r98: TS2814 + TS2813 for a function-with-body that merges with a non-ambient
+     * class ACROSS merged `namespace X` blocks. A function-with-a-body can only merge
+     * with an AMBIENT class; otherwise TypeScript reports TS2814 on the function name +
+     * TS2813 on the class name (+ related TS6506 "Consider adding a 'declare' modifier
+     * to this class."). The SAME-statement-list case is already handled by the TS2813/
+     * TS2814 branch in [checkDuplicateDeclarations] (which recurses into namespace
+     * bodies); this walker covers ONLY the cross-block shape, gated on the func + class
+     * spanning ≥2 DISTINCT blocks so the two paths never double-emit. Namespace merge
+     * only merges EXPORTS, so both the function AND the class must be `export`ed —
+     * a non-exported sibling (the `g`/`C` cases in
+     * `duplicateIdentifiersAcrossContainerBoundaries`) does NOT merge and is silent.
+     * An ambient (`declare`) namespace block makes its members ambient → skipped.
+     */
+    private fun checkCrossNamespaceFunctionClassMerge() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val nsBlocks = mutableMapOf<String, MutableList<ModuleDeclaration>>()
+            for (stmt in result.sourceFile.statements) {
+                val nm = (stmt as? ModuleDeclaration)?.name
+                if (stmt is ModuleDeclaration && nm is Identifier && nm.text != "global") {
+                    nsBlocks.getOrPut(nm.text) { mutableListOf() }.add(stmt)
+                }
+            }
+            for ((_, blocks) in nsBlocks) {
+                if (blocks.size < 2) continue
+                val funcs = mutableMapOf<String, MutableList<Pair<FunctionDeclaration, Int>>>()
+                val classes = mutableMapOf<String, MutableList<Pair<ClassDeclaration, Int>>>()
+                blocks.forEachIndexed { bi, block ->
+                    if (ModifierFlag.Declare in block.modifiers) return@forEachIndexed
+                    val body = block.body as? ModuleBlock ?: return@forEachIndexed
+                    for (s in body.statements) {
+                        when (s) {
+                            is FunctionDeclaration ->
+                                if (s.name != null && s.body != null &&
+                                    ModifierFlag.Export in s.modifiers && ModifierFlag.Declare !in s.modifiers) {
+                                    funcs.getOrPut(s.name!!.text) { mutableListOf() }.add(s to bi)
+                                }
+                            is ClassDeclaration ->
+                                if (s.name != null &&
+                                    ModifierFlag.Export in s.modifiers && ModifierFlag.Declare !in s.modifiers) {
+                                    classes.getOrPut(s.name!!.text) { mutableListOf() }.add(s to bi)
+                                }
+                            else -> {}
+                        }
+                    }
+                }
+                for ((name, fnList) in funcs) {
+                    val clsList = classes[name] ?: continue
+                    // Cross-block only: the func + class decls must span ≥2 distinct blocks
+                    // (same-block is owned by checkDuplicateDeclarations).
+                    val involvedBlocks = (fnList.map { it.second } + clsList.map { it.second }).distinct()
+                    if (involvedBlocks.size < 2) continue
+                    val firstClass = clsList.first().first
+                    val firstClassName = firstClass.name!!
+                    val (clsLine, clsChar) = getLineAndCharacterOfPosition(source, firstClassName.pos)
+                    val related = Diagnostic(
+                        message = "Consider adding a 'declare' modifier to this class.",
+                        category = DiagnosticCategory.Message, code = 6506,
+                        fileName = fileName, line = clsLine, character = clsChar,
+                        start = firstClassName.pos, length = firstClassName.text.length,
+                    )
+                    for ((fn, _) in fnList) {
+                        val n = fn.name!!
+                        val (line, character) = getLineAndCharacterOfPosition(source, n.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Function with bodies can only merge with classes that are ambient.",
+                            category = DiagnosticCategory.Error, code = 2814,
+                            fileName = fileName, line = line, character = character,
+                            start = n.pos, length = n.text.length,
+                            relatedInformation = listOf(related),
+                        ))
+                    }
+                    for ((cls, _) in clsList) {
+                        val n = cls.name!!
+                        val (line, character) = getLineAndCharacterOfPosition(source, n.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Class declaration cannot implement overload list for '$name'.",
+                            category = DiagnosticCategory.Error, code = 2813,
+                            fileName = fileName, line = line, character = character,
+                            start = n.pos, length = n.text.length,
+                            relatedInformation = listOf(related),
                         ))
                     }
                 }
