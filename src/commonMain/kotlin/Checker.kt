@@ -21717,6 +21717,53 @@ class Checker(
                         }
                     }
                     val isClassicResolution = effectiveModuleRes !in setOf("node", "node10", "node16", "nodenext", "bundler")
+                    // B98.r105: TS5097 / TS2846 — a relative import specifier carrying a
+                    // TS-only file extension. A `.ts`/`.tsx` extension needs
+                    // `allowImportingTsExtensions` (or `rewriteRelativeImportExtensions`, which
+                    // rewrites it at emit) → otherwise TS5097. A `.d.ts` specifier imported as a
+                    // VALUE (not `import type`) is TS2846; the suggested implementation path gets
+                    // a `.js` suffix only for ES-module output. Span = the quoted specifier.
+                    if (isRelative) {
+                        val isTypeOnlyImport = when (stmt) {
+                            is ImportDeclaration -> stmt.importClause?.isTypeOnly == true
+                            is ImportEqualsDeclaration -> stmt.isTypeOnly
+                            is ExportDeclaration -> stmt.isTypeOnly
+                            else -> false
+                        }
+                        if (moduleName.endsWith(".d.ts")) {
+                            if (!isTypeOnlyImport) {
+                                val suggested = moduleName.removeSuffix(".d.ts") +
+                                    (if (options.module in ES_MODULE_KINDS) ".js" else "")
+                                val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "A declaration file cannot be imported without 'import type'. Did you mean to import an implementation file '$suggested' instead?",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2846,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = specifier.pos,
+                                    length = moduleName.length + 2,
+                                ))
+                                continue // TS reports only TS2846 for this specifier
+                            }
+                        } else if ((moduleName.endsWith(".ts") || moduleName.endsWith(".tsx")) &&
+                            !options.allowImportingTsExtensions && !options.rewriteRelativeImportExtensions) {
+                            val ext = if (moduleName.endsWith(".tsx")) ".tsx" else ".ts"
+                            val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "An import path can only end with a '$ext' extension when 'allowImportingTsExtensions' is enabled.",
+                                category = DiagnosticCategory.Error,
+                                code = 5097,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = specifier.pos,
+                                length = moduleName.length + 2,
+                            ))
+                            continue // TS reports only TS5097 for this specifier
+                        }
+                    }
                     // B98.r61: TS2834 — under node16/nodenext in ESM format, a relative
                     // import MUST carry an explicit file extension (`./foo.js`); an
                     // extensionless relative specifier (`./pkg`, `./node_modules/pkg`)
