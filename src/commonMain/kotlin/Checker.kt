@@ -21983,8 +21983,13 @@ class Checker(
                     // to the reverted blanket B98.r2 attempt: single-segment-only (no `/` → excludes
                     // scoped `@scope/pkg` and path-mapped specifiers), no `:` (excludes `node:` and
                     // other protocol forms), non-classic, no node_modules package, no ambient module,
-                    // no `.d.ts` basename match, not a node builtin. Under classic/AMD/System the
-                    // earlier classic branch already owns bare-specifier TS2307.
+                    // not a node builtin. The `.d.ts` rule is NODE_MODULES-AWARE: a plain SIBLING
+                    // `.d.ts` (e.g. `a.d.ts` next to `b.ts`) is NOT bare-resolvable under node10 —
+                    // only a `.d.ts` under `node_modules/`/`@types/` is — so `bareDtsResolvableInNodeModules`
+                    // (not the over-broad `dtsFileBaseNames` set) gates the suppression; this lets the
+                    // sibling-`.d.ts` shape (`es6ExportAssignment3`) fire while keeping real node_modules
+                    // typings suppressed. Under classic/AMD/System the earlier classic branch already
+                    // owns bare-specifier TS2307.
                     else if (!isRelative && !isClassicResolution
                         && !moduleName.startsWith("/")
                         && !moduleName.contains("/")
@@ -21997,7 +22002,7 @@ class Checker(
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
                         && moduleName !in ambientModuleNames
-                        && moduleName !in dtsFileBaseNames
+                        && !bareDtsResolvableInNodeModules(moduleName)
                         && !hasNodeModulesPackage(moduleName)
                         && moduleName !in NODE_BUILTIN_MODULES
                     ) {
@@ -22519,6 +22524,27 @@ class Checker(
         val needle = "/node_modules/$pkgName/"
         for (fn in fileResults.keys) {
             if (needle in fn || fn.startsWith("node_modules/$pkgName/")) return true
+        }
+        return false
+    }
+
+    /**
+     * True when a bare specifier [moduleName] could legitimately resolve to a `.d.ts` declaration
+     * file under `node_modules/` (incl. `@types/`). Used by the B98.r107 single-segment bare-specifier
+     * TS2307 gate to suppress the diagnostic ONLY for real package typings — a plain SIBLING `.d.ts`
+     * (`a.d.ts` next to `b.ts`) is NOT bare-resolvable under node10 and must NOT suppress. Matches
+     * either `node_modules/.../<name>.d.ts` (a flat `.d.ts`) or `node_modules/<name>/...` /
+     * `node_modules/@types/<name>/...index.d.ts` (a package directory of typings).
+     */
+    private fun bareDtsResolvableInNodeModules(moduleName: String): Boolean {
+        for (fn in fileResults.keys) {
+            if (!isDtsFile(fn)) continue
+            val inNodeModules = "/node_modules/" in fn || fn.startsWith("node_modules/")
+            if (!inNodeModules) continue
+            val base = fn.substringAfterLast("/").removeSuffix(".d.ts")
+            if (base == moduleName) return true
+            if ("/node_modules/$moduleName/" in fn || fn.startsWith("node_modules/$moduleName/")) return true
+            if ("/node_modules/@types/$moduleName/" in fn || fn.startsWith("node_modules/@types/$moduleName/")) return true
         }
         return false
     }
