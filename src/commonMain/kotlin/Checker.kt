@@ -60180,6 +60180,20 @@ interface DataView {
         }
         val sig = Signature(
             declaration = expr,
+            // Capture the arrow's own type parameters (with resolved constraints/defaults)
+            // so an explicit-type-arg call `fn<X>(...)` reaches the constraint check
+            // (TS2344/TS2559). Interned by node position (B59.1). Constraints/defaults are
+            // resolved in the current scope — top-level constraints (`A extends ObjA`)
+            // resolve fine; constraints referencing sibling params stay best-effort.
+            typeParameters = expr.typeParameters?.map { tp ->
+                typeParamInternCache.getOrPut(tp.pos) {
+                    val p = Type.TypeParam()
+                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
+                    tp.default?.let { p.default = getTypeFromTypeNode(it) }
+                    p
+                }
+            },
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = expr.parameters.count {
@@ -74670,15 +74684,28 @@ interface DataView {
                 typeArgs.map { getTypeFromTypeNode(it) }
             } catch (_: StackOverflowError) { null }
             if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
-                // Find a generic signature with matching type parameter count
+                // Find a generic signature whose type-param count accommodates the supplied
+                // type args. Exact-arity matches; ADDITIONALLY accept FEWER args than params
+                // when the trailing params have defaults — the supplied count must be within
+                // [minTypeParams, size] where minTypeParams = count of params with NO default.
+                // Previously only exact-arity sigs matched, so `fn<MyObjA>` against
+                // `<A extends ObjA, B extends ObjB = ObjB>` skipped the constraint check for
+                // the supplied `A` entirely (TS2344/TS2559 never fired).
                 val genericSig = signatures.firstOrNull { sig ->
-                    val tp = sig.typeParameters
-                    tp != null && tp.size == resolvedTypeArgs.size
+                    val tp = sig.typeParameters ?: return@firstOrNull false
+                    resolvedTypeArgs.size in tp.count { it.default == null }..tp.size
                 }
                 if (genericSig?.typeParameters != null) {
-                    val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
-                    // TS2344: Check type argument constraints
-                    checkCallTypeArgConstraints(genericSig.typeParameters!!, resolvedTypeArgs, typeArgs, mapper, source, fileName)
+                    val tps = genericSig.typeParameters!!
+                    // Pad the supplied args with the trailing params' resolved defaults so the
+                    // mapper + contextual instantiation see every param. The constraint check
+                    // still iterates only the SUPPLIED args (each has a typeArgNode).
+                    val paddedArgs = if (resolvedTypeArgs.size < tps.size) {
+                        resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
+                    } else resolvedTypeArgs
+                    val mapper = createTypeMapper(tps, paddedArgs)
+                    // TS2344 / TS2559: Check supplied type arguments against their constraints.
+                    checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName)
                     // B83.4f-a: use instantiateContextualSignature (not the plain
                     // instantiateSignature) so a nested FUNCTION-typed param like
                     // `f: (x: T) => Date` substitutes its inner `(x: T)` to `(x: <number>)`.
@@ -77273,6 +77300,35 @@ interface DataView {
             // Instantiate the constraint (e.g., `U extends T` where T is mapped to number → constraint = number)
             val instantiatedConstraint = instantiateType(constraint, mapper)
             if (instantiatedConstraint === anyType || instantiatedConstraint === errorType) continue
+            // TS2559 weak-type rule: when the (instantiated) constraint is a "weak type"
+            // (object with ≥1 property, ALL optional, no index/call/construct sigs) and the
+            // supplied type arg is an object sharing NO property name with it, TypeScript
+            // reports "Type 'X' has no properties in common with type 'Y'." — even when X is
+            // otherwise structurally assignable. Fires at the type-arg node, supersedes TS2344.
+            if (isWeakObjectType(instantiatedConstraint) && hasNoCommonProperties(argType, instantiatedConstraint)) {
+                val argNode = typeArgNodes[i]
+                val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
+                var wEnd = argNode.end
+                while (wEnd > argNode.pos && source.getOrNull(wEnd - 1)?.let {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' ||
+                    it == ',' || it == '>' || it == ')' || it == ';'
+                } == true) wEnd--
+                val wLen = if (wEnd > argNode.pos) wEnd - argNode.pos else argDisplay.length
+                if (wLen > 0) {
+                    val (wLine, wChar) = getLineAndCharacterOfPosition(source, argNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$argDisplay' has no properties in common with type '${typeToString(instantiatedConstraint)}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2559,
+                        fileName = fileName,
+                        line = wLine,
+                        character = wChar,
+                        start = argNode.pos,
+                        length = wLen,
+                    ))
+                    continue
+                }
+            }
             lastMissingPropertyName = null
             lastMissingPropertySymbol = null
             if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
@@ -77340,6 +77396,41 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * TS2559: a "weak type" is an object/interface with at least one property, where ALL
+     * properties are optional, and there are NO index/call/construct signatures. (Matches
+     * TypeScript's `isWeakType`.) Used by the type-arg-constraint weak-type rule.
+     */
+    private fun isWeakObjectType(type: Type): Boolean {
+        val obj = type as? Type.Object ?: return false
+        resolveStructuredTypeMembers(obj)
+        if (obj.stringIndexInfo != null || obj.numberIndexInfo != null) return false
+        if (!obj.callSignatures.isNullOrEmpty() || !obj.constructSignatures.isNullOrEmpty()) return false
+        val props = obj.properties ?: return false
+        if (props.isEmpty()) return false
+        return props.all { isOptionalProperty(it) }
+    }
+
+    /**
+     * TS2559: true when [arg] is an object/interface with ≥1 property, NO index/call/
+     * construct signatures, and shares NO property NAME with [target]. Conservative — an
+     * arg carrying an index/call signature is treated as potentially-common (returns false,
+     * no fire), and a shared property name (even with a mismatched type) also returns false
+     * so the standard TS2344 relation path handles it instead.
+     */
+    private fun hasNoCommonProperties(arg: Type, target: Type): Boolean {
+        val a = arg as? Type.Object ?: return false
+        resolveStructuredTypeMembers(a)
+        if (a.stringIndexInfo != null || a.numberIndexInfo != null) return false
+        if (!a.callSignatures.isNullOrEmpty() || !a.constructSignatures.isNullOrEmpty()) return false
+        val aProps = a.properties ?: return false
+        if (aProps.isEmpty()) return false
+        val t = target as? Type.Object ?: return false
+        val tNames = (t.properties ?: emptyList()).map { it.name }.toSet()
+        if (tNames.isEmpty()) return false
+        return aProps.none { it.name in tNames }
     }
 
     /**
