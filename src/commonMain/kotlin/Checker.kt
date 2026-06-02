@@ -78170,6 +78170,47 @@ interface DataView {
             } else {
                 val valueType = try { getTypeOfExpression(value) } catch (_: Throwable) { continue }
                 if (valueType === anyType || valueType === errorType) continue
+                // Nullish value vs a target member that doesn't accept it (strictNullChecks):
+                // `children: null` vs optional `children?: IIntervalTreeNode[]`
+                // (= `IIntervalTreeNode[] | undefined`). Emits at the key with the FULL
+                // declared member-type display (+ ` | undefined` for an optional prop) and
+                // a TS6500 "expected type comes from property X" related info.
+                val valIsNull = valueType.flags.hasAny(TypeFlags.Null)
+                val valIsUndef = valueType.flags.hasAny(TypeFlags.Undefined)
+                if (strictNullChecks && (valIsNull || valIsUndef) &&
+                    !tgtMemberType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) &&
+                    !tgtMemberType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
+                    val tgtSym = targetObj.members?.get(propName)
+                    val isOptional = tgtSym != null && isOptionalProperty(tgtSym)
+                    val accepted = (valIsNull && typeIncludesNull(tgtMemberType)) ||
+                        (valIsUndef && (typeIncludesUndefined(tgtMemberType) || isOptional))
+                    if (!accepted && tgtSym != null) {
+                        var disp = typeToString(tgtMemberType)
+                        if (isOptional && !typeIncludesUndefined(tgtMemberType)) disp = "$disp | undefined"
+                        val keyPos2 = nameNode.pos
+                        val keyLen2 = when (nameNode) {
+                            is StringLiteralNode -> (nameNode.rawText?.length ?: nameNode.text.length) + 2
+                            else -> propName.length
+                        }
+                        if (keyLen2 > 0) {
+                            val (l2, c2) = getLineAndCharacterOfPosition(source, keyPos2)
+                            val related = createPropertyDeclaredHereRelatedInfo(tgtSym)?.let { d ->
+                                listOf(d.copy(
+                                    message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetObj)}'",
+                                    code = 6500,
+                                ))
+                            } ?: emptyList()
+                            diagnostics.add(Diagnostic(
+                                message = "Type '${typeToString(valueType)}' is not assignable to type '$disp'.",
+                                category = DiagnosticCategory.Error, code = 2322,
+                                fileName = fileName, line = l2, character = c2,
+                                start = keyPos2, length = keyLen2,
+                                relatedInformation = related,
+                            ))
+                        }
+                    }
+                    continue
+                }
                 if (!isSimpleCheckableType(valueType) || !isSimpleCheckableType(tgtMemberType)) continue
                 if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
                 if (checkTypeRelatedTo(valueType, tgtMemberType, assignableRelation)) continue
