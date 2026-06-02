@@ -14767,6 +14767,14 @@ class Checker(
                 val methodScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 // Check decorators
                 element.decorators?.forEach { checkUnresolvedInExpr(it.expression, methodScope, source, fileName) }
+                // B98.r111: check a computed method name (`[foo<T>(a)]() {}`) in the OUTER
+                // scope — it is a value-position expression evaluated at class-definition time,
+                // so the method's OWN type parameters and parameters are NOT yet in scope (T/a
+                // are unresolved → TS2304/TS2552). Must run BEFORE addTypeParam/addParamsToScope
+                // below. Mirrors the PropertyDeclaration branch's computed-name check.
+                if (element.name is ComputedPropertyName) {
+                    checkUnresolvedInExpr((element.name as ComputedPropertyName).expression, methodScope, source, fileName)
+                }
                 element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
