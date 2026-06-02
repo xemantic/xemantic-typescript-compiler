@@ -691,6 +691,7 @@ class Checker(
         if (declarationOnly) {
             checkClassStrictModeIdentifiers()
             checkUnresolvedNames()
+            checkDtsImportEqualsAliasResolved()
             // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
             // walker is self-contained (no TS6131-style FPs), so it must also run under
             // emitDeclarationOnly (which takes the declarationOnly path).
@@ -785,6 +786,7 @@ class Checker(
         }
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
+        checkDtsImportEqualsAliasResolved()
         // 9. Check JSX elements for missing type definitions (TS7026)
         // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
         // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
@@ -13448,6 +13450,43 @@ class Checker(
             hasArguments: Boolean = false,
             classContext: ClassContext? = this.classContext,
         ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext)
+    }
+
+    /**
+     * B98.r95: TS2503 for a top-level `import X = <bare-Identifier>` in a `.d.ts`
+     * file whose alias target resolves to nothing. The general
+     * [checkUnresolvedNames] walker skips `.d.ts` files entirely (ambient merge
+     * rules differ → a broad un-skip would FP), so the ImportEqualsDeclaration
+     * TS2503 emit inside `checkUnresolvedInStatementCore` never fires for ambient
+     * files. This narrow pre-pass handles ONLY the `.d.ts` + top-level +
+     * bare-`Identifier` `moduleReference` shape (skips `QualifiedName` /
+     * `ExternalModuleReference` — those have their own TS2694/TS2307 paths). An
+     * alias target that resolves nowhere (not in own-file locals, not in the
+     * cross-file merged `globals`, not a `KNOWN_GLOBALS`) is unambiguously TS2503
+     * — TypeScript reports exactly this (`reexportedMissingAlias`,
+     * `export import Component = CompletelyMissing;`). Consulting `globals`
+     * (which merges every file's `.d.ts` locals) is the FP firewall for legit
+     * cross-file ambient aliases.
+     */
+    private fun checkDtsImportEqualsAliasResolved() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportEqualsDeclaration) continue
+                val ref = stmt.moduleReference
+                if (ref !is Identifier) continue
+                val name = ref.text
+                val validIdStart = name.isNotEmpty() &&
+                    (name[0] in 'A'..'Z' || name[0] in 'a'..'z' || name[0] == '_' || name[0] == '$')
+                if (!validIdStart || name in KEYWORD_IDENTIFIERS) continue
+                val resolvable = result.locals.containsKey(name) ||
+                    globals.containsKey(name) ||
+                    name in KNOWN_GLOBALS
+                if (!resolvable) emitTS2503(name, ref, source, fileName)
+            }
+        }
     }
 
     /**
