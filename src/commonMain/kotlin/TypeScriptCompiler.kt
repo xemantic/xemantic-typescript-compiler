@@ -530,6 +530,30 @@ class TypeScriptCompiler {
                 ))
             }
         }
+        // TS6504: a JavaScript ROOT file present without `allowJs`. When the ENTIRE program
+        // is JS-family files and `allowJs` is off, none can be a valid compilation unit →
+        // TS6504 per file (TypeScript's "File '...' is a JavaScript file. Did you mean to
+        // enable the 'allowJs' option?"). Gated to an ALL-JS program (no .ts/.tsx/.d.ts) so
+        // it never fires for a `.ts` test with an auxiliary `.js` file or a `.ts`-only run.
+        // The checkJs+allowJsExplicitlyFalse case above handles the mixed/checkJs variant.
+        run {
+            fun isJsFamily(fn: String) = fn.endsWith(".js") || fn.endsWith(".jsx") ||
+                    fn.endsWith(".cjs") || fn.endsWith(".mjs")
+            if (!options.allowJs && !options.checkJs &&
+                parsed.files.isNotEmpty() && parsed.files.all { isJsFamily(it.fileName) }) {
+                for (file in parsed.files) {
+                    diagnostics.add(Diagnostic(
+                        message = "File '${file.fileName.removePrefix("/")}' is a JavaScript file. Did you mean to enable the 'allowJs' option?",
+                        category = DiagnosticCategory.Error,
+                        code = 6504,
+                        messageChain = listOf(
+                            "  The file is in the program because:",
+                            "    Root file specified for compilation",
+                        ),
+                    ))
+                }
+            }
+        }
         // TS5069: isolatedDeclarations without declaration/composite
         if (options.isolatedDeclarations && !options.declaration && !options.composite) {
             diagnostics.add(Diagnostic(
