@@ -57261,12 +57261,13 @@ interface DataView {
         declaredTypes[symbol.id] = interfaceType
         // Collect type parameters from the first class/interface declaration
         val decl = symbol.declarations.firstOrNull {
-            it is ClassDeclaration || it is InterfaceDeclaration
+            it is ClassDeclaration || it is InterfaceDeclaration || it is ClassExpression
         }
         if (decl != null) {
             val typeParams = when (decl) {
                 is ClassDeclaration -> decl.typeParameters
                 is InterfaceDeclaration -> decl.typeParameters
+                is ClassExpression -> decl.typeParameters
                 else -> null
             }
             if (typeParams != null && typeParams.isNotEmpty()) {
@@ -57305,6 +57306,7 @@ interface DataView {
                 val heritageClauses = when (d) {
                     is ClassDeclaration -> d.heritageClauses
                     is InterfaceDeclaration -> d.heritageClauses
+                    is ClassExpression -> d.heritageClauses
                     else -> null
                 } ?: continue
                 for (clause in heritageClauses) {
@@ -57776,6 +57778,7 @@ interface DataView {
             val classMembers = when (decl) {
                 is ClassDeclaration -> decl.members
                 is InterfaceDeclaration -> decl.members
+                is ClassExpression -> decl.members
                 else -> continue
             }
             // B85.2: target-version member filter for builtin lib declarations.
@@ -70185,6 +70188,34 @@ interface DataView {
                 }
                 currentLocalTypes = savedLocalTypes
                 currentParamBindingNames = savedParamBindings
+            }
+            is ClassExpression -> {
+                // B98.r109: a class EXPRESSION (`class { m() { this.X } }`, e.g. used as a
+                // base in `class George extends class { reset() { return this.y } }`) is reached
+                // here via the ClassDeclaration heritage walk / var-decl initializer / etc., but
+                // had no handler — so `this.X` inside its method bodies was never checked and a
+                // missing member silently produced no TS2339. Mirror the ClassDeclaration branch
+                // of checkPropertyAccessInStatement: walk the anon class's own heritage
+                // expressions, build a transient Type.Interface for `this` (synthetic Class
+                // symbol named "(Anonymous class)" so typeToString renders the matching display
+                // for the diagnostic), then walk each member with that classType. The synthetic
+                // symbol is never published to the binder tables (check-pass-local). ClassExpression
+                // member/heritage/type-param resolution was just enabled in
+                // getDeclaredTypeOfClassOrInterface / resolveInterfaceMembers / resolveBaseTypesLazy.
+                expr.heritageClauses?.forEach { clause ->
+                    clause.types.forEach { ewta ->
+                        checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType = null)
+                    }
+                }
+                val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
+                anonSym.declarations.add(expr)
+                val anonClassType = try { getDeclaredTypeOfSymbol(anonSym) } catch (_: StackOverflowError) { null }
+                val savedStatic = inStaticClassMethod
+                inStaticClassMethod = false
+                for (member in expr.members) {
+                    checkPropertyAccessInClassMember(member, source, fileName, anonClassType)
+                }
+                inStaticClassMethod = savedStatic
             }
             else -> {}
         }
