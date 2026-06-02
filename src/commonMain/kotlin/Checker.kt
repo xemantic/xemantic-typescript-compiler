@@ -86830,6 +86830,31 @@ interface DataView {
                 if (body.statements.any { it is ExportAssignment && it.isExportEquals }) continue
                 // An augmentation with no declarations to merge isn't worth flagging.
                 if (body.statements.isEmpty()) continue
+                // TS2649: a VALUE-export augmentation (`export function`/`var`/`class`/`enum`)
+                // of a BARE-resolvable package whose top-level `export = V` target is a value
+                // (plus only EMPTY namespaces) — a non-module entity. The TS2671 path below only
+                // reaches ambient-block / relative definitions; a bare package FILE
+                // (`/node_modules/lib/index.d.ts` with top-level `export = lib`) is not covered
+                // there, so this branch is purely additive and disjoint.
+                if (augmentationHasValueExport(body) &&
+                    !specifier.startsWith("./") && !specifier.startsWith("../")) {
+                    val pkgFile = resolveBareSpecifierViaNodeModules(specifier, augFile)
+                    val pkgResult = pkgFile?.let { fileResults[it] }
+                    if (pkgResult != null && isValuePlusEmptyNamespaceExportTarget(pkgResult.sourceFile)) {
+                        val (l, c) = getLineAndCharacterOfPosition(augSource, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot augment module '$specifier' with value exports because it resolves to a non-module entity.",
+                            category = DiagnosticCategory.Error,
+                            code = 2649,
+                            fileName = augFile,
+                            line = l,
+                            character = c,
+                            start = nameNode.pos,
+                            length = (nameNode.rawText?.length ?: nameNode.text.length) + 2,
+                        ))
+                        continue
+                    }
+                }
                 if (!ambientModuleExportEqualsIsValueOnly(specifier, augFile)) continue
                 val (line, character) = getLineAndCharacterOfPosition(augSource, nameNode.pos)
                 diagnostics.add(Diagnostic(
@@ -86844,6 +86869,54 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * B98.r114 (TS2649): true when a `declare module "X" { ... }` augmentation BODY
+     * adds at least one VALUE export (`export function`/`export var`/`export class`/
+     * `export enum`). Type-only exports (`export interface`/`export type`) do NOT count.
+     */
+    private fun augmentationHasValueExport(body: ModuleBlock): Boolean = body.statements.any { s ->
+        when (s) {
+            is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
+            is VariableStatement -> ModifierFlag.Export in s.modifiers
+            is ClassDeclaration -> ModifierFlag.Export in s.modifiers
+            is EnumDeclaration -> ModifierFlag.Export in s.modifiers
+            else -> false
+        }
+    }
+
+    /**
+     * B98.r114 (TS2649): true when [file] has a top-level `export = V` whose target V
+     * is declared ONLY as a value (`var`/`function`) plus, at most, EMPTY namespaces
+     * (`declare namespace V {}`) — a non-module entity. A namespace with any members,
+     * or any class/interface/type-alias/enum named V, disqualifies (it carries
+     * namespace/type meaning, so `export = V` is module-like). Distinct from
+     * [isNameValueOnlyInFile] which rejects ANY namespace; here an empty namespace is
+     * tolerated (it's uninstantiated and exports nothing).
+     */
+    private fun isValuePlusEmptyNamespaceExportTarget(file: SourceFile): Boolean {
+        val exportEq = file.statements.filterIsInstance<ExportAssignment>().firstOrNull { it.isExportEquals } ?: return false
+        val name = (exportEq.expression as? Identifier)?.text ?: return false
+        var hasValue = false
+        var hasDisqualifying = false
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement ->
+                    if (stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) hasValue = true
+                is FunctionDeclaration -> if (stmt.name?.text == name) hasValue = true
+                is ClassDeclaration -> if (stmt.name?.text == name) hasDisqualifying = true
+                is InterfaceDeclaration -> if (stmt.name.text == name) hasDisqualifying = true
+                is TypeAliasDeclaration -> if (stmt.name.text == name) hasDisqualifying = true
+                is EnumDeclaration -> if (stmt.name.text == name) hasDisqualifying = true
+                is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == name) {
+                    val b = stmt.body as? ModuleBlock
+                    if (b == null || b.statements.isNotEmpty()) hasDisqualifying = true
+                }
+                else -> {}
+            }
+        }
+        return hasValue && !hasDisqualifying
     }
 
     /**
