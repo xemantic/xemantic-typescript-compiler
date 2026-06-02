@@ -75111,6 +75111,28 @@ interface DataView {
      * (interfaces, objects, unions, intersections) to avoid false positives
      * from incomplete structural comparison and missing generic instantiation.
      */
+    /**
+     * voidArrayLit: returns [voidType] iff [arg] is a zero-argument call of a parameterless,
+     * un-annotated arrow/function-expression whose block body has no value-returning `return`
+     * — i.e. an IIFE `(() => {})()` / `(function(){})()` whose result is unambiguously `void`.
+     * Returns null for every other shape, so the caller falls back to the original type.
+     */
+    private fun voidIifeArgType(arg: Expression): Type? {
+        if (arg !is CallExpression) return null
+        if (arg.arguments.isNotEmpty() || !arg.typeArguments.isNullOrEmpty()) return null
+        var callee: Expression = arg.expression
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        val (fnParams, fnBody, fnRet) = when (val fn = callee) {
+            is ArrowFunction -> Triple(fn.parameters, fn.body, fn.type)
+            is FunctionExpression -> Triple(fn.parameters, fn.body as Node, fn.type)
+            else -> return null
+        }
+        if (fnParams.isNotEmpty() || fnRet != null) return null
+        val block = fnBody as? Block ?: return null
+        if (hasReturnWithExpression(block)) return null
+        return voidType
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -75163,7 +75185,14 @@ interface DataView {
             // type instead of widening to the primitive — matches TypeScript's
             // bidirectional contextual-typing rule for TS2345 source display.
             val argType = try {
-                val widened = getTypeOfExpression(arg)
+                val raw = getTypeOfExpression(arg)
+                // voidArrayLit: a zero-arg IIFE of a parameterless, no-return,
+                // un-annotated arrow/fn-expr returns `void`. `getReturnTypeOfCallExpression`
+                // yields `anyType` for an arrow/fn-expr callee, so detect the shape here and
+                // override to voidType ONLY at this arg-check site — NEVER in the global
+                // call-return path, which would cascade `void` into currentLocalTypes /
+                // var-init inference (the `isFromCall` rule).
+                val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
                 if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
                 } else widened
