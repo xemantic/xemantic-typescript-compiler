@@ -65526,6 +65526,98 @@ interface DataView {
                 }
                 if (baseTypeExprs.size < 2) return // Need 2+ base types
 
+                // B98.r128d: TS2320 for the SAME generic base extended with DIFFERENT
+                // type args (`interface C extends A<string>, A<number>`). The property
+                // loop below skips this (both bases are `A` → distinctBases < 2), and the
+                // parser MISPARSES the first generic base (the one before the comma) as a
+                // ParenthesizedExpression carrying `instantiationEnd`, dropping its
+                // `.typeArguments` (the B93 gotcha) — so the first base's type-arg text is
+                // recovered from `source.substring(<…instantiationEnd)`. When a base name
+                // recurs with non-identical type-arg text AND a base property mentions a
+                // DIFFERING type parameter, the substituted parent types diverge → TS2320 +
+                // a "Named property 'P' of types 'A<…>' and 'A<…>' are not identical." chain.
+                // FP-safe: extending the same generic base with non-identical args is
+                // unconditionally TS2320. Emit once per interface (return after).
+                run {
+                    // Uniform SOURCE-based type-arg extraction (avoids both the `.end`
+                    // overshoot — which doubles the trailing `>` — and the misparsed-first-
+                    // base `instantiationEnd` handling): from the base name's position, find
+                    // the `<` and bracket-match to its `>`, then split args by top-level commas.
+                    fun splitTopLevel(s: String): List<String> {
+                        val out = mutableListOf<String>(); var depth = 0; var start = 0
+                        for (j in s.indices) when (s[j]) {
+                            '<', '(', '[', '{' -> depth++
+                            '>', ')', ']', '}' -> depth--
+                            ',' -> if (depth == 0) { out.add(s.substring(start, j)); start = j + 1 }
+                        }
+                        out.add(s.substring(start)); return out
+                    }
+                    fun occOf(te: ExpressionWithTypeArguments): Triple<String, List<String>, String>? {
+                        val (name, startPos) = when (val be = te.expression) {
+                            is Identifier -> be.text to be.pos
+                            is ParenthesizedExpression -> ((be.expression as? Identifier) ?: return null).let { it.text to it.pos }
+                            else -> return null
+                        }
+                        val ltPos = source.indexOf('<', startPos)
+                        if (ltPos < 0) return null
+                        var depth = 0; var i = ltPos; var gtPos = -1
+                        while (i < source.length) {
+                            when (source[i]) { '<' -> depth++; '>' -> { depth--; if (depth == 0) { gtPos = i; break } } }
+                            i++
+                        }
+                        if (gtPos < 0) return null
+                        val args = splitTopLevel(source.substring(ltPos + 1, gtPos)).map { it.trim() }.filter { it.isNotEmpty() }
+                        if (args.isEmpty()) return null
+                        return Triple(name, args, "$name<${args.joinToString(", ")}>")
+                    }
+                    val occs = baseTypeExprs.mapNotNull { occOf(it) }
+                    for ((bname, group) in occs.groupBy { it.first }) {
+                        if (group.size < 2) continue
+                        val o1 = group[0]
+                        val o2 = group.firstOrNull { it.second != o1.second } ?: continue
+                        val baseSym = globals[bname] ?: currentFileLocals?.get(bname) ?: continue
+                        val baseDecl = baseSym.declarations.filterIsInstance<InterfaceDeclaration>().firstOrNull() ?: continue
+                        val tpNames = baseDecl.typeParameters?.map { it.name.text } ?: emptyList()
+                        if (tpNames.isEmpty()) continue
+                        val diffTpNames = tpNames.filterIndexed { i, _ ->
+                            val a1 = o1.second.getOrNull(i); val a2 = o2.second.getOrNull(i)
+                            a1 != null && a2 != null && a1 != a2
+                        }.toSet()
+                        if (diffTpNames.isEmpty()) continue
+                        fun mentions(node: TypeNode?): Boolean = when (node) {
+                            null -> false
+                            is TypeReference -> ((node.typeName as? Identifier)?.text in diffTpNames) ||
+                                (node.typeArguments?.any { mentions(it) } == true)
+                            is ArrayType -> mentions(node.elementType)
+                            is UnionType -> node.types.any { mentions(it) }
+                            is IntersectionType -> node.types.any { mentions(it) }
+                            is ParenthesizedType -> mentions(node.type)
+                            else -> false
+                        }
+                        val diffProp = baseDecl.members.firstNotNullOfOrNull { m ->
+                            when (m) {
+                                is PropertyDeclaration -> if (mentions(m.type)) (m.name as? Identifier)?.text else null
+                                is MethodDeclaration -> if (mentions(m.type)) (m.name as? Identifier)?.text else null
+                                else -> null
+                            }
+                        } ?: continue
+                        val nameNode = stmt.name
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Interface '$ifaceName' cannot simultaneously extend types '${o1.third}' and '${o2.third}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2320,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = nameNode.text.length,
+                            messageChain = listOf("  Named property '$diffProp' of types '${o1.third}' and '${o2.third}' are not identical."),
+                        ))
+                        return
+                    }
+                }
+
                 // Own members override base member conflicts — skip names declared by ANY merged decl.
                 val ownMemberNames = allDecls.flatMap { it.members }.mapNotNull {
                     when (it) {
