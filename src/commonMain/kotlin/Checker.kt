@@ -43668,6 +43668,7 @@ interface DataView {
                 if (inNullCastOverlapPass) {
                     emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
                     emitTS2352IfNullAsCast(expr, source, fileName)
+                    emitTS1355IfInvalidConstAssertion(expr, source, fileName)
                 }
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
@@ -43806,6 +43807,55 @@ interface DataView {
     private fun emitTS2352IfNullAsCast(expr: AsExpression, source: String, fileName: String) {
         val spanEnd = if (expr.tightEnd > expr.pos) expr.tightEnd else expr.end
         emitTS2352NullishCastCore(expr.expression, expr.type, expr.pos, spanEnd, source, fileName)
+    }
+
+    /**
+     * B98.r128c: TS1355 — "A 'const' assertion can only be applied to references to enum
+     * members, or string, number, boolean, array, or object literals." Narrow, FP-safe
+     * slice: `<operand> as const` where the operand is a PROPERTY or ELEMENT access whose
+     * base Identifier resolves to a genuine NON-enum VALUE declaration (var/const/let/
+     * class/function/param). Enum-member access (`E.A as const`) is the ONLY valid
+     * property-access operand, so a non-enum base is unambiguously invalid (e.g.
+     * `const E5 = {…}; E5.a as const`). Conservative everywhere else: an unresolvable
+     * base, a namespace/interface/type-alias base, a qualified (PropertyAccess) base, or
+     * any non-member operand is SKIPPED (FN, never FP) — so the full whitelist of valid
+     * `as const` forms (literals, array/object literals, +/- numerics, …) is never at
+     * risk of a false positive. Squiggle spans the operand. Corpus FP surface verified
+     * empty: only `constantEnumAssert` (non-enum, fires) and `computedEnumTypeWidening`
+     * (enum base, skipped) have the `X.prop as const` shape.
+     */
+    private fun emitTS1355IfInvalidConstAssertion(expr: AsExpression, source: String, fileName: String) {
+        val t = expr.type
+        if (t !is TypeReference || (t.typeName as? Identifier)?.text != "const") return
+        val operand = expr.expression
+        val baseIdent: Identifier? = when (operand) {
+            is PropertyAccessExpression -> operand.expression as? Identifier
+            is ElementAccessExpression -> operand.expression as? Identifier
+            else -> null
+        }
+        if (baseIdent == null) return
+        val sym = globals[baseIdent.text] ?: return
+        val decls = sym.declarations
+        if (decls.any { it is EnumDeclaration }) return            // enum member ref → valid
+        val isValueDecl = decls.any {
+            it is VariableDeclaration || it is ClassDeclaration ||
+                it is FunctionDeclaration || it is Parameter
+        }
+        if (!isValueDecl) return                                   // namespace/type-only/etc → skip
+        val start = operand.pos
+        val length = expressionTrueEnd(operand) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals.",
+            category = DiagnosticCategory.Error,
+            code = 1355,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /** Shared core for TS2352 nullish/primitive-mismatch cast diagnostics (both `<T>x` and
