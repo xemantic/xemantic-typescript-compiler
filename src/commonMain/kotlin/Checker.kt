@@ -61409,6 +61409,45 @@ interface DataView {
                                 ))
                             }
                         }
+                    } else if (source != null && fileName != null &&
+                        constraint is Type.Reference &&
+                        constraint.resolvedTypeArguments?.any { typeMentionsTypeParam(it, tp) } == true &&
+                        isSimpleCheckableType(getWidenedLiteralType(firstWidened)) &&
+                        effectiveCandidates.size >= 2 &&
+                        effectiveCandidates.all { it.literalType != null }) {
+                        // B98.r128 (Blocker #2): a multi-literal-anchor TP whose inferred union
+                        // fails a SELF-REFERENTIAL Type.Reference constraint
+                        // (`<T extends Comparable<T>>` called `max2(1, 2)`). TypeScript displays
+                        // T as the UNION of the literal arg types (`1 | 2`) substituted into the
+                        // constraint (`Comparable<1 | 2>`), while the failing arg is shown WIDENED
+                        // (`number`). Complements B98.r118 (which excludes Reference constraints
+                        // because a SINGLE-anchor instantiated-Reference display is unreliable);
+                        // gated to the multi-literal-anchor shape so that excluded case stays out.
+                        val unionForDisplay = getUnionType(effectiveCandidates.map { it.literalType!! })
+                        val tpMapper = TypeMapper { t ->
+                            if (t === tp || (t is Type.TypeParam && t.symbol != null && t.symbol === tp.symbol))
+                                unionForDisplay else null
+                        }
+                        val substituted = try { instantiateType(constraint, tpMapper) }
+                            catch (_: StackOverflowError) { constraint }
+                        val arg = args[first.argIdx]
+                        if (arg !is SpreadElement) {
+                            val start = arg.pos
+                            val length = expressionTrueEnd(arg) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Argument of type '${typeToString(getWidenedLiteralType(firstWidened))}' is not assignable to parameter of type '${typeToString(substituted)}'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2345,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
                     }
                     return null
                 }
