@@ -66074,6 +66074,89 @@ interface DataView {
             }
         }
 
+        // B98.r128b: TS2413 for NAMED-interface index value types (the anonymous
+        // object-literal case above emits at the type NAME; this emits at the OWN
+        // index-SIGNATURE declaration, matching TypeScript's `indexerConstraints`
+        // baseline). When an interface has BOTH a number and a string index signature
+        // — collected across its MERGE GROUP (all declarations of the name) plus
+        // single-level `extends` bases — whose NAMED-interface values conflict because
+        // the NUMBER value is MISSING a required property of the STRING value
+        // (`collectMissingProperties` non-empty = the FP-safe B87.4 missing-property
+        // subset; a missing required property unambiguously means not-assignable), emit
+        // ONCE per merge group at the OWN index sig (prefer the number sig; fall back to
+        // the string sig when the number sig is inherited — e.g. `I extends H`). Squiggle
+        // spans `[...]: T;`. Dedup: emit only at the declaration that contains the report
+        // sig (so a merged `interface E {[s]:B}` + `interface E {[n]:A}` fires once, at
+        // the number sig). Disjoint from the anonymous path (both values must be
+        // Type.Interface), so it cannot double-emit or regress `inheritedString…2` (B98.r20).
+        if (stmt is InterfaceDeclaration && stmt.name != null) {
+            val tn = stmt.name!!
+            val isNum = { s: IndexSignature -> s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true }
+            val isStr = { s: IndexSignature -> s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true }
+            val groupDecls = globals[tn.text]?.declarations?.filterIsInstance<InterfaceDeclaration>()
+                ?.ifEmpty { listOf(stmt) } ?: listOf(stmt)
+            val groupSigs = groupDecls.flatMap { it.members.filterIsInstance<IndexSignature>() }
+            val ownNumberSig = groupSigs.firstOrNull(isNum)
+            val ownStringSig = groupSigs.firstOrNull(isStr)
+            var inhNumberSig: IndexSignature? = null
+            var inhStringSig: IndexSignature? = null
+            if (ownNumberSig == null || ownStringSig == null) {
+                val baseNames = stmt.heritageClauses
+                    ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                for (bn in baseNames) {
+                    val bsym = globals[bn] ?: continue
+                    val bsigs = bsym.declarations.flatMap { d ->
+                        when (d) {
+                            is InterfaceDeclaration -> d.members.filterIsInstance<IndexSignature>()
+                            is ClassDeclaration -> d.members.filterIsInstance<IndexSignature>()
+                            else -> emptyList()
+                        }
+                    }
+                    if (inhNumberSig == null) inhNumberSig = bsigs.firstOrNull(isNum)
+                    if (inhStringSig == null) inhStringSig = bsigs.firstOrNull(isStr)
+                }
+            }
+            val effNumSig = ownNumberSig ?: inhNumberSig
+            val effStrSig = ownStringSig ?: inhStringSig
+            val numNode = effNumSig?.type
+            val strNode = effStrSig?.type
+            if (numNode != null && strNode != null) {
+                val numVal = try { getTypeFromTypeNode(numNode) } catch (_: StackOverflowError) { errorType }
+                val strVal = try { getTypeFromTypeNode(strNode) } catch (_: StackOverflowError) { errorType }
+                if (numVal is Type.Interface && strVal is Type.Interface &&
+                    numVal !== strVal && numVal !== errorType && strVal !== errorType) {
+                    resolveStructuredTypeMembers(numVal)
+                    resolveStructuredTypeMembers(strVal)
+                    val missing = try { collectMissingProperties(numVal, strVal) } catch (_: StackOverflowError) { emptyList() }
+                    if (missing.isNotEmpty()) {
+                        val reportSig = ownNumberSig ?: ownStringSig
+                        if (reportSig != null && stmt.members.contains(reportSig)) {
+                            val start = reportSig.pos
+                            val typePos = reportSig.type?.pos ?: reportSig.pos
+                            var i = typePos
+                            while (i < source.length && source[i] != ';' && source[i] != '\n') i++
+                            val end = if (i < source.length && source[i] == ';') i + 1 else i
+                            val length = end - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "'number' index type '${typeToString(numVal)}' is not assignable to 'string' index type '${typeToString(strVal)}'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2413,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
         if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
 
