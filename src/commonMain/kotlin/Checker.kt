@@ -74038,6 +74038,29 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                    // B98.r126 (Blocker #2 substep): populate `currentLocalTypes` for an
+                    // ANNOTATED function-local variable whose resolved type is CALLABLE
+                    // (has call signatures). Without this, `var f: I1<string>; f(arg)`
+                    // inside a function body resolves `f` to anyType in `getCalleeType`
+                    // (the var is neither a param nor a global), so the call's args are
+                    // never type-checked. Gated to callable types so the new arg-checking
+                    // surface is confined to "call a callable-typed local" (the
+                    // `callSignaturesShouldBeResolvedBeforeSpecialization` shape) — a plain
+                    // `number`/object local is NOT added, leaving its handling unchanged.
+                    // First-decl/param-shadow wins (skip when already present).
+                    val nm = decl.name as? Identifier
+                    val ann = decl.type
+                    if (nm != null && ann != null && currentLocalTypes[nm.text] == null) {
+                        try {
+                            val t = getTypeFromTypeNode(ann)
+                            if (t is Type.Object && t !== anyType && t !== errorType) {
+                                resolveStructuredTypeMembers(t)
+                                if (!t.callSignatures.isNullOrEmpty()) {
+                                    currentLocalTypes[nm.text] = t
+                                }
+                            }
+                        } catch (_: StackOverflowError) { /* circular type */ }
+                    }
                 }
             }
             is ReturnStatement -> stmt.expression?.let { checkCallTypesInExpr(it, source, fileName) }
@@ -77330,7 +77353,16 @@ interface DataView {
                 }
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // Emit TS2345
-                val argTypeStr = typeToString(argType)
+                // B98.r126: widen a fresh literal ARG for display UNLESS the PARAM is
+                // itself a literal type. TypeScript shows `boolean`/`string`/`number`
+                // (widened) when the target is a base type (`f(x: string)` called
+                // `f(true)` → 'boolean'), but PRESERVES the literal when the target is
+                // also a literal (`f(x: 123)` called `f(true)` → 'true', per
+                // deepKeysIndexing). getWidenedLiteralType is a no-op for non-literal
+                // args, so object/named/reference arg displays are unaffected. Verified:
+                // zero baselines show a literal-arg-vs-base-param literal display.
+                val paramIsLiteral = getWidenedLiteralType(paramType) !== paramType
+                val argTypeStr = typeToString(if (paramIsLiteral) argType else getWidenedLiteralType(argType))
                 val paramTypeStr = typeToString(paramType)
                 val start = arg.pos
                 // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
