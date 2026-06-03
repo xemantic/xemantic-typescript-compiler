@@ -74500,6 +74500,58 @@ interface DataView {
         }
     }
 
+    /**
+     * B98.r125: TS2345 — a call to a function whose LAST parameter is a rest
+     * parameter typed exactly `never` (the bottom type, NOT `never[]`). Such a
+     * signature is uncallable: the supplied argument tuple is never assignable to
+     * `never` (only `never` itself is). e.g. `declare let foo: (...args: never) =>
+     * void; foo()` → "Argument of type '[]' is not assignable to parameter of type
+     * 'never'." (the args-tuple display is `[]` for zero args, `[T1, T2, ...]`
+     * otherwise). Squiggle spans the whole call expression.
+     *
+     * FP-safe: the guard `paramType === neverType` matches ONLY a bare-`never`
+     * rest parameter — a normal `T[]`/`never[]` rest resolves to a Type.Reference,
+     * never to the `neverType` singleton. A `...args: never` signature is an
+     * uncallable error-repro shape, so every call to it is unconditionally TS2345.
+     * Returns true if it emitted (caller returns to avoid double-emit).
+     */
+    private fun checkNeverRestParamCall(
+        expr: CallExpression,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val params = sig.parameters
+        if (params.isEmpty()) return false
+        val last = params.last()
+        val isRest = (last.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        if (!isRest) return false
+        val ptype = try { getTypeOfSymbol(last) } catch (_: StackOverflowError) { return false }
+        if (ptype !== neverType) return false
+        val argDisplays = expr.arguments.map { a ->
+            val at = try { getTypeOfExpression(a) } catch (_: StackOverflowError) { return false }
+            typeToString(at)
+        }
+        val tupleDisplay = "[" + argDisplays.joinToString(", ") + "]"
+        val start = expr.pos
+        val end = if (expr.arguments.isNotEmpty()) expressionTrueEnd(expr.arguments.last()) + 1
+                  else expressionTrueEnd(expr.expression) + 2
+        val length = end - start
+        if (length <= 0) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$tupleDisplay' is not assignable to parameter of type 'never'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return true
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -74970,6 +75022,11 @@ interface DataView {
             }
         }
         if (signatures.size == 1) {
+            // B98.r125: TS2345 for a call whose callee's last parameter is a rest
+            // parameter typed exactly `never` (the bottom type — NOT `never[]`).
+            // Such a signature is uncallable: the supplied argument tuple is never
+            // assignable to `never`. Fires and returns before the standard arg check.
+            if (checkNeverRestParamCall(expr, signatures[0], source, fileName)) return
             // TS2793: only attach "implementation would have succeeded" when the
             // implementation signature actually accepts these args. Without this
             // gate, calls like `foo("HI")` against `function foo(name: "SPAN");
