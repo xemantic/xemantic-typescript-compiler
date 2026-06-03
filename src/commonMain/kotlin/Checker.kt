@@ -65786,6 +65786,92 @@ interface DataView {
                     ))
                     return // One TS2320 per interface
                 }
+
+                // B98.r128e: TS2411 — a PROPERTY inherited from one direct base is not
+                // assignable to an INDEX SIGNATURE inherited from a DIFFERENT direct base.
+                // Uses DIRECT bases' DIRECT (own) members only, so a conflict INTERNAL to a
+                // base (e.g. `F extends A,B,E` where E's `0` clashes with A/B's indexes) is
+                // reported at F, NOT re-reported at `H extends A, F` (F contributes no OWN
+                // member). A NUMERIC-named property checks against BOTH the number and string
+                // index; a non-numeric property against the string index only. Numeric
+                // property keys are ordered first (ascending) then non-numeric — matching
+                // TS's member-table order; per property, number-index before string-index.
+                // Gated to ANONYMOUS object value types on both sides (the B98.r20-proven
+                // safe `checkTypeRelatedTo` zone — no named→named recursion). FP-safe: a
+                // property genuinely not assignable to an inherited index value is TS2411.
+                run {
+                    data class IdxI(val kind: String, val valueNode: TypeNode?, val baseName: String)
+                    data class PropI(val name: String, val typeNode: TypeNode?, val baseName: String, val numKey: Double?)
+                    val idxs = mutableListOf<IdxI>()
+                    val props = mutableListOf<PropI>()
+                    for (te in baseTypeExprs) {
+                        val bname = when (val be = te.expression) {
+                            is Identifier -> be.text
+                            is PropertyAccessExpression -> be.name.text
+                            else -> continue
+                        }
+                        val bsym = resolveBaseSym(te.expression) ?: continue
+                        val bdecl = bsym.declarations.filterIsInstance<InterfaceDeclaration>().firstOrNull() ?: continue
+                        for (m in bdecl.members) {
+                            when (m) {
+                                is IndexSignature -> {
+                                    val pkw = m.parameters.firstOrNull()?.type
+                                    val kind = when {
+                                        pkw is KeywordTypeNode && pkw.kind == SyntaxKind.NumberKeyword -> "number"
+                                        pkw is KeywordTypeNode && pkw.kind == SyntaxKind.StringKeyword -> "string"
+                                        else -> null
+                                    }
+                                    if (kind != null) idxs.add(IdxI(kind, m.type, bname))
+                                }
+                                is PropertyDeclaration -> {
+                                    val nm = when (val n = m.name) {
+                                        is Identifier -> n.text
+                                        is NumericLiteralNode -> n.text
+                                        is StringLiteralNode -> n.rawText ?: n.text
+                                        else -> null
+                                    } ?: continue
+                                    props.add(PropI(nm, m.type, bname, nm.toDoubleOrNull()))
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                    if (props.isNotEmpty() && idxs.isNotEmpty()) {
+                        val orderedProps = props.filter { it.numKey != null }.sortedBy { it.numKey } +
+                            props.filter { it.numKey == null }
+                        val isAnon = { t: Type -> t is Type.Object && t !is Type.Interface && t !is Type.Reference }
+                        val pending = mutableListOf<Diagnostic>()
+                        for (p in orderedProps) {
+                            val pNode = p.typeNode ?: continue
+                            val pType = try { getTypeFromTypeNode(pNode) } catch (_: StackOverflowError) { continue }
+                            if (!isAnon(pType)) continue
+                            val kinds = if (p.numKey != null) listOf("number", "string") else listOf("string")
+                            for (kind in kinds) {
+                                val idx = idxs.firstOrNull { it.kind == kind && it.baseName != p.baseName } ?: continue
+                                val iNode = idx.valueNode ?: continue
+                                val iType = try { getTypeFromTypeNode(iNode) } catch (_: StackOverflowError) { continue }
+                                if (!isAnon(iType)) continue
+                                val ok = try { checkTypeRelatedTo(pType, iType, assignableRelation) } catch (_: StackOverflowError) { true }
+                                if (ok) continue
+                                val pDisp = if (pNode is TypeLiteral && pNode.members.isEmpty()) "{}" else typeToString(pType)
+                                val iDisp = typeToString(iType)
+                                val nameNode = stmt.name
+                                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                pending.add(Diagnostic(
+                                    message = "Property '${p.name}' of type '$pDisp' is not assignable to '$kind' index type '$iDisp'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2411,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nameNode.pos,
+                                    length = nameNode.text.length,
+                                ))
+                            }
+                        }
+                        pending.forEach { diagnostics.add(it) }
+                    }
+                }
             }
             is ModuleDeclaration -> {
                 (stmt.body as? ModuleBlock)?.statements?.forEach { checkMultiBaseInStatement(it, source, fileName) }
