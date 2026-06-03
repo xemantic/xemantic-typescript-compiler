@@ -71474,12 +71474,27 @@ interface DataView {
                 // runtime type is effectively any[] so downstream checks should not use the
                 // erroneous annotation).
                 if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
+                // B98.r127: the property-access walker tracks enclosing namespaces in
+                // `propertyAccessEnclosingNamespaces`, NOT `inferenceNamespaceStack`
+                // (which is what `getTypeFromTypeReference`'s bare-Identifier fallback
+                // consults via `lookupTypeSymbolInInferenceNamespace`). So a param typed
+                // as a NAMESPACE-LOCAL interface (`namespace M { class C { f(x: I) {…} } }`,
+                // `interface I` in M) resolved to errorType here, leaving `x` untyped so
+                // `x.e` never fired TS2339. Bridge the innermost enclosing namespace onto
+                // `inferenceNamespaceStack` ONLY around this type-annotation resolution
+                // (popped immediately) — confined to type-position lookup, so it cannot
+                // affect the value-position lookups (`lookupInInferenceNamespace`) that the
+                // ModuleDeclaration branch deliberately avoids polluting (TS2576 FP guard).
+                val bridgeNs = inferenceNamespaceStack.isEmpty() &&
+                    propertyAccessEnclosingNamespaces.isNotEmpty()
+                if (bridgeNs) inferenceNamespaceStack.addLast(propertyAccessEnclosingNamespaces.last())
                 try {
                     val resolvedType = getTypeFromTypeNode(paramType)
                     if (resolvedType !== anyType && resolvedType !== errorType) {
                         currentLocalTypes[paramName.text] = resolvedType
                     }
                 } catch (_: StackOverflowError) { /* circular type */ }
+                finally { if (bridgeNs) inferenceNamespaceStack.removeLast() }
             } else if (paramName is ArrayBindingPattern || paramName is ObjectBindingPattern) {
                 // B83.4i: register destructured-param binding NAMES (e.g. `[x]` / `{x}`)
                 // into the shadow tracker so a same-named file-level `var x = foo(...)`
