@@ -50143,8 +50143,16 @@ interface DataView {
         val needsExtendsHelper = options.target <= ScriptTarget.ES5
         // Decorator helpers always needed when experimentalDecorators is set
         val needsDecoratorHelper = options.experimentalDecorators
+        // B98: an `async function` needs the __awaiter helper when target < ES2017.
+        // Under importHelpers with no resolvable tslib, that syntax fires TS2354.
+        val needsAwaiterHelper = options.effectiveTarget < ScriptTarget.ES2017 &&
+            binderResults.any { result ->
+                !isDtsFile(result.sourceFile.fileName) &&
+                    result.sourceFile.statements.any { it is FunctionDeclaration &&
+                        ModifierFlag.Async in it.modifiers && !it.asteriskToken }
+            }
 
-        if (!needsEsmHelpers && !needsExtendsHelper && !needsDecoratorHelper) return
+        if (!needsEsmHelpers && !needsExtendsHelper && !needsDecoratorHelper && !needsAwaiterHelper) return
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -50233,6 +50241,21 @@ interface DataView {
                         // Decorators need __decorate helper (module files only) — skip if already emitted
                         if (!emittedForClass && needsDecoratorHelper && isModule) {
                             checkDecoratorHelperOnClass(stmt, source, fileName)
+                        }
+                    }
+                    is FunctionDeclaration -> {
+                        // B98: a top-level `async function` (non-generator) needs __awaiter
+                        // when target < ES2017. With importHelpers and no resolvable tslib,
+                        // TypeScript reports TS2354 at the function NAME. Module files only
+                        // (mirrors the __extends/__decorate gating) — bounds the FP surface
+                        // to the single no-tslib async fixture.
+                        if (needsAwaiterHelper && isModule &&
+                            ModifierFlag.Async in stmt.modifiers && !stmt.asteriskToken
+                        ) {
+                            val name = stmt.name
+                            if (name != null) {
+                                emitTS2354(name.pos, name.text.length, source, fileName)
+                            }
                         }
                     }
                     else -> {}
