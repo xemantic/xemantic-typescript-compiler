@@ -35897,6 +35897,24 @@ interface DataView {
     private fun checkDeleteReadonlyOperand(inner: Expression, source: String, fileName: String) {
         when (inner) {
             is PropertyAccessExpression -> {
+                // `delete C.name` / `delete C.length` where C is a class: in value
+                // position C is the constructor (typeof C) whose apparent type is the
+                // `Function` interface, on which `name`/`length` are readonly → TS2704.
+                // getTypeOfExpression(C) resolves to the INSTANCE type (no static side),
+                // so the structural readonly check below misses it; this narrow gate
+                // handles it directly. FP-safe: `delete <ClassIdent>.{name,length}` is
+                // always a TS2704 error.
+                val recv = inner.expression
+                if (recv is Identifier && (inner.name.text == "name" || inner.name.text == "length")) {
+                    val sym = currentFileLocals?.get(recv.text) ?: globals[recv.text]
+                    if (sym != null && sym.flags.hasAny(SymbolFlags.Class) &&
+                        !sym.flags.hasAny(SymbolFlags.Module)
+                    ) {
+                        emitDeleteReadonlyDiag(inner, 2704,
+                            "The operand of a 'delete' operator cannot be a read-only property.", source, fileName)
+                        return
+                    }
+                }
                 if (isReadonlyPropertyAccess(inner, fileName)) {
                     emitDeleteReadonlyDiag(inner, 2704,
                         "The operand of a 'delete' operator cannot be a read-only property.", source, fileName)
