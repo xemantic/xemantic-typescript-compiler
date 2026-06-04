@@ -84714,6 +84714,45 @@ interface DataView {
         ))
     }
 
+    /**
+     * TS2848: the right-hand side of an `instanceof` expression must not be an
+     * instantiation expression (`x instanceof Box<number>`). The parser drops the
+     * type-args in two ways: (a) a bare RHS `Box<number>;` becomes a synthetic
+     * `ParenthesizedExpression(instantiationEnd)` wrapping the `Box` Identifier;
+     * (b) a parenthesized RHS `(Box<number>)` / `((Box<number>))` consumes the
+     * type-args but returns the bare `Box` Identifier (Parser.kt:4617). In BOTH
+     * cases, after unwrapping paren layers the inner expr is a bare Identifier /
+     * PropertyAccess and the SOURCE immediately after it begins with a `<` type-arg
+     * list. Span = `Box<number>` (name start → matching `>`). FP-safe: a comparison
+     * `(Box < number)` parses to a BinaryExpression (not a bare Identifier), and a
+     * plain `instanceof Box` has no following `<`; an instantiation on the LHS is legal.
+     */
+    private fun checkInstanceofRhsInstantiation(rhs: Expression, source: String, fileName: String) {
+        var node: Expression = rhs
+        while (node is ParenthesizedExpression) node = node.expression
+        if (node !is Identifier && node !is PropertyAccessExpression) return
+        var i = expressionTrueEnd(node)
+        while (i < source.length && (source[i] == ' ' || source[i] == '\t')) i++
+        if (i >= source.length || source[i] != '<') return
+        var depth = 0; var j = i
+        while (j < source.length) {
+            when (source[j]) { '<' -> depth++; '>' -> { depth--; if (depth == 0) break } }
+            j++
+        }
+        if (j >= source.length || depth != 0) return
+        val start = node.pos
+        val length = (j + 1 - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "The right-hand side of an 'instanceof' expression must not be an instantiation expression.",
+            category = DiagnosticCategory.Error,
+            code = 2848,
+            fileName = fileName,
+            line = line, character = character,
+            start = start, length = length,
+        ))
+    }
+
     private fun isPrimitiveInstanceofLhs(t: Type): Boolean = when (t) {
         is Type.Union -> t.types.isNotEmpty() && t.types.all { isPrimitiveInstanceofLhs(it) }
         else -> t.flags.hasAny(
@@ -84734,6 +84773,7 @@ interface DataView {
         // type parameter — a primitive (or a union of only primitives) is invalid.
         if (op == SyntaxKind.InstanceOfKeyword) {
             checkInstanceofLhsType(expr.left, source, fileName)
+            checkInstanceofRhsInstantiation(expr.right, source, fileName)
             return
         }
         // TS2367: "This comparison appears to be unintentional because the
