@@ -55089,6 +55089,81 @@ interface DataView {
     }
 
     /**
+     * TS2341 for destructuring-ASSIGNMENT targets that read a private member from a class
+     * instance — `([{ a: { x } }] = [{ a: new C() }])`, `({ o: [...] } = new C())`. The
+     * sibling [checkDestructuringPrivateAccess] handles the var-decl BINDING-pattern form;
+     * here the LHS is an Array/Object LITERAL used as an assignment target. Walks the LHS
+     * pattern paired with the RHS type, reporting each private property read at its key.
+     * FP-safe: a property read is flagged ONLY when the source is a class instance
+     * (Type.Interface) and the member is fully private — always a TS error.
+     */
+    private fun checkDestructuringAssignmentPrivate(pattern: Expression, sourceType: Type, source: String, fileName: String) {
+        when (pattern) {
+            is ParenthesizedExpression ->
+                checkDestructuringAssignmentPrivate(pattern.expression, sourceType, source, fileName)
+            is ObjectLiteralExpression -> {
+                if (sourceType is Type.Object) {
+                    try { resolveStructuredTypeMembers(sourceType) } catch (_: StackOverflowError) { return }
+                }
+                for (p in pattern.properties) {
+                    when (p) {
+                        is ShorthandPropertyAssignment ->
+                            emitDestructuringPrivate(sourceType, p.name, source, fileName)
+                        is PropertyAssignment -> {
+                            emitDestructuringPrivate(sourceType, p.name, source, fileName)
+                            val pn = resolveDestructuringPropName(p.name, source, fileName) ?: continue
+                            val propSym = getPropertyOfType(sourceType, pn.first) ?: continue
+                            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { continue }
+                            checkDestructuringAssignmentPrivate(p.initializer, propType, source, fileName)
+                        }
+                        else -> {} // SpreadAssignment etc.
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> {
+                for ((idx, el) in pattern.elements.withIndex()) {
+                    if (el is OmittedExpression) continue
+                    val elemType = destructuringElementType(sourceType, idx) ?: continue
+                    checkDestructuringAssignmentPrivate(el, elemType, source, fileName)
+                }
+            }
+            else -> {} // Identifier / other leaf target — no privacy read
+        }
+    }
+
+    /** Emit TS2341 if [keyNode] reads a private member from [sourceType] (a class instance). */
+    private fun emitDestructuringPrivate(sourceType: Type, keyNode: Node, source: String, fileName: String) {
+        if (sourceType !is Type.Interface) return
+        val (propName, sqStart, sqLen) = resolveDestructuringPropName(keyNode, source, fileName) ?: return
+        val prop = getPropertyOfType(sourceType, propName) ?: return
+        val declNode = prop.valueDeclaration ?: prop.declarations.firstOrNull() ?: return
+        if (!isMemberPrivate(declNode)) return
+        val (_, displayName) = findPrivateDeclaringClassInfo(sourceType, propName) ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, sqStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' is private and only accessible within class '$displayName'.",
+            category = DiagnosticCategory.Error,
+            code = 2341,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = sqStart,
+            length = sqLen,
+        ))
+    }
+
+    /** Element type of a destructured array/tuple source at [idx], or null if not array-like. */
+    private fun destructuringElementType(sourceType: Type, idx: Int): Type? {
+        if (sourceType is Type.Object && sourceType.tupleElementTypes != null) {
+            return sourceType.tupleElementTypes!!.getOrNull(idx)
+        }
+        if (sourceType is Type.Reference && sourceType.target.symbol?.name == "Array") {
+            return sourceType.resolvedTypeArguments?.getOrNull(0)
+        }
+        return null
+    }
+
+    /**
      * Resolve the property name being destructured + the squiggle (start, length).
      * Returns Triple(propName, squiggleStart, squiggleLen) or null if not statically resolvable.
      * Computed names like `[nameP]` resolve `nameP` via [findConstStringValue] if it's a top-level
@@ -71177,6 +71252,14 @@ interface DataView {
                 while (cur is BinaryExpression) {
                     if (cur.operator == SyntaxKind.Equals && cur.left is ArrayLiteralExpression) {
                         checkAssignmentTupleBounds(cur.left as ArrayLiteralExpression, cur.right, source, fileName)
+                    }
+                    // TS2341: destructuring-assignment target that reads a private member
+                    // from a class instance, e.g. `([{ a: { x } }] = [{ a: new C() }])`.
+                    if (cur.operator == SyntaxKind.Equals &&
+                        (cur.left is ArrayLiteralExpression || cur.left is ObjectLiteralExpression)
+                    ) {
+                        val rhsT = try { getTypeOfExpression(cur.right) } catch (_: StackOverflowError) { null }
+                        if (rhsT != null) checkDestructuringAssignmentPrivate(cur.left, rhsT, source, fileName)
                     }
                     rightStack.addLast(cur.right)
                     cur = cur.left
