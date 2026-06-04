@@ -19603,6 +19603,13 @@ class Checker(
     private fun checkDuplicateIdentifiers() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
+            // TS2502 self-referential `typeof X` annotations (`declare const foo: typeof foo`,
+            // incl. inside `declare global`) are circular regardless of .ts vs .d.ts — run
+            // this narrow, FP-safe check for ALL non-node_modules files. The REST of the
+            // duplicate-identifier pipeline below stays .ts-only (B98.r81 ambient-merge skip).
+            if (!fileName.contains("node_modules/")) {
+                checkAccessorSelfTypeofInStatements(result.sourceFile.statements, result.sourceFile.text, fileName)
+            }
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
@@ -19612,9 +19619,6 @@ class Checker(
             checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
             // B61.6: cross-interface-declaration TS2717 for method-vs-property merge conflict
             checkCrossInterfacePropertyConflict(result.sourceFile.statements, source, fileName)
-            // B81.2: accessor return type `typeof this.<sameName>` is a TS2502
-            // self-referential annotation. Walks class declarations recursively.
-            checkAccessorSelfTypeofInStatements(result.sourceFile.statements, source, fileName)
             // B96 (round 80): TS2300 for a `prototype` member declared in a namespace
             // that merges with a class of the same name (the class's implicit static
             // `prototype` conflicts).
