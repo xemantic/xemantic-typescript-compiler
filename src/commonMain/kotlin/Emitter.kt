@@ -550,9 +550,11 @@ class Emitter(
             // Emit then-block without trailing newline so we can put else on same/next line
             if (node.thenStatement is Block) {
                 val block = node.thenStatement
-                // In semi-inline function body context, force then-block to multi-line
+                // A non-empty then-block is always emitted multi-line (matching TypeScript, which
+                // never keeps a non-empty control-flow block inline — the else-block path below
+                // already does this via emitEmbeddedStatement).
                 val savedForce = forceBlocksMultiLine
-                val blockToEmit = if (forceBlocksMultiLine && block.statements.isNotEmpty() && !block.multiLine)
+                val blockToEmit = if (block.statements.isNotEmpty() && !block.multiLine)
                     block.copy(multiLine = true) else block
                 forceBlocksMultiLine = false  // Don't propagate into the then-block's contents
                 emitBlockBody(blockToEmit, emitOpenBraceComments = true)
