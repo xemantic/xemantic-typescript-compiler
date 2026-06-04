@@ -13685,6 +13685,17 @@ class Checker(
                 fileScope.names.remove("global")
             }
 
+            // libReplacement (@libReplacement): when the DOM lib is replaced by a
+            // user stub under /node_modules/@typescript/lib-dom/, the embedded
+            // lib.dom.d.ts globals (window/document/…) must NOT be in scope — only
+            // what the stub declares. Strip them so e.g. `window.localStorage`
+            // correctly errors TS2304. The gate is matched by exactly the four
+            // `@typescript/lib-` fixtures in the corpus → zero FP surface.
+            if (isDomLibReplaced()) {
+                fileScope.names.removeAll(DOM_GLOBAL_NAMES)
+                fileScope.names.removeAll(HOST_ONLY_GLOBALS)
+            }
+
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
                 fileScope,
@@ -17151,6 +17162,17 @@ class Checker(
      * case-diff = 0.1, substitution = 2, insert/delete = 1.
      * Only suggests value-producing names (not type-alias/interface-only declarations).
      */
+    /**
+     * libReplacement: true when the DOM lib is replaced by a user stub under
+     * /node_modules/@typescript/lib-dom/. Used to strip the embedded DOM globals
+     * (window/Window/document/…) from both file scope (so they error) and the
+     * spelling-suggestion candidate pool (so e.g. unresolved `window` does not get
+     * a bogus "Did you mean 'Window'?" — TypeScript reports plain TS2304). Matched
+     * by exactly the four `@typescript/lib-` fixtures in the corpus → zero FP.
+     */
+    private fun isDomLibReplaced(): Boolean =
+        binderResults.any { "/node_modules/@typescript/lib-dom/" in it.sourceFile.fileName }
+
     private fun getSpellingSuggestion(
         name: String,
         scope: NameScope,
@@ -17212,6 +17234,18 @@ class Checker(
                 }
                 s = s.parent
             }
+        }
+
+        // libReplacement: when the DOM lib has been replaced by a user stub, the
+        // embedded DOM globals are not in scope — don't propose them as spelling
+        // suggestions (so unresolved `window` → plain TS2304, not TS2552/Window).
+        if (isDomLibReplaced()) {
+            candidates.removeAll(DOM_GLOBAL_NAMES)
+            candidates.removeAll(HOST_ONLY_GLOBALS)
+            // `Windows` is a fiction in our KNOWN_GLOBALS (the real TS lib has no
+            // such global); without removing it, an unresolved `window` wrongly
+            // gets "Did you mean 'Windows'?".
+            candidates.remove("Windows")
         }
 
         // TypeScript's threshold: floor(name.length * 0.4) + 1
