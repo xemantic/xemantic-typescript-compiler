@@ -22610,6 +22610,29 @@ class Checker(
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
                         }
+                    } else if (isRelative && effectiveModuleRes == "bundler" && moduleName.endsWith("/")
+                        && !moduleName.endsWith(".json")
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                    ) {
+                        // B98: bundler resolution, a relative TRAILING-SLASH specifier
+                        // (`"./"`, `"../"`, `"./foo/"`). Under bundler these resolve to the
+                        // directory's index file; when the directory doesn't exist (no
+                        // `<dir>/index.<ext>` and no matching file) TypeScript emits TS2307.
+                        // Index-aware resolution keeps the legit `"./"`/`"../"`→`index.ts`
+                        // cases FP-safe (they resolve non-null → suppressed), so only a
+                        // genuinely-missing directory like `./foo/` fires. Narrow to the
+                        // trailing-slash shape under bundler only (no path/root config).
+                        if (resolveRelativeIncludingIndex(moduleName, fileName) == null
+                            && moduleName !in ambientModuleNames
+                            && moduleName !in dtsFileBaseNames
+                            && !hasTsErrorSuppressionAbove(specifier.pos, source)
+                        ) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
                     } else if (moduleName.endsWith(".json") && !options.resolveJsonModule && !isRelative) {
                         // Non-relative .json imports (resolved via node_modules or path mapping)
                         // require `resolveJsonModule: true`; without it, TypeScript emits TS2732.
