@@ -1106,6 +1106,8 @@ class Checker(
         checkCircularImportAlias()
         // 56b. Check circular `import = require` / `export =` re-export cycles (TS2303)
         checkCircularExportEqualsImportAlias()
+        // 56c. Check `export = X` + `export as namespace X` self-cycle (TS2303)
+        checkExportAsNamespaceSelfCycle()
         // 57. Check return statement outside function body (TS1108)
         checkReturnOutsideFunction()
         // 57b. Check with statements (TS1101 in strict mode, TS2410 always)
@@ -49211,6 +49213,90 @@ interface DataView {
             start = spanStart,
             length = length,
         ))
+    }
+
+    /**
+     * TS2303: `export = X` + `export as namespace X` where X is NOT declared module-locally
+     * (only as a `declare global { namespace X {} }` member) forms a circular UMD self-alias —
+     * the UMD global X is the module export, and `export = X` resolves X back through the global
+     * scope to the very name the UMD declaration is defining. "Circular definition of import
+     * alias 'X'." reported over the whole `export as namespace X;` statement.
+     *
+     * The parser misparses `export as namespace X` (no AST node — see scanner/parser gotchas), so
+     * the UMD side is found by a source regex; the `export =` side via the AST.
+     *
+     * FP firewall (triple gate): fires ONLY when (a) the file has `export = X` (Identifier target),
+     * (b) a same-name `export as namespace X`, AND (c) X has NO module-local declaration (import /
+     * local namespace / var / class / function / interface / type / enum) outside `declare global`.
+     * The common valid UMD pattern `export = Foo; export as namespace Foo;` where Foo is a real
+     * module-local value (`declare namespace Foo {...}` / `import * as Foo`) fails gate (c), so it
+     * never fires (verified against all same-name corpus fixtures — only the all-global target trips it).
+     */
+    private fun checkExportAsNamespaceSelfCycle() {
+        val umdRegex = Regex("""(?m)^[ \t]*(export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*;?)""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isDtsFile(fileName)) continue
+            val statements = result.sourceFile.statements
+            val source = result.sourceFile.text
+            // (a) `export = X` with an Identifier target.
+            val exportEqName = statements.asSequence()
+                .filterIsInstance<ExportAssignment>()
+                .firstOrNull { it.isExportEquals }
+                ?.let { (it.expression as? Identifier)?.text }
+                ?: continue
+            // (b) `export as namespace X` with the same name.
+            val match = umdRegex.findAll(source).firstOrNull { it.groups[2]?.value == exportEqName } ?: continue
+            val grp = match.groups[1]!!
+            // (c) X has no module-local declaration outside `declare global`. The parser misparses
+            // `export as namespace X` itself into a `namespace X` ModuleDeclaration (+ stray
+            // statements) — exclude any statement that falls within the UMD declaration's source
+            // span so the misparse isn't mistaken for a genuine local declaration of X.
+            if (declaresNameModuleLocally(statements, exportEqName, grp.range)) continue
+            val pos = grp.range.first
+            val (line, ch) = getLineAndCharacterOfPosition(source, pos)
+            diagnostics.add(Diagnostic(
+                message = "Circular definition of import alias '$exportEqName'.",
+                category = DiagnosticCategory.Error, code = 2303,
+                fileName = fileName, line = line, character = ch,
+                start = pos, length = grp.value.length,
+            ))
+        }
+    }
+
+    /** True if [name] is declared at the top level (outside any `declare global` block) as an
+     * import, local namespace, variable, class, function, interface, type alias, or enum.
+     * Statements whose start position falls within [excludeRange] are skipped (used to ignore the
+     * misparsed `export as namespace X` statements that masquerade as a `namespace X` declaration). */
+    private fun declaresNameModuleLocally(statements: List<Statement>, name: String, excludeRange: IntRange): Boolean {
+        for (stmt in statements) {
+            if (stmt.pos in excludeRange) continue
+            when (stmt) {
+                is ImportEqualsDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    if (clause.name?.text == name) return true
+                    when (val nb = clause.namedBindings) {
+                        is NamespaceImport -> if (nb.name.text == name) return true
+                        is NamedImports -> if (nb.elements.any { it.name.text == name }) return true
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> {
+                    val nm = (stmt.name as? Identifier)?.text
+                    if (nm == name && nm != "global") return true
+                }
+                is VariableStatement ->
+                    if (stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) return true
+                is FunctionDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                is ClassDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                is InterfaceDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                is TypeAliasDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                is EnumDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                else -> {}
+            }
+        }
+        return false
     }
 
     // -----------------------------------------------------------------------
