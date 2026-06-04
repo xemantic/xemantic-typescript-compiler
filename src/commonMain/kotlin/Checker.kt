@@ -1102,6 +1102,8 @@ class Checker(
         checkDerivedConstructorReturnNull()
         // 55c. Check generic class constructor returning an unconstrained-type-param value (TS2322 + TS2409 + TS2208)
         checkConstructorReturnTypeParam()
+        // 55d. Check class constructor returning a primitive literal (TS2322 + TS2409)
+        checkConstructorReturnPrimitiveLiteral()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
         // 56b. Check circular `import = require` / `export =` re-export cycles (TS2303)
@@ -48524,6 +48526,138 @@ interface DataView {
                 }
                 else -> {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2322 + TS2409: class constructor returning a PRIMITIVE LITERAL.
+    //   class X { constructor() { return 1; } foo() {} }
+    // A primitive (`number`/`string`/`boolean`/`bigint`) is not assignable to the
+    // class instance type when the class has a required own member the primitive
+    // lacks. JS discards a primitive return, but TS still type-checks it.
+    // Gate (FP firewall): the class must declare >=1 required (non-optional),
+    // non-static own member with a non-Object-prototype Identifier name — which
+    // guarantees the instance type has a required member the primitive cannot
+    // provide. Empty / all-optional classes are NOT flagged (a primitive IS
+    // structurally assignable to `{}` / an all-optional shape).
+    // -----------------------------------------------------------------------
+
+    private fun checkConstructorReturnPrimitiveLiteral() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            walkForCtorReturnPrimitive(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkForCtorReturnPrimitive(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    checkClassCtorReturnPrimitive(stmt.members, source, fileName, stmt.name?.text)
+                    for (m in stmt.members) when (m) {
+                        is MethodDeclaration -> m.body?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    when (val init = d.initializer) {
+                        is ClassExpression -> checkClassCtorReturnPrimitive(init.members, source, fileName, init.name?.text)
+                        is FunctionExpression -> walkForCtorReturnPrimitive(init.body.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForCtorReturnPrimitive(it.statements, source, fileName) }
+                is Block -> walkForCtorReturnPrimitive(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkClassCtorReturnPrimitive(
+        members: List<ClassElement>, source: String, fileName: String, className: String?,
+    ) {
+        if (className == null) return
+        // Gate: >=1 required, non-static own member with a non-Object-prototype Identifier name.
+        val hasRequiredOwnMember = members.any { m ->
+            val nameNode: NameNode?; val optional: Boolean; val modifiers: Set<ModifierFlag>
+            when (m) {
+                is MethodDeclaration -> { nameNode = m.name; optional = m.questionToken; modifiers = m.modifiers }
+                is PropertyDeclaration -> { nameNode = m.name; optional = m.questionToken; modifiers = m.modifiers }
+                is GetAccessor -> { nameNode = m.name; optional = false; modifiers = m.modifiers }
+                is SetAccessor -> { nameNode = m.name; optional = false; modifiers = m.modifiers }
+                else -> { nameNode = null; optional = true; modifiers = emptySet() }
+            }
+            val nm = (nameNode as? Identifier)?.text
+            nm != null && !optional && ModifierFlag.Static !in modifiers && nm !in OBJECT_PROTOTYPE_PROPERTIES
+        }
+        if (!hasRequiredOwnMember) return
+        for (member in members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            findReturnPrimitiveLiteralsInStatements(body.statements) { returnPos, primName ->
+                val (line, character) = getLineAndCharacterOfPosition(source, returnPos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$primName' is not assignable to type '$className'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = character,
+                    start = returnPos, length = 6, // "return"
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Return type of constructor signature must be assignable to the instance type of the class.",
+                    category = DiagnosticCategory.Error, code = 2409,
+                    fileName = fileName, line = line, character = character,
+                    start = returnPos, length = 6,
+                ))
+            }
+        }
+    }
+
+    /** The primitive type name of a return expression that is a primitive literal, else null. */
+    private fun primitiveLiteralTypeName(expr: Expression?): String? = when (expr) {
+        is NumericLiteralNode -> "number"
+        is BigIntLiteralNode -> "bigint"
+        is StringLiteralNode -> "string"
+        is Identifier -> if (expr.text == "true" || expr.text == "false") "boolean" else null
+        is PrefixUnaryExpression ->
+            if (expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode) "number" else null
+        else -> null
+    }
+
+    private fun findReturnPrimitiveLiteralsInStatements(stmts: List<Statement>, callback: (Int, String) -> Unit) {
+        for (stmt in stmts) findReturnPrimitiveLiteralInStmt(stmt, callback)
+    }
+
+    private fun findReturnPrimitiveLiteralInStmt(stmt: Statement, callback: (Int, String) -> Unit) {
+        when (stmt) {
+            is ReturnStatement -> primitiveLiteralTypeName(stmt.expression)?.let { callback(stmt.pos, it) }
+            is Block -> findReturnPrimitiveLiteralsInStatements(stmt.statements, callback)
+            is IfStatement -> {
+                findReturnPrimitiveLiteralInStmt(stmt.thenStatement, callback)
+                stmt.elseStatement?.let { findReturnPrimitiveLiteralInStmt(it, callback) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
+                is CaseClause -> clause.statements.forEach { findReturnPrimitiveLiteralInStmt(it, callback) }
+                is DefaultClause -> clause.statements.forEach { findReturnPrimitiveLiteralInStmt(it, callback) }
+                else -> {}
+            }
+            is ForStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            is ForInStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            is ForOfStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            is WhileStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            is DoStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            is TryStatement -> {
+                findReturnPrimitiveLiteralsInStatements(stmt.tryBlock.statements, callback)
+                stmt.catchClause?.let { findReturnPrimitiveLiteralsInStatements(it.block.statements, callback) }
+                stmt.finallyBlock?.let { findReturnPrimitiveLiteralsInStatements(it.statements, callback) }
+            }
+            is LabeledStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
+            else -> {}
         }
     }
 
