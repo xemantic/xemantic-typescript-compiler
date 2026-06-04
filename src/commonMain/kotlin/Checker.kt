@@ -73416,6 +73416,38 @@ interface DataView {
                         } catch (_: StackOverflowError) { /* fall through */ }
                     }
                 }
+                // B98.r138 (TS2339): a QUALIFIED namespace member that is a NON-EXPORTED
+                // import alias — e.g. `new m2.m3.c()` where `c` inside `namespace m3` is
+                // `import c = x.c` WITHOUT an `export` keyword, so it is not accessible
+                // from outside m3 → "Property 'c' does not exist on type 'typeof m3'.".
+                // FP firewall (load-bearing — an earlier `isNameExportedFromNamespace`
+                // gate over-fired on legitimately-exported function/class/var members of
+                // ambient namespaces): fire ONLY when the resolved member symbol's
+                // declarations are ALL non-exported `ImportEqualsDeclaration`s (a private
+                // import alias) — exported members and `export import` aliases are excluded
+                // by construction; ambient `declare namespace` (NamespaceModule) receivers
+                // are excluded (their members are implicitly exported).
+                if (objectExpr is PropertyAccessExpression &&
+                    (keySuggestion == null || keySuggestion.startsWith(".")) &&
+                    propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+                    propName !in RUNTIME_PROPERTIES) {
+                    val recvSym = try { resolveQualifiedValueSymbol(objectExpr) } catch (_: StackOverflowError) { null }
+                    val memberSym = recvSym?.takeIf {
+                        it.flags.hasAny(SymbolFlags.Module) &&
+                            !it.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Alias or SymbolFlags.NamespaceModule)
+                    }?.exports?.get(propName)
+                    if (memberSym != null && memberSym.declarations.isNotEmpty() &&
+                        memberSym.declarations.all { it is ImportEqualsDeclaration && ModifierFlag.Export !in it.modifiers }) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                }
                 return
             }
             val identName = objectExpr.text
