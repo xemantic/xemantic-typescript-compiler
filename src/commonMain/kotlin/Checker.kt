@@ -21534,6 +21534,23 @@ class Checker(
                 else -> null
             }
             if (member.initializer != null) {
+                // B98: TS18055 — under isolatedModules, an enum member whose initializer is a
+                // BARE identifier resolving to a STRING-typed const lacks "syntactically
+                // recognizable string syntax". Template / `"" + n` concat / parenthesized-literal
+                // forms are not bare Identifiers so they're excluded for free.
+                // resolveImportedConstLiteralValue follows the import alias to the declaring file.
+                val init = member.initializer
+                if (options.isolatedModules && init is Identifier && memberName != null &&
+                    resolveImportedConstLiteralValue(init.text, fileName) is ConstantValue.StringValue
+                ) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, init.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'${decl.name.text}.$memberName' has a string type, but must have syntactically recognizable string syntax when 'isolatedModules' is enabled.",
+                        category = DiagnosticCategory.Error, code = 18055,
+                        fileName = fileName, line = line, character = character,
+                        start = init.pos, length = init.text.length,
+                    ))
+                }
                 val v = evaluateEnumInitializer(member.initializer, localValues, syntheticSymbol)
                 canAutoIncrement = v is ConstantValue.NumberValue
                 if (v != null && memberName != null) localValues[memberName] = v
