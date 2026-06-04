@@ -2064,6 +2064,11 @@ class Parser(
                     code = 1092, overrideStart = ltPos + 1, overrideLength = 0)
             }
         }
+        // B98: in JS files, JSDoc `@template`/`@return` on a CONSTRUCTOR are illegal
+        // (TS1092 / TS1093) — TypeScript accepts these tags on other methods, so gating
+        // at the constructor parse site auto-excludes them. String-scan the ctor's own
+        // leading JSDoc block; purely syntactic (mirrors parseJSDocTemplateTypeParams).
+        reportJSDocIllegalCtorTags(comments)
         val rawParams = parseParameterList()
         // 17.140: JSDoc `@param {primitive} name` bridge for Constructor.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
@@ -2115,6 +2120,69 @@ class Parser(
             leadingComments = comments,
             trailingComments = trailing,
         )
+    }
+
+    /**
+     * B98: TS1092 / TS1093 — a JS-file constructor whose leading JSDoc carries a
+     * `@template` (type parameter) or `@return`/`@returns {type}` (type annotation) tag.
+     * TypeScript rejects these on a constructor specifically. Purely a string-scan of the
+     * ctor's own leading `/** */` block; offsets map to absolute source via `comment.pos`.
+     * Gated to JS-like files (mirrors [parseJSDocTemplateTypeParams]); .ts files ignore
+     * JSDoc tags. Squiggle: TS1092 → the first type-param name; TS1093 → the inner type
+     * text inside `{...}`.
+     */
+    private fun reportJSDocIllegalCtorTags(comments: List<Comment>?) {
+        if (!isJsLikeFile || comments.isNullOrEmpty()) return
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            // TS1092: @template on a constructor — squiggle the first type-param name.
+            run {
+                val tagIdx = ct.indexOf("@template")
+                if (tagIdx < 0) return@run
+                val afterTag = if (tagIdx + 9 < ct.length) ct[tagIdx + 9] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') return@run
+                var i = tagIdx + 9
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                // Skip an optional `{Constraint}` block.
+                if (i < ct.length && ct[i] == '{') {
+                    var depth = 1; i++
+                    while (i < ct.length && depth > 0) { when (ct[i]) { '{' -> depth++; '}' -> depth-- }; if (depth == 0) break; i++ }
+                    if (i < ct.length && ct[i] == '}') i++
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                }
+                if (i < ct.length && (ct[i].isLetter() || ct[i] == '_' || ct[i] == '$')) {
+                    val nameStart = i
+                    while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                    reportError("Type parameters cannot appear on a constructor declaration.",
+                        code = 1092, overrideStart = comment.pos + nameStart, overrideLength = i - nameStart)
+                }
+            }
+            // TS1093: @return/@returns {type} on a constructor — squiggle the inner type text.
+            run {
+                for (tag in listOf("@returns", "@return")) {
+                    val tagIdx = ct.indexOf(tag)
+                    if (tagIdx < 0) continue
+                    val afterTag = if (tagIdx + tag.length < ct.length) ct[tagIdx + tag.length] else ' '
+                    if (afterTag.isLetterOrDigit() || afterTag == '_') continue
+                    var i = tagIdx + tag.length
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                    if (i < ct.length && ct[i] == '{') {
+                        val innerStart = i + 1
+                        var depth = 1; i++
+                        while (i < ct.length && depth > 0) { when (ct[i]) { '{' -> depth++; '}' -> depth-- }; if (depth == 0) break; i++ }
+                        val innerEnd = i
+                        reportError("Type annotation cannot appear on a constructor declaration.",
+                            code = 1093, overrideStart = comment.pos + innerStart, overrideLength = (innerEnd - innerStart).coerceAtLeast(1))
+                    } else {
+                        reportError("Type annotation cannot appear on a constructor declaration.",
+                            code = 1093, overrideStart = comment.pos + tagIdx, overrideLength = tag.length)
+                    }
+                    break
+                }
+            }
+        }
     }
 
     private fun parseGetAccessor(modifiers: Set<ModifierFlag>, comments: List<Comment>?, pos: Int, decorators: List<Decorator>? = null): GetAccessor {
