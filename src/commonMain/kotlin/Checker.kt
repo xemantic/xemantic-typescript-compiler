@@ -51833,11 +51833,13 @@ interface DataView {
         when (stmt) {
             is FunctionDeclaration -> {
                 checkTPNRForCallable(stmt.parameters, stmt.type, source, fileName)
+                checkPredicateTypeParamNotAssignable(stmt.typeParameters, stmt.parameters, source, fileName)
                 stmt.body?.let { walkTPNRStmts(it.statements, source, fileName) }
             }
             is ClassDeclaration -> for (m in stmt.members) when (m) {
                 is MethodDeclaration -> {
                     checkTPNRForCallable(m.parameters, m.type, source, fileName)
+                    checkPredicateTypeParamNotAssignable(m.typeParameters, m.parameters, source, fileName)
                     m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
                 }
                 is Constructor -> m.body?.let { walkTPNRStmts(it.statements, source, fileName) }
@@ -51925,6 +51927,63 @@ interface DataView {
                 "    Type 'null' is not assignable to type '$paramTypeStr'.",
             ),
         ))
+    }
+
+    /**
+     * TS2677 + TS2208: a function-typed PARAMETER whose return is a type predicate `x is T`,
+     * where T is an UNCONSTRAINED type parameter of the enclosing function/method and the
+     * predicate parameter's declared type is the empty object `{}`.
+     *   declare function f<T>(predicate: (x: {}) => x is T): T;
+     * An unconstrained T (implicit constraint `unknown`, which includes null/undefined) is NOT
+     * assignable to `{}`, so TS emits TS2677 at the predicate type + the chain "Type 'T' is not
+     * assignable to type '{}'." + a related TS2208 at the type-parameter declaration.
+     *
+     * FP firewall: predicate type is a BARE TypeReference to an UNCONSTRAINED enclosing type
+     * param AND the predicate parameter's type is exactly `{}` (empty TypeLiteral). A constrained
+     * T (`T extends object`) is assignable to `{}` (excluded by the unconstrained filter); a
+     * concrete predicate type (`x is string`) is not a type-param ref (excluded). Additive +
+     * always-an-error shape → cannot false-positive on a currently-passing test.
+     */
+    private fun checkPredicateTypeParamNotAssignable(
+        typeParameters: List<TypeParameter>?,
+        parameters: List<Parameter>,
+        source: String, fileName: String,
+    ) {
+        val tps = typeParameters ?: return
+        val unconstrained = tps.filter { it.constraint == null }.associateBy { it.name.text }
+        if (unconstrained.isEmpty()) return
+        for (param in parameters) {
+            val fnType = param.type as? FunctionType ?: continue
+            val pred = fnType.type as? TypePredicate ?: continue
+            if (pred.assertsModifier) continue
+            val predType = pred.type as? TypeReference ?: continue
+            if (!predType.typeArguments.isNullOrEmpty()) continue
+            val predName = (predType.typeName as? Identifier)?.text ?: continue
+            val tpDecl = unconstrained[predName] ?: continue
+            // The predicate parameter's declared type must be the bare empty object `{}`.
+            // `parameterName` may parse as an Identifier or a TypeReference wrapping it.
+            val predParamName = (pred.parameterName as? Identifier)?.text
+                ?: (pred.parameterName as? TypeReference)?.let { (it.typeName as? Identifier)?.text }
+                ?: continue
+            val predParam = fnType.parameters.firstOrNull { (it.name as? Identifier)?.text == predParamName } ?: continue
+            val predParamType = predParam.type as? TypeLiteral ?: continue
+            if (predParamType.members.isNotEmpty()) continue
+            val (line, ch) = getLineAndCharacterOfPosition(source, predType.pos)
+            val (tpLine, tpCh) = getLineAndCharacterOfPosition(source, tpDecl.name.pos)
+            diagnostics.add(Diagnostic(
+                message = "A type predicate's type must be assignable to its parameter's type.",
+                category = DiagnosticCategory.Error, code = 2677,
+                fileName = fileName, line = line, character = ch,
+                start = predType.pos, length = predName.length,
+                messageChain = listOf("  Type '$predName' is not assignable to type '{}'."),
+                relatedInformation = listOf(Diagnostic(
+                    message = "This type parameter might need an `extends {}` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = tpLine, character = tpCh,
+                    start = tpDecl.name.pos, length = tpDecl.name.text.length,
+                )),
+            ))
+        }
     }
 
     private fun walkForImplicitReturns(stmts: List<Statement>, source: String, fileName: String) {
