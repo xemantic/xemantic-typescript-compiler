@@ -1282,6 +1282,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileModuleAugmentationDuplicates()
         }
+        // 73j. UMD global (`export as namespace X`) redeclared as a `declare global`
+        //      const/let X (TS2451 + TS6203). The parser misparses `export as namespace`
+        //      (no AST node), so the UMD side is found by regex; the const side via AST.
+        checkUmdGlobalVsDeclareGlobalConst()
         // 73i. Check `export * from` re-export ambiguity (TS2308) — two different modules
         //      re-exported via `export *` both directly export the same member name.
         if (binderResults.size > 1) {
@@ -87377,6 +87381,74 @@ interface DataView {
             entries.addAll(decls)
         }
         amalgamateAndEmitCrossFileDuplicates(entries)
+    }
+
+    /**
+     * TS2451: a UMD global declared via `export as namespace X` and a `declare global`
+     * `const`/`let X` redeclare the same block-scoped variable X. Both are global VALUE
+     * bindings named X → "Cannot redeclare block-scoped variable 'X'." reported at each
+     * occurrence (UMD name + each const/let name) with a TS6203 related-info pointing at
+     * the other(s). The parser misparses `export as namespace X` (no AST node — see the
+     * scanner/parser gotchas), so the UMD side is found by a source regex; the const/let
+     * side via the `declare global { ... }` AST. FP-safe: fires ONLY when a name has BOTH
+     * a UMD occurrence AND a declare-global const/let occurrence — both are unconditional
+     * TS2451 in TypeScript, and .d.ts files (where these live) skip the general duplicate
+     * pipeline, so there is no double-emit.
+     */
+    private fun checkUmdGlobalVsDeclareGlobalConst() {
+        data class Occ(val fileName: String, val source: String, val pos: Int, val len: Int)
+        val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
+        val umdByName = mutableMapOf<String, MutableList<Occ>>()
+        val constByName = mutableMapOf<String, MutableList<Occ>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (m in umdRegex.findAll(source)) {
+                val g = m.groups[1] ?: continue
+                umdByName.getOrPut(g.value) { mutableListOf() }
+                    .add(Occ(fileName, source, g.range.first, g.value.length))
+            }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if ((stmt.name as? Identifier)?.text != "global") continue
+                if (ModifierFlag.Declare !in stmt.modifiers) continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s !is VariableStatement) continue
+                    val flags = s.declarationList.flags
+                    if (flags != SyntaxKind.ConstKeyword && flags != SyntaxKind.LetKeyword) continue
+                    for (d in s.declarationList.declarations) {
+                        val nm = d.name as? Identifier ?: continue
+                        constByName.getOrPut(nm.text) { mutableListOf() }
+                            .add(Occ(fileName, source, nm.pos, nm.text.length))
+                    }
+                }
+            }
+        }
+        for ((name, umd) in umdByName) {
+            val cons = constByName[name] ?: continue
+            val all = umd + cons
+            if (all.size < 2) continue
+            for (occ in all) {
+                val related = all.filter { it !== occ }.map { other ->
+                    val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.pos)
+                    Diagnostic(
+                        message = "'$name' was also declared here.",
+                        category = DiagnosticCategory.Message, code = 6203,
+                        fileName = other.fileName, line = ol, character = oc,
+                        start = other.pos, length = other.len,
+                    )
+                }
+                val (line, ch) = getLineAndCharacterOfPosition(occ.source, occ.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot redeclare block-scoped variable '$name'.",
+                    category = DiagnosticCategory.Error, code = 2451,
+                    fileName = occ.fileName, line = line, character = ch,
+                    start = occ.pos, length = occ.len,
+                    relatedInformation = related,
+                ))
+            }
+        }
     }
 
     /**
