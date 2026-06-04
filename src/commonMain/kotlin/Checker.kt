@@ -55070,16 +55070,6 @@ interface DataView {
             }
             if (key !in boundNames) boundNames.add(key)
         }
-        for (p in init.properties) {
-            when (p) {
-                is PropertyAssignment ->
-                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
-                is ShorthandPropertyAssignment -> {}
-                is MethodDeclaration ->
-                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
-                else -> return  // SpreadAssignment / accessor — bail (unsound)
-            }
-        }
         val members: SymbolTable = mutableMapOf()
         val props = mutableListOf<Symbol>()
         for (n in boundNames) {
@@ -55092,8 +55082,52 @@ interface DataView {
             it.members = members
             it.properties = props
         }
+        val targetDisplay = typeToString(target)
+        // B98.r136 (GH #38175): an `any`-typed COMPUTED key `[k]` (k: any) in a fresh
+        // object-literal destructured against a binding pattern is excess — TS2353 with
+        // the literal name string `'[k]'`. Runs independently of the spread/computed
+        // bail below (so `{ x, ...o, [k]: 1 }` still fires). FP firewall: only when the
+        // computed-key expression resolves to `any`/error — a concrete string/number/
+        // enum computed key is a real (possibly-known) property and is never flagged.
+        for (p in init.properties) {
+            val cpn = when (p) {
+                is PropertyAssignment -> p.name as? ComputedPropertyName
+                is MethodDeclaration -> p.name as? ComputedPropertyName
+                else -> null
+            } ?: continue
+            val keyType = try { getTypeOfExpression(cpn.expression) } catch (_: StackOverflowError) { continue }
+            if (!keyType.flags.hasAny(TypeFlags.Any) && keyType !== errorType) continue
+            var lb = cpn.pos.coerceAtLeast(0)
+            while (lb < source.length && source[lb] != '[') lb++
+            if (lb >= source.length) continue
+            var rb = lb + 1; var depth = 1
+            while (rb < source.length && depth > 0) {
+                when (source[rb]) { '[' -> depth++; ']' -> depth-- }
+                if (depth == 0) break
+                rb++
+            }
+            if (rb >= source.length) continue
+            val nameText = source.substring(lb, rb + 1)
+            val (line, character) = getLineAndCharacterOfPosition(source, lb)
+            diagnostics.add(Diagnostic(
+                message = "Object literal may only specify known properties, and '$nameText' does not exist in type '$targetDisplay'.",
+                category = DiagnosticCategory.Error, code = 2353,
+                fileName = fileName, line = line, character = character,
+                start = lb, length = rb + 1 - lb,
+            ))
+        }
+        for (p in init.properties) {
+            when (p) {
+                is PropertyAssignment ->
+                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
+                is ShorthandPropertyAssignment -> {}
+                is MethodDeclaration ->
+                    if (p.name !is Identifier && p.name !is StringLiteralNode) return
+                else -> return  // SpreadAssignment / accessor — bail (unsound)
+            }
+        }
         val sourceType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
-        checkExcessProperties(init, sourceType, target, typeToString(target), source, fileName)
+        checkExcessProperties(init, sourceType, target, targetDisplay, source, fileName)
     }
 
     private fun checkDestructuringFromNullableUnion(
