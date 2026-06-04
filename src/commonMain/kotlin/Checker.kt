@@ -85972,6 +85972,52 @@ interface DataView {
         if (type == null) return
         when (type) {
             is ImportType -> {
+                // B98.r139: TS2591 for an import-type whose module specifier is a
+                // Node.js built-in (`import("module").Foo`, `import("fs")`, …) that
+                // doesn't resolve and isn't an ambient `declare module "X"` — the
+                // user forgot `@types/node`. Fires REGARDLESS of `.qualifier`
+                // (the spec itself is unfindable). Reuses `emitTS2307`, which maps
+                // node-builtins under node resolution to the exact TS2591 @types/node
+                // hint message; the literal node gives the col-of-opening-quote span.
+                // FP firewall: node-builtin name + not ambient + does-not-resolve +
+                // no node_modules package + node resolution — corpus-wide only the
+                // `importTypeWithUnparenthesizedGenericFunctionParsed` shape matches
+                // (the only other node-builtin import-type, `import("url")` in
+                // `declarationEmitTripleSlashReferenceAmbientModule`, is excluded by
+                // the ambient-module gate).
+                run {
+                    val litNode = (type.argument as? LiteralType)?.literal as? StringLiteralNode
+                    val bareSpec = litNode?.text
+                    if (litNode != null && bareSpec != null) {
+                        val withoutNodePrefix = bareSpec.removePrefix("node:")
+                        val isNodeBuiltin = bareSpec.startsWith("node:") || withoutNodePrefix in NODE_BUILTIN_MODULES
+                        // Mirror the import-declaration walker's ambient set: a top-level
+                        // `declare module "<spec>"` in any file makes the specifier resolvable.
+                        val isAmbientSpec = binderResults.any { br ->
+                            br.sourceFile.statements.any { s ->
+                                s is ModuleDeclaration && (s.name as? StringLiteralNode)?.text == bareSpec
+                            }
+                        }
+                        if (isNodeBuiltin && !isAmbientSpec) {
+                            val moduleRes = options.moduleResolution?.lowercase()
+                            val effRes = moduleRes ?: when (options.module) {
+                                ModuleKind.CommonJS -> "node10"
+                                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
+                                ModuleKind.NodeNext -> "nodenext"
+                                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
+                                else -> "node10"
+                            }
+                            val isNodeRes = effRes in setOf("node", "node10", "node16", "nodenext", "bundler")
+                            if (isNodeRes) {
+                                val targetFile = resolveModuleSpecifierRelative(bareSpec, fileName)
+                                    ?: resolveModuleSpecifier(bareSpec, null)
+                                if (targetFile == null && !hasNodeModulesPackage(bareSpec)) {
+                                    emitTS2307(litNode, bareSpec, source, fileName)
+                                }
+                            }
+                        }
+                    }
+                }
                 if (type.qualifier == null && !type.isTypeOf && type.typeArguments.isNullOrEmpty()) {
                     val spec = ((type.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
                     if (spec != null) {
