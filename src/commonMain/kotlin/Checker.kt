@@ -911,6 +911,7 @@ class Checker(
         // 18e. Check exported type alias references nested-only private name (TS4081)
         if (options.declaration) {
             checkExportTypeAliasPrivateNameRef()
+            checkExportedAnonClassExprPrivateMembers()
         }
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
@@ -30057,6 +30058,73 @@ interface DataView {
                         }
                     }
                     else -> {}
+                }
+            }
+        }
+    }
+
+    /**
+     * B98: TS4094 "Property 'X' of exported anonymous class type may not be private
+     * or protected." A declaration-emit (`@declaration: true`) diagnostic for an
+     * EXPORTED, annotation-less variable whose initializer is directly an ANONYMOUS
+     * `class { ... }` expression containing private (`#name`) or `private`/`protected`
+     * members — the emitted .d.ts would expose a class type whose private/protected
+     * member cannot be represented. Pure AST-shape walk; no type engine. A `#`-private
+     * member's name node text already includes the leading `#`. Names are reported
+     * alphabetically (matches TypeScript), each at the VARIABLE name position with a
+     * TS9027 "Add a type annotation" related info.
+     */
+    private fun checkExportedAnonClassExprPrivateMembers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val name = decl.name as? Identifier ?: continue
+                    val ce = decl.initializer as? ClassExpression ?: continue
+                    if (ce.name != null) continue
+                    val privateNames = mutableListOf<String>()
+                    for (member in ce.members) {
+                        val (memberName, mods) = when (member) {
+                            is PropertyDeclaration -> member.name to member.modifiers
+                            is MethodDeclaration -> member.name to member.modifiers
+                            is GetAccessor -> member.name to member.modifiers
+                            is SetAccessor -> member.name to member.modifiers
+                            else -> null to emptySet()
+                        }
+                        if (memberName == null) continue
+                        // A `#`-private member's name node text already includes the leading `#`.
+                        if (memberName is Identifier && memberName.text.startsWith("#")) {
+                            privateNames.add(memberName.text)
+                        } else if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) {
+                            val dn = (memberName as? Identifier)?.text
+                                ?: (memberName as? StringLiteralNode)?.text
+                                ?: (memberName as? NumericLiteralNode)?.text
+                            if (dn != null) privateNames.add(dn)
+                        }
+                    }
+                    if (privateNames.isEmpty()) continue
+                    privateNames.sort()
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    for (pn in privateNames) {
+                        val related = listOf(Diagnostic(
+                            message = "Add a type annotation to the variable ${name.text}.",
+                            category = DiagnosticCategory.Message, code = 9027,
+                            fileName = fileName, line = line, character = character,
+                            start = name.pos, length = name.text.length,
+                        ))
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$pn' of exported anonymous class type may not be private or protected.",
+                            category = DiagnosticCategory.Error, code = 4094,
+                            fileName = fileName, line = line, character = character,
+                            start = name.pos, length = name.text.length,
+                            relatedInformation = related,
+                        ))
+                    }
                 }
             }
         }
