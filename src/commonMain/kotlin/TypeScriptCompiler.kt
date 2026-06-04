@@ -1053,6 +1053,19 @@ class TypeScriptCompiler {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 
+                // TS1327: object property keys in a JSON source file must be
+                // double-quoted string literals. A single-quoted key (`'a':`), a
+                // computed key (`[a]:`), or a bare identifier key is invalid JSON
+                // and reports "String literal with double quotes expected.". JSON
+                // files are otherwise never parsed/checked, so this scan is the only
+                // detector. Excludes tsconfig.json/package.json/node_modules. FP-safe:
+                // valid JSON has only double-quoted keys → nothing flagged.
+                if (file.fileName.endsWith(".json") && baseName != "tsconfig.json" &&
+                    baseName != "package.json" && !file.fileName.contains("node_modules/")
+                ) {
+                    diagnostics.addAll(scanJsonKeysForTS1327(file.content, file.fileName))
+                }
+
                 // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
                 // and not files from node_modules which TypeScript never re-emits).
                 // Also collect under outFile+resolveJsonModule so AMD/System/UMD outFile bundling
@@ -4989,7 +5002,122 @@ private fun emitIsolatedDeclarationsAugmentImports(
     return results
 }
 
-/** 1-based line + character for a position in `source`. */
+/**
+ * Scan a JSON source file for object property keys that are NOT double-quoted
+ * string literals and emit TS1327 ("String literal with double quotes expected.")
+ * for each. Handles single-quoted keys (`'a':`), computed keys (`[a]:`), and bare
+ * identifier/number keys. A string-aware mini-tokenizer tracks object vs array
+ * context so array elements and string values are never mistaken for keys; a key
+ * candidate is only flagged when it is actually followed by `:`. Tolerates line
+ * and block comments and trailing commas (JSONC). FP-safe: valid JSON (all keys
+ * double-quoted) produces no diagnostics.
+ */
+private fun scanJsonKeysForTS1327(content: String, fileName: String): List<Diagnostic> {
+    val diags = mutableListOf<Diagnostic>()
+    val n = content.length
+    // context stack: true = inside object, false = inside array
+    val stack = ArrayDeque<Boolean>()
+    var expectKey = false
+    var i = 0
+
+    fun consumeDoubleString(from: Int): Int {
+        var j = from + 1
+        while (j < n) {
+            when (content[j]) {
+                '\\' -> { j += 2; continue }
+                '"' -> { j++; return j }
+            }
+            j++
+        }
+        return j
+    }
+    fun keyTokenEnd(from: Int): Int {
+        when (content[from]) {
+            '\'' -> {
+                var j = from + 1
+                while (j < n) {
+                    when (content[j]) {
+                        '\\' -> { j += 2; continue }
+                        '\'' -> { j++; return j }
+                    }
+                    j++
+                }
+                return j
+            }
+            '[' -> {
+                var depth = 1; var j = from + 1
+                while (j < n && depth > 0) {
+                    when (content[j]) { '[' -> depth++; ']' -> depth-- }
+                    j++
+                }
+                return j
+            }
+            else -> {
+                var j = from
+                while (j < n && content[j] != ':' && content[j] != ',' && content[j] != '}' &&
+                    !content[j].isWhitespace()) j++
+                return j
+            }
+        }
+    }
+
+    while (i < n) {
+        val c = content[i]
+        if (c == '/' && i + 1 < n && content[i + 1] == '/') {
+            while (i < n && content[i] != '\n') i++
+            continue
+        }
+        if (c == '/' && i + 1 < n && content[i + 1] == '*') {
+            i += 2
+            while (i + 1 < n && !(content[i] == '*' && content[i + 1] == '/')) i++
+            i += 2
+            continue
+        }
+        if (c.isWhitespace()) { i++; continue }
+
+        if (expectKey && stack.lastOrNull() == true) {
+            when (c) {
+                '"' -> { i = consumeDoubleString(i); expectKey = false }
+                '}' -> { stack.removeLastOrNull(); expectKey = false; i++ }
+                else -> {
+                    val startOff = i
+                    val endOff = keyTokenEnd(i)
+                    var k = endOff
+                    while (k < n && content[k].isWhitespace()) k++
+                    if (k < n && content[k] == ':') {
+                        val (line, ch) = positionToLineCharacter(content, startOff)
+                        diags.add(Diagnostic(
+                            message = "String literal with double quotes expected.",
+                            category = DiagnosticCategory.Error,
+                            code = 1327,
+                            fileName = fileName,
+                            line = line,
+                            character = ch,
+                            start = startOff,
+                            length = endOff - startOff,
+                        ))
+                    }
+                    expectKey = false
+                    i = endOff
+                }
+            }
+            continue
+        }
+
+        when (c) {
+            '{' -> { stack.addLast(true); expectKey = true; i++ }
+            '[' -> { stack.addLast(false); expectKey = false; i++ }
+            '}' -> { stack.removeLastOrNull(); expectKey = false; i++ }
+            ']' -> { stack.removeLastOrNull(); expectKey = false; i++ }
+            ',' -> { expectKey = (stack.lastOrNull() == true); i++ }
+            ':' -> { expectKey = false; i++ }
+            '"' -> { i = consumeDoubleString(i) }
+            else -> i++
+        }
+    }
+    return diags
+}
+
 private fun positionToLineCharacter(source: String, position: Int): Pair<Int, Int> {
     var line = 1
     var lineStart = 0
