@@ -1419,19 +1419,39 @@ class Scanner(private val text: String) {
                 val nextCh = if (pos < end) text[pos] else '\u0000'
                 val nextIsIdentStart = isIdentifierStart(nextCh) ||
                         (nextCh.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate())
-                if (nextIsIdentStart) {
-                    // Scan private identifier as a single token — handle surrogate pairs
+                // A private identifier body may BEGIN with a unicode escape (e.g. `#` + `x`) —
+                // in which case nextIsIdentStart is false because the next char is the backslash.
+                // Recognize it so the escape is decoded into the private name rather than split
+                // into a bare Hash token + a separate identifier.
+                val nextIsEscapeStart = nextCh == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
+                        pos + 2 < end && (text[pos + 2] == '{' || isUnicodeEscape4Hex(pos + 2))
+                if (nextIsIdentStart || nextIsEscapeStart) {
+                    // Scan private identifier as a single token — handle surrogate pairs and
+                    // mid-name unicode escapes (e.g. `#x` + `x`).
+                    var hasEscape = false
                     while (pos < end) {
                         val c = text[pos]
                         if (c.isHighSurrogate() && pos + 1 < end && text[pos + 1].isLowSurrogate()) {
                             pos += 2
+                        } else if (c == '\\' && pos + 1 < end && text[pos + 1] == 'u' &&
+                                pos + 2 < end && (text[pos + 2] == '{' || isUnicodeEscape4Hex(pos + 2))) {
+                            hasEscape = true
+                            break
                         } else if (isIdentifierPart(c)) {
                             pos++
                         } else {
                             break
                         }
                     }
-                    tokenValue = text.substring(tokenPos, pos)
+                    if (hasEscape) {
+                        // Decode the escaped body so tokenValue matches a non-escaped use of the
+                        // same name (the escaped and plain spellings are the same private member),
+                        // while getTokenText() still returns the raw source for emit.
+                        scanIdentifierWithEscapes(tokenPos + 1) // body starts right after '#'
+                        tokenValue = "#" + tokenValue
+                    } else {
+                        tokenValue = text.substring(tokenPos, pos)
+                    }
                     SyntaxKind.Identifier
                 } else {
                     tokenValue = "#"
