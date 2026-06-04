@@ -19600,6 +19600,93 @@ class Checker(
         }
     }
 
+    /**
+     * Cross-body duplicate-identifier detection for same-named (merged) top-level
+     * namespaces, e.g. `declare namespace TypeScript { class X<T> ... } declare namespace
+     * TypeScript { class X<T> ... }`. Two cases, both unconditional TS errors:
+     *  - TS2300: a member name has >=2 CLASS declarations across the merged bodies
+     *    (classes never merge with each other). class+interface is a LEGAL merge → excluded.
+     *  - TS2374: a merged interface (>=2 declarations of the same name) has duplicate index
+     *    signatures by key type. The single-declaration TS2374 path doesn't aggregate across
+     *    the merge, so a `[s:string]:T` repeated in each body is missed without this.
+     * FP-safe: only fires on always-error shapes; within-a-single-body duplicates are
+     * handled by the existing per-body walkers (this requires >=2 bodies → no double-emit).
+     */
+    private fun checkMergedNamespaceDuplicates(statements: List<Statement>, source: String, fileName: String) {
+        val nsBodies = mutableMapOf<String, MutableList<ModuleBlock>>()
+        for (stmt in statements) {
+            if (stmt !is ModuleDeclaration) continue
+            val nm = (stmt.name as? Identifier)?.text ?: continue // skip string-named ambient modules
+            val body = stmt.body as? ModuleBlock ?: continue
+            nsBodies.getOrPut(nm) { mutableListOf() }.add(body)
+        }
+        for ((_, bodies) in nsBodies) {
+            if (bodies.size < 2) continue
+            val classByName = mutableMapOf<String, MutableList<ClassDeclaration>>()
+            val interfaceByName = mutableMapOf<String, MutableList<InterfaceDeclaration>>()
+            for (body in bodies) {
+                for (s in body.statements) {
+                    when (s) {
+                        is ClassDeclaration -> (s.name as? Identifier)?.let {
+                            classByName.getOrPut(it.text) { mutableListOf() }.add(s)
+                        }
+                        is InterfaceDeclaration ->
+                            interfaceByName.getOrPut(s.name.text) { mutableListOf() }.add(s)
+                        else -> {}
+                    }
+                }
+            }
+            for ((name, classes) in classByName) {
+                if (classes.size < 2) continue
+                for (cls in classes) {
+                    val nameNode = cls.name as? Identifier ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate identifier '$name'.",
+                        category = DiagnosticCategory.Error, code = 2300,
+                        fileName = fileName, line = line, character = character,
+                        start = nameNode.pos, length = name.length,
+                    ))
+                }
+            }
+            for ((_, ifaces) in interfaceByName) {
+                if (ifaces.size < 2) continue
+                val byKey = mutableMapOf<String, MutableList<IndexSignature>>()
+                for (iface in ifaces) {
+                    for (m in iface.members) {
+                        if (m !is IndexSignature) continue
+                        if (m.parameters.size != 1) continue
+                        val param = m.parameters[0]
+                        if (param.dotDotDotToken || param.questionToken) continue
+                        val key = when ((param.type as? KeywordTypeNode)?.kind) {
+                            SyntaxKind.StringKeyword -> "string"
+                            SyntaxKind.NumberKeyword -> "number"
+                            SyntaxKind.SymbolKeyword -> "symbol"
+                            else -> continue
+                        }
+                        byKey.getOrPut(key) { mutableListOf() }.add(m)
+                    }
+                }
+                for ((key, sigs) in byKey) {
+                    if (sigs.size < 2) continue
+                    for (sig in sigs) {
+                        val start = sig.pos
+                        val semiIdx = source.indexOf(';', start)
+                        val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else sig.end
+                        val length = (end - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Duplicate index signature for type '$key'.",
+                            category = DiagnosticCategory.Error, code = 2374,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     private fun checkDuplicateIdentifiers() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -19615,6 +19702,10 @@ class Checker(
             checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
             // Check file-level duplicate declarations
             checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
+            // Cross-body duplicates in same-named (merged) top-level namespaces:
+            // ≥2 CLASS decls of a name (TS2300) and duplicate index sigs in a merged
+            // interface (TS2374). Within-a-single-body duplicates are handled above.
+            checkMergedNamespaceDuplicates(result.sourceFile.statements, source, fileName)
             // B61.1: top-level non-declare class shadowing a built-in lib class
             checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
             // B61.6: cross-interface-declaration TS2717 for method-vs-property merge conflict
