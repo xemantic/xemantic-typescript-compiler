@@ -27,10 +27,17 @@ From the TypeScript 7 progress notes and migration guides
 [TS6.0 breaking changes](https://byteiota.com/typescript-6-0-breaking-changes-and-migration-guide/)),
 tsgo (TS 7.0):
 
-- **Enables strictness by default.** (Confirmed empirically: directive-free
-  compiler-test baselines such as `arrowFunctionWithObjectLiteralBody1` already
-  carry `TS7006` — the tsc compiler-test harness effectively runs
-  `noImplicitAny: true`, and tsgo makes that the language default.)
+- **Enables strictness by default** (the *language* default in tsgo). **BUT do
+  NOT flip our `compile()` `noImplicitAny` default to match** — the tsc test
+  baselines we diff against were NOT generated with noImplicitAny on: an
+  empirical sample (2026-06-05) found **26 of 29 currently-passing untyped-param,
+  no-directive tests have baselines WITHOUT `TS7006`**, so flipping the default
+  would regress hundreds of passing tests. (`arrowFunctionWithObjectLiteralBody1`
+  carries `TS7006` with no directive, but it is a per-test outlier — ~3/29 — not
+  the harness rule.) The implicit-any `TS7006`/`TS7009`/`TS7019`/`TS7026` family
+  is therefore **architectural** (would need per-test harness-default replication
+  in the test generator, a Guardrail), NOT a one-line default flip. Settled — do
+  not re-attempt the flip.
 - **Removes legacy emit targets** ES3 (removed in 5.5) and ES5 (dropping) — the
   modern baseline is ES2015+.
 - **Removes the legacy module emitters / deprecates** AMD / System / UMD
@@ -58,13 +65,11 @@ es5-downlevel-emit noise to trim. **Conclusion: the path to "finishing" is the
 core type-engine Blockers (#1 control-flow narrowing, #2 generic-argument
 inference, #3 per-file scope), not deprecated-feature pruning.**
 
-The one sizeable *alignment* opportunity is **strict-by-default**: a family of
-`TS7006`/`TS7009`/`TS7019`/`TS7026` implicit-any failures exist only because our
-`compile()` defaults `noImplicitAny:false` while both the tsc harness AND tsgo
-default it on. These are **relevant** (the tsc baseline already expects the
-errors) but blocked by an option-default change that is a CLAUDE.md Guardrail
-(touches the option-default / test-generation contract) — pursue only with owner
-sign-off and careful corpus-wide regression budget.
+A tempting-but-dead alignment lever is **strict-by-default**: the implicit-any
+`TS7006` family. It was investigated and **ruled out** (2026-06-05) — see the
+strict-by-default note above: the tsc baselines were NOT generated with
+noImplicitAny on (26/29 passing untyped-param tests have no `TS7006`), so a
+global default flip would regress hundreds. Do not re-attempt it.
 
 ## Signal rules (auto-applied by tsgo_relevance.py)
 
