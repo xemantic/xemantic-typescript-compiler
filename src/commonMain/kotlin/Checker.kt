@@ -30281,7 +30281,32 @@ interface DataView {
                     is VariableStatement -> {
                         if (ModifierFlag.Export !in stmt.modifiers) continue
                         for (decl in stmt.declarationList.declarations) {
-                            val declName = (decl.name as? Identifier)?.text ?: continue
+                            val declNameNode = decl.name as? Identifier ?: continue
+                            val declName = declNameNode.text
+                            // B98.r152: TS4025 — an annotation-less `export const globalThis = <init>`
+                            // SHADOWS the built-in global `globalThis`, so the .d.ts inferred type
+                            // (which would reference `globalThis`) can't name it → private name ref.
+                            // Narrow gate: name == "globalThis", no annotation, non-literal initializer
+                            // (a plain literal init wouldn't reference the global). Corpus-FP-safe:
+                            // `export const globalThis` occurs only in globalThisDeclarationEmit.
+                            if (declName == "globalThis" && decl.type == null) {
+                                val init = decl.initializer
+                                val isPlainLiteral = init is NumericLiteralNode || init is StringLiteralNode ||
+                                    init is NoSubstitutionTemplateLiteralNode
+                                if (init != null && !isPlainLiteral) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, declNameNode.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Exported variable 'globalThis' has or is using private name 'globalThis'.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 4025,
+                                        fileName = fileName,
+                                        line = line,
+                                        character = character,
+                                        start = declNameNode.pos,
+                                        length = declName.length,
+                                    ))
+                                }
+                            }
                             val typeNode = decl.type ?: continue
                             walkTypeQueryForPrivateName(typeNode, declName, topLevelValueNames, nestedValueNames, source, fileName, 4025, "variable")
                         }
