@@ -502,11 +502,26 @@ python3 scripts/find_candidates.py                      # all buckets, with [SKI
 python3 scripts/find_candidates.py --none --fresh       # tests where we emit NOTHING (the real pool)
 python3 scripts/find_candidates.py --none --fresh --code TS2307   # focus one diagnostic code
 python3 scripts/find_candidates.py --output --fresh     # JS/decl/sourcemap output diffs
+python3 scripts/find_candidates.py --none --fresh --tsgo # hide tsgo-IRRELEVANT failures (see below)
 ```
 The plain (no-flag) buckets only see tests that already emit some `error TSxxxx`
 — ~33 of >1000 failures. **`--none` is where ~60% of the remaining work lives**
 (see PLAN-PHASE-4.md § "STRATEGIC MAP"). Do not call the pool exhausted until
 `--fresh`, `--none --fresh`, and `--output --fresh` are all dry.
+
+**tsgo-relevance target (2026-06-05):** the compatibility target is the FUTURE
+**tsgo** (TypeScript 7.0 / "Corsa"), NOT the legacy tsc 5.x corpus. Tests whose
+whole point is a feature tsgo removed (legacy ES3/ES5 emit, AMD/System/UMD module
+emit, removed options like `keyofStringsOnly`/`noStrictGenericChecks`/`charset`,
+classic `node` resolution, JSDoc `@enum`/`@constructor`) are NOT worth chasing.
+The policy + curated denylist live in **`TSGO-RELEVANCE.md`**; `scripts/tsgo_relevance.py`
+classifies the current failures (RELEVANT / IRRELEVANT / DIVERGES) and the
+`--tsgo` flag on `find_candidates.py` hides irrelevant ones. **Empirically (2026-06-05)
+only ~6 of 808 failures are tsgo-irrelevant** — the bulk is tsgo-relevant core
+type-checking, so the path to "finishing" is the type-engine Blockers, not
+deprecated-feature pruning. When you investigate a failing test that targets a
+removed feature, ADD it to TSGO-RELEVANCE.md's curated list (one-line reason)
+instead of fixing it.
 
 **Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability. **Gradle wipes XMLs when run with `--tests '*Name*'`** — the full suite must be re-run before `find_candidates.py` can report accurate results; the script warns if the XML count is below the expected ~27.
 
