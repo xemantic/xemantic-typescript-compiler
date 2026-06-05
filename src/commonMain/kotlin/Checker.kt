@@ -763,6 +763,13 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyNewExpressions()
         }
+        // 7a''. TS7057: a `yield` expression inside a generator FUNCTION DECLARATION that
+        // lacks a return-type annotation has implicit-any result type (no contextual type
+        // tells what `next()` passes back). Gated noImplicitAny/strict. FP-safe subset:
+        // only FunctionDeclaration generators (never contextually typed).
+        if (options.noImplicitAny || options.strict) {
+            checkImplicitAnyYieldExpressions()
+        }
         // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
         // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
         if (!options.strictExplicitlyFalse) {
@@ -801,6 +808,9 @@ class Checker(
         // 7b''''. TS8024: JSDoc `@param` tag with name not matching any function parameter.
         // JS-like files only (`.js`/`.jsx`/`.cjs`/`.mjs`).
         checkJSDocParamTags()
+        // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
+        // any `@property`/`@member` tags. JS-like files only.
+        checkJSDocTypedefTags()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -10937,6 +10947,148 @@ class Checker(
         }
     }
 
+    /**
+     * TS7057: a `yield` expression in a generator FUNCTION DECLARATION lacking a
+     * return-type annotation has implicit-any result type. Gated noImplicitAny/strict.
+     * FP-safe subset: only FunctionDeclaration generators are flagged (they are never
+     * contextually typed, unlike a generator FunctionExpression/method passed as an
+     * argument or assigned to a typed variable). The `inGen` flag is true ONLY while
+     * directly inside such a generator's body — any nested function-like resets it.
+     * Squiggle = the `yield` keyword (length 5).
+     */
+    private fun checkImplicitAnyYieldExpressions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) walkYield7057Stmt(stmt, false, source, fileName)
+        }
+    }
+
+    private fun walkYield7057Stmts(stmts: List<Statement>, inGen: Boolean, source: String, fileName: String) {
+        for (s in stmts) walkYield7057Stmt(s, inGen, source, fileName)
+    }
+
+    private fun walkYield7057Stmt(stmt: Statement, inGen: Boolean, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                val childGen = stmt.asteriskToken && stmt.type == null
+                stmt.body?.let { walkYield7057Stmts(it.statements, childGen, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
+                is Constructor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
+                is GetAccessor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
+                is SetAccessor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
+                is PropertyDeclaration -> m.initializer?.let { walkYield7057Expr(it, false, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
+            is Block -> walkYield7057Stmts(stmt.statements, inGen, source, fileName)
+            is ExpressionStatement -> walkYield7057Expr(stmt.expression, inGen, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkYield7057Expr(it, inGen, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
+            is IfStatement -> {
+                walkYield7057Expr(stmt.expression, inGen, source, fileName)
+                walkYield7057Stmt(stmt.thenStatement, inGen, source, fileName)
+                stmt.elseStatement?.let { walkYield7057Stmt(it, inGen, source, fileName) }
+            }
+            is WhileStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
+            is DoStatement -> { walkYield7057Stmt(stmt.statement, inGen, source, fileName); walkYield7057Expr(stmt.expression, inGen, source, fileName) }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { walkYield7057Expr(it, inGen, source, fileName) } }
+                (stmt.initializer as? Expression)?.let { walkYield7057Expr(it, inGen, source, fileName) }
+                stmt.condition?.let { walkYield7057Expr(it, inGen, source, fileName) }
+                stmt.incrementor?.let { walkYield7057Expr(it, inGen, source, fileName) }
+                walkYield7057Stmt(stmt.statement, inGen, source, fileName)
+            }
+            is ForInStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
+            is ForOfStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
+            is SwitchStatement -> {
+                walkYield7057Expr(stmt.expression, inGen, source, fileName)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> { walkYield7057Expr(clause.expression, inGen, source, fileName); walkYield7057Stmts(clause.statements, inGen, source, fileName) }
+                    is DefaultClause -> walkYield7057Stmts(clause.statements, inGen, source, fileName)
+                    else -> {}
+                }
+            }
+            is LabeledStatement -> walkYield7057Stmt(stmt.statement, inGen, source, fileName)
+            is TryStatement -> {
+                walkYield7057Stmts(stmt.tryBlock.statements, inGen, source, fileName)
+                stmt.catchClause?.block?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
+                stmt.finallyBlock?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkYield7057Expr(expr: Expression, inGen: Boolean, source: String, fileName: String) {
+        when (expr) {
+            is YieldExpression -> {
+                if (inGen) {
+                    // Squiggle the `yield` keyword (5 chars) at the expression start.
+                    val pos = expr.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation.",
+                        category = DiagnosticCategory.Error,
+                        code = 7057,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = pos,
+                        length = 5,
+                    ))
+                }
+                expr.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
+            }
+            is BinaryExpression -> {
+                // Iterative left-spine to avoid StackOverflow on deep `a+b+c...` chains.
+                var current: Expression = expr
+                while (current is BinaryExpression) {
+                    walkYield7057Expr(current.right, inGen, source, fileName)
+                    current = current.left
+                }
+                walkYield7057Expr(current, inGen, source, fileName)
+            }
+            is ParenthesizedExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is CallExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); for (a in expr.arguments) walkYield7057Expr(a, inGen, source, fileName) }
+            is NewExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); expr.arguments?.forEach { walkYield7057Expr(it, inGen, source, fileName) } }
+            is ConditionalExpression -> { walkYield7057Expr(expr.condition, inGen, source, fileName); walkYield7057Expr(expr.whenTrue, inGen, source, fileName); walkYield7057Expr(expr.whenFalse, inGen, source, fileName) }
+            is PrefixUnaryExpression -> walkYield7057Expr(expr.operand, inGen, source, fileName)
+            is PostfixUnaryExpression -> walkYield7057Expr(expr.operand, inGen, source, fileName)
+            is PropertyAccessExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is ElementAccessExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); walkYield7057Expr(expr.argumentExpression, inGen, source, fileName) }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkYield7057Expr(e, inGen, source, fileName)
+            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
+                is PropertyAssignment -> { (prop.name as? ComputedPropertyName)?.let { walkYield7057Expr(it.expression, inGen, source, fileName) }; walkYield7057Expr(prop.initializer, inGen, source, fileName) }
+                is SpreadAssignment -> walkYield7057Expr(prop.expression, inGen, source, fileName)
+                else -> {}
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { walkYield7057Expr(it.expression, inGen, source, fileName) }
+            is TaggedTemplateExpression -> { walkYield7057Expr(expr.tag, inGen, source, fileName); (expr.template as? TemplateExpression)?.templateSpans?.forEach { walkYield7057Expr(it.expression, inGen, source, fileName) } }
+            is SpreadElement -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is AwaitExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is AsExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is NonNullExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is TypeOfExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is DeleteExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is VoidExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is TypeAssertionExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is SatisfiesExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
+            is CommaListExpression -> for (e in expr.elements) walkYield7057Expr(e, inGen, source, fileName)
+            // Nested function-likes reset the generator context (FP-safe subset).
+            is ArrowFunction -> when (val body = expr.body) {
+                is Block -> walkYield7057Stmts(body.statements, false, source, fileName)
+                is Expression -> walkYield7057Expr(body, false, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> walkYield7057Stmts(expr.body.statements, false, source, fileName)
+            else -> {}
+        }
+    }
+
     private fun walkNewImplicitAnyStmts(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) walkNewImplicitAnyStmt(stmt, source, fileName)
     }
@@ -12652,6 +12804,79 @@ class Checker(
                     ))
                 }
                 idx = i
+            }
+        }
+    }
+
+    /**
+     * TS8021: a JSDoc `@typedef <Name>` tag that has NEITHER a `{type}` annotation
+     * NOR any `@property`/`@member` tags in the same comment block is malformed —
+     * TypeScript can't derive a type for it. JS-like files only (`@typedef` is a JSDoc
+     * construct). Squiggle lands on the typedef NAME. FP-safe by construction: only
+     * the no-type-AND-no-property shape (always an error) is flagged.
+     */
+    private fun checkJSDocTypedefTags() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName)) continue
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkJSDocTypedefTagsInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkJSDocTypedefTagsInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            checkJSDocTypedefTagsInComments(stmt.leadingComments, source, fileName)
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let { checkJSDocTypedefTagsInStmts(it.statements, source, fileName) }
+                is Block -> checkJSDocTypedefTagsInStmts(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkJSDocTypedefTagsInStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkJSDocTypedefTagsInComments(comments: List<Comment>?, source: String, fileName: String) {
+        if (comments.isNullOrEmpty()) return
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            // A `@property`/`@member` tag anywhere in the same block satisfies the typedef.
+            val hasPropertyOrMember = ct.contains("@property") || ct.contains("@member")
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@typedef", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 8 < ct.length) ct[tagIdx + 8] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') { idx = tagIdx + 8; continue }
+                var i = tagIdx + 8
+                // Skip spaces/tabs only — the name (or `{type}`) sits on the same line.
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i < ct.length && ct[i] == '{') {
+                    // Has a `{type}` annotation → well-formed.
+                    idx = tagIdx + 8
+                    continue
+                }
+                val nameStart = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                val name = ct.substring(nameStart, i)
+                if (name.isNotEmpty() && !hasPropertyOrMember) {
+                    val pos = comment.pos + nameStart
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "JSDoc '@typedef' tag should either have a type annotation or be followed by '@property' or '@member' tags.",
+                        category = DiagnosticCategory.Error,
+                        code = 8021,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = pos,
+                        length = name.length,
+                    ))
+                }
+                idx = if (i > tagIdx + 8) i else tagIdx + 8
             }
         }
     }
