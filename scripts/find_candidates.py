@@ -55,6 +55,20 @@ ERR_LINE_RE = re.compile(r"(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$")
 NONE_RE = re.compile(r"reference/([^ \n]+\.errors\.txt)")
 CODE_RE = re.compile(r"error (TS\d+)")
 
+# Optional tsgo-relevance layer (see TSGO-RELEVANCE.md). `--tsgo` hides failures
+# that target features tsgo (TypeScript 7.0) removed, so the candidate pool shows
+# only tsgo-relevant work.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from tsgo_relevance import irrelevant_bases as _tsgo_irrelevant_bases
+except Exception:  # pragma: no cover
+    _tsgo_irrelevant_bases = None
+
+
+def _base_key(name: str) -> str:
+    m = re.match(r"([A-Za-z0-9_\-]+_ts)", name.split("[jvm]")[0].strip())
+    return m.group(1) if m else name
+
 
 def load_skipped_tests() -> set[str]:
     """Extract test-basename tokens from the 'Explored-but-skipped' section
@@ -227,12 +241,19 @@ def main(argv):
     show_all = "--all" in argv
     none_only = "--none" in argv
     output_only = "--output" in argv
+    tsgo_only = "--tsgo" in argv
     code_filter = None
     if "--code" in argv:
         i = argv.index("--code")
         if i + 1 < len(argv):
             code_filter = argv[i + 1].upper()
     skipped = load_skipped_tests()
+    tsgo_irrelevant = set()
+    if tsgo_only and _tsgo_irrelevant_bases is not None:
+        tsgo_irrelevant = _tsgo_irrelevant_bases()
+
+    def tsgo_drop(name: str) -> bool:
+        return tsgo_only and _base_key(name) in tsgo_irrelevant
 
     xmls = glob.glob(XML_GLOB)
     if not xmls:
@@ -259,8 +280,10 @@ def main(argv):
         print("=" * 80)
         filtered = rows
         if fresh_only:
-            filtered = [r for r in rows if tag(r[0], skipped).strip() != "[SKIP]"]
-        print(f"{title}: {len(filtered)}{' (filtered from ' + str(len(rows)) + ')' if fresh_only and len(filtered) != len(rows) else ''}")
+            filtered = [r for r in filtered if tag(r[0], skipped).strip() != "[SKIP]"]
+        if tsgo_only:
+            filtered = [r for r in filtered if not tsgo_drop(r[0])]
+        print(f"{title}: {len(filtered)}{' (filtered from ' + str(len(rows)) + ')' if len(filtered) != len(rows) else ''}")
         for row in sorted(filtered, key=lambda x: x[1])[:limit]:
             mark = tag(row[0], skipped)
             print(f"  {mark}+{row[1]} {row[0]}")
@@ -281,6 +304,8 @@ def main(argv):
         rows = none_produced
         if fresh_only:
             rows = [r for r in rows if tag(r[0], skipped).strip() != "[SKIP]"]
+        if tsgo_only:
+            rows = [r for r in rows if not tsgo_drop(r[0])]
         if code_filter:
             rows = [r for r in rows if code_filter in r[1]]
         # group by code signature; within a group sort by err-line count
@@ -308,6 +333,8 @@ def main(argv):
         rows = output_diffs
         if fresh_only:
             rows = [r for r in rows if tag(r[0], skipped).strip() != "[SKIP]"]
+        if tsgo_only:
+            rows = [r for r in rows if not tsgo_drop(r[0])]
         if code_filter:
             rows = []  # OUTPUT diffs carry no codes
         bykind = defaultdict(list)
