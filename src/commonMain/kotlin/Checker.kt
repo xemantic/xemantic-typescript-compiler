@@ -55028,6 +55028,7 @@ interface DataView {
         val name = decl.name
         if (name is ObjectBindingPattern) {
             checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
+            checkDestructuringFromObjectSpread(name, decl.initializer, source, fileName)
             checkDestructuringPrivateAccess(name, decl.initializer, source, fileName)
             // B98.r120: `var { a } = { a: 1, b: 2 }` — a destructured object-LITERAL
             // initializer is fresh, so any property NOT bound by the pattern is excess
@@ -55841,6 +55842,73 @@ interface DataView {
                 length = squiggleLen,
             ))
         }
+    }
+
+    /**
+     * destructuringFromUnionSpread: `const { a } = { ...x }` where `x` has a UNION type
+     * whose constituents are object/interface types. The spread distributes over the
+     * union, producing `{ ...A } | { ...B }`; a destructured property absent from ANY
+     * constituent is TS2339 (a property must exist on EVERY union member). Display
+     * anonymizes each constituent structurally (`{ a: string; } | { b: number; }`),
+     * matching TypeScript. Only fires for an initializer that is an object literal with
+     * exactly one spread whose source resolves to a Union of object-like types — bails on
+     * any non-object constituent, keeping the FP surface minimal.
+     */
+    private fun checkDestructuringFromObjectSpread(
+        pattern: ObjectBindingPattern, initializer: Expression?, source: String, fileName: String,
+    ) {
+        val objLit = initializer as? ObjectLiteralExpression ?: return
+        if (objLit.properties.size != 1) return
+        val spread = objLit.properties[0] as? SpreadAssignment ?: return
+        val srcType = try { getTypeOfExpression(spread.expression) } catch (_: StackOverflowError) { return }
+        if (srcType !is Type.Union) return
+        // Spread filters out null/undefined; the rest must all be object-like to render.
+        val constituents = srcType.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+        if (constituents.isEmpty()) return
+        val displays = constituents.map { structuralSpreadDisplay(it) ?: return }
+        val display = displays.joinToString(" | ")
+        for (el in pattern.elements) {
+            if (el !is BindingElement || el.dotDotDotToken) continue
+            val propNode = el.propertyName ?: el.name
+            val propName = when (propNode) {
+                is Identifier -> propNode.text
+                is StringLiteralNode -> propNode.text
+                else -> continue
+            }
+            val missing = constituents.any {
+                try { getPropertyOfType(it, propName) == null } catch (_: StackOverflowError) { return }
+            }
+            if (!missing) continue
+            val squiggleStart = propNode.pos
+            val squiggleLen = when (propNode) {
+                is Identifier -> propNode.text.length
+                is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'.",
+                category = DiagnosticCategory.Error,
+                code = 2339,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = squiggleStart,
+                length = squiggleLen,
+            ))
+        }
+    }
+
+    /** Structural (anonymized) display of an object/interface type's own data properties,
+     *  e.g. `{ a: string; b: number; }`. Returns null for non-object types. Used by
+     *  [checkDestructuringFromObjectSpread] to render spread constituents. */
+    private fun structuralSpreadDisplay(t: Type): String? {
+        val obj = t as? Type.Object ?: return null
+        try { resolveStructuredTypeMembers(obj) } catch (_: StackOverflowError) { return null }
+        val props = obj.properties ?: obj.members?.values?.toList() ?: return null
+        if (props.isEmpty()) return "{}"
+        val parts = props.map { sym -> "${sym.name}: ${typeToString(getTypeOfSymbol(sym))}" }
+        return "{ " + parts.joinToString("; ") + "; }"
     }
 
     /**
