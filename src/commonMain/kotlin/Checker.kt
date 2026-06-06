@@ -315,6 +315,13 @@ class Checker(
      *  enumPropertyAccess TS2339 case. Saved/restored alongside `currentLocalTypes`. */
     private var currentEnumConstrainedParams: Map<String, String> = emptyMap()
 
+    /** The enum declaration whose member-initializer expressions are currently being
+     *  walked by the property-access pass, so a bare-Identifier receiver that names a
+     *  member of THIS enum (`enum E { a, b = a.x }`) resolves to an enum member. Set by
+     *  the EnumDeclaration branch of [checkPropertyAccessInStatement]; consulted by
+     *  [enumTypedReceiverDisplay]. */
+    private var currentEnclosingEnum: EnumDeclaration? = null
+
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
@@ -71902,6 +71909,18 @@ interface DataView {
                     walkTypeNodeForUndefinedTypeQueryChain(stmt.type, source, fileName, atNode = stmt)
                 }
             }
+            is EnumDeclaration -> {
+                // enumBasics3: walk member-initializer expressions for property accesses
+                // (`enum E { a = 1, b = a.x }`). Track the enclosing enum so a bare-ident
+                // receiver naming a member of THIS enum resolves to an enum member.
+                val saved = currentEnclosingEnum
+                currentEnclosingEnum = stmt
+                try {
+                    for (m in stmt.members) {
+                        m.initializer?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                    }
+                } finally { currentEnclosingEnum = saved }
+            }
             else -> { /* no property access in other statement types */ }
         }
     }
@@ -73670,8 +73689,20 @@ interface DataView {
         diagStart: Int, diagLength: Int, source: String, fileName: String,
     ): Boolean {
         if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
-        val enumIdent = enumAccess.expression as? Identifier ?: return false
-        val enumSym = currentFileLocals?.get(enumIdent.text) ?: globals[enumIdent.text] ?: return false
+        // Resolve the enum from a bare Identifier base (`E.M.prop`) OR a qualified base
+        // (`M.N.E.member.prop`). The display enum name is always the enum's OWN last
+        // segment (`E`), not the full qualified path.
+        val (enumSym, enumName) = when (val base = enumAccess.expression) {
+            is Identifier -> {
+                val s = currentFileLocals?.get(base.text) ?: globals[base.text] ?: return false
+                s to base.text
+            }
+            is PropertyAccessExpression -> {
+                val s = resolveQualifiedValueSymbol(base) ?: return false
+                s to base.name.text
+            }
+            else -> return false
+        }
         // Require an actual EnumDeclaration: namespaces holding only const enums get
         // SymbolFlags.ConstEnum set via ModuleInstanceState.ConstEnumOnly, so checking
         // the flag alone aliases real `enum E {}` declarations with `namespace M { const enum X {} }`.
@@ -73683,7 +73714,7 @@ interface DataView {
         if (numHasIt != null) return false
         val strHasIt = try { getPropertyOfType(getApparentType(stringType), propName) } catch (_: StackOverflowError) { null }
         if (strHasIt != null) return false
-        val display = "${enumIdent.text}.$memberName"
+        val display = "$enumName.$memberName"
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
         diagnostics.add(Diagnostic(
             message = "Property '$propName' does not exist on type '$display'.",
@@ -73741,6 +73772,12 @@ interface DataView {
     private fun enumTypedReceiverDisplay(recv: Identifier): String? {
         // (a) param typed as a type parameter constrained to an enum.
         currentEnumConstrainedParams[recv.text]?.let { return it }
+        // (c) bare member reference inside the enclosing enum's own member initializer
+        //     (`enum E { a, b = a.x }`) — `a` names a member of the enum being defined.
+        currentEnclosingEnum?.let { enumDecl ->
+            val isMember = enumDecl.members.any { (it.name as? Identifier)?.text == recv.text }
+            if (isMember) return "${enumDecl.name.text}.${recv.text}"
+        }
         // (b) un-annotated local var initialized to an enum-member access `E.M`.
         val sym = currentFileLocals?.get(recv.text) ?: return null
         if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
@@ -74055,10 +74092,11 @@ interface DataView {
                 tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
                 return
             }
-            // 17.22: `E.A.prop` — enum-member access then property. Emits TS2339 with `E.A` display
-            // when prop is absent from both Number and String wrapper apparent types.
+            // 17.22: `E.A.prop` / `M.N.E.A.prop` — enum-member access then property. Emits
+            // TS2339 with `E.A` display when prop is absent from both Number and String
+            // wrapper apparent types. Base may be a bare Identifier or a qualified chain.
             if (objectExpr is PropertyAccessExpression &&
-                objectExpr.expression is Identifier &&
+                (objectExpr.expression is Identifier || objectExpr.expression is PropertyAccessExpression) &&
                 tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
                 return
             }
