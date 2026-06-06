@@ -309,6 +309,12 @@ class Checker(
      *  at function-body entry. NOT used for type resolution — membership-only. */
     private var currentParamBindingNames: MutableSet<String> = mutableSetOf()
 
+    /** Param name → enum display name for params typed as a type parameter constrained
+     *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
+     *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
+     *  enumPropertyAccess TS2339 case. Saved/restored alongside `currentLocalTypes`. */
+    private var currentEnumConstrainedParams: Map<String, String> = emptyMap()
+
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
@@ -71669,12 +71675,15 @@ interface DataView {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
+                    val savedEnumParams = currentEnumConstrainedParams
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
                     populateParameterLocalTypes(stmt.parameters)
                     checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
                     currentLocalTypes = savedLocalTypes
                     currentParamBindingNames = savedParamBindings
+                    currentEnumConstrainedParams = savedEnumParams
                 }
             }
             is VariableStatement -> {
@@ -72743,6 +72752,35 @@ interface DataView {
         return saved
     }
 
+    /**
+     * Map each parameter whose annotation is a bare reference to a type parameter (from
+     * [typeParameters]) constrained to an enum, to that enum's name. Pure symbol lookup
+     * (no type engine) — used for the enumPropertyAccess TS2339 case. Returns empty map
+     * when nothing matches.
+     */
+    private fun collectEnumConstrainedParams(
+        typeParameters: List<TypeParameter>?, parameters: List<Parameter>,
+    ): Map<String, String> {
+        if (typeParameters.isNullOrEmpty()) return emptyMap()
+        // Build TP-name → enum-name for type params constrained to an enum.
+        val tpEnum = HashMap<String, String>()
+        for (tp in typeParameters) {
+            val cons = tp.constraint as? TypeReference ?: continue
+            val consName = (cons.typeName as? Identifier)?.text ?: continue
+            val enumSym = currentFileLocals?.get(consName) ?: globals[consName] ?: continue
+            if (enumSym.declarations.any { it is EnumDeclaration }) tpEnum[tp.name.text] = consName
+        }
+        if (tpEnum.isEmpty()) return emptyMap()
+        val result = HashMap<String, String>()
+        for (param in parameters) {
+            val pName = (param.name as? Identifier)?.text ?: continue
+            val ann = param.type as? TypeReference ?: continue
+            val annName = (ann.typeName as? Identifier)?.text ?: continue
+            tpEnum[annName]?.let { result[pName] = it }
+        }
+        return result
+    }
+
     private fun populateParameterLocalTypes(parameters: List<Parameter>) {
         for (param in parameters) {
             val paramName = param.name
@@ -73593,6 +73631,63 @@ interface DataView {
     }
 
     /**
+     * enumPropertyAccess: TS2339 for `recv.prop` where the Identifier `recv` is statically
+     * an enum (member). Two AST/symbol-resolvable shapes that need NO enum-literal types in
+     * the type engine:
+     *   (a) a param/local typed as a TYPE PARAMETER constrained to an enum
+     *       (`function f<B extends E>(p: B){ p.prop }`) → display the enum name `E`;
+     *   (b) an un-annotated local var initialized to an enum-member access
+     *       (`var x = E.M; x.prop`)                     → display `E.M`.
+     * Emits only when `prop` is absent from BOTH the Number and String wrapper apparent types
+     * (an enum value's apparent type is Number/String), mirroring [tryEmitEnumMemberAccessTs2339].
+     * FP-safe: an enum value never carries an arbitrary member, and valid numeric/string
+     * methods (`toFixed`, `toString`, …) are filtered by the apparent-type check.
+     */
+    private fun tryEmitEnumTypedIdentReceiverTs2339(
+        recv: Identifier, propName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        if (recv.text == "this" || recv.text == "super") return false
+        val display = enumTypedReceiverDisplay(recv) ?: return false
+        val numHasIt = try { getPropertyOfType(getApparentType(numberType), propName) } catch (_: StackOverflowError) { return false }
+        if (numHasIt != null) return false
+        val strHasIt = try { getPropertyOfType(getApparentType(stringType), propName) } catch (_: StackOverflowError) { return false }
+        if (strHasIt != null) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$display'.",
+            category = DiagnosticCategory.Error,
+            code = 2339,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = diagStart,
+            length = diagLength,
+        ))
+        return true
+    }
+
+    /** Display string for an enum-typed Identifier receiver, or null if not enum-typed.
+     *  See [tryEmitEnumTypedIdentReceiverTs2339]. */
+    private fun enumTypedReceiverDisplay(recv: Identifier): String? {
+        // (a) param typed as a type parameter constrained to an enum.
+        currentEnumConstrainedParams[recv.text]?.let { return it }
+        // (b) un-annotated local var initialized to an enum-member access `E.M`.
+        val sym = currentFileLocals?.get(recv.text) ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+        if (decl.type != null) return null
+        val init = decl.initializer as? PropertyAccessExpression ?: return null
+        val enumIdent = init.expression as? Identifier ?: return null
+        val enumSym = currentFileLocals?.get(enumIdent.text) ?: globals[enumIdent.text] ?: return null
+        if (enumSym.declarations.none { it is EnumDeclaration }) return null
+        val memberSym = enumSym.exports?.get(init.name.text) ?: return null
+        if (!memberSym.flags.hasAny(SymbolFlags.EnumMember)) return null
+        return "${enumIdent.text}.${init.name.text}"
+    }
+
+    /**
      * 16.4ed: Narrow TS2339 for `g.prop` where `g: Partial<T>` / `Required<T>` / `Readonly<T>`.
      * These utility types preserve T's property set, so if `prop` isn't a member of T, the
      * access is invalid. Fires only when the inner type resolves to a plain Object/Interface
@@ -73684,6 +73779,13 @@ interface DataView {
         val ts2576Start = ts2576SquiggleStart
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // enumPropertyAccess: `x.prop` where `x` is statically an enum (member) —
+        // a var initialized to `E.M`, or a param typed as a type-param `extends E`.
+        if (objectExpr is Identifier && !isThisAccess &&
+            tryEmitEnumTypedIdentReceiverTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
+            return
+        }
 
         // 17.161: String literal receiver — `"".bogus` / `"foo".missing`. Resolves
         // to the String apparent type and emits TS2339 with the literal value displayed
