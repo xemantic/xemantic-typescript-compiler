@@ -19194,6 +19194,7 @@ class Checker(
         // "excessive stack depth" the test guards against). This runs first because the
         // alias body often resolves to errorType/any, which the type-based path skips.
         if (ts2403CheckAliasAnnotations(decls, varName, source, fileName)) return
+        if (ts2403CheckEnumValueRedeclarations(decls, varName, source, fileName)) return
         val firstType = getVarDeclType(firstDecl) ?: return
         // Two comparison modes: SIMPLE (intrinsic/literal/function — reliable string
         // compare) and STRUCTURED (generic interface instantiations — recursive
@@ -19254,6 +19255,70 @@ class Checker(
                 length = length,
                 relatedInformation = relatedInfo,
             ))
+        }
+    }
+
+    /**
+     * AST/symbol-level TS2403 for a var group where declarations are initialized to an enum
+     * VALUE vs an enum MEMBER (`var x = E` has type `typeof E`; `var x = E.a` has type `E`).
+     * The two genuinely differ, but our inference engine renders both as a bare `Type.Object`
+     * displaying `E`, so this pre-check classifies the un-annotated enum initializers directly
+     * (bare enum identifier → `typeof E`; enum-member access → `E`). Returns true when it
+     * handled the group (compared ≥2 enum-classifiable decls), so the caller skips the
+     * type-based path. FP-safe: only fires when initializers resolve to a real EnumDeclaration.
+     */
+    private fun ts2403CheckEnumValueRedeclarations(
+        decls: List<VariableDeclaration>, varName: String, source: String, fileName: String,
+    ): Boolean {
+        val firstDisplay = enumRedeclDisplay(decls[0]) ?: return false
+        val firstExported = isVarDeclExported(decls[0])
+        var handled = false
+        for (i in 1 until decls.size) {
+            val decl = decls[i]
+            if (isVarDeclExported(decl) != firstExported) continue
+            val declDisplay = enumRedeclDisplay(decl) ?: continue
+            handled = true
+            if (declDisplay == firstDisplay) continue
+            val nameNode = decl.name as? Identifier ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            val firstNameNode = decls[0].name as? Identifier
+            val relatedInfo = if (firstNameNode != null) {
+                val (fl, fc) = getLineAndCharacterOfPosition(source, firstNameNode.pos)
+                listOf(Diagnostic(
+                    message = "'$varName' was also declared here.",
+                    category = DiagnosticCategory.Message, code = 6203, fileName = fileName,
+                    line = fl, character = fc, start = firstNameNode.pos, length = firstNameNode.text.length,
+                ))
+            } else emptyList()
+            diagnostics.add(Diagnostic(
+                message = "Subsequent variable declarations must have the same type.  Variable '$varName' must be of type '$firstDisplay', but here has type '$declDisplay'.",
+                category = DiagnosticCategory.Error, code = 2403, fileName = fileName,
+                line = line, character = character, start = nameNode.pos, length = nameNode.text.length,
+                relatedInformation = relatedInfo,
+            ))
+        }
+        return handled
+    }
+
+    /** Classify an un-annotated var declaration's enum initializer: a bare enum identifier
+     *  (`var x = E`) → `typeof E`; an enum-member access (`var x = E.a`) → `E`. Null if the
+     *  declaration is annotated or its initializer is not an enum value/member reference. */
+    private fun enumRedeclDisplay(decl: VariableDeclaration): String? {
+        if (decl.type != null) return null
+        return when (val init = decl.initializer) {
+            is Identifier -> {
+                val s = currentFileLocals?.get(init.text) ?: globals[init.text] ?: return null
+                if (s.declarations.any { it is EnumDeclaration }) "typeof ${init.text}" else null
+            }
+            is PropertyAccessExpression -> {
+                val base = init.expression as? Identifier ?: return null
+                val s = currentFileLocals?.get(base.text) ?: globals[base.text] ?: return null
+                if (s.declarations.none { it is EnumDeclaration }) return null
+                val m = s.exports?.get(init.name.text) ?: return null
+                if (!m.flags.hasAny(SymbolFlags.EnumMember)) return null
+                base.text
+            }
+            else -> null
         }
     }
 
