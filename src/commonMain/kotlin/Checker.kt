@@ -75641,6 +75641,53 @@ interface DataView {
                 }
             }
         }
+        // B98.r167: TS2339 for `{ objLit }[id]` where `id` has a UNION-of-literal
+        // type and one literal is not a key of the FRESH object literal. Gated:
+        // receiver resolves to a fresh Type.Object (own props, no index sig, no
+        // call/construct sigs), index resolves to a Type.Union whose members are
+        // ALL string/number literal types. FP-safe — a missing key on a closed
+        // object literal is always a TypeScript error; the no-index-signature gate
+        // excludes `({...} as Record<...>)[id]` shapes.
+        run {
+            if (arg is StringLiteralNode || arg is NumericLiteralNode) return@run
+            val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { return@run }
+            if (recvType !is Type.Object || recvType is Type.Reference || recvType is Type.Interface) return@run
+            try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return@run }
+            if (recvType.stringIndexInfo != null || recvType.numberIndexInfo != null) return@run
+            if (!recvType.callSignatures.isNullOrEmpty() || !recvType.constructSignatures.isNullOrEmpty()) return@run
+            val props = recvType.properties ?: return@run
+            if (props.isEmpty()) return@run
+            val idxType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return@run }
+            if (idxType !is Type.Union) return@run
+            val keys = props.map { it.name }.toSet()
+            var missing: String? = null
+            for (m in idxType.types) {
+                val k = when (m) {
+                    is Type.StringLiteral -> m.value
+                    is Type.NumberLiteral -> m.toString()
+                    else -> return@run // a non-literal member → not a closed-key index
+                }
+                if (k !in keys && missing == null) missing = k
+            }
+            if (missing != null) {
+                val recvStart = expr.expression.pos
+                var closeBracket = expressionTrueEnd(arg)
+                while (closeBracket < source.length && source[closeBracket] != ']') closeBracket++
+                val end = if (closeBracket < source.length) closeBracket + 1 else expr.end
+                val length = (end - recvStart).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, recvStart)
+                val recvDisplay = props.joinToString(prefix = "{ ", separator = "; ", postfix = "; }") { sym ->
+                    val pt = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { anyType }
+                    "${sym.name}: ${typeToString(widenType(pt))}"
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Property '$missing' does not exist on type '$recvDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = character, start = recvStart, length = length,
+                ))
+                return
+            }
+        }
         val propName: String
         val diagStart: Int
         val diagLength: Int
