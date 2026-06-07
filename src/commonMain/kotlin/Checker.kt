@@ -61494,7 +61494,19 @@ interface DataView {
             if (el is SpreadElement) return anyType // spread not yet supported
             val t = getTypeOfExpression(el)
             if (t === anyType || t === errorType) return anyType // can't determine
-            if (t !in elementTypes) elementTypes.add(t)
+            // B98.r162: STRUCTURAL dedup of element types — the plain `!in` (reference
+            // identity) misses two fresh-but-structurally-identical anonymous object
+            // literal types, so `[{name,id}, {name,id}]` produced a bogus
+            // `{name,id} | {name,id}` element union (TypeScript never displays `T | T`;
+            // its best-common-type collapses identical members to one). Reuse the
+            // tri-state TS2403 structural-identity comparator: skip an element type that
+            // is IDENTICAL to one already collected. UNKNOWN/DIFFERENT → keep as a union
+            // member (preserves prior behavior for genuinely heterogeneous arrays).
+            // Unblocks `lambdaParamTypes` (contextually-typed lambda param resolves to a
+            // single anonymous object type so `x.foo` reaches the TS2339 emission).
+            if (elementTypes.none { it === t || ts2403Identical(it, t, 0) == Ts2403Cmp.IDENTICAL }) {
+                elementTypes.add(t)
+            }
         }
         // For a homogeneous array, element type is the single type
         // For heterogeneous, it's a union
