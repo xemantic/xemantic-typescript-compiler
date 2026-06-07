@@ -3924,6 +3924,19 @@ class Checker(
                                     }
                                 }
                             }
+                            // Fallback: `export = X` is consumed as the DEFAULT import under
+                            // esModuleInterop (TypeScript's synthetic-default rule — a CommonJS
+                            // `export =` module is default-imported as its export-equals value).
+                            // e.g. exp.ts `export = x` + imp.ts `import foo from "./exp"` → foo is x.
+                            // Gated to esModuleInterop (default true) since without it the default
+                            // import of an `export =` module is a TS1259 error, not a value.
+                            if (options.esModuleInterop) {
+                                val exportEqualsTarget = resolveModuleExportAssignment(targetResult, visited)
+                                if (exportEqualsTarget != null) {
+                                    setSymbolTarget(symbol, exportEqualsTarget)
+                                    return resolveAlias(exportEqualsTarget, visited)
+                                }
+                            }
                             continue
                         }
 
