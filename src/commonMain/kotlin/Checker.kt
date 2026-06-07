@@ -57337,6 +57337,34 @@ interface DataView {
                         return
                     }
                 }
+                // B106: function/property source vs CONSTRUCTOR-type return target.
+                // canUseTypeEngine bails when source lacks construct sigs but target
+                // requires them, so TS2322 never fires for
+                // `function f(): { new(): T } { return function(){} }`. Mirror the
+                // assignment-path construct-sig-mismatch branch (~57866) into the return
+                // path. Squiggle = the `return` keyword (stmt.pos, length 6). FP-safe:
+                // getNonConstructibleElaboration is non-null only for a genuine mismatch.
+                if (expr != null && targetType is Type.Object && !targetType.constructSignatures.isNullOrEmpty() &&
+                    !isClassOrInterfaceInstanceType(targetType) &&
+                    sourceType is Type.Object &&
+                    (!sourceType.callSignatures.isNullOrEmpty() ||
+                        (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
+                    sourceType.constructSignatures.isNullOrEmpty()) {
+                    val srcCtorElab = getNonConstructibleElaboration(sourceType, targetType)
+                    if (srcCtorElab != null) {
+                        val displaySource = typeToString(sourceType)
+                        val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                        val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = line, character = character,
+                            start = stmt.pos, length = 6,
+                            messageChain = srcCtorElab,
+                        ))
+                        return
+                    }
+                }
                 if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                     // Async-function returns: declared `Promise<T>` accepts `T` directly.
                     // The returned value is implicitly wrapped in a Promise at runtime,
