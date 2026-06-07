@@ -18,6 +18,12 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
 /**
  * A fully-resolved `tsconfig.json`: the merged [CompilerOptions], the raw
  * `include`/`exclude`/`files` glob/path lists (resolved against [configDir]),
@@ -33,14 +39,15 @@ data class LoadedTsConfig(
 )
 
 /**
- * Loads a `tsconfig.json` from disk through a [Vfs], resolving the `extends`
- * chain and mapping `compilerOptions` onto [CompilerOptions] via [applyDirective]
- * (the same option-string mapping the test directives use).
+ * Loads a `tsconfig.json` from disk through a [Vfs], resolving the `extends` chain
+ * and mapping `compilerOptions` onto [CompilerOptions] via [applyDirective] (the same
+ * option-string mapping the test directives use).
  *
- * Supported: `extends` (string or array; relative paths and `node_modules` package
- * configs), `compilerOptions`, `include`, `exclude`, `files`, `customConditions`.
- * `compilerOptions.paths` and other object-valued options that [applyDirective]
- * doesn't model are skipped (logged by the caller, not fatal).
+ * Each config file is read into the typed [TsConfigFile] via kotlinx-serialization
+ * (JSONC-tolerant). Supported: `extends` (string or array; relative paths and
+ * `node_modules` package configs), `compilerOptions`, `include`, `exclude`, `files`,
+ * `customConditions`. `compilerOptions.paths` and other object-valued options that
+ * [applyDirective] doesn't model are skipped.
  */
 class TsConfigLoader(private val vfs: Vfs) {
 
@@ -55,12 +62,11 @@ class TsConfigLoader(private val vfs: Vfs) {
         val merged = loadMerged(tsconfigPath, mutableSetOf())
             ?: return LoadedTsConfig(CompilerOptions(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList())
 
-        val coObj = (merged["compilerOptions"] as? JsonValue.Obj)?.entries ?: emptyMap()
+        val co = merged.compilerOptions ?: JsonObject(emptyMap())
         var options = CompilerOptions()
-        for ((rawKey, value) in coObj) {
-            val key = rawKey.lowercase()
+        for ((rawKey, value) in co) {
             val directiveValue = jsonToDirectiveValue(value) ?: continue
-            options = applyDirective(options, key, directiveValue)
+            options = applyDirective(options, rawKey.lowercase(), directiveValue)
         }
         options = applyImpliedAllowJs(options)
 
@@ -70,37 +76,55 @@ class TsConfigLoader(private val vfs: Vfs) {
             rootDir = options.rootDir?.let { PathUtil.join(configDir, it) },
         )
 
-        val include = (merged["include"]?.asStringList ?: emptyList()).ifEmpty {
-            if (merged["files"] != null) emptyList() else defaultInclude
+        val include = (merged.include ?: emptyList()).ifEmpty {
+            if (merged.files != null) emptyList() else defaultInclude
         }
-        val exclude = merged["exclude"]?.asStringList ?: defaultExclude
-        val files = (merged["files"]?.asStringList ?: emptyList()).map { PathUtil.join(configDir, it) }
-        val customConditions = coObj["customConditions"]?.asStringList ?: emptyList()
+        val exclude = merged.exclude ?: defaultExclude
+        val files = (merged.files ?: emptyList()).map { PathUtil.join(configDir, it) }
+        val customConditions = co["customConditions"]?.asStringList ?: emptyList()
 
         return LoadedTsConfig(options, configDir, include, exclude, files, customConditions)
     }
 
     /**
      * Reads [tsconfigPath], recursively merges its `extends` parents (parent first,
-     * child overrides), and returns the merged top-level object. `compilerOptions`
-     * is deep-merged; `include`/`exclude`/`files` are child-wins (TS semantics:
-     * a child that specifies them replaces the parent's).
+     * child overrides), and returns the merged config. `compilerOptions` is shallow-
+     * merged; `include`/`exclude`/`files` are child-wins (a child that specifies them
+     * replaces the parent's, per TS semantics).
      */
-    private fun loadMerged(tsconfigPath: String, seen: MutableSet<String>): JsonValue.Obj? {
+    private fun loadMerged(tsconfigPath: String, seen: MutableSet<String>): TsConfigFile? {
         val norm = PathUtil.normalize(tsconfigPath)
         if (!seen.add(norm)) return null // cycle guard
         val text = vfs.readText(norm) ?: return null
-        val obj = parseJson(text) as? JsonValue.Obj ?: return null
+        val self = try {
+            LENIENT_JSON.decodeFromString<TsConfigFile>(text)
+        } catch (_: Throwable) {
+            return null
+        }
         val configDir = PathUtil.dirname(norm)
 
-        val parents = obj["extends"]?.asStringList ?: emptyList()
-        var base: JsonValue.Obj? = null
-        for (ext in parents) {
+        var base: TsConfigFile? = null
+        for (ext in (self.extends?.asStringList ?: emptyList())) {
             val parentPath = resolveExtends(ext, configDir) ?: continue
             val parent = loadMerged(parentPath, seen) ?: continue
-            base = if (base == null) parent else mergeConfig(base, parent)
+            base = if (base == null) parent else merge(base, parent)
         }
-        return if (base == null) obj else mergeConfig(base, obj)
+        return if (base == null) self else merge(base, self)
+    }
+
+    /** child overrides base; `compilerOptions` is shallow-merged. */
+    private fun merge(base: TsConfigFile, child: TsConfigFile): TsConfigFile = TsConfigFile(
+        extends = child.extends,
+        compilerOptions = mergeObjects(base.compilerOptions, child.compilerOptions),
+        include = child.include ?: base.include,
+        exclude = child.exclude ?: base.exclude,
+        files = child.files ?: base.files,
+    )
+
+    private fun mergeObjects(base: JsonObject?, child: JsonObject?): JsonObject? = when {
+        base == null -> child
+        child == null -> base
+        else -> JsonObject(base + child) // child keys override
     }
 
     /** Resolves an `extends` target to a tsconfig path (relative file or node_modules package). */
@@ -131,27 +155,11 @@ class TsConfigLoader(private val vfs: Vfs) {
         }
     }
 
-    /** child overrides base; `compilerOptions` objects are shallow-merged. */
-    private fun mergeConfig(base: JsonValue.Obj, child: JsonValue.Obj): JsonValue.Obj {
-        val out = LinkedHashMap(base.entries)
-        for ((k, v) in child.entries) {
-            out[k] = if (k == "compilerOptions" && v is JsonValue.Obj) {
-                val baseCo = (base.entries[k] as? JsonValue.Obj)?.entries ?: emptyMap()
-                JsonValue.Obj(LinkedHashMap(baseCo).apply { putAll(v.entries) })
-            } else v
-        }
-        return JsonValue.Obj(out)
-    }
-
     /** Converts a compilerOptions value to the string form [applyDirective] expects. */
-    private fun jsonToDirectiveValue(value: JsonValue): String? = when (value) {
-        is JsonValue.Str -> value.value
-        is JsonValue.Bool -> value.value.toString()
-        is JsonValue.Num -> {
-            val d = value.value
-            if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
-        }
-        is JsonValue.Arr -> value.items.mapNotNull { it.string }.joinToString(",")
+    private fun jsonToDirectiveValue(value: JsonElement): String? = when (value) {
+        is JsonNull -> null
+        is JsonPrimitive -> value.content // string content, or "true"/"false"/"5" for bool/number
+        is JsonArray -> value.mapNotNull { it.stringValue }.joinToString(",")
         else -> null // objects (paths, etc.) are not modeled by applyDirective
     }
 }

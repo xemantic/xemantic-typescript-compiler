@@ -18,6 +18,11 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
 /**
  * A pragmatic node / nodenext / bundler module resolver operating over a [Vfs].
  *
@@ -63,7 +68,7 @@ class ModuleResolver(
         ".cjs" to listOf(".cts", ".d.cts"),
     )
 
-    private val pkgJsonCache = HashMap<String, JsonValue.Obj?>()
+    private val pkgJsonCache = HashMap<String, JsonObject?>()
 
     /** Resolves [specifier] imported from [importerPath]; returns an absolute file path or null. */
     fun resolve(specifier: String, importerPath: String): String? {
@@ -111,10 +116,10 @@ class ModuleResolver(
     /** Resolves directory [dir] via its package.json (types/main) then `index.*`. */
     private fun resolveAsDirectory(dir: String): String? {
         readPackageJson("$dir/package.json")?.let { pkg ->
-            (pkg["types"]?.string ?: pkg["typings"]?.string)?.let { t ->
+            (pkg["types"]?.stringValue ?: pkg["typings"]?.stringValue)?.let { t ->
                 resolveAsFile(PathUtil.join(dir, t))?.let { return it }
             }
-            pkg["main"]?.string?.let { m ->
+            pkg["main"]?.stringValue?.let { m ->
                 resolveAsFile(PathUtil.join(dir, m))?.let { return it }
                 if (vfs.isDirectory(PathUtil.join(dir, m))) resolveIndex(PathUtil.join(dir, m))?.let { return it }
             }
@@ -173,10 +178,10 @@ class ModuleResolver(
             // type-checking even when a package's exports map omits a `types`-y target.
         }
         return if (sub.isEmpty()) {
-            (pkg?.get("types")?.string ?: pkg?.get("typings")?.string)?.let { t ->
+            (pkg?.get("types")?.stringValue ?: pkg?.get("typings")?.stringValue)?.let { t ->
                 resolveAsFile(PathUtil.join(pkgDir, t))?.let { return it }
             }
-            pkg?.get("main")?.string?.let { m ->
+            pkg?.get("main")?.stringValue?.let { m ->
                 resolveAsFileOrDirectory(PathUtil.join(pkgDir, m))?.let { return it }
             }
             resolveAsDirectory(pkgDir)
@@ -188,12 +193,12 @@ class ModuleResolver(
     // --- package.json "exports" -------------------------------------------------
 
     /** Resolves an export [key] (".", "./sub") against the package's `exports` [value]. */
-    private fun resolveExports(value: JsonValue, key: String, pkgDir: String): String? {
+    private fun resolveExports(value: JsonElement, key: String, pkgDir: String): String? {
         // String or array sugar applies only to the package root ".".
-        if (value is JsonValue.Str || value is JsonValue.Arr) {
+        if (value is JsonPrimitive || value is JsonArray) {
             return if (key == ".") resolveExportTarget(value, pkgDir, null) else null
         }
-        val obj = (value as? JsonValue.Obj)?.entries ?: return null
+        val obj = (value as? JsonObject) ?: return null
         val isSubpathMap = obj.keys.all { it == "." || it.startsWith("./") }
         if (!isSubpathMap) {
             // A pure condition map applies to "." only.
@@ -210,22 +215,21 @@ class ModuleResolver(
     }
 
     /** Resolves a (possibly condition-nested, possibly `*`-templated) export target. */
-    private fun resolveExportTarget(value: JsonValue, pkgDir: String, star: String?): String? = when (value) {
-        is JsonValue.Str -> {
-            val t = if (star != null) value.value.replace("*", star) else value.value
-            resolveAsFile(PathUtil.join(pkgDir, t))
-        }
-        is JsonValue.Obj -> {
+    private fun resolveExportTarget(value: JsonElement, pkgDir: String, star: String?): String? = when (value) {
+        is JsonObject -> {
             var result: String? = null
             for (cond in conditions) {
-                val branch = value.entries[cond] ?: continue
+                val branch = value[cond] ?: continue
                 resolveExportTarget(branch, pkgDir, star)?.let { result = it }
                 if (result != null) break
             }
             result
         }
-        is JsonValue.Arr -> value.items.firstNotNullOfOrNull { resolveExportTarget(it, pkgDir, star) }
-        else -> null
+        is JsonArray -> value.firstNotNullOfOrNull { resolveExportTarget(it, pkgDir, star) }
+        else -> value.stringValue?.let { s ->
+            val t = if (star != null) s.replace("*", star) else s
+            resolveAsFile(PathUtil.join(pkgDir, t))
+        }
     }
 
     /** Matches subpath [key] against a single-`*` [pattern]; returns the `*` capture or null. */
@@ -239,8 +243,8 @@ class ModuleResolver(
         return key.substring(prefix.length, key.length - suffix.length)
     }
 
-    private fun readPackageJson(path: String): JsonValue.Obj? =
+    private fun readPackageJson(path: String): JsonObject? =
         pkgJsonCache.getOrPut(PathUtil.normalize(path)) {
-            vfs.readText(path)?.let { parseJson(it) as? JsonValue.Obj }
+            vfs.readText(path)?.let { parseJsonOrNull(it) as? JsonObject }
         }
 }

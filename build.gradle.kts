@@ -26,6 +26,7 @@ import org.jreleaser.model.Active
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.plugin.power.assert)
+    alias(libs.plugins.kotlin.plugin.serialization)
     alias(libs.plugins.dokka)
     alias(libs.plugins.versions)
     alias(libs.plugins.maven.publish)
@@ -124,6 +125,8 @@ kotlin {
                 // loading + module resolution). kotlinx-io is multiplatform (JVM/Native/WASI),
                 // so the project driver stays in commonMain rather than a jvm-only source set.
                 implementation(libs.kotlinx.io.core)
+                // tsconfig.json / package.json parsing (JSONC: comments + trailing commas).
+                implementation(libs.kotlinx.serialization.json)
             }
         }
 
