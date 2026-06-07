@@ -197,6 +197,14 @@ class Checker(
     /** Tracks whether we're inside a static class method/accessor for TS2339 `this` checking. */
     private var inStaticClassMethod = false
 
+    /** B101: the enclosing ClassDeclaration while the assignability walker descends an
+     *  INSTANCE member body (set per-member; null for static members and reset at
+     *  non-arrow nested-function boundaries that rebind `this`). Used ONLY by the
+     *  narrow `var x: <primitive> = this.voidMethod()` TS2322 check — not for general
+     *  `this` typing (that proved too broad an FP surface in the return-assignability
+     *  path). */
+    private var currentClassForThis: ClassDeclaration? = null
+
     /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
     private var argCountSuperCtor: FuncParamInfo? = null
 
@@ -55108,8 +55116,15 @@ interface DataView {
                     }
                 }
                 is FunctionDeclaration -> {
-                    checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes,
-                        isAsync = ModifierFlag.Async in stmt.modifiers)
+                    // B101: a free function rebinds `this`; clear the enclosing class.
+                    val savedThis = currentClassForThis
+                    currentClassForThis = null
+                    try {
+                        checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes,
+                            isAsync = ModifierFlag.Async in stmt.modifiers)
+                    } finally {
+                        currentClassForThis = savedThis
+                    }
                 }
                 is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
@@ -55131,8 +55146,19 @@ interface DataView {
                         for (tp in stmt.typeParameters!!) merged[tp.name.text] = tp
                         currentTypeParamDecls = merged
                     }
+                    val savedClassForThis = currentClassForThis
                     try {
                     for (member in stmt.members) {
+                        // B101: instance-member bodies see `this` as this class; static
+                        // members do not. Used only by the narrow void-method TS2322 check.
+                        val memberIsStatic = when (member) {
+                            is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                            is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                            is GetAccessor -> ModifierFlag.Static in member.modifiers
+                            is SetAccessor -> ModifierFlag.Static in member.modifiers
+                            else -> false
+                        }
+                        currentClassForThis = if (memberIsStatic) null else stmt
                         when (member) {
                             is MethodDeclaration -> {
                                 // B85.1b: Populate `this.X` types from class property declarations
@@ -55285,6 +55311,7 @@ interface DataView {
                     }
                     } finally {
                         currentTypeParamDecls = savedClassTypeParamDecls
+                        currentClassForThis = savedClassForThis
                     }
                 }
                 is ModuleDeclaration -> {
@@ -55465,8 +55492,16 @@ interface DataView {
     ) {
         when (expr) {
             is FunctionExpression -> {
-                checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
-                    isAsync = ModifierFlag.Async in expr.modifiers)
+                // B101: a function expression rebinds `this`; clear the enclosing class
+                // (an arrow, below, preserves `this`).
+                val savedThis = currentClassForThis
+                currentClassForThis = null
+                try {
+                    checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
+                        isAsync = ModifierFlag.Async in expr.modifiers)
+                } finally {
+                    currentClassForThis = savedThis
+                }
             }
             is ArrowFunction -> {
                 (expr.body as? Block)?.let { body ->
@@ -55716,6 +55751,53 @@ interface DataView {
         }
     }
 
+    /**
+     * B101: emit TS2322 for `var x: <primitive> = this.M()` where `M` is an instance
+     * method of [currentClassForThis] declared with NO return annotation and a body
+     * with no `return` statement (→ `void`). `void` is never assignable to a primitive
+     * annotation, so this is FP-safe. Returns true when emitted.
+     */
+    private fun tryEmitVoidThisMethodToPrimitiveVar(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String
+    ): Boolean {
+        val cls = currentClassForThis ?: return false
+        // Annotation must be a primitive keyword that `void` is NOT assignable to.
+        val ann = decl.type as? KeywordTypeNode ?: return false
+        val primName = when (ann.kind) {
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            else -> return false
+        }
+        // Initializer must be `this.M(...)`.
+        val init = decl.initializer as? CallExpression ?: return false
+        val callee = init.expression as? PropertyAccessExpression ?: return false
+        val recv = callee.expression
+        if (recv !is Identifier || recv.text != "this") return false
+        val methodName = callee.name.text
+        // Find a single, own, instance method `M` with no return annotation, no async/
+        // generator modifier, and a return-free body → void. Bail on anything uncertain.
+        val methodDecls = cls.members.filterIsInstance<MethodDeclaration>()
+            .filter { (it.name as? Identifier)?.text == methodName }
+        if (methodDecls.size != 1) return false
+        val m = methodDecls[0]
+        if (ModifierFlag.Static in m.modifiers || ModifierFlag.Async in m.modifiers) return false
+        if (m.asteriskToken) return false
+        if (m.type != null) return false
+        val body = m.body ?: return false
+        if (!bodyHasNoReturn(body)) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type 'void' is not assignable to type '$primName'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = name.pos, length = name.text.length,
+        ))
+        return true
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -55734,6 +55816,13 @@ interface DataView {
             }
         }
         if (name !is Identifier) return
+
+        // B101: narrow FP-safe TS2322 for `var x: <primitive> = this.voidMethod()`.
+        // A `this`-method call whose method is declared in the enclosing class with no
+        // return annotation and a return-free body resolves to `void`, which is never
+        // assignable to a primitive var annotation. This is the one shape `thisWhenType-
+        // CheckFails` needs; broad `this` typing FP'd the return-assignability path.
+        if (tryEmitVoidThisMethodToPrimitiveVar(decl, name, source, fileName)) return
 
         // For unannotated variables with initializers, infer and store the type
         // in currentLocalTypes so downstream references can resolve it.
