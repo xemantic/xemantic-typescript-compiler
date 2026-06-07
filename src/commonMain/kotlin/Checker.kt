@@ -91093,14 +91093,14 @@ interface DataView {
                 }
                 // 17.58b: types synthesized from a leading `@type {...}` JSDoc comment
                 // are valid in JS files — skip the TS8010 emission for that case.
-                if (member.type != null && !member.typeFromJSDoc) emitTs8xxxForType(member.type!!, source, fileName)
+                if (member.type != null && !member.typeFromJSDoc) emitTs8xxxForType(member.type, source, fileName)
                 // Check declare modifier (TS8009)
                 if (ModifierFlag.Declare in member.modifiers) {
                     emitTs8xxxDeclare(member.pos, source, fileName)
                 }
             }
             is GetAccessor -> {
-                if (member.type != null) emitTs8xxxForType(member.type!!, source, fileName)
+                if (member.type != null) emitTs8xxxForType(member.type, source, fileName)
                 member.body?.let { checkTsSyntaxInStatements(it.statements, source, fileName) }
             }
             is SetAccessor -> {
@@ -91118,7 +91118,7 @@ interface DataView {
         for (param in params) {
             // 17.140 / B5.2: skip TS8010 for params whose type was synthesized
             // from a JSDoc `@param {T} name` tag — those are valid in JS files.
-            if (param.type != null && !param.typeFromJSDoc) emitTs8xxxForType(param.type!!, source, fileName)
+            if (param.type != null && !param.typeFromJSDoc) emitTs8xxxForType(param.type, source, fileName)
             if (param.questionToken) {
                 findQuestionTokenPos(param, source)?.let { emitTs8xxxQuestionToken(it, source, fileName) }
             }

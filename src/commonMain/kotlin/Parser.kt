@@ -647,7 +647,7 @@ class Parser(
                 ) {
                     val propAccess = PropertyAccessExpression(
                         expression = Identifier(text = "this", pos = -1, end = -1),
-                        name = expr.left as Identifier,
+                        name = expr.left,
                         pos = -1, end = -1,
                     )
                     stmt.copy(expression = expr.copy(left = propAccess))

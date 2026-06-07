@@ -1,18 +1,18 @@
 [versions]
-kotlinTarget = "2.3"
+kotlinTarget = "2.4"
 javaTarget = "17"
 
-kotlin = "2.3.10"
+kotlin = "2.4.0"
 asm = "9.9.1"
 
 xemanticKotlinTest = "1.17.5"
-kotlinxCoroutines = "1.10.2"
-kotlinxIo = "0.8.2"
+kotlinxCoroutines = "1.11.0"
+kotlinxIo = "0.9.0"
 
-versionsPlugin = "0.53.0"
-dokkaPlugin = "2.1.0"
+versionsPlugin = "0.54.0"
+dokkaPlugin = "2.2.0"
 mavenPublishPlugin = "0.36.0"
-jreleaserPlugin = "1.22.0"
+jreleaserPlugin = "1.24.0"
 xemanticConventionsPlugin = "0.6.8"
 
 [libraries]
