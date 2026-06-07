@@ -61743,12 +61743,38 @@ interface DataView {
     }
 
     /** Check if a block contains any return statement with an expression. */
-    private fun hasReturnWithExpression(block: Block): Boolean {
-        for (stmt in block.statements) {
-            if (stmt is ReturnStatement && stmt.expression != null) return true
-            // Don't recurse into nested functions — they have their own return scope
+    private fun hasReturnWithExpression(block: Block): Boolean =
+        block.statements.any { stmtHasReturnWithExpr(it) }
+
+    /** Recursive: does any statement contain a `return <expr>`, descending through
+     *  control-flow constructs (if/else, loops, switch, try, labeled, with, blocks)
+     *  but NOT into nested function-likes (they have their own return scope)? A
+     *  function whose value-returns are all nested in if/else is NOT void-returning,
+     *  so the top-level-only scan previously mis-inferred its return type as `void`
+     *  (e.g. a sort comparator `(a,b)=>{ if(...)return 1; else return -1; }`). */
+    private fun stmtHasReturnWithExpr(stmt: Statement): Boolean = when (stmt) {
+        is ReturnStatement -> stmt.expression != null
+        is Block -> stmt.statements.any { stmtHasReturnWithExpr(it) }
+        is IfStatement -> stmtHasReturnWithExpr(stmt.thenStatement) ||
+            (stmt.elseStatement?.let { stmtHasReturnWithExpr(it) } ?: false)
+        is ForStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is ForInStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is ForOfStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is WhileStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is DoStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is LabeledStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is WithStatement -> stmtHasReturnWithExpr(stmt.statement)
+        is SwitchStatement -> stmt.caseBlock.any { clause ->
+            when (clause) {
+                is CaseClause -> clause.statements.any { stmtHasReturnWithExpr(it) }
+                is DefaultClause -> clause.statements.any { stmtHasReturnWithExpr(it) }
+                else -> false
+            }
         }
-        return false
+        is TryStatement -> stmt.tryBlock.statements.any { stmtHasReturnWithExpr(it) } ||
+            (stmt.catchClause?.block?.statements?.any { stmtHasReturnWithExpr(it) } ?: false) ||
+            (stmt.finallyBlock?.statements?.any { stmtHasReturnWithExpr(it) } ?: false)
+        else -> false
     }
 
     /** Get the return type of a call expression by resolving the callee's call signature. */
