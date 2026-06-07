@@ -2388,7 +2388,7 @@ class Transformer(
                             // TypeScript prefixes with `exports.X = X =` to update both local and export.
                             // Exclude direct-exported vars (no local var binding) — those are handled by
                             // the global exportRewriteMap pass: `X = expr` → `exports.X = expr` directly.
-                            var assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
+                            val assignedExportName = extractExportedAssignmentName(stmt, exportedVarNames)
                             // Also detect late-export mutations of locally-declared vars:
                             //   var foo = 2; foo = 3;        + export { foo }       → exports.foo = foo = 3;
                             //   var baz = 3; baz = 4;        + export { baz, baz as quux } → exports.quux = exports.baz = baz = 4;
@@ -9924,7 +9924,7 @@ class Transformer(
                 statements.add(ExportDeclaration(
                     exportClause = NamedExports(
                         elements = listOf(ExportSpecifier(
-                            name = syntheticId(className) as Identifier,
+                            name = syntheticId(className),
                             propertyName = null,
                             pos = -1, end = -1,
                         )),
@@ -10287,7 +10287,7 @@ class Transformer(
                 is NoSubstitutionTemplateLiteralNode -> syntheticId("String")
                 is NumericLiteralNode -> syntheticId("Number")
                 // Negative numeric literal type (-1, -2.5, etc.) — still a Number
-                is PrefixUnaryExpression -> if ((typeNode.literal as PrefixUnaryExpression).operand is NumericLiteralNode)
+                is PrefixUnaryExpression -> if (typeNode.literal.operand is NumericLiteralNode)
                     syntheticId("Number") else syntheticId("Object")
                 is Identifier -> when ((typeNode.literal).text) {
                     "true", "false" -> syntheticId("Boolean")
@@ -11402,7 +11402,7 @@ class Transformer(
                     options.effectiveTarget < ScriptTarget.ES2022 &&
                     (containsThisInExpr(prop.initializer) ||
                         (prop.initializer is ArrowFunction &&
-                            ModifierFlag.Async in (prop.initializer as ArrowFunction).modifiers))
+                            ModifierFlag.Async in prop.initializer.modifiers))
             }
             val classTempVar: String? = if (staticPropsWithThis.isNotEmpty()) {
                 val tv = nextTempVarName()
