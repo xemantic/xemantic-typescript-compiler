@@ -128,6 +128,7 @@ class TypeScriptCompiler {
         for ((key, value) in optionOverrides) {
             options = applyDirective(options, key.lowercase(), value)
         }
+        options = applyImpliedAllowJs(options)
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
         // `"type": "commonjs"`. Under Node16/Node18/Node20/NodeNext, this determines whether
         // plain `.ts`/`.js` files emit as ESM or CJS. Without this, plain `.ts` defaults to CJS.

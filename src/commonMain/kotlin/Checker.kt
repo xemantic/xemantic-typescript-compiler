@@ -824,6 +824,9 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         checkJSDocTypedefTags()
+        // 7b''''''. TS2855: `super.X` accessing a parent-class instance FIELD
+        // (not a prototype method/accessor) in a derived JS class. JS-like files only.
+        checkClassFieldSuperAccessJs()
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
@@ -12891,6 +12894,229 @@ class Checker(
                 }
                 idx = if (i > tagIdx + 8) i else tagIdx + 8
             }
+        }
+    }
+
+    /**
+     * TS2855: `super.X` / `super['X']` in a derived JS class where `X` is an
+     * INSTANCE FIELD of the parent class (not a method/accessor on the prototype).
+     * Class fields are own-instance properties — never on the prototype — so
+     * accessing them via `super` always yields `undefined`. JS-only (checkJs);
+     * purely AST/symbol. FP-safe: fires ONLY on a `super`-access whose name is a
+     * collected parent FIELD AND is NOT a parent prototype member (methods,
+     * get/set, `accessor` auto-properties are filtered out), so a legal
+     * `super.method()` never trips it.
+     */
+    private fun checkClassFieldSuperAccessJs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val classesByName = HashMap<String, ClassDeclaration>()
+            collectNamedClassDecls(result.sourceFile.statements, classesByName)
+            if (classesByName.isEmpty()) continue
+            for (cls in classesByName.values) {
+                val baseName = extendsBaseIdentifierName(cls) ?: continue
+                val base = classesByName[baseName] ?: continue
+                if (base === cls) continue
+                val fieldDisplay = collectClassInstanceFields(base)
+                if (fieldDisplay.isEmpty()) continue
+                for (member in cls.members) {
+                    val body: Node? = when (member) {
+                        is MethodDeclaration -> member.body
+                        is GetAccessor -> member.body
+                        is SetAccessor -> member.body
+                        is Constructor -> member.body
+                        is ClassStaticBlockDeclaration -> member.body
+                        is PropertyDeclaration -> member.initializer
+                        else -> null
+                    }
+                    walkAccessesNoFnBoundary(body) { acc ->
+                        val recv = when (acc) {
+                            is PropertyAccessExpression -> acc.expression
+                            is ElementAccessExpression -> acc.expression
+                            else -> null
+                        }
+                        if (recv !is Identifier || recv.text != "super") return@walkAccessesNoFnBoundary
+                        val name: String; val pos: Int; val len: Int
+                        when (acc) {
+                            is PropertyAccessExpression -> { name = acc.name.text; pos = acc.name.pos; len = acc.name.text.length }
+                            is ElementAccessExpression -> {
+                                val arg = acc.argumentExpression
+                                if (arg !is StringLiteralNode) return@walkAccessesNoFnBoundary
+                                name = arg.text; pos = arg.pos; len = (arg.rawText?.length ?: arg.text.length) + 2
+                            }
+                            else -> return@walkAccessesNoFnBoundary
+                        }
+                        val display = fieldDisplay[name] ?: return@walkAccessesNoFnBoundary
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Class field '$display' defined by the parent class is not accessible in the child class via super.",
+                            category = DiagnosticCategory.Error, code = 2855, fileName = fileName,
+                            line = line, character = character, start = pos, length = len,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Collect named ClassDeclarations from a statement list, recursing into
+     *  namespace/function/block bodies. Used by [checkClassFieldSuperAccessJs]. */
+    private fun collectNamedClassDecls(stmts: List<Statement>, out: MutableMap<String, ClassDeclaration>) {
+        for (stmt in stmts) when (stmt) {
+            is ClassDeclaration -> { stmt.name?.text?.let { out.putIfAbsent(it, stmt) } }
+            is FunctionDeclaration -> stmt.body?.let { collectNamedClassDecls(it.statements, out) }
+            is Block -> collectNamedClassDecls(stmt.statements, out)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectNamedClassDecls(it.statements, out) }
+            else -> {}
+        }
+    }
+
+    /** The simple-identifier base name of a class's `extends` clause, or null. */
+    private fun extendsBaseIdentifierName(cls: ClassDeclaration): String? {
+        val clause = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return null
+        val expr = clause.types.firstOrNull()?.expression ?: return null
+        return (expr as? Identifier)?.text
+    }
+
+    /** Map of a class's INSTANCE-FIELD names → display name (quoted for
+     *  string-literal-keyed fields), EXCLUDING prototype members (methods,
+     *  get/set accessors, `accessor` auto-properties). Fields come from explicit
+     *  PropertyDeclarations and from `this.X =`/`this.X;`/`this['X']` expando
+     *  references anywhere in the class member bodies. */
+    private fun collectClassInstanceFields(cls: ClassDeclaration): Map<String, String> {
+        val protoNames = HashSet<String>()
+        val fields = LinkedHashMap<String, String>()
+        for (member in cls.members) when (member) {
+            is MethodDeclaration -> nameTextOrNull(member.name)?.let { protoNames.add(it) }
+            is GetAccessor -> nameTextOrNull(member.name)?.let { protoNames.add(it) }
+            is SetAccessor -> nameTextOrNull(member.name)?.let { protoNames.add(it) }
+            is PropertyDeclaration -> {
+                val nm = nameTextOrNull(member.name) ?: continue
+                if (ModifierFlag.Accessor in member.modifiers) protoNames.add(nm)
+                else fields.putIfAbsent(nm, if (member.name is StringLiteralNode) quotedName(member.name as StringLiteralNode) else nm)
+            }
+            else -> {}
+        }
+        // Expando `this.X` references in member bodies / initializers.
+        for (member in cls.members) {
+            val body: Node? = when (member) {
+                is MethodDeclaration -> member.body
+                is GetAccessor -> member.body
+                is SetAccessor -> member.body
+                is Constructor -> member.body
+                is ClassStaticBlockDeclaration -> member.body
+                is PropertyDeclaration -> member.initializer
+                else -> null
+            }
+            walkAccessesNoFnBoundary(body) { acc ->
+                val recv = when (acc) {
+                    is PropertyAccessExpression -> acc.expression
+                    is ElementAccessExpression -> acc.expression
+                    else -> null
+                }
+                if (recv !is Identifier || recv.text != "this") return@walkAccessesNoFnBoundary
+                when (acc) {
+                    is PropertyAccessExpression -> fields.putIfAbsent(acc.name.text, acc.name.text)
+                    is ElementAccessExpression -> {
+                        val arg = acc.argumentExpression
+                        if (arg is StringLiteralNode) fields.putIfAbsent(arg.text, quotedName(arg))
+                    }
+                    else -> {}
+                }
+            }
+        }
+        protoNames.forEach { fields.remove(it) }
+        return fields
+    }
+
+    private fun quotedName(node: StringLiteralNode): String =
+        if (node.singleQuote) "'${node.text}'" else "\"${node.text}\""
+
+    /** Walk an expression/statement subtree invoking [onAccess] for every
+     *  PropertyAccess/ElementAccess node, descending through arrow functions and
+     *  all control flow but NOT into nested non-arrow functions, methods, or
+     *  classes (which rebind `this`/`super`). Conservative: an unhandled node
+     *  kind is a false-negative (a missed diagnostic), never a false-positive. */
+    private fun walkAccessesNoFnBoundary(node: Node?, onAccess: (Expression) -> Unit) {
+        when (node) {
+            null -> {}
+            is Block -> node.statements.forEach { waStmt(it, onAccess) }
+            is Statement -> waStmt(node, onAccess)
+            is Expression -> waExpr(node, onAccess)
+            else -> {}
+        }
+    }
+
+    private fun waExpr(e: Expression?, onAccess: (Expression) -> Unit) {
+        e ?: return
+        when (e) {
+            is PropertyAccessExpression -> { onAccess(e); waExpr(e.expression, onAccess) }
+            is ElementAccessExpression -> { onAccess(e); waExpr(e.expression, onAccess); waExpr(e.argumentExpression, onAccess) }
+            is CallExpression -> { waExpr(e.expression, onAccess); e.arguments.forEach { waExpr(it, onAccess) } }
+            is NewExpression -> { waExpr(e.expression, onAccess); e.arguments?.forEach { waExpr(it, onAccess) } }
+            is BinaryExpression -> { waExpr(e.left, onAccess); waExpr(e.right, onAccess) }
+            is ConditionalExpression -> { waExpr(e.condition, onAccess); waExpr(e.whenTrue, onAccess); waExpr(e.whenFalse, onAccess) }
+            is ParenthesizedExpression -> waExpr(e.expression, onAccess)
+            is PrefixUnaryExpression -> waExpr(e.operand, onAccess)
+            is PostfixUnaryExpression -> waExpr(e.operand, onAccess)
+            is TypeAssertionExpression -> waExpr(e.expression, onAccess)
+            is AsExpression -> waExpr(e.expression, onAccess)
+            is SatisfiesExpression -> waExpr(e.expression, onAccess)
+            is NonNullExpression -> waExpr(e.expression, onAccess)
+            is ArrayLiteralExpression -> e.elements.forEach { waExpr(it, onAccess) }
+            is SpreadElement -> waExpr(e.expression, onAccess)
+            is YieldExpression -> e.expression?.let { waExpr(it, onAccess) }
+            is AwaitExpression -> waExpr(e.expression, onAccess)
+            is ObjectLiteralExpression -> e.properties.forEach { p ->
+                when (p) {
+                    is PropertyAssignment -> waExpr(p.initializer, onAccess)
+                    is SpreadAssignment -> waExpr(p.expression, onAccess)
+                    else -> {}
+                }
+            }
+            is ArrowFunction -> when (val b = e.body) {
+                is Block -> b.statements.forEach { waStmt(it, onAccess) }
+                is Expression -> waExpr(b, onAccess)
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun waStmt(s: Statement?, onAccess: (Expression) -> Unit) {
+        s ?: return
+        when (s) {
+            is ExpressionStatement -> waExpr(s.expression, onAccess)
+            is ReturnStatement -> waExpr(s.expression, onAccess)
+            is ThrowStatement -> waExpr(s.expression, onAccess)
+            is VariableStatement -> s.declarationList.declarations.forEach { waExpr(it.initializer, onAccess) }
+            is IfStatement -> { waExpr(s.expression, onAccess); waStmt(s.thenStatement, onAccess); waStmt(s.elseStatement, onAccess) }
+            is Block -> s.statements.forEach { waStmt(it, onAccess) }
+            is ForStatement -> {
+                s.initializer?.let { if (it is Expression) waExpr(it, onAccess) else if (it is VariableDeclarationList) it.declarations.forEach { d -> waExpr(d.initializer, onAccess) } }
+                waExpr(s.condition, onAccess); waExpr(s.incrementor, onAccess); waStmt(s.statement, onAccess)
+            }
+            is ForInStatement -> { waExpr(s.expression, onAccess); waStmt(s.statement, onAccess) }
+            is ForOfStatement -> { waExpr(s.expression, onAccess); waStmt(s.statement, onAccess) }
+            is WhileStatement -> { waExpr(s.expression, onAccess); waStmt(s.statement, onAccess) }
+            is DoStatement -> { waExpr(s.expression, onAccess); waStmt(s.statement, onAccess) }
+            is SwitchStatement -> {
+                waExpr(s.expression, onAccess)
+                for (c in s.caseBlock) when (c) {
+                    is CaseClause -> { waExpr(c.expression, onAccess); c.statements.forEach { waStmt(it, onAccess) } }
+                    is DefaultClause -> c.statements.forEach { waStmt(it, onAccess) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                s.tryBlock.statements.forEach { waStmt(it, onAccess) }
+                s.catchClause?.block?.statements?.forEach { waStmt(it, onAccess) }
+                s.finallyBlock?.statements?.forEach { waStmt(it, onAccess) }
+            }
+            is LabeledStatement -> waStmt(s.statement, onAccess)
+            else -> {}
         }
     }
 

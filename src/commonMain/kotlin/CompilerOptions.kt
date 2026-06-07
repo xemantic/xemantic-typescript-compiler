@@ -342,6 +342,8 @@ fun parseCompilerOptions(source: String): Pair<CompilerOptions, String> {
         options = applyDirective(options, key, value)
     }
 
+    options = applyImpliedAllowJs(options)
+
     return options to strippedSource
 }
 
@@ -439,6 +441,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     for ((key, value) in directives) {
         options = applyDirective(options, key, value)
     }
+    options = applyImpliedAllowJs(options)
 
     if (fileEntries.isEmpty()) {
         // Single-file test: use the original parseCompilerOptions for source cleanup
@@ -448,6 +451,17 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
 
     return ParsedSource(options, fileEntries, hasExplicitFilenames = true)
 }
+
+/**
+ * TypeScript: `checkJs` implies `allowJs` when `allowJs` is not explicitly set
+ * (`getAllowJSCompilerOption` returns `allowJs ?? !!checkJs`). Without this, the
+ * `.js` files in a `@checkJs`-only program are never loaded into the program and
+ * so never type-checked.
+ */
+internal fun applyImpliedAllowJs(options: CompilerOptions): CompilerOptions =
+    if (options.checkJs && !options.allowJs && !options.allowJsExplicitlyFalse)
+        options.copy(allowJs = true)
+    else options
 
 internal fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
     val boolValue = value.lowercase() == "true"
