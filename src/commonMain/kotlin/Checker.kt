@@ -56221,6 +56221,30 @@ interface DataView {
                     targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
             val canUse = canUseRaw || callBypass
             val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            // B103: the relation engine ignores optional-vs-required presence, so it can
+            // wrongly report `{ x?: T }`-shaped source as assignable to `{ x: T }`. When the
+            // comparison otherwise PASSES but a target REQUIRED property's source counterpart
+            // is OPTIONAL, emit TS2322 + the specific chain (matches TypeScript regardless of
+            // strictNullChecks). FP-safe: optional-source-vs-required-target is always an error.
+            if (isAssignable && sourceType is Type.Object && targetType is Type.Object &&
+                init !is ObjectLiteralExpression) {
+                val mismatch = try { findOptionalVsRequiredMismatch(sourceType, targetType) }
+                    catch (_: StackOverflowError) { null }
+                if (mismatch != null) {
+                    val displaySource = typeToString(sourceType)
+                    val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                    val pname = formatPropertyDisplayName(mismatch)
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = name.pos, length = name.text.length,
+                        messageChain = listOf("  Property '$pname' is optional in type '$displaySource' but required in type '$displayTarget'."),
+                    ))
+                    return
+                }
+            }
             // B87.6b (round 73): array-VARIABLE source → tuple target tuple-arity TS2322 for
             // VAR-DECL — completes the tuple-arity feature uniformly with the async-return
             // path (B87.6). `var x: [number] = someNumberArray` → "Target allows only N
@@ -83431,6 +83455,28 @@ interface DataView {
             is MethodDeclaration -> decl.questionToken
             else -> false
         }
+    }
+
+    /**
+     * B103: find the first target property that is REQUIRED but whose same-named source
+     * property is OPTIONAL. Such a source is never assignable to such a target (the
+     * property may be absent at runtime) — TypeScript reports "Property 'X' is optional
+     * in type 'S' but required in type 'T'." regardless of strictNullChecks. FP-safe:
+     * the rule is universally true. Returns the target Symbol, or null.
+     */
+    private fun findOptionalVsRequiredMismatch(source: Type.Object, target: Type.Object): Symbol? {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val targetProps = target.properties ?: return null
+        // A source string/number index signature could provide the property — skip to stay safe.
+        if (source.stringIndexInfo != null || source.numberIndexInfo != null) return null
+        for (tProp in targetProps) {
+            if (tProp.name.isEmpty() || tProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (isOptionalProperty(tProp)) continue
+            val sProp = getPropertyOfType(source, tProp.name) ?: continue
+            if (isOptionalProperty(sProp)) return tProp
+        }
+        return null
     }
 
     /**
