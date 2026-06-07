@@ -1176,6 +1176,8 @@ class Checker(
         checkConstructorParamInInitializers()
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         checkTypeAssignability()
+        // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
+        checkGeneratorBareYieldTypes()
         // 64b. Check property access on known types (TS2339)
         checkPropertyAccess()
         // 64c. Check call expression argument types (TS2345)
@@ -55010,6 +55012,163 @@ interface DataView {
             }
         }
         return false
+    }
+
+    /**
+     * B102: under strictNullChecks, a bare `yield;` (no operand) in a generator with an
+     * explicit yield-type annotation (`IterableIterator<T>` / `Generator<T,...>` /
+     * `Iterator<T>` / `IterableIterator<T>`, SYNC only) produces `undefined`, which is
+     * never assignable to a primitive `T`. FP-safe: a bare yield always yields undefined,
+     * and a primitive yield-type never accepts undefined under strictNullChecks; with an
+     * EXPLICIT annotation the yield type is fixed (not inferred to include undefined).
+     */
+    private fun checkGeneratorBareYieldTypes() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            scanGeneratorsInStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /** Extract the primitive yield-type name from a generator return annotation, or null
+     *  when it is not a single-arg `Iterator/IterableIterator/Generator<primitive,...>`
+     *  whose first type argument is a primitive that `undefined` is not assignable to. */
+    private fun generatorPrimitiveYieldType(type: TypeNode?): String? {
+        val ref = type as? TypeReference ?: return null
+        val name = (ref.typeName as? Identifier)?.text ?: return null
+        if (name != "Iterator" && name != "IterableIterator" && name != "Generator") return null
+        val first = ref.typeArguments?.firstOrNull() as? KeywordTypeNode ?: return null
+        return when (first.kind) {
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            else -> null
+        }
+    }
+
+    private fun scanGeneratorsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) scanGeneratorsInStatement(stmt, source, fileName)
+    }
+
+    private fun scanGeneratorsInStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                val body = stmt.body
+                if (stmt.asteriskToken && body != null) {
+                    generatorPrimitiveYieldType(stmt.type)?.let { scanBareYieldsInStatements(body.statements, it, source, fileName) }
+                }
+                body?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (member in stmt.members) {
+                if (member is MethodDeclaration) {
+                    val body = member.body
+                    if (member.asteriskToken && body != null) {
+                        generatorPrimitiveYieldType(member.type)?.let { scanBareYieldsInStatements(body.statements, it, source, fileName) }
+                    }
+                    body?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+                }
+            }
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                (decl.initializer as? FunctionExpression)?.let { fe ->
+                    val body = fe.body
+                    if (fe.asteriskToken && body != null) {
+                        generatorPrimitiveYieldType(fe.type)?.let { scanBareYieldsInStatements(body.statements, it, source, fileName) }
+                    }
+                    body?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+                }
+            }
+            is Block -> scanGeneratorsInStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                scanGeneratorsInStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { scanGeneratorsInStatement(it, source, fileName) }
+            }
+            is ForStatement -> scanGeneratorsInStatement(stmt.statement, source, fileName)
+            is ForInStatement -> scanGeneratorsInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> scanGeneratorsInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> scanGeneratorsInStatement(stmt.statement, source, fileName)
+            is DoStatement -> scanGeneratorsInStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                scanGeneratorsInStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { scanGeneratorsInStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** Walk a generator body's statements for bare `yield;`, STOPPING at nested
+     *  function/arrow/class boundaries (which rebind the generator context). */
+    private fun scanBareYieldsInStatements(stmts: List<Statement>, primName: String, source: String, fileName: String) {
+        for (stmt in stmts) scanBareYieldsInStatement(stmt, primName, source, fileName)
+    }
+
+    private fun scanBareYieldsInStatement(stmt: Statement, primName: String, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> scanBareYieldsInExpr(stmt.expression, primName, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { scanBareYieldsInExpr(it, primName, source, fileName) }
+            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                decl.initializer?.let { scanBareYieldsInExpr(it, primName, source, fileName) }
+            }
+            is Block -> scanBareYieldsInStatements(stmt.statements, primName, source, fileName)
+            is IfStatement -> {
+                scanBareYieldsInExpr(stmt.expression, primName, source, fileName)
+                scanBareYieldsInStatement(stmt.thenStatement, primName, source, fileName)
+                stmt.elseStatement?.let { scanBareYieldsInStatement(it, primName, source, fileName) }
+            }
+            is ForStatement -> { stmt.condition?.let { scanBareYieldsInExpr(it, primName, source, fileName) }; scanBareYieldsInStatement(stmt.statement, primName, source, fileName) }
+            is ForInStatement -> scanBareYieldsInStatement(stmt.statement, primName, source, fileName)
+            is ForOfStatement -> scanBareYieldsInStatement(stmt.statement, primName, source, fileName)
+            is WhileStatement -> { scanBareYieldsInExpr(stmt.expression, primName, source, fileName); scanBareYieldsInStatement(stmt.statement, primName, source, fileName) }
+            is DoStatement -> { scanBareYieldsInExpr(stmt.expression, primName, source, fileName); scanBareYieldsInStatement(stmt.statement, primName, source, fileName) }
+            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
+                is CaseClause -> scanBareYieldsInStatements(clause.statements, primName, source, fileName)
+                is DefaultClause -> scanBareYieldsInStatements(clause.statements, primName, source, fileName)
+                else -> {}
+            }
+            is TryStatement -> {
+                scanBareYieldsInStatements(stmt.tryBlock.statements, primName, source, fileName)
+                stmt.catchClause?.block?.let { scanBareYieldsInStatements(it.statements, primName, source, fileName) }
+                stmt.finallyBlock?.let { scanBareYieldsInStatements(it.statements, primName, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun scanBareYieldsInExpr(expr: Expression, primName: String, source: String, fileName: String) {
+        when (expr) {
+            is YieldExpression -> {
+                if (expr.expression == null && !expr.asteriskToken) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'undefined' is not assignable to type '$primName'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = expr.pos, length = 5,
+                    ))
+                } else {
+                    expr.expression?.let { scanBareYieldsInExpr(it, primName, source, fileName) }
+                }
+            }
+            is BinaryExpression -> { scanBareYieldsInExpr(expr.left, primName, source, fileName); scanBareYieldsInExpr(expr.right, primName, source, fileName) }
+            is ParenthesizedExpression -> scanBareYieldsInExpr(expr.expression, primName, source, fileName)
+            is CallExpression -> { scanBareYieldsInExpr(expr.expression, primName, source, fileName); expr.arguments.forEach { scanBareYieldsInExpr(it, primName, source, fileName) } }
+            is ConditionalExpression -> { scanBareYieldsInExpr(expr.condition, primName, source, fileName); scanBareYieldsInExpr(expr.whenTrue, primName, source, fileName); scanBareYieldsInExpr(expr.whenFalse, primName, source, fileName) }
+            is PrefixUnaryExpression -> scanBareYieldsInExpr(expr.operand, primName, source, fileName)
+            is PostfixUnaryExpression -> scanBareYieldsInExpr(expr.operand, primName, source, fileName)
+            is AwaitExpression -> scanBareYieldsInExpr(expr.expression, primName, source, fileName)
+            is SpreadElement -> scanBareYieldsInExpr(expr.expression, primName, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { scanBareYieldsInExpr(it, primName, source, fileName) }
+            // Stop at FunctionExpression / ArrowFunction / ClassExpression — they rebind
+            // the generator context. PropertyAccess/ElementAccess receivers can hold yields.
+            is PropertyAccessExpression -> scanBareYieldsInExpr(expr.expression, primName, source, fileName)
+            is ElementAccessExpression -> { scanBareYieldsInExpr(expr.expression, primName, source, fileName); scanBareYieldsInExpr(expr.argumentExpression, primName, source, fileName) }
+            else -> {}
+        }
     }
 
     private fun checkTypeAssignability() {
