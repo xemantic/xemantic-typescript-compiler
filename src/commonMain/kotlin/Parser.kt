@@ -3493,6 +3493,17 @@ class Parser(
 
     // ── Modifiers & Decorators ──────────────────────────────────────────────
 
+    /**
+     * Tokens that, when they immediately follow a modifier keyword in a class/interface
+     * member, mean the keyword is being used as a member NAME rather than a modifier
+     * (e.g. `readonly(): T`, `static = 1`, `public: string`). See [parseModifiers].
+     */
+    private val MODIFIER_NAME_FOLLOWERS = setOf(
+        SyntaxKind.OpenParen, SyntaxKind.LessThan, SyntaxKind.Colon, SyntaxKind.Question,
+        SyntaxKind.Equals, SyntaxKind.Semicolon, SyntaxKind.Comma, SyntaxKind.CloseBrace,
+        SyntaxKind.Exclamation, SyntaxKind.EndOfFile,
+    )
+
     private fun parseModifiers(): Set<ModifierFlag> {
         val mods = mutableSetOf<ModifierFlag>()
         loop@ while (true) {
@@ -3525,6 +3536,14 @@ class Parser(
                 isIdentifier() && scanner.getTokenValue() == "accessor" -> ModifierFlag.Accessor
                 else -> break@loop
             }
+            // A modifier keyword is actually the member NAME when immediately followed by a
+            // token that starts a method's params/type-params or terminates the member:
+            // `(` `<` `:` `?` `=` `;` `,` `}` `!` or EOF — e.g. `readonly(): T`, `static = 1`,
+            // `public: string`, `override?: T`. (get/set are disambiguated earlier; `default`
+            // is excluded from the `when` above; `static {` static-blocks use `{`, not in the set.)
+            // Only applies on the FIRST keyword (mods empty) — once a real modifier is consumed,
+            // a following keyword+punctuator is still its name and handled by the same break.
+            if (lookAhead { scanner.scan(); scanner.getToken() } in MODIFIER_NAME_FOLLOWERS) break@loop
             if (mod in mods) break@loop  // duplicate modifier — second occurrence is actually the member name
             // Access modifiers are mutually exclusive: public/private/protected cannot combine.
             // If we already have an access modifier and see another, break — second is the member name.
