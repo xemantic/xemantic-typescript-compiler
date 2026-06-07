@@ -36218,6 +36218,7 @@ interface DataView {
             is RegularExpressionLiteralNode -> {
                 emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
                 emitTS1503And1532ForNamedGroups(expr, source, fileName)
+                emitTS1499ForRegexFlags(expr, source, fileName)
             }
             else -> {}
         }
@@ -36359,6 +36360,88 @@ interface DataView {
                 line = line, character = character, start = absPos, length = name.length,
                 relatedInformation = related,
             ))
+        }
+    }
+
+    /**
+     * TS1499 "Unknown regular expression flag." Validates BOTH the trailing flags
+     * (after the closing `/`) against the valid set `d g i m s u v y`, and the
+     * inline modifier-group flags `(?ims:` / `(?ims-ims:` against the valid set
+     * `i m s`. Purely syntactic; iterates by CODE POINT so a non-BMP "flag"
+     * (surrogate pair) is one unknown flag of length 2. FP-safe: a `(?`-construct
+     * is treated as a modifier group ONLY when it is not `(?:`/`(?=`/`(?!`/`(?<…`
+     * AND its flag region (terminated by `:`, before any regex structural char)
+     * contains only flag chars / a single `-` — there is no other valid regex
+     * construct of that shape, and the valid-flag sets mean a legal regex never
+     * trips it.
+     */
+    private fun emitTS1499ForRegexFlags(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+
+        fun cpLen(i: Int): Int =
+            if (text[i].isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) 2 else 1
+
+        fun emit(offset: Int, len: Int) {
+            val absPos = node.pos + offset
+            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+            diagnostics.add(Diagnostic(
+                message = "Unknown regular expression flag.",
+                category = DiagnosticCategory.Error, code = 1499, fileName = fileName,
+                line = line, character = character, start = absPos, length = len,
+            ))
+        }
+
+        // Trailing flags (after the closing `/`): valid = d/g/i/m/s/u/v/y.
+        var i = lastSlash + 1
+        while (i < text.length) {
+            val len = cpLen(i)
+            if (!(len == 1 && text[i] in "dgimsuvy")) emit(i, len)
+            i += len
+        }
+
+        // Inline modifier groups `(?<flags>-<flags>:` in the body (valid = i/m/s).
+        var inClass = false
+        var j = 1
+        while (j < lastSlash) {
+            val c = text[j]
+            when {
+                c == '\\' -> j += 2
+                c == '[' && !inClass -> { inClass = true; j++ }
+                c == ']' && inClass -> { inClass = false; j++ }
+                inClass -> j++
+                c == '(' && j + 2 < lastSlash && text[j + 1] == '?' -> {
+                    val after = j + 2
+                    val a = text[after]
+                    if (a == ':' || a == '=' || a == '!' || a == '<') {
+                        j = after
+                    } else {
+                        // Scan for the terminating `:`; bail (not a modifier group)
+                        // on any regex structural char.
+                        var k = after
+                        var foundColon = false
+                        while (k < lastSlash) {
+                            val ck = text[k]
+                            if (ck == ':') { foundColon = true; break }
+                            if (ck in ")(|[]<>\\/") break
+                            k++
+                        }
+                        if (foundColon) {
+                            var m = after
+                            while (m < k) {
+                                if (text[m] == '-') { m++; continue }
+                                val len = cpLen(m)
+                                if (!(len == 1 && text[m] in "ims")) emit(m, len)
+                                m += len
+                            }
+                            j = k + 1
+                        } else j = after
+                    }
+                }
+                else -> j++
+            }
         }
     }
 
