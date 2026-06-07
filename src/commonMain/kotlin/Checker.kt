@@ -36215,7 +36215,10 @@ interface DataView {
             }
             // TS1538: braced `\u{...}` regex escapes require the u/v flag. This
             // per-file walker already reaches every expression position; reuse it.
-            is RegularExpressionLiteralNode -> emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
+            is RegularExpressionLiteralNode -> {
+                emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
+                emitTS1503And1532ForNamedGroups(expr, source, fileName)
+            }
             else -> {}
         }
     }
@@ -36294,6 +36297,67 @@ interface DataView {
                 character = character,
                 start = absPos,
                 length = m.value.length,
+            ))
+        }
+    }
+
+    /** True iff the character at [pos] in [text] is escaped (preceded by an odd run of `\`). */
+    private fun isRegexEscaped(text: String, pos: Int): Boolean {
+        var i = pos - 1; var n = 0
+        while (i >= 0 && text[i] == '\\') { n++; i-- }
+        return n % 2 == 1
+    }
+
+    /**
+     * TS1503 (named capturing groups require ES2018+) and TS1532 (backreference to a
+     * non-existent named group, with a TS1369 "Did you mean 'X'?" suggestion). A bounded
+     * text scan of the regex literal — collects `(?<name>` group definitions and `\k<name>`
+     * backreferences. FP-safe: TS1503 only fires below ES2018 (where named groups are a hard
+     * error), TS1532 only on a backreference whose name was never declared.
+     */
+    private fun emitTS1503And1532ForNamedGroups(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+        // `(?<name>` — the `[A-Za-z_$]` after `<` excludes lookbehind `(?<=` / `(?<!`.
+        val groupDefRe = Regex("""\(\?<([A-Za-z_$][\w$]*)>""")
+        val declared = LinkedHashSet<String>()
+        for (m in groupDefRe.findAll(text)) {
+            if (m.range.first >= lastSlash) continue
+            if (isRegexEscaped(text, m.range.first)) continue
+            val name = m.groupValues[1]
+            declared.add(name)
+            if (options.target < ScriptTarget.ES2018) {
+                val absPos = node.pos + m.range.first + 2 // start of `<`
+                val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+                diagnostics.add(Diagnostic(
+                    message = "Named capturing groups are only available when targeting 'ES2018' or later.",
+                    category = DiagnosticCategory.Error, code = 1503, fileName = fileName,
+                    line = line, character = character, start = absPos, length = name.length + 2,
+                ))
+            }
+        }
+        // `\k<name>` — a single (unescaped) backslash, k, then the name.
+        val backRe = Regex("""\\k<([A-Za-z_$][\w$]*)>""")
+        for (m in backRe.findAll(text)) {
+            if (m.range.first >= lastSlash) continue
+            if (isRegexEscaped(text, m.range.first)) continue
+            val name = m.groupValues[1]
+            if (name in declared) continue
+            val nameRange = m.groups[1]!!.range
+            val absPos = node.pos + nameRange.first
+            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+            val suggestion = getSpellingSuggestionFromNames(name, declared)
+            val related = if (suggestion != null) listOf(Diagnostic(
+                message = "Did you mean '$suggestion'?",
+                category = DiagnosticCategory.Message, code = 1369, fileName = null,
+            )) else emptyList()
+            diagnostics.add(Diagnostic(
+                message = "There is no capturing group named '$name' in this regular expression.",
+                category = DiagnosticCategory.Error, code = 1532, fileName = fileName,
+                line = line, character = character, start = absPos, length = name.length,
+                relatedInformation = related,
             ))
         }
     }

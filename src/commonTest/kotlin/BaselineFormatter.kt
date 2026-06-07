@@ -645,9 +645,12 @@ fun formatErrorBaseline(
                     for (related in diag.relatedInformation) {
                         +"!!! related TS"
                         +related.code.toString()
-                        +" "
                         val relFile = related.fileName
                         if (relFile != null) {
+                            // Space separates the code from the file location. A related info
+                            // with NO file (e.g. TS1369 regex group suggestion) renders the
+                            // code directly followed by `: message` (no space before colon).
+                            +" "
                             // Mirror summary-line convention: strip leading "./".
                             +relFile.removePrefix("./")
                             +":"
