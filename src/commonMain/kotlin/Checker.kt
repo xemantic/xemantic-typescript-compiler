@@ -10986,6 +10986,28 @@ class Checker(
                             else -> emptyList()
                         }
                         emitVarFn7006Params(params, source, fileName)
+                    } else if (decl.type == null && init is TypeAssertionExpression) {
+                        // `var foo = <{ (): number; }> function(a) {...}` — the assertion type
+                        // supplies a CONTEXTUAL signature; fn params at index >= the contextual
+                        // sig's param count get no contextual type → TS7006 (contextualTyping38).
+                        // Conservative: only act when the assertion type resolves to call
+                        // signatures (so the contextual arity is precise — `<any>` etc. skipped).
+                        val inner = init.expression
+                        val params = when (inner) {
+                            is ArrowFunction -> inner.parameters
+                            is FunctionExpression -> inner.parameters
+                            else -> null
+                        }
+                        if (params != null) {
+                            val ctxType = getTypeFromTypeNodeSafe(init.type)
+                            val ctxArity = (ctxType as? Type.Object)?.let { t ->
+                                resolveStructuredTypeMembers(t)
+                                t.callSignatures?.maxOfOrNull { it.parameters.size }
+                            }
+                            if (ctxArity != null) {
+                                emitVarFn7006Params(params.drop(ctxArity), source, fileName)
+                            }
+                        }
                     }
                     init?.let { walkVarFn7006Expr(it, source, fileName) }
                 }
@@ -11026,6 +11048,7 @@ class Checker(
             }
             is FunctionExpression -> walkVarFn7006Stmts(expr.body.statements, source, fileName)
             is ParenthesizedExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
             else -> {}
         }
     }
