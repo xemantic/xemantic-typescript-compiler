@@ -56790,6 +56790,39 @@ interface DataView {
                                         }
                                     }
                                 }
+                                // typeOfPrototype: `X.prototype.dataProp = rhs` where
+                                // `dataProp` is a DATA property. `classType.members` mirrors
+                                // both instance AND static entries under one name, so a
+                                // same-named static (`static bar = ''`) can clobber the
+                                // instance type. Resolve the INSTANCE member directly from
+                                // the class declaration. Conservative: simple-checkable
+                                // member types only; emits TS2322 on assignability failure.
+                                run dataProp@{
+                                    val classDecl = classSymbol.declarations
+                                        .firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return@dataProp
+                                    val instMember = classDecl.members.firstOrNull {
+                                        it is PropertyDeclaration && ModifierFlag.Static !in it.modifiers &&
+                                            getMemberNameText(it.name) == target.name.text
+                                    } as? PropertyDeclaration ?: return@dataProp
+                                    val memberType = (instMember.type?.let { getTypeFromTypeNode(it) }
+                                        ?: instMember.initializer?.let { getWidenedLiteralType(getTypeOfExpression(it)) })
+                                        ?: return@dataProp
+                                    if (memberType === anyType || memberType === errorType) return@dataProp
+                                    if (!isSimpleCheckableType(memberType)) return@dataProp
+                                    val rhsType = getTypeOfExpression(expr.right)
+                                    if (rhsType === anyType || rhsType === errorType) return@dataProp
+                                    if (checkTypeRelatedTo(rhsType, memberType, assignableRelation)) return@dataProp
+                                    val lhsStart = inner.expression.pos
+                                    val lhsLen = expressionTrueEnd(target) - lhsStart
+                                    if (lhsLen <= 0) return@dataProp
+                                    val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type '${typeToString(rhsType)}' is not assignable to type '${typeToString(memberType)}'.",
+                                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                                        line = line, character = character, start = lhsStart, length = lhsLen,
+                                    ))
+                                    return
+                                }
                             }
                         }
                     } catch (_: StackOverflowError) { /* circular */ }
