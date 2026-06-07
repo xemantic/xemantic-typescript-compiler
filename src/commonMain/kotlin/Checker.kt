@@ -81905,6 +81905,42 @@ interface DataView {
             if (elementType is Type.Object) {
                 try {
                     resolveStructuredTypeMembers(elementType)
+                    // B109: call-signature element type (a function type, e.g.
+                    // `{ (): number; (i: number): number; }[]`). Check each
+                    // function/arrow element's inferred type against it — the
+                    // existing object-element path bails because such a type has
+                    // no properties. `contextualTyping33`.
+                    if (elementType.properties.isNullOrEmpty() &&
+                        !elementType.callSignatures.isNullOrEmpty()) {
+                        val displayTarget = typeToString(elementType)
+                        for (elem in arrLit.elements) {
+                            if (elem !is FunctionExpression && elem !is ArrowFunction) continue
+                            val elemType = getTypeOfExpression(elem)
+                            if (elemType !is Type.Object || elemType.callSignatures.isNullOrEmpty()) continue
+                            if (elemType === anyType || elemType === errorType) continue
+                            if (!checkTypeRelatedTo(elemType, elementType, assignableRelation)) {
+                                val chain = getFunctionMismatchElaboration(elemType, elementType)
+                                val start = elem.pos
+                                // For a function expression, TypeScript squiggles the
+                                // `function` keyword; for an arrow, the whole expression.
+                                val length = if (elem is FunctionExpression) 8
+                                    else (expressionTrueEnd(elem) - start).coerceAtLeast(1)
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '${typeToString(elemType)}' is not assignable to type '$displayTarget'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2322,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                    messageChain = chain,
+                                ))
+                            }
+                        }
+                        return
+                    }
                     if (elementType.properties.isNullOrEmpty()) return
                     val display = typeToString(elementType)
                     for (elem in arrLit.elements) {
