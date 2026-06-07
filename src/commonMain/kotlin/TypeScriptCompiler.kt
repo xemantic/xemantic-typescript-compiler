@@ -1029,7 +1029,7 @@ class TypeScriptCompiler {
                     val rewrites = mutableMapOf<String, String>()
                     for (name in importedJsonBaseNames) {
                         val withoutExt = name.removeSuffix(".json")
-                        for (suffix in options.moduleSuffixes!!) {
+                        for (suffix in options.moduleSuffixes) {
                             if (suffix.isEmpty()) continue
                             val suffixed = "$withoutExt$suffix.json"
                             if (suffixed in allBaseNames) {
