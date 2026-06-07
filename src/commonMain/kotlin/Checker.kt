@@ -76001,6 +76001,19 @@ interface DataView {
                                     }
                                     try {
                                         populateParameterLocalTypes(member.parameters)
+                                        // trailingCommaInHeterogenousArrayLiteral1: type `this` as
+                                        // the class instance so `this.method(args)` calls in a
+                                        // non-static method body reach argument-type checking
+                                        // (TS2345/TS2769). Confined to this call-arg walker
+                                        // (currentLocalTypes is saved/restored per walker subtree).
+                                        if (!isStatic && classSym != null) {
+                                            try {
+                                                val instType = getDeclaredTypeOfSymbol(classSym)
+                                                if (instType !== anyType && instType !== errorType) {
+                                                    currentLocalTypes["this"] = instType
+                                                }
+                                            } catch (_: StackOverflowError) { /* circular */ }
+                                        }
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
