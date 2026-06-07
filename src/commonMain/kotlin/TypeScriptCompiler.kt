@@ -123,12 +123,31 @@ class TypeScriptCompiler {
     ): CompilationResult {
         // Parse multi-file source and compiler options
         val parsed = parseMultiFileSource(source, fileName)
-        var options = parsed.options
+        var baseOptions = parsed.options
         // Apply overrides after parsing directives from source
         for ((key, value) in optionOverrides) {
-            options = applyDirective(options, key.lowercase(), value)
+            baseOptions = applyDirective(baseOptions, key.lowercase(), value)
         }
-        options = applyImpliedAllowJs(options)
+        baseOptions = applyImpliedAllowJs(baseOptions)
+        return compileParsed(parsed, baseOptions, fileName)
+    }
+
+    /**
+     * Shared compilation core operating on an already-parsed multi-file [parsed] program
+     * with fully-resolved [baseOptions]. This is the seam used by BOTH the string-based
+     * [compile] entry point (which derives [parsed]/[baseOptions] from `// @directive` headers
+     * and the embedded `@Filename:` format) AND the filesystem-based whole-project driver
+     * ([ProjectCompiler]), which performs real tsconfig loading, glob expansion, and
+     * node/nodenext module resolution from disk and then constructs [parsed] from the
+     * resolved file set. Keeping a single core means whole-project builds reuse the exact
+     * binder → checker → transformer → emitter pipeline the test suite exercises.
+     */
+    fun compileParsed(
+        parsed: ParsedSource,
+        baseOptions: CompilerOptions,
+        fileName: String = "input.ts",
+    ): CompilationResult {
+        var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
         // `"type": "commonjs"`. Under Node16/Node18/Node20/NodeNext, this determines whether
         // plain `.ts`/`.js` files emit as ESM or CJS. Without this, plain `.ts` defaults to CJS.

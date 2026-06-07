@@ -26,6 +26,7 @@ import org.jreleaser.model.Active
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.plugin.power.assert)
+    alias(libs.plugins.kotlin.plugin.serialization)
     alias(libs.plugins.dokka)
     alias(libs.plugins.versions)
     alias(libs.plugins.maven.publish)
@@ -120,6 +121,12 @@ kotlin {
         commonMain {
             dependencies {
                 implementation(libs.kotlinx.coroutines.core)
+                // Filesystem access for the whole-project build driver (CLI + tsconfig
+                // loading + module resolution). kotlinx-io is multiplatform (JVM/Native/WASI),
+                // so the project driver stays in commonMain rather than a jvm-only source set.
+                implementation(libs.kotlinx.io.core)
+                // tsconfig.json / package.json parsing (JSONC: comments + trailing commas).
+                implementation(libs.kotlinx.serialization.json)
             }
         }
 
@@ -134,6 +141,26 @@ kotlin {
 
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// Whole-project build CLI runner
+// ---------------------------------------------------------------------------
+//
+// Runs the filesystem-based project compiler (com.xemantic.typescript.compiler.main)
+// against a real directory containing a tsconfig.json. Usage:
+//
+//   ./gradlew compileTsProject -Pargs="/path/to/project"
+//   ./gradlew compileTsProject -Pargs="--project zod --noEmit"
+//
+tasks.register<JavaExec>("compileTsProject") {
+    group = "application"
+    description = "Compile a real on-disk TypeScript project (tsconfig + globs + module resolution)."
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+    classpath = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    mainClass.set("com.xemantic.typescript.compiler.MainKt")
+    (project.findProperty("args") as String?)?.let { setArgs(it.split(" ").filter { a -> a.isNotEmpty() }) }
 }
 
 // ---------------------------------------------------------------------------

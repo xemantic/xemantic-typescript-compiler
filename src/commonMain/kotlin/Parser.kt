@@ -3493,6 +3493,47 @@ class Parser(
 
     // ── Modifiers & Decorators ──────────────────────────────────────────────
 
+    /**
+     * Tokens that, when they immediately follow a modifier keyword in a class/interface
+     * member, mean the keyword is being used as a member NAME rather than a modifier
+     * (e.g. `readonly(): T`, `static = 1`, `public: string`). See [parseModifiers].
+     */
+    private val MODIFIER_NAME_FOLLOWERS = setOf(
+        SyntaxKind.OpenParen, SyntaxKind.LessThan, SyntaxKind.Colon, SyntaxKind.Question,
+        SyntaxKind.Equals, SyntaxKind.Semicolon, SyntaxKind.Comma, SyntaxKind.CloseBrace,
+        SyntaxKind.Exclamation, SyntaxKind.EndOfFile,
+    )
+
+    /**
+     * Inside a raw `scanner.lookAhead { }` (e.g. generic-arrow detection), skip an entire
+     * template literal the scanner is currently positioned on (token == TemplateHead).
+     * A `${ expr }` substitution requires [Scanner.reScanTemplateToken] at the closing `}`
+     * to continue as TemplateMiddle/Tail; a plain `scan()` would tokenize that `}` as a
+     * CloseBrace and let the following backtick start a runaway template that swallows the
+     * surrounding `)` / `=>`. Leaves the scanner positioned ON the closing TemplateTail so
+     * the caller's subsequent `scan()` advances past it like any other token.
+     */
+    private fun skipTemplateInScannerLookahead() {
+        if (scanner.getToken() != SyntaxKind.TemplateHead) return
+        while (true) {
+            scanner.scan() // move into the substitution expression
+            var braceDepth = 0
+            while (scanner.getToken() != SyntaxKind.EndOfFile) {
+                when (scanner.getToken()) {
+                    SyntaxKind.OpenBrace -> braceDepth++
+                    SyntaxKind.CloseBrace -> if (braceDepth == 0) break else braceDepth--
+                    SyntaxKind.TemplateHead -> skipTemplateInScannerLookahead() // nested template
+                    else -> {}
+                }
+                scanner.scan()
+            }
+            if (scanner.getToken() == SyntaxKind.EndOfFile) return
+            // Positioned on the `}` closing the substitution → rescan as middle/tail.
+            if (scanner.reScanTemplateToken() == SyntaxKind.TemplateTail) return
+            // TemplateMiddle: loop; the next scan() enters the following substitution.
+        }
+    }
+
     private fun parseModifiers(): Set<ModifierFlag> {
         val mods = mutableSetOf<ModifierFlag>()
         loop@ while (true) {
@@ -3507,7 +3548,14 @@ class Parser(
                 token == SyntaxKind.AsyncKeyword -> ModifierFlag.Async
                 token == SyntaxKind.DeclareKeyword -> ModifierFlag.Declare
                 token == SyntaxKind.ExportKeyword -> ModifierFlag.Export
-                token == SyntaxKind.DefaultKeyword -> ModifierFlag.Default
+                // NOTE: `default` is intentionally NOT a modifier here. parseModifiers() is
+                // only called for class members (parseClassMember) and interface/type-literal
+                // members (parseTypeMember), and `default` is never a member modifier in either —
+                // it is a valid member NAME (e.g. zod's `default(def): this`). `export default`
+                // is parsed via parseExportDeclaration / parseDefaultStartedStatement, which set
+                // ModifierFlag.Default explicitly. Consuming `default` here desynced the whole
+                // class body: `default(...)` became a `default` modifier + a garbage name, so a
+                // later `const x = ...` was misread as a class member (spurious TS1248 + cascade).
                 token == SyntaxKind.ConstKeyword -> ModifierFlag.Const
                 token == SyntaxKind.AccessorKeyword -> ModifierFlag.Accessor
                 isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly
@@ -3518,6 +3566,14 @@ class Parser(
                 isIdentifier() && scanner.getTokenValue() == "accessor" -> ModifierFlag.Accessor
                 else -> break@loop
             }
+            // A modifier keyword is actually the member NAME when immediately followed by a
+            // token that starts a method's params/type-params or terminates the member:
+            // `(` `<` `:` `?` `=` `;` `,` `}` `!` or EOF — e.g. `readonly(): T`, `static = 1`,
+            // `public: string`, `override?: T`. (get/set are disambiguated earlier; `default`
+            // is excluded from the `when` above; `static {` static-blocks use `{`, not in the set.)
+            // Only applies on the FIRST keyword (mods empty) — once a real modifier is consumed,
+            // a following keyword+punctuator is still its name and handled by the same break.
+            if (lookAhead { scanner.scan(); scanner.getToken() } in MODIFIER_NAME_FOLLOWERS) break@loop
             if (mod in mods) break@loop  // duplicate modifier — second occurrence is actually the member name
             // Access modifiers are mutually exclusive: public/private/protected cannot combine.
             // If we already have an access modifier and see another, break — second is the member name.
@@ -4037,6 +4093,10 @@ class Parser(
                                 when (scanner.getToken()) {
                                     SyntaxKind.OpenParen -> parenDepth++
                                     SyntaxKind.CloseParen -> parenDepth--
+                                    // A template literal in a param default (`p = `${x}``) must be
+                                    // skipped via reScanTemplateToken, else the `}` of `${...}` is
+                                    // mis-tokenized and the trailing backtick runs away over the `)`.
+                                    SyntaxKind.TemplateHead -> skipTemplateInScannerLookahead()
                                     else -> {}
                                 }
                                 if (parenDepth > 0) scanner.scan()

@@ -18914,6 +18914,12 @@ class Checker(
                     ))
                     return
                 }
+                // `export {};` — an empty export clause with no module specifier — is the legal
+                // "marker export" TypeScript permits inside a namespace (used for visibility
+                // control, e.g. zod's standard-schema.ts). Only non-empty `export { x }` and
+                // `export * from "..."` are TS1194.
+                val clause = stmt.exportClause
+                if (clause is NamedExports && clause.elements.isEmpty()) return
                 val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                 // Find statement end: scan forward from pos for the close-paren / semi.
                 // Use a conservative span by re-scanning the source slice for the next
