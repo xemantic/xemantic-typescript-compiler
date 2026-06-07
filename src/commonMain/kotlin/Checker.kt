@@ -23357,13 +23357,34 @@ class Checker(
                 collectDynamicImportSpecifiers(result.sourceFile.statements, dynSpecs, includeRequire = isJsLikeFileName(fileName))
                 for (spec in dynSpecs) {
                     val mod = spec.text
-                    if (!mod.startsWith("./") && !mod.startsWith("../")) continue
                     if (mod.endsWith(".json")) continue
-                    if (resolveRelativeIncludingIndex(mod, fileName) == null
+                    val isRel = mod.startsWith("./") || mod.startsWith("../")
+                    if (isRel) {
+                        if (resolveRelativeIncludingIndex(mod, fileName) == null
+                            && mod !in ambientModuleNames
+                            && mod !in dtsFileBaseNames
+                            && !hasTsErrorSuppressionAbove(spec.pos, source)
+                        ) {
+                            emitTS2307(spec, mod, source, fileName)
+                        }
+                    } else if (isJsLikeFileName(fileName)
+                        && !mod.startsWith("/")
+                        && !mod.contains("/")
+                        && !mod.contains(":")
                         && mod !in ambientModuleNames
                         && mod !in dtsFileBaseNames
+                        && !bareDtsResolvableInNodeModules(mod)
+                        && !hasNodeModulesPackage(mod)
+                        && mod !in NODE_BUILTIN_MODULES
+                        && resolveModuleSpecifier(mod, null) == null
                         && !hasTsErrorSuppressionAbove(spec.pos, source)
                     ) {
+                        // B98.r169: a bare `require("X")` in a JS file whose single-segment
+                        // specifier resolves to nothing (no node_modules package / ambient
+                        // module / `.d.ts` / node builtin) — TypeScript emits TS2307 (it treats
+                        // CommonJS `require` in JS files as a module reference). Mirrors the
+                        // r107/r168 bare-import gate's FP-safe guards (single-segment-only, no
+                        // `/`/`:`, every resolution path checked). `tslibInJs`.
                         emitTS2307(spec, mod, source, fileName)
                     }
                 }
