@@ -3504,6 +3504,36 @@ class Parser(
         SyntaxKind.Exclamation, SyntaxKind.EndOfFile,
     )
 
+    /**
+     * Inside a raw `scanner.lookAhead { }` (e.g. generic-arrow detection), skip an entire
+     * template literal the scanner is currently positioned on (token == TemplateHead).
+     * A `${ expr }` substitution requires [Scanner.reScanTemplateToken] at the closing `}`
+     * to continue as TemplateMiddle/Tail; a plain `scan()` would tokenize that `}` as a
+     * CloseBrace and let the following backtick start a runaway template that swallows the
+     * surrounding `)` / `=>`. Leaves the scanner positioned ON the closing TemplateTail so
+     * the caller's subsequent `scan()` advances past it like any other token.
+     */
+    private fun skipTemplateInScannerLookahead() {
+        if (scanner.getToken() != SyntaxKind.TemplateHead) return
+        while (true) {
+            scanner.scan() // move into the substitution expression
+            var braceDepth = 0
+            while (scanner.getToken() != SyntaxKind.EndOfFile) {
+                when (scanner.getToken()) {
+                    SyntaxKind.OpenBrace -> braceDepth++
+                    SyntaxKind.CloseBrace -> if (braceDepth == 0) break else braceDepth--
+                    SyntaxKind.TemplateHead -> skipTemplateInScannerLookahead() // nested template
+                    else -> {}
+                }
+                scanner.scan()
+            }
+            if (scanner.getToken() == SyntaxKind.EndOfFile) return
+            // Positioned on the `}` closing the substitution → rescan as middle/tail.
+            if (scanner.reScanTemplateToken() == SyntaxKind.TemplateTail) return
+            // TemplateMiddle: loop; the next scan() enters the following substitution.
+        }
+    }
+
     private fun parseModifiers(): Set<ModifierFlag> {
         val mods = mutableSetOf<ModifierFlag>()
         loop@ while (true) {
@@ -4063,6 +4093,10 @@ class Parser(
                                 when (scanner.getToken()) {
                                     SyntaxKind.OpenParen -> parenDepth++
                                     SyntaxKind.CloseParen -> parenDepth--
+                                    // A template literal in a param default (`p = `${x}``) must be
+                                    // skipped via reScanTemplateToken, else the `}` of `${...}` is
+                                    // mis-tokenized and the trailing backtick runs away over the `)`.
+                                    SyntaxKind.TemplateHead -> skipTemplateInScannerLookahead()
                                     else -> {}
                                 }
                                 if (parenDepth > 0) scanner.scan()
