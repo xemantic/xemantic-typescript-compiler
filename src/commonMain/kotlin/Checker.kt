@@ -56256,6 +56256,36 @@ interface DataView {
                 isNarrowableTarget(targetType)) {
                 getNarrowedTypeForReference(rawSourceType, init)
             } else rawSourceType
+            // B112: function/property source vs CONSTRUCTOR-type var-decl target.
+            // `var Person: new () => T = function(){...}`. canUseTypeEngine bails when
+            // the source lacks construct sigs but the target requires them, so the
+            // standard relation path never fires (we emit nothing today). Mirror the
+            // assignment-path (17.111, ~57950) and return-path (B106, ~57397)
+            // construct-sig-mismatch branch into the var-decl path — the third
+            // assignability site. FP-safe: getNonConstructibleElaboration returns
+            // non-null only for a genuine mismatch (source lacks construct sigs while
+            // target requires them → never assignable). Squiggle = the var name.
+            if (targetType is Type.Object && !targetType.constructSignatures.isNullOrEmpty() &&
+                !isClassOrInterfaceInstanceType(targetType) &&
+                sourceType is Type.Object &&
+                (!sourceType.callSignatures.isNullOrEmpty() ||
+                    (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
+                sourceType.constructSignatures.isNullOrEmpty()) {
+                val srcCtorElab = getNonConstructibleElaboration(sourceType, targetType)
+                if (srcCtorElab != null) {
+                    val displaySource = typeToString(sourceType)
+                    val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = name.pos, length = name.text.length,
+                        messageChain = srcCtorElab,
+                    ))
+                    return
+                }
+            }
             lastMissingPropertyName = null // reset before comparison
             lastMissingIndexSigKind = null // reset before comparison (17.74)
             // 17.31f: bypass `canUseTypeEngine`'s nullish-Union gate when the init is a
@@ -62593,6 +62623,17 @@ interface DataView {
         if (retExpr is NewExpression) {
             try {
                 val t = getReturnTypeOfNewExpression(retExpr)
+                if (t !== anyType && t !== errorType) return t
+            } catch (_: Throwable) { /* fall through */ }
+        }
+        // B112: `return { name: "joe" }` infers the WIDENED object-literal type
+        // (`{ name: string }`) so a function-expression source displays as
+        // `() => { name: string; }` instead of `() => any`. Scoped to the
+        // FunctionExpression single-return path (narrow blast radius vs the shared
+        // inferReturnTypeFromBody). Only return a CONCRETE result (non-any/error).
+        if (retExpr is ObjectLiteralExpression) {
+            try {
+                val t = widenType(getTypeOfObjectLiteral(retExpr))
                 if (t !== anyType && t !== errorType) return t
             } catch (_: Throwable) { /* fall through */ }
         }
