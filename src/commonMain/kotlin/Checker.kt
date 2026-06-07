@@ -769,6 +769,11 @@ class Checker(
         // 7. Check for implicit any parameters (TS7006)
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyParameters()
+        } else if (!options.strictExplicitlyFalse) {
+            // Pure-default mode (neither strict/noImplicitAny set, nor @strict:false):
+            // the harness still fires TS7006 for the unannotated `var x = arrow/fn-expr`
+            // shape. Narrow walker — see checkImplicitAnyDefaultVarFunctions docs.
+            checkImplicitAnyDefaultVarFunctions()
         }
         // 7a'. TS7009: `new F()` where F is a plain function (no construct signature)
         // implicitly has type 'any'. Gated on noImplicitAny/strict (TypeScript's tests
@@ -10939,6 +10944,113 @@ class Checker(
             } finally {
                 currentFileLocals = savedLocals
             }
+        }
+    }
+
+    /**
+     * Narrow default-mode TS7006: an unannotated `var/let/const NAME = <arrow|function-expr>`
+     * whose parameter has no type, no default, no contextual type → TS7006. This is the
+     * ONE TS7006 sub-shape the TypeScript compiler-test harness fires by DEFAULT (no
+     * @strict / @noImplicitAny) — e.g. `arrowFunctionWithObjectLiteralBody1/2`
+     * (`var v = a => <any>{}`). The full `checkImplicitAnyParameters` walker is gated on
+     * noImplicitAny/strict because broadening it regresses ~19 tests (FunctionDeclaration
+     * params, type-annotation walking, ambient TS7005/7008, JS files, object-literal
+     * contextual-typing gaps). This focused walker fires ONLY for the unannotated-var
+     * arrow/function-expression initializer shape, which a corpus scan confirms has no
+     * no-flag counterexample (the lone match is a `.js` file, skipped here). It runs only
+     * in PURE-default mode (when the full walker is OFF) so the two never double-emit.
+     */
+    private fun checkImplicitAnyDefaultVarFunctions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            walkVarFn7006Stmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkVarFn7006Stmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) walkVarFn7006Stmt(s, source, fileName)
+    }
+
+    private fun walkVarFn7006Stmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (decl in stmt.declarationList.declarations) {
+                    val init = decl.initializer
+                    if (decl.type == null && (init is ArrowFunction || init is FunctionExpression)) {
+                        val params = when (init) {
+                            is ArrowFunction -> init.parameters
+                            is FunctionExpression -> init.parameters
+                            else -> emptyList()
+                        }
+                        emitVarFn7006Params(params, source, fileName)
+                    }
+                    init?.let { walkVarFn7006Expr(it, source, fileName) }
+                }
+            }
+            is ExpressionStatement -> walkVarFn7006Expr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { walkVarFn7006Expr(it, source, fileName) }
+            is Block -> walkVarFn7006Stmts(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
+            is IfStatement -> {
+                walkVarFn7006Stmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkVarFn7006Stmt(it, source, fileName) }
+            }
+            is ForStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is WhileStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is DoStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is LabeledStatement -> walkVarFn7006Stmt(stmt.statement, source, fileName)
+            is TryStatement -> {
+                walkVarFn7006Stmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                (stmt.body as? ModuleBlock)?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun walkVarFn7006Expr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is ArrowFunction -> when (val b = expr.body) {
+                is Block -> walkVarFn7006Stmts(b.statements, source, fileName)
+                is Expression -> walkVarFn7006Expr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> walkVarFn7006Stmts(expr.body.statements, source, fileName)
+            is ParenthesizedExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun emitVarFn7006Params(parameters: List<Parameter>, source: String, fileName: String) {
+        for (param in parameters) {
+            if (param.isCommentPlaceholder) continue
+            if (param.type != null) continue
+            if (param.initializer != null) continue
+            if (param.dotDotDotToken) continue
+            if (param.modifiers.any { isParameterPropertyModifier(it) }) continue
+            val name = param.name as? Identifier ?: continue
+            if (name.text.isEmpty() || name.text == "this") continue
+            val start = name.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7006,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = name.text.length,
+            ))
         }
     }
 
