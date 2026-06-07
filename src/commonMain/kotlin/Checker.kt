@@ -23295,6 +23295,31 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
+                    // B98.r168: a SINGLE-SEGMENT bare specifier under EXPLICIT `@moduleResolution:
+                    // bundler` (cachedModuleResolution6/7). Bundler resolves bare specifiers via
+                    // node_modules (like node) but allows extensionless paths; a single-segment bare
+                    // name with no node_modules package / ambient module / bare-`.d.ts` / node builtin
+                    // cannot resolve, so TypeScript emits TS2307. Mirrors the B98.r107 default-null
+                    // gate above with identical FP-safe guards (single-segment-only, no `/`/`:`, no
+                    // path/baseUrl/rootDirs/moduleSuffixes config). `effectiveModuleRes == "bundler"`
+                    // can only be reached when `moduleResolution` is EXPLICITLY bundler (the default
+                    // fallback never yields "bundler"), so this is disjoint from the r107 gate.
+                    else if (!isRelative && effectiveModuleRes == "bundler"
+                        && !moduleName.startsWith("/")
+                        && !moduleName.contains("/")
+                        && !moduleName.contains(":")
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                        && moduleName !in ambientModuleNames
+                        && !bareDtsResolvableInNodeModules(moduleName)
+                        && !hasNodeModulesPackage(moduleName)
+                        && moduleName !in NODE_BUILTIN_MODULES
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs. The
                     // bare-specifier-missing case (B98.r2 attempt, reverted round 83) is NOT
