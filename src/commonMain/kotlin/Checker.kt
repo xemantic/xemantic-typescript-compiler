@@ -74202,6 +74202,34 @@ interface DataView {
             return
         }
 
+        // extendFromAny: a PropertyAccess/ElementAccess receiver whose type resolves to a
+        // primitive intrinsic (e.g. `c.known` typed `number` where `known` is a class
+        // field). Mirror B64.1's call-result branch: TS2339 when the property is absent
+        // from the primitive's apparent (wrapper) type; display uses the primitive name.
+        // The PRIMITIVE_WRAPPER_INTRINSIC_NAMES gate excludes any/unknown/error, so a
+        // member typed `any` (e.g. `c.unknown.length` under `class C extends Base:any`)
+        // is correctly left alone.
+        if (objectExpr is PropertyAccessExpression || objectExpr is ElementAccessExpression) {
+            val recvType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { null }
+            if (recvType is Type.Intrinsic &&
+                recvType.intrinsicName in PRIMITIVE_WRAPPER_INTRINSIC_NAMES && propName.isNotEmpty()
+            ) {
+                val apparent = try { getApparentType(recvType) } catch (_: StackOverflowError) { null }
+                if (apparent is Type.Object) {
+                    try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
+                    if (getPropertyOfType(apparent, propName) != null) return
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '${typeToString(recvType)}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
+        }
+
         // === Static method "this" access ===
         // In static methods, "this" refers to the constructor type (typeof C).
         if (isThisAccess && inStaticClassMethod && enclosingClassType is Type.Object) {
