@@ -44543,19 +44543,50 @@ interface DataView {
         //   - TypeReference to named Class or Interface (not TypeAlias)
         //   - FunctionType, ConstructorType (function/constructor type expressions)
         //   - TypeLiteral with at least one member (object/call/construct/index sig)
-        // Skipped: lib `Object`/`Function` (accept null-like values), TypeAlias,
+        //   - IntersectionType / generic-alias whose body is an intersection, when an
+        //     object-literal constituent is present (parenthesisDoesNotBlockAliasSymbolCreation)
+        // Skipped: lib `Object`/`Function` (accept null-like values), bare TypeAlias,
         // empty `{}`, and any other type form.
+        // When set, a "  Type '<src>' is not comparable to type '<chainTarget>'." chain line
+        // is appended (the object-literal constituent null can't overlap).
+        var chainTarget: String? = null
+        val isNullish = sourceLit == "null" || sourceLit == "undefined"
         val name: String = when (typeNode) {
             is TypeReference -> {
                 val typeName = typeNode.typeName as? Identifier ?: return
                 val n = typeName.text
                 val sym = currentFileLocals?.get(n) ?: globals[n] ?: return
-                val isClassOrInterface = sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
-                        && !sym.flags.hasAny(SymbolFlags.TypeAlias or SymbolFlags.Module)
-                if (!isClassOrInterface) return
-                // Skip lib-declared Object/Function — their interfaces accept null-like values.
-                if (n == "Object" || n == "Function") return
-                n
+                // Generic type-alias whose body is an intersection, applied to an
+                // object-literal type argument: `null as A<{x:number}>` where
+                // `A<T> = (T & InvalidKeys<...>)`. null doesn't overlap the object arg.
+                val aliasName = if (isNullish && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                    val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    var body = aliasDecl?.type
+                    while (body is ParenthesizedType) body = body.type
+                    val firstArg = typeNode.typeArguments?.firstOrNull()
+                    if (body is IntersectionType && firstArg is TypeLiteral && firstArg.members.isNotEmpty()) {
+                        val ct = formatTypeForDisplay(firstArg)
+                        val disp = formatTypeForDisplay(typeNode)
+                        if (ct != null && disp != null) { chainTarget = ct; disp } else null
+                    } else null
+                } else null
+                if (aliasName != null) {
+                    aliasName
+                } else {
+                    val isClassOrInterface = sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+                            && !sym.flags.hasAny(SymbolFlags.TypeAlias or SymbolFlags.Module)
+                    if (!isClassOrInterface) return
+                    // Skip lib-declared Object/Function — their interfaces accept null-like values.
+                    if (n == "Object" || n == "Function") return
+                    n
+                }
+            }
+            // Direct intersection with an object-literal constituent: `null as ({x:number} & InvalidKeys<"a">)`.
+            is IntersectionType -> {
+                if (!isNullish) return
+                val objMember = typeNode.types.firstOrNull { it is TypeLiteral && it.members.isNotEmpty() } as? TypeLiteral ?: return
+                chainTarget = formatTypeForDisplay(objMember) ?: return
+                formatTypeForDisplay(typeNode) ?: return
             }
             is FunctionType, is ConstructorType -> formatTypeForDisplay(typeNode) ?: return
             is TypeLiteral -> {
@@ -44598,6 +44629,7 @@ interface DataView {
             character = character,
             start = spanStart,
             length = length,
+            messageChain = chainTarget?.let { listOf("  Type '$sourceLit' is not comparable to type '$it'.") } ?: emptyList(),
         ))
     }
 
