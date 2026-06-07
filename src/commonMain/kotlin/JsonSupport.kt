@@ -42,7 +42,15 @@ internal val LENIENT_JSON: Json = Json {
     allowTrailingComma = true
 }
 
-/** Parses [text] into a [JsonElement] tree, or `null` if it is malformed. */
+/**
+ * Parses [text] into a [JsonElement] tree, or `null` if it is malformed.
+ *
+ * Returns `null` rather than reporting an error on purpose: the only caller is
+ * [ModuleResolver]'s `package.json` reader during `node_modules` resolution, where a
+ * broken *dependency* manifest must not abort the build — the consequence already
+ * surfaces as an unresolved import. The project's own `tsconfig.json` is NOT parsed
+ * here; [TsConfigLoader] reads it with explicit TS5083/TS5014/TS6053 diagnostics.
+ */
 internal fun parseJsonOrNull(text: String): JsonElement? = try {
     LENIENT_JSON.parseToJsonElement(text)
 } catch (_: Throwable) {

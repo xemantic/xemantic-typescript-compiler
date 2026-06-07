@@ -36,6 +36,8 @@ data class LoadedTsConfig(
     val exclude: List<String>,
     val files: List<String>,
     val customConditions: List<String>,
+    /** Errors encountered loading the config chain (unreadable file TS5083, malformed JSON TS5014). */
+    val diagnostics: List<Diagnostic> = emptyList(),
 )
 
 /**
@@ -59,8 +61,11 @@ class TsConfigLoader(private val vfs: Vfs) {
 
     fun load(tsconfigPath: String): LoadedTsConfig {
         val configDir = PathUtil.dirname(tsconfigPath)
-        val merged = loadMerged(tsconfigPath, mutableSetOf())
-            ?: return LoadedTsConfig(CompilerOptions(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList())
+        val diags = mutableListOf<Diagnostic>()
+        val merged = loadMerged(tsconfigPath, mutableSetOf(), diags)
+            ?: return LoadedTsConfig(
+                CompilerOptions(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList(), diags,
+            )
 
         val co = merged.compilerOptions ?: JsonObject(emptyMap())
         var options = CompilerOptions()
@@ -83,7 +88,7 @@ class TsConfigLoader(private val vfs: Vfs) {
         val files = (merged.files ?: emptyList()).map { PathUtil.join(configDir, it) }
         val customConditions = co["customConditions"]?.asStringList ?: emptyList()
 
-        return LoadedTsConfig(options, configDir, include, exclude, files, customConditions)
+        return LoadedTsConfig(options, configDir, include, exclude, files, customConditions, diags)
     }
 
     /**
@@ -92,25 +97,46 @@ class TsConfigLoader(private val vfs: Vfs) {
      * merged; `include`/`exclude`/`files` are child-wins (a child that specifies them
      * replaces the parent's, per TS semantics).
      */
-    private fun loadMerged(tsconfigPath: String, seen: MutableSet<String>): TsConfigFile? {
+    private fun loadMerged(
+        tsconfigPath: String,
+        seen: MutableSet<String>,
+        diags: MutableList<Diagnostic>,
+    ): TsConfigFile? {
         val norm = PathUtil.normalize(tsconfigPath)
         if (!seen.add(norm)) return null // cycle guard
-        val text = vfs.readText(norm) ?: return null
+        val text = vfs.readText(norm)
+        if (text == null) {
+            diags.add(configError("Cannot read file '$norm'.", 5083, norm))
+            return null
+        }
         val self = try {
             LENIENT_JSON.decodeFromString<TsConfigFile>(text)
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            val detail = e.message?.substringBefore('\n')?.trim().orEmpty().ifEmpty { "invalid JSON" }
+            diags.add(configError("Failed to parse file '$norm': $detail", 5014, norm))
             return null
         }
         val configDir = PathUtil.dirname(norm)
 
         var base: TsConfigFile? = null
         for (ext in (self.extends?.asStringList ?: emptyList())) {
-            val parentPath = resolveExtends(ext, configDir) ?: continue
-            val parent = loadMerged(parentPath, seen) ?: continue
+            val parentPath = resolveExtends(ext, configDir)
+            if (parentPath == null) {
+                diags.add(configError("File '$ext' not found.", 6053, norm))
+                continue
+            }
+            val parent = loadMerged(parentPath, seen, diags) ?: continue
             base = if (base == null) parent else merge(base, parent)
         }
         return if (base == null) self else merge(base, self)
     }
+
+    private fun configError(message: String, code: Int, fileName: String) = Diagnostic(
+        message = message,
+        category = DiagnosticCategory.Error,
+        code = code,
+        fileName = fileName,
+    )
 
     /** child overrides base; `compilerOptions` is shallow-merged. */
     private fun merge(base: TsConfigFile, child: TsConfigFile): TsConfigFile = TsConfigFile(

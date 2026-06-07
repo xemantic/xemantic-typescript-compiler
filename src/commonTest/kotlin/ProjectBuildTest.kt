@@ -111,6 +111,47 @@ class ProjectBuildTest {
         // node_modules outputs are never written.
         assertTrue(written.none { it.contains("/node_modules/") })
     }
+
+    @Test
+    fun reportsMalformedTsConfig() {
+        val vfs = InMemoryVfs(
+            mapOf(
+                "/proj/tsconfig.json" to "{ this is not valid json",
+                "/proj/src/index.ts" to "export const x = 1;",
+            ),
+        )
+        val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        assertTrue(
+            result.diagnostics.any { it.code == 5014 },
+            "malformed tsconfig should report TS5014: ${result.diagnostics.map { it.code }}",
+        )
+    }
+
+    @Test
+    fun reportsMissingExtends() {
+        val vfs = InMemoryVfs(
+            mapOf(
+                "/proj/tsconfig.json" to """{ "extends": "./nope.json", "include": ["src/**/*.ts"] }""",
+                "/proj/src/index.ts" to "export const x = 1;",
+            ),
+        )
+        val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        assertTrue(
+            result.diagnostics.any { it.code == 6053 },
+            "missing extends target should report TS6053: ${result.diagnostics.map { it.code }}",
+        )
+    }
+
+    @Test
+    fun reportsMissingTsConfig() {
+        // Point at a directory with no tsconfig.json.
+        val vfs = InMemoryVfs(mapOf("/proj/src/index.ts" to "export const x = 1;"))
+        val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
+        assertTrue(
+            result.diagnostics.any { it.code == 5083 },
+            "missing tsconfig should report TS5083: ${result.diagnostics.map { it.code }}",
+        )
+    }
 }
 
 /** An in-memory [Vfs] for deterministic tests (and a reference Vfs implementation). */

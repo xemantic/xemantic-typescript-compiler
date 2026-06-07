@@ -98,7 +98,9 @@ class ProjectCompiler(private val vfs: Vfs) {
             configPath = configPath,
             rootFiles = rootFiles,
             programFiles = program.keys.toList(),
-            diagnostics = result.diagnostics,
+            // Config-load errors (unreadable/malformed tsconfig, missing `extends`) first,
+            // then the compiler's own diagnostics.
+            diagnostics = config.diagnostics + result.diagnostics,
             unresolved = unresolved.distinct(),
             written = written,
         )
