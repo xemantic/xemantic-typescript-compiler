@@ -23295,6 +23295,31 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
+                    // B98.r168: a SINGLE-SEGMENT bare specifier under EXPLICIT `@moduleResolution:
+                    // bundler` (cachedModuleResolution6/7). Bundler resolves bare specifiers via
+                    // node_modules (like node) but allows extensionless paths; a single-segment bare
+                    // name with no node_modules package / ambient module / bare-`.d.ts` / node builtin
+                    // cannot resolve, so TypeScript emits TS2307. Mirrors the B98.r107 default-null
+                    // gate above with identical FP-safe guards (single-segment-only, no `/`/`:`, no
+                    // path/baseUrl/rootDirs/moduleSuffixes config). `effectiveModuleRes == "bundler"`
+                    // can only be reached when `moduleResolution` is EXPLICITLY bundler (the default
+                    // fallback never yields "bundler"), so this is disjoint from the r107 gate.
+                    else if (!isRelative && effectiveModuleRes == "bundler"
+                        && !moduleName.startsWith("/")
+                        && !moduleName.contains("/")
+                        && !moduleName.contains(":")
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                        && moduleName !in ambientModuleNames
+                        && !bareDtsResolvableInNodeModules(moduleName)
+                        && !hasNodeModulesPackage(moduleName)
+                        && moduleName !in NODE_BUILTIN_MODULES
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs. The
                     // bare-specifier-missing case (B98.r2 attempt, reverted round 83) is NOT
@@ -23332,13 +23357,34 @@ class Checker(
                 collectDynamicImportSpecifiers(result.sourceFile.statements, dynSpecs, includeRequire = isJsLikeFileName(fileName))
                 for (spec in dynSpecs) {
                     val mod = spec.text
-                    if (!mod.startsWith("./") && !mod.startsWith("../")) continue
                     if (mod.endsWith(".json")) continue
-                    if (resolveRelativeIncludingIndex(mod, fileName) == null
+                    val isRel = mod.startsWith("./") || mod.startsWith("../")
+                    if (isRel) {
+                        if (resolveRelativeIncludingIndex(mod, fileName) == null
+                            && mod !in ambientModuleNames
+                            && mod !in dtsFileBaseNames
+                            && !hasTsErrorSuppressionAbove(spec.pos, source)
+                        ) {
+                            emitTS2307(spec, mod, source, fileName)
+                        }
+                    } else if (isJsLikeFileName(fileName)
+                        && !mod.startsWith("/")
+                        && !mod.contains("/")
+                        && !mod.contains(":")
                         && mod !in ambientModuleNames
                         && mod !in dtsFileBaseNames
+                        && !bareDtsResolvableInNodeModules(mod)
+                        && !hasNodeModulesPackage(mod)
+                        && mod !in NODE_BUILTIN_MODULES
+                        && resolveModuleSpecifier(mod, null) == null
                         && !hasTsErrorSuppressionAbove(spec.pos, source)
                     ) {
+                        // B98.r169: a bare `require("X")` in a JS file whose single-segment
+                        // specifier resolves to nothing (no node_modules package / ambient
+                        // module / `.d.ts` / node builtin) — TypeScript emits TS2307 (it treats
+                        // CommonJS `require` in JS files as a module reference). Mirrors the
+                        // r107/r168 bare-import gate's FP-safe guards (single-segment-only, no
+                        // `/`/`:`, every resolution path checked). `tslibInJs`.
                         emitTS2307(spec, mod, source, fileName)
                     }
                 }
@@ -75639,6 +75685,53 @@ interface DataView {
                         return
                     }
                 }
+            }
+        }
+        // B98.r167: TS2339 for `{ objLit }[id]` where `id` has a UNION-of-literal
+        // type and one literal is not a key of the FRESH object literal. Gated:
+        // receiver resolves to a fresh Type.Object (own props, no index sig, no
+        // call/construct sigs), index resolves to a Type.Union whose members are
+        // ALL string/number literal types. FP-safe — a missing key on a closed
+        // object literal is always a TypeScript error; the no-index-signature gate
+        // excludes `({...} as Record<...>)[id]` shapes.
+        run {
+            if (arg is StringLiteralNode || arg is NumericLiteralNode) return@run
+            val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { return@run }
+            if (recvType !is Type.Object || recvType is Type.Reference || recvType is Type.Interface) return@run
+            try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return@run }
+            if (recvType.stringIndexInfo != null || recvType.numberIndexInfo != null) return@run
+            if (!recvType.callSignatures.isNullOrEmpty() || !recvType.constructSignatures.isNullOrEmpty()) return@run
+            val props = recvType.properties ?: return@run
+            if (props.isEmpty()) return@run
+            val idxType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return@run }
+            if (idxType !is Type.Union) return@run
+            val keys = props.map { it.name }.toSet()
+            var missing: String? = null
+            for (m in idxType.types) {
+                val k = when (m) {
+                    is Type.StringLiteral -> m.value
+                    is Type.NumberLiteral -> m.toString()
+                    else -> return@run // a non-literal member → not a closed-key index
+                }
+                if (k !in keys && missing == null) missing = k
+            }
+            if (missing != null) {
+                val recvStart = expr.expression.pos
+                var closeBracket = expressionTrueEnd(arg)
+                while (closeBracket < source.length && source[closeBracket] != ']') closeBracket++
+                val end = if (closeBracket < source.length) closeBracket + 1 else expr.end
+                val length = (end - recvStart).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, recvStart)
+                val recvDisplay = props.joinToString(prefix = "{ ", separator = "; ", postfix = "; }") { sym ->
+                    val pt = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { anyType }
+                    "${sym.name}: ${typeToString(widenType(pt))}"
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Property '$missing' does not exist on type '$recvDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = character, start = recvStart, length = length,
+                ))
+                return
             }
         }
         val propName: String
