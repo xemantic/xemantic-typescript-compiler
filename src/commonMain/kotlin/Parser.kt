@@ -3507,7 +3507,14 @@ class Parser(
                 token == SyntaxKind.AsyncKeyword -> ModifierFlag.Async
                 token == SyntaxKind.DeclareKeyword -> ModifierFlag.Declare
                 token == SyntaxKind.ExportKeyword -> ModifierFlag.Export
-                token == SyntaxKind.DefaultKeyword -> ModifierFlag.Default
+                // NOTE: `default` is intentionally NOT a modifier here. parseModifiers() is
+                // only called for class members (parseClassMember) and interface/type-literal
+                // members (parseTypeMember), and `default` is never a member modifier in either —
+                // it is a valid member NAME (e.g. zod's `default(def): this`). `export default`
+                // is parsed via parseExportDeclaration / parseDefaultStartedStatement, which set
+                // ModifierFlag.Default explicitly. Consuming `default` here desynced the whole
+                // class body: `default(...)` became a `default` modifier + a garbage name, so a
+                // later `const x = ...` was misread as a class member (spurious TS1248 + cascade).
                 token == SyntaxKind.ConstKeyword -> ModifierFlag.Const
                 token == SyntaxKind.AccessorKeyword -> ModifierFlag.Accessor
                 isIdentifier() && scanner.getTokenValue() == "readonly" -> ModifierFlag.Readonly
