@@ -62296,8 +62296,10 @@ interface DataView {
                     // return type from the body (mirrors arrow/fn-expr concise+block-body
                     // inference) instead of defaulting to `any` — so an object-literal method
                     // value can be checked against a typed target member's return type.
+                    // objectLiteralThisWidenedOnUse: a no-return method body infers `void`
+                    // (matches resolveInterfaceMembers), not `any`.
                     val returnType = prop.type?.let { getTypeFromTypeNode(it) }
-                        ?: prop.body?.let { inferReturnTypeFromBody(it) }
+                        ?: prop.body?.let { if (!hasReturnWithExpression(it)) voidType else inferReturnTypeFromBody(it) }
                         ?: anyType
                     val params = getParameterSymbols(prop.parameters)
                     val sig = Signature(
@@ -65060,14 +65062,29 @@ interface DataView {
                         if (props != null) {
                             for (p in props) {
                                 val propType = symbolTypes[p.id]
-                                val typeStr = if (propType != null) typeToString(propType) else "any"
                                 val displayName = formatPropertyDisplayName(p)
-                                // 16.0: Optional properties render as `name?: type | undefined`
-                                // matching TypeScript's display convention.
-                                if (isOptionalProperty(p)) {
-                                    parts.add("$displayName?: $typeStr | undefined")
+                                // A member DECLARED as a method (`m() {}`) renders in shorthand
+                                // form `m(params): ret`, not the property-with-function-type form
+                                // `m: (params) => ret` (matches TypeScript). Distinguished by the
+                                // declaration kind, so a property whose value happens to be a
+                                // function (`m: () => void`) keeps the arrow form.
+                                val methodSig = if (propType is Type.Object &&
+                                    propType.properties.isNullOrEmpty() &&
+                                    propType.constructSignatures.isNullOrEmpty() &&
+                                    propType.callSignatures?.size == 1 &&
+                                    p.declarations.any { it is MethodDeclaration }
+                                ) propType.callSignatures!!.first() else null
+                                if (methodSig != null) {
+                                    parts.add("$displayName${signatureToStringColon(methodSig, isConstruct = false)}")
                                 } else {
-                                    parts.add("$displayName: $typeStr")
+                                    val typeStr = if (propType != null) typeToString(propType) else "any"
+                                    // 16.0: Optional properties render as `name?: type | undefined`
+                                    // matching TypeScript's display convention.
+                                    if (isOptionalProperty(p)) {
+                                        parts.add("$displayName?: $typeStr | undefined")
+                                    } else {
+                                        parts.add("$displayName: $typeStr")
+                                    }
                                 }
                             }
                         }
@@ -77076,14 +77093,29 @@ interface DataView {
             }
             is ArrayLiteralExpression -> expr.elements.forEach { checkCallTypesInExpr(it, source, fileName) }
             is ObjectLiteralExpression -> {
+                // objectLiteralThisWidenedOnUse: type `this` inside the literal's
+                // methods/accessors as the object-literal type so `this.method(this)`
+                // reaches argument checking (mirrors the class-method handling above).
+                val objThisType = try {
+                    val t = getTypeOfObjectLiteral(expr)
+                    if (t !== anyType && t !== errorType) t else null
+                } catch (_: StackOverflowError) { null }
+                fun withObjThis(body: Block) {
+                    if (objThisType == null) { checkCallTypesInStatements(body.statements, source, fileName); return }
+                    val saved = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes["this"] = objThisType
+                    try { checkCallTypesInStatements(body.statements, source, fileName) }
+                    finally { currentLocalTypes = saved }
+                }
                 for (prop in expr.properties) {
                     when (prop) {
                         is PropertyAssignment -> checkCallTypesInExpr(prop.initializer, source, fileName)
                         is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCallTypesInExpr(it, source, fileName) }
                         is SpreadAssignment -> checkCallTypesInExpr(prop.expression, source, fileName)
-                        is MethodDeclaration -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> prop.body?.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                        is MethodDeclaration -> prop.body?.let { withObjThis(it) }
+                        is GetAccessor -> prop.body?.let { withObjThis(it) }
+                        is SetAccessor -> prop.body?.let { withObjThis(it) }
                         else -> {}
                     }
                 }
@@ -79820,7 +79852,14 @@ interface DataView {
             val argIsRefForArgCheck = argType is Type.Reference
             val argIsDistinctNamedClass = argType is Type.Interface && argType.symbol != null &&
                 paramType is Type.Interface && argType.symbol !== paramType.symbol
-            if (!isRestParam && (argIsRefForArgCheck || argIsDistinctNamedClass) &&
+            // objectLiteralThisWidenedOnUse: a bare `this` reference (typed as an
+            // anonymous object-literal type inside an object-literal method, see the
+            // call-arg walker) passed to a named-interface param it doesn't satisfy.
+            // TIGHTLY gated to a literal `this` arg → FP surface is ~zero (passing
+            // `this` to an interface param it lacks a required member of is always an error).
+            val argIsThisAnonObj = arg is Identifier && arg.text == "this" &&
+                argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface
+            if (!isRestParam && (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj) &&
                 paramType is Type.Interface && paramType.symbol != null) {
                 try {
                     resolveStructuredTypeMembers(argType as Type.Object)
