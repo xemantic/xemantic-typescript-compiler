@@ -1175,6 +1175,9 @@ class Checker(
         checkIncDecTypeParamOperands()
         // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
         checkGenericIndexWrite()
+        // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
+        // interpolation (TS2731) — annotation-based, FP-safe.
+        checkSymbolToStringConversions()
         // 64e. Check class implements interface (TS2420)
         checkClassImplementsInterface()
         // 64e2. Check property type incompatible with base type (TS2416)
@@ -85906,6 +85909,269 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2469 ("The '+'/'+=' operator cannot be applied to type 'symbol'.") and
+    // TS2731 ("Implicit conversion of a 'symbol' to a 'string' will fail at
+    // runtime. Consider wrapping this expression in 'String(...)'.").
+    //
+    // AST-level + FP-firewalled, mirroring the r79/r80 type-param walkers: we
+    // thread the set of in-scope identifier names whose declared annotation type
+    // CONTAINS `symbol` (directly, via a union, via a `symbol`-constrained type
+    // parameter, or via a type alias resolving to a symbol-containing type), then
+    // flag those identifiers when used as a template-interpolation operand
+    // (TS2731) or a `+`/`+=`/unary-`+` operand (TS2469). No type-engine — purely
+    // annotation-based. FP-safe: TypeScript emits TS2469/TS2731 UNCONDITIONALLY
+    // for a symbol operand in these positions, so a passing test with such an
+    // operand already carries the diagnostic — this can only help or be neutral.
+    // -----------------------------------------------------------------------
+    private fun checkSymbolToStringConversions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            val aliasNames = mutableSetOf<String>()
+            collectSymbolAliases(result.sourceFile.statements, aliasNames)
+            try {
+                sym2strHandleBody(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), aliasNames)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** A type node that contains `symbol` (directly / union / symbol-constrained
+     *  type-param ref / symbol-resolving type-alias ref). Unwraps parentheses. */
+    private fun sym2strContainsSymbol(t: TypeNode?, tpNames: Set<String>, aliasNames: Set<String>): Boolean {
+        var node = t
+        while (node is ParenthesizedType) node = node.type
+        return when (node) {
+            is KeywordTypeNode -> node.kind == SyntaxKind.SymbolKeyword
+            is UnionType -> node.types.any { sym2strContainsSymbol(it, tpNames, aliasNames) }
+            is TypeReference -> {
+                val nm = (node.typeName as? Identifier)?.text
+                nm != null && node.typeArguments.isNullOrEmpty() && (nm in tpNames || nm in aliasNames)
+            }
+            else -> false
+        }
+    }
+
+    /** File/namespace-level type aliases whose body resolves to a symbol-containing
+     *  type (fixpoint over alias→alias references). */
+    private fun collectSymbolAliases(stmts: List<Statement>, into: MutableSet<String>) {
+        val aliases = HashMap<String, TypeNode>()
+        fun walk(ss: List<Statement>) {
+            for (s in ss) when (s) {
+                is TypeAliasDeclaration -> aliases[s.name.text] = s.type
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walk(it.statements) }
+                is Block -> walk(s.statements)
+                else -> {}
+            }
+        }
+        walk(stmts)
+        var changed = true
+        while (changed) {
+            changed = false
+            for ((name, type) in aliases) {
+                if (name !in into && sym2strContainsSymbol(type, emptySet(), into)) { into.add(name); changed = true }
+            }
+        }
+    }
+
+    /** Type-parameter names whose constraint contains symbol (plus the outer set). */
+    private fun symbolLikeTpNames(tps: List<TypeParameter>?, outer: Set<String>, aliasNames: Set<String>): Set<String> {
+        if (tps.isNullOrEmpty()) return outer
+        val result = outer.toMutableSet()
+        var changed = true
+        while (changed) {
+            changed = false
+            for (tp in tps) {
+                if (tp.name.text !in result && sym2strContainsSymbol(tp.constraint, result, aliasNames)) {
+                    result.add(tp.name.text); changed = true
+                }
+            }
+        }
+        return result
+    }
+
+    /** Collect local var names (incl. for-init) whose annotation contains symbol.
+     *  Does NOT descend into nested function/class bodies. */
+    private fun collectSymbolLocals(stmts: List<Statement>, tpNames: Set<String>, aliasNames: Set<String>, into: MutableSet<String>) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text
+                if (n != null && sym2strContainsSymbol(d.type, tpNames, aliasNames)) into.add(n)
+            }
+            is Block -> collectSymbolLocals(stmt.statements, tpNames, aliasNames, into)
+            is IfStatement -> { collectSymbolLocals(listOf(stmt.thenStatement), tpNames, aliasNames, into); stmt.elseStatement?.let { collectSymbolLocals(listOf(it), tpNames, aliasNames, into) } }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    val n = (d.name as? Identifier)?.text
+                    if (n != null && sym2strContainsSymbol(d.type, tpNames, aliasNames)) into.add(n)
+                }
+                collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            }
+            is ForInStatement -> collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            is ForOfStatement -> collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            is WhileStatement -> collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            is DoStatement -> collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            is TryStatement -> {
+                collectSymbolLocals(stmt.tryBlock.statements, tpNames, aliasNames, into)
+                stmt.catchClause?.let { collectSymbolLocals(it.block.statements, tpNames, aliasNames, into) }
+                stmt.finallyBlock?.let { collectSymbolLocals(it.statements, tpNames, aliasNames, into) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) {
+                val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
+                collectSymbolLocals(cs, tpNames, aliasNames, into)
+            }
+            is LabeledStatement -> collectSymbolLocals(listOf(stmt.statement), tpNames, aliasNames, into)
+            else -> {}
+        }
+    }
+
+    /** Set up a function/method/arrow scope: extend tp names + symbol params/locals, then scan the body. */
+    private fun sym2strHandleFnBody(params: List<Parameter>, tps: List<TypeParameter>?, body: Node?, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
+        val bodyTp = symbolLikeTpNames(tps, tpNames, aliasNames)
+        val names = symbolNames.toMutableSet()
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text
+            if (pn != null && sym2strContainsSymbol(p.type, bodyTp, aliasNames)) names.add(pn)
+        }
+        when (body) {
+            is Block -> sym2strHandleBody(body.statements, source, fileName, names, bodyTp, aliasNames)
+            is Expression -> { val n2 = names.toMutableSet(); sym2strCheckExpr(body, source, fileName, n2, bodyTp, aliasNames) }
+            else -> {}
+        }
+    }
+
+    /** Collect this body's symbol-typed locals, then scan each statement. */
+    private fun sym2strHandleBody(stmts: List<Statement>, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
+        val names = symbolNames.toMutableSet()
+        collectSymbolLocals(stmts, tpNames, aliasNames, names)
+        for (stmt in stmts) sym2strScanStatement(stmt, source, fileName, names, tpNames, aliasNames)
+    }
+
+    private fun sym2strScanStatement(stmt: Statement, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
+        when (stmt) {
+            is ClassDeclaration -> {
+                val newTp = symbolLikeTpNames(stmt.typeParameters, tpNames, aliasNames)
+                for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { sym2strHandleFnBody(m.parameters, m.typeParameters, it, source, fileName, symbolNames, newTp, aliasNames) }
+                    is Constructor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
+                    is GetAccessor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
+                    is SetAccessor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
+                    is PropertyDeclaration -> m.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> stmt.body?.let { sym2strHandleFnBody(stmt.parameters, stmt.typeParameters, it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ExpressionStatement -> sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ReturnStatement -> stmt.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ThrowStatement -> stmt.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is Block -> sym2strHandleBody(stmt.statements, source, fileName, symbolNames, tpNames, aliasNames)
+            is IfStatement -> {
+                sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
+                sym2strScanStatement(stmt.thenStatement, source, fileName, symbolNames, tpNames, aliasNames)
+                stmt.elseStatement?.let { sym2strScanStatement(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
+                (stmt.initializer as? Expression)?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+                stmt.condition?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+                stmt.incrementor?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+                sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames)
+            }
+            is ForInStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ForOfStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
+            is WhileStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
+            is DoStatement -> { sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames) }
+            is SwitchStatement -> {
+                sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
+                for (c in stmt.caseBlock) {
+                    val cs = when (c) { is CaseClause -> { sym2strCheckExpr(c.expression, source, fileName, symbolNames, tpNames, aliasNames); c.statements }; is DefaultClause -> c.statements; else -> emptyList() }
+                    sym2strHandleBody(cs, source, fileName, symbolNames, tpNames, aliasNames)
+                }
+            }
+            is TryStatement -> {
+                sym2strHandleBody(stmt.tryBlock.statements, source, fileName, symbolNames, tpNames, aliasNames)
+                stmt.catchClause?.let { sym2strHandleBody(it.block.statements, source, fileName, symbolNames, tpNames, aliasNames) }
+                stmt.finallyBlock?.let { sym2strHandleBody(it.statements, source, fileName, symbolNames, tpNames, aliasNames) }
+            }
+            is LabeledStatement -> sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { sym2strHandleBody(it.statements, source, fileName, symbolNames, tpNames, aliasNames) }
+            else -> {}
+        }
+    }
+
+    private fun sym2strIsSymbolOperand(e: Expression, symbolNames: Set<String>): Boolean =
+        e is Identifier && e.text in symbolNames
+
+    private fun emitSym2469(operand: Expression, opText: String, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, operand.pos)
+        diagnostics.add(Diagnostic(
+            message = "The '$opText' operator cannot be applied to type 'symbol'.",
+            category = DiagnosticCategory.Error, code = 2469, fileName = fileName,
+            line = line, character = character, start = operand.pos, length = expressionTrueEnd(operand) - operand.pos,
+        ))
+    }
+
+    private fun emitSym2731(operand: Expression, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, operand.pos)
+        diagnostics.add(Diagnostic(
+            message = "Implicit conversion of a 'symbol' to a 'string' will fail at runtime. Consider wrapping this expression in 'String(...)'.",
+            category = DiagnosticCategory.Error, code = 2731, fileName = fileName,
+            line = line, character = character, start = operand.pos, length = expressionTrueEnd(operand) - operand.pos,
+        ))
+    }
+
+    private fun sym2strCheckExpr(expr: Expression, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
+        when (expr) {
+            is TemplateExpression -> for (span in expr.templateSpans) {
+                if (sym2strIsSymbolOperand(span.expression, symbolNames)) emitSym2731(span.expression, source, fileName)
+                sym2strCheckExpr(span.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            }
+            is BinaryExpression -> {
+                when (expr.operator) {
+                    SyntaxKind.Plus -> {
+                        if (sym2strIsSymbolOperand(expr.left, symbolNames)) emitSym2469(expr.left, "+", source, fileName)
+                        else if (sym2strIsSymbolOperand(expr.right, symbolNames)) emitSym2469(expr.right, "+", source, fileName)
+                    }
+                    SyntaxKind.PlusEquals -> {
+                        if (sym2strIsSymbolOperand(expr.right, symbolNames)) emitSym2469(expr.right, "+=", source, fileName)
+                    }
+                    else -> {}
+                }
+                sym2strCheckExpr(expr.left, source, fileName, symbolNames, tpNames, aliasNames)
+                sym2strCheckExpr(expr.right, source, fileName, symbolNames, tpNames, aliasNames)
+            }
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.Plus && sym2strIsSymbolOperand(expr.operand, symbolNames)) emitSym2469(expr.operand, "+", source, fileName)
+                sym2strCheckExpr(expr.operand, source, fileName, symbolNames, tpNames, aliasNames)
+            }
+            is PostfixUnaryExpression -> sym2strCheckExpr(expr.operand, source, fileName, symbolNames, tpNames, aliasNames)
+            is ParenthesizedExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is ConditionalExpression -> { sym2strCheckExpr(expr.condition, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.whenTrue, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.whenFalse, source, fileName, symbolNames, tpNames, aliasNames) }
+            is CallExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); expr.arguments.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
+            is NewExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); expr.arguments?.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
+            is PropertyAccessExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is ElementAccessExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.argumentExpression, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ArrayLiteralExpression -> expr.elements.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is SpreadElement -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is AsExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is TypeAssertionExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is NonNullExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is SatisfiesExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is AwaitExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
+            is YieldExpression -> expr.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> sym2strCheckExpr(p.initializer, source, fileName, symbolNames, tpNames, aliasNames)
+                is SpreadAssignment -> sym2strCheckExpr(p.expression, source, fileName, symbolNames, tpNames, aliasNames)
+                else -> {}
+            }
+            is ArrowFunction -> sym2strHandleFnBody(expr.parameters, expr.typeParameters, expr.body, source, fileName, symbolNames, tpNames, aliasNames)
+            is FunctionExpression -> sym2strHandleFnBody(expr.parameters, expr.typeParameters, expr.body, source, fileName, symbolNames, tpNames, aliasNames)
+            else -> {}
+        }
     }
 
     // TS2362/TS2363 arithmetic operator type checking — deferred.
