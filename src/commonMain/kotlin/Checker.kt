@@ -50847,22 +50847,36 @@ interface DataView {
                 stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
             }
         }
-        val hasTslib = hasAmbientTslib || if (isClassicResolution) {
-            // 16.4do: Classic resolution (AMD/System/UMD) does NOT search node_modules
-            // — only accepts tslib.d.ts in the root/baseUrl. Tests that provide tslib
-            // ONLY via `node_modules/tslib/index.d.ts` still need TS2354 under classic.
-            binderResults.any { result ->
-                val fn = result.sourceFile.fileName
-                fn.contains("tslib") && !(fn.contains("node_modules") || fn.contains("node-modules"))
-            }
-        } else {
-            // Modern resolution: only node_modules/tslib/ counts
-            binderResults.any { result ->
-                val fn = result.sourceFile.fileName
-                (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
+        // 16.4do: Classic resolution (AMD/System/UMD) does NOT search node_modules
+        // — only accepts tslib.d.ts in the root/baseUrl, which is visible to ALL files.
+        val hasClassicRootTslib = isClassicResolution && binderResults.any { result ->
+            val fn = result.sourceFile.fileName
+            fn.contains("tslib") && !(fn.contains("node_modules") || fn.contains("node-modules"))
+        }
+        // B98.r163: tslib availability is PER-FILE, not program-wide. A `node_modules/tslib`
+        // install only satisfies files BELOW its enclosing directory (nearest-enclosing
+        // node_modules walk, mirroring resolveTslibDedupKey). So a tslib under
+        // `/package1/node_modules` does NOT satisfy a file in `/package2` — that file still
+        // fires TS2354 (tslibNotFoundDifferentModules). A ROOT `/node_modules/tslib`
+        // (baseDir "/") is an ancestor of everything, so it satisfies all files as before.
+        fun tslibResolvableFor(fileName: String): Boolean {
+            if (hasAmbientTslib || hasClassicRootTslib) return true
+            if (isClassicResolution) return false
+            return binderResults.any { result ->
+                val tfn = result.sourceFile.fileName
+                if (!tfn.contains("tslib")) return@any false
+                // Match "node_modules/" with OR without a leading slash — test fixtures
+                // mix conventions (e.g. "node_modules/tslib/index.d.ts" vs
+                // "/package1/node_modules/tslib/tslib.d.ts"); within a single test the
+                // file paths share the convention, so the baseDir prefix-match is sound.
+                val nmIdx = tfn.lastIndexOf("node_modules/").let {
+                    if (it < 0) tfn.lastIndexOf("node-modules/") else it
+                }
+                if (nmIdx < 0) return@any false
+                val baseDir = tfn.substring(0, nmIdx) // "" (root), "/", or "/package1/"
+                fileName.startsWith(baseDir)
             }
         }
-        if (hasTslib) return
 
         val em = options.effectiveModule
         // esModuleInterop helpers needed for CJS/AMD/UMD/NodeNext (not System/ES) modules
@@ -50886,6 +50900,7 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            if (tslibResolvableFor(fileName)) continue
             val source = result.sourceFile.text
 
             val isModule = isModuleFile(result.sourceFile.statements)
