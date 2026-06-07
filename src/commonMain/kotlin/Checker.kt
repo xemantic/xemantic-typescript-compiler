@@ -56171,6 +56171,56 @@ interface DataView {
                     }
                 }
             }
+            // classExpressionAssignment: a ClassExpression assigned to a construct-signature
+            // target (`const A: { new(): A } = class {}`). The anonymous class's instance type
+            // may lack a property required by the target construct-sig's return type. The
+            // relation engine skips class-instance-vs-constructor comparisons, so nothing fires.
+            // Display the source as `typeof <constName>` (the anon class is named after the const).
+            if (init is ClassExpression &&
+                targetType is Type.Object &&
+                !targetType.constructSignatures.isNullOrEmpty()
+            ) {
+                val targetReturn = targetType.constructSignatures!!.first().resolvedReturnType
+                if (targetReturn is Type.Object) {
+                    val synSym = Symbol(SymbolFlags.Class, name.text)
+                    synSym.declarations.add(init)
+                    val instanceType = try { getDeclaredTypeOfSymbol(synSym) } catch (_: StackOverflowError) { null }
+                    if (instanceType is Type.Object) {
+                        val missing = try { collectMissingProperties(instanceType, targetReturn) }
+                            catch (_: StackOverflowError) { emptyList() }
+                        if (missing.isNotEmpty()) {
+                            val displaySource = "typeof ${name.text}"
+                            val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                            val instDisplay = typeToString(instanceType)
+                            val retDisplay = typeToString(targetReturn)
+                            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                            val chain: List<String>
+                            val related: List<Diagnostic>
+                            if (missing.size == 1) {
+                                val mpSym = targetReturn.properties?.find { it.name == missing[0] }
+                                chain = listOf("  Property '${missing[0]}' is missing in type '$instDisplay' but required in type '$retDisplay'.")
+                                related = listOfNotNull(mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) })
+                            } else {
+                                chain = listOf("  " + formatTs2740Message(instDisplay, retDisplay, missing))
+                                related = emptyList()
+                            }
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2322,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = name.pos,
+                                length = name.text.length,
+                                messageChain = chain,
+                                relatedInformation = related,
+                            ))
+                            return
+                        }
+                    }
+                }
+            }
             // Set contextual type for function expression parameter inference
             val savedContextual = contextualType
             if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
