@@ -18,6 +18,7 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -111,7 +112,7 @@ class TsConfigLoader(private val vfs: Vfs) {
         }
         val self = try {
             LENIENT_JSON.decodeFromString<TsConfigFile>(text)
-        } catch (e: Throwable) {
+        } catch (e: SerializationException) {
             val detail = e.message?.substringBefore('\n')?.trim().orEmpty().ifEmpty { "invalid JSON" }
             diags.add(configError("Failed to parse file '$norm': $detail", 5014, norm))
             return null

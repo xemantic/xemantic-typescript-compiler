@@ -33,6 +33,12 @@ import kotlinx.serialization.json.JsonPrimitive
  * only read a handful of fields, and a `package.json`'s `exports` can be arbitrarily
  * shaped). Everything is read through kotlinx-serialization's battle-tested parser
  * rather than a hand-rolled one.
+ *
+ * Shared by [TsConfigLoader] (`decodeFromString<TsConfigFile>`, errors reported as
+ * TS5014/TS5083/TS6053) and [ModuleResolver] (`parseToJsonElement` of `package.json`,
+ * lenient — a broken dependency manifest must not abort resolution). Both catch
+ * [kotlinx.serialization.SerializationException] at their call site. `internal`, not
+ * public: it's a driver detail, kept off the published library's API surface.
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal val LENIENT_JSON: Json = Json {
@@ -40,21 +46,6 @@ internal val LENIENT_JSON: Json = Json {
     ignoreUnknownKeys = true
     allowComments = true
     allowTrailingComma = true
-}
-
-/**
- * Parses [text] into a [JsonElement] tree, or `null` if it is malformed.
- *
- * Returns `null` rather than reporting an error on purpose: the only caller is
- * [ModuleResolver]'s `package.json` reader during `node_modules` resolution, where a
- * broken *dependency* manifest must not abort the build — the consequence already
- * surfaces as an unresolved import. The project's own `tsconfig.json` is NOT parsed
- * here; [TsConfigLoader] reads it with explicit TS5083/TS5014/TS6053 diagnostics.
- */
-internal fun parseJsonOrNull(text: String): JsonElement? = try {
-    LENIENT_JSON.parseToJsonElement(text)
-} catch (_: Throwable) {
-    null
 }
 
 /** This element's content if it is a JSON string, else `null` (numbers/bools/null/objects/arrays → null). */

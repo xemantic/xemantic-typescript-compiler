@@ -18,6 +18,7 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -243,8 +244,19 @@ class ModuleResolver(
         return key.substring(prefix.length, key.length - suffix.length)
     }
 
+    /**
+     * Reads and caches a `package.json` as a [JsonObject]. Returns `null` when the file
+     * is absent OR malformed: a broken *dependency* manifest must not abort resolution —
+     * the effect already surfaces upstream as an unresolved import. (The project's own
+     * `tsconfig.json` is read by [TsConfigLoader], which DOES report parse failures.)
+     */
     private fun readPackageJson(path: String): JsonObject? =
         pkgJsonCache.getOrPut(PathUtil.normalize(path)) {
-            vfs.readText(path)?.let { parseJsonOrNull(it) as? JsonObject }
+            val text = vfs.readText(path) ?: return@getOrPut null
+            try {
+                LENIENT_JSON.parseToJsonElement(text) as? JsonObject
+            } catch (_: SerializationException) {
+                null
+            }
         }
 }
