@@ -4413,7 +4413,7 @@ class Checker(
             normalized.endsWith(".cjs") -> normalized.removeSuffix(".cjs")
             else -> normalized
         }
-        val exts = listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json", ".mts", ".cts", ".mjs", ".cjs")
+        val exts = listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json", ".mts", ".cts", ".mjs", ".cjs", ".d.mts", ".d.cts")
         for (s in listOf(stem, "$stem/index")) {
             for (e in exts) {
                 val cand = "$s$e"
@@ -23336,17 +23336,26 @@ class Checker(
      */
     private fun checkExportAssignmentInEsModule() {
         val effectiveModule = options.effectiveModule
-        // ES module kinds: ES2015, ES2020, ES2022, ESNext
-        // Node16/Node18/Node20/NodeNext support import= require() via createRequire, so exclude them
-        // Preserve mode defers module format decision per-file, so exclude it too
-        val isEsModule = effectiveModule >= ModuleKind.ES2015 && !effectiveModule.isNodeNext && effectiveModule != ModuleKind.Preserve
-        if (!isEsModule) return
+        // Preserve mode preserves module syntax per-file — TS does not flag export=/import= there.
+        if (effectiveModule == ModuleKind.Preserve) return
+        // ES module kinds: ES2015, ES2020, ES2022, ESNext.
+        // Node16/Node18/Node20/NodeNext support import= require() via createRequire for plain
+        // .ts/.cts files, so they are NOT program-wide ES modules — but a .mts/.mjs file under
+        // ANY module setting is unconditionally an ES module (where export=/import= are invalid).
+        val programIsEsModule = effectiveModule >= ModuleKind.ES2015 && !effectiveModule.isNodeNext
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
+            // A .mts/.mjs file is ESM (impliedNodeFormat) ONLY under node module kinds. Under
+            // commonjs/amd/system/umd (module kind < ES2015, non-node) the global module setting
+            // governs and `export =`/`import = require()` in a .mts is NOT flagged (matches TS).
+            val fileIsMtsEsm = (fileName.endsWith(".mts") || fileName.endsWith(".mjs")) && effectiveModule.isNodeNext
+            if (!programIsEsModule && !fileIsMtsEsm) continue
+            // Plain .d.ts CJS-ambient declarations may legally use `export =`; a .d.mts may not.
+            if (isDtsFile(fileName) && !fileName.endsWith(".d.mts")) continue
             // Skip JS files — TS1203 doesn't apply to JS
-            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                    fileName.endsWith(".mjs") || fileName.endsWith(".cjs"))) continue
             val source = result.sourceFile.text
 
             for (stmt in result.sourceFile.statements) {
@@ -24920,7 +24929,13 @@ class Checker(
             options.allowSyntheticDefaultImports ||
             options.effectiveModule == ModuleKind.System
         }
-        if (effectiveSyntheticDefaults) return
+        // NOTE: do NOT early-return on effectiveSyntheticDefaults. Synthetic defaults
+        // (allowSyntheticDefaultImports / System / esModuleInterop) only synthesize a default
+        // for CJS-format targets — the whole module.exports becomes the default. An ESM-format
+        // target (.mts/.mjs/.d.mts, unconditionally ESM) has NO synthetic default: only an actual
+        // `export default` counts, so a default import against a no-default ESM module is TS1192
+        // even with allowSyntheticDefaultImports. The per-import `targetIsEsm` gate below handles
+        // this; for CJS targets the synthetic-default skip is applied per-import.
 
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
@@ -24939,7 +24954,10 @@ class Checker(
                 // Resolve the module specifier
                 val specifier = stmt.moduleSpecifier
                 val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
-                val resolvedFile = resolveModuleSpecifier(moduleName) ?: continue
+                // Fall back to extension-mapping relative resolution so a runtime `.mjs`/`.cjs`
+                // specifier (nodenext) resolves to its `.mts`/`.d.mts`/`.cts` declaration sibling.
+                val resolvedFile = resolveModuleSpecifier(moduleName)
+                    ?: resolveRelativeIncludingIndex(moduleName, fileName) ?: continue
                 val targetResult = fileResults[resolvedFile] ?: continue
                 val targetFile = targetResult.sourceFile
                 // Empty fixture files (admitted to fileResults so B11.2's resolver can find
@@ -24949,12 +24967,23 @@ class Checker(
                 // redundant noise.
                 if (targetFile.statements.isEmpty()) continue
 
+                // Under node module kinds, a .mts/.mjs/.d.mts target is an ES module
+                // (impliedNodeFormat): no synthetic default is ever produced for it, so all the
+                // CJS-synthetic-default suppression below (allowSyntheticDefaultImports / System /
+                // esModuleInterop / export=→TS1259) is bypassed and a default import against a
+                // no-`export default` module is plain TS1192. Restricted to node modes so amd/
+                // system/umd/es2015 behavior is unchanged.
+                val targetIsEsm = (resolvedFile.endsWith(".mts") || resolvedFile.endsWith(".mjs")) &&
+                    options.effectiveModule.isNodeNext
+                // CJS-format target: synthetic defaults make the default import legal → skip.
+                if (effectiveSyntheticDefaults && !targetIsEsm) continue
+
                 val hasDefaultExport = moduleHasDefaultExport(targetFile)
 
                 // TS1192: default binding used but module has no default export
                 // Suppress for 'export =' modules when esModuleInterop=true (TS1259 would fire instead)
-                val hasExportEquals = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
-                val esModuleInteropActive = options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
+                val hasExportEquals = !targetIsEsm && targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
+                val esModuleInteropActive = !targetIsEsm && options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
                     !options.allowSyntheticDefaultImportsExplicitlyFalse
                 // Suppress for JS CJS files (no ESM exports) when esModuleInterop=true —
                 // module.exports becomes a synthetic default export under esModuleInterop.
@@ -24967,9 +24996,18 @@ class Checker(
                         (it is VariableStatement && ModifierFlag.Export in it.modifiers) }
                 val defaultBinding = importClause.name
                 if (defaultBinding != null && !hasDefaultExport && !(hasExportEquals && esModuleInteropActive) && !targetIsJsCjs) {
-                    // Compute display module name: strip leading "./" from relative specifiers
+                    // Compute display module name: strip leading "./" from relative specifiers.
+                    // For ESM-format (.mjs/.mts) targets, TS also strips the trailing extension
+                    // ("./other.mjs" displays as "other"); other targets keep the verbatim form.
                     val displayName = when {
-                        moduleName.startsWith("./") -> moduleName.removePrefix("./")
+                        moduleName.startsWith("./") -> {
+                            val noPrefix = moduleName.removePrefix("./")
+                            if (targetIsEsm) {
+                                listOf(".mjs", ".mts", ".cjs", ".cts", ".jsx", ".tsx", ".js", ".ts")
+                                    .firstOrNull { noPrefix.endsWith(it) }
+                                    ?.let { noPrefix.removeSuffix(it) } ?: noPrefix
+                            } else noPrefix
+                        }
                         moduleName.startsWith("../") -> moduleName
                         else -> {
                             // For bare specifiers, use the resolved file path without extension
