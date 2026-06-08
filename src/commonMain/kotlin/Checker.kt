@@ -22871,12 +22871,94 @@ class Checker(
         }
     }
 
+    /**
+     * B139: A catch clause whose variable is a DESTRUCTURING pattern over a `unknown`-typed
+     * catch variable. The catch variable is `unknown` when (a) explicitly annotated `: unknown`,
+     * or (b) un-annotated AND `useUnknownInCatchVariables` is effective (explicit flag, else
+     * `strict`). Destructuring `unknown`:
+     *  - ObjectBindingPattern → TS2339 per top-level property (display `unknown` under
+     *    strictNullChecks, else `{}`);
+     *  - ArrayBindingPattern → TS2488 (unknown is not iterable; squiggle spans the whole pattern).
+     * A `: any` annotation (or un-annotated under useUnknown=false) → no error. FP-safe: a
+     * binding pattern over a genuinely-`unknown` value is always one of these errors.
+     */
+    private fun checkCatchClauseBindingType(cc: CatchClause, source: String, fileName: String) {
+        val vd = cc.variableDeclaration ?: return
+        val pattern = vd.name
+        if (pattern !is ObjectBindingPattern && pattern !is ArrayBindingPattern) return
+        val isUnknown = when (val ann = vd.type) {
+            is KeywordTypeNode -> when (ann.kind) {
+                SyntaxKind.UnknownKeyword -> true
+                else -> return // `: any` or any other annotation → not our case
+            }
+            null -> if (options.useUnknownInCatchVariablesExplicitlySet)
+                options.useUnknownInCatchVariables else options.strict
+            else -> return
+        }
+        if (!isUnknown) return
+        val display = if (strictNullChecks) "unknown" else "{}"
+        when (pattern) {
+            is ObjectBindingPattern -> {
+                for (el in pattern.elements) {
+                    if (el.dotDotDotToken) continue // rest captures the whole object — no property access
+                    val nameNode = el.propertyName ?: el.name
+                    val (propName, pos) = when (nameNode) {
+                        is Identifier -> nameNode.text to nameNode.pos
+                        is StringLiteralNode -> nameNode.text to nameNode.pos
+                        is NumericLiteralNode -> nameNode.text to nameNode.pos
+                        else -> continue
+                    }
+                    if (pos < 0) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = propName.length,
+                    ))
+                }
+            }
+            is ArrayBindingPattern -> {
+                val (startPos, len) = arrayBindingPatternSpan(pattern, source)
+                if (startPos < 0) return
+                val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'unknown' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                    category = DiagnosticCategory.Error, code = 2488,
+                    fileName = fileName, line = line, character = character,
+                    start = startPos, length = len,
+                ))
+            }
+            else -> {}
+        }
+    }
+
+    /** Span (start-at-`[`, length-through-matching-`]`) of an array binding pattern, bracket-matched
+     *  from source since `node.end` overshoots. */
+    private fun arrayBindingPatternSpan(pattern: ArrayBindingPattern, source: String): Pair<Int, Int> {
+        var start = pattern.pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        if (start >= source.length || source[start] != '[') return pattern.pos to 1
+        var depth = 0
+        var i = start
+        while (i < source.length) {
+            when (source[i]) {
+                '[', '{' -> depth++
+                ']', '}' -> { depth--; if (depth == 0) { i++; return start to (i - start) } }
+            }
+            i++
+        }
+        return start to (i - start)
+    }
+
     private fun walkStatementsForCatchRedecl(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) {
             when (stmt) {
                 is TryStatement -> {
                     walkStatementsForCatchRedecl(stmt.tryBlock.statements, source, fileName)
                     stmt.catchClause?.let { catchClause ->
+                        // B139: destructuring a `unknown`-typed catch variable.
+                        checkCatchClauseBindingType(catchClause, source, fileName)
                         // Collect catch variable names
                         val catchNames = mutableSetOf<String>()
                         catchClause.variableDeclaration?.let { collectBindingNames(it.name, catchNames) }

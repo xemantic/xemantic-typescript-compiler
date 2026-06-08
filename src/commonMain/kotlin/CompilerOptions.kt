@@ -109,6 +109,10 @@ data class CompilerOptions(
     val strictNullChecks: Boolean = false,
     /** True when `// @strictNullChecks: false` was explicitly set. */
     val strictNullChecksExplicitlyFalse: Boolean = false,
+    /** `useUnknownInCatchVariables`: when effective, an un-annotated catch variable is typed
+     *  `unknown` instead of `any`. Effective value = this flag if explicitly set, else `strict`. */
+    val useUnknownInCatchVariables: Boolean = false,
+    val useUnknownInCatchVariablesExplicitlySet: Boolean = false,
     /** True when `// @strictPropertyInitialization: false` was explicitly set. */
     val strictPropertyInitializationExplicitlyFalse: Boolean = false,
     val noUnusedLocals: Boolean = false,
@@ -492,6 +496,10 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
         "noimplicitthis" -> options.copy(noImplicitThis = boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
+        "useunknownincatchvariables" -> options.copy(
+            useUnknownInCatchVariables = boolValue,
+            useUnknownInCatchVariablesExplicitlySet = true,
+        )
         "exactoptionalpropertytypes" -> options.copy(exactOptionalPropertyTypes = boolValue)
         "strictpropertyinitialization" -> options.copy(strictPropertyInitializationExplicitlyFalse = !boolValue)
         "nounusedlocals" -> options.copy(noUnusedLocals = boolValue)
