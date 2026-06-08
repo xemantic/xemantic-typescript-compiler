@@ -59878,6 +59878,52 @@ interface DataView {
         }
     }
 
+    /**
+     * B116: materialize the member-set utility types `Pick<T,K>` / `Omit<T,K>` directly
+     * (no embedded-lib definitions needed). Returns a fresh `Type.Object` whose members
+     * are the SOURCE property symbols (so type / optional / readonly are all preserved),
+     * or null when it can't materialize reliably (T not a resolvable object, K not a
+     * string-literal key set). Called from [getTypeFromTypeReference] ONLY when no
+     * user/lib symbol resolves the name (so a user `type Omit<…>` shadow still wins) and
+     * the arity is exactly 2. The B50.4 alias-display logic in
+     * [getDeclaredTypeOfSymbolWorker] registers the alias name for the resulting Object
+     * automatically (e.g. `type Bar = Omit<Foo,"c">` displays as `Bar`).
+     */
+    private fun materializeMemberSetUtility(name: String, typeArgs: List<TypeNode>?): Type? {
+        val args = typeArgs ?: return null
+        if (args.size != 2) return null
+        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        if (src === anyType || src === errorType) return null
+        val srcObj = src as? Type.Object ?: return null
+        if (srcObj is Type.Reference) return null // generic instantiations: defer (members may be lazy/substituted)
+        try { resolveStructuredTypeMembers(srcObj) } catch (_: StackOverflowError) { return null }
+        // index signatures complicate key-set semantics → don't materialize
+        if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
+        val srcProps = srcObj.properties ?: return null
+        val k = try { getTypeFromTypeNode(args[1]) } catch (_: StackOverflowError) { return null }
+        // K must be a string-literal key set (single or union of string literals).
+        val keyLits: List<String> = when (k) {
+            is Type.StringLiteral -> listOf(k.value)
+            is Type.Union -> {
+                val ls = k.types.mapNotNull { (it as? Type.StringLiteral)?.value }
+                if (ls.size != k.types.size) return null else ls
+            }
+            else -> return null
+        }
+        val keySet = keyLits.toSet()
+        val chosen: List<Symbol> = when (name) {
+            "Pick" -> srcProps.filter { it.name in keySet }
+            "Omit" -> srcProps.filter { it.name !in keySet }
+            else -> return null
+        }
+        val result = Type.Object()
+        val members = symbolTable()
+        for (p in chosen) members[p.name] = p
+        result.members = members
+        result.properties = chosen
+        return result
+    }
+
     private fun getTypeFromTypeReference(node: TypeReference): Type {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
@@ -60026,6 +60072,13 @@ interface DataView {
                 }
             }
             return declaredType
+        }
+        // B116: no user/lib symbol resolved the name — try materializing a member-set
+        // utility type (Pick/Omit). Gated to symbol==null so a user `type Omit<…>` shadow
+        // (which produces a non-null symbol above) always wins. FP-safe: only fires for
+        // these exact names with a resolvable object T + string-literal key set K.
+        if (name == "Omit" || name == "Pick") {
+            materializeMemberSetUtility(name, node.typeArguments)?.let { return it }
         }
         // Not found — return errorType (TS2304 handles the diagnostic separately)
         return errorType
