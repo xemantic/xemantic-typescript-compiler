@@ -63534,11 +63534,57 @@ interface DataView {
             }
             return sig.resolvedReturnType ?: anyType
         }
-        // Multiple signatures on interfaces — skip overload resolution (inherited overloads
-        // with specialized string literal params need proper literal type matching)
         if (calleeType is Type.Interface) return anyType
-        // Multiple signatures on functions — attempt overload resolution
-        return resolveCallOverload(sigs, expr.arguments)?.resolvedReturnType ?: anyType
+        // Multiple signatures on functions — attempt overload resolution.
+        val chosen = resolveCallOverload(sigs, expr.arguments) ?: return anyType
+        val chosenRt = chosen.resolvedReturnType ?: anyType
+        // B136: predicate-overload pair fix (e.g. `Array.filter<S extends T>(p): S[]`
+        // vs `filter(p): T[]`). resolveCallOverload matches by arity and may pick the
+        // GENERIC type-guard overload, whose return is an unresolved type param (`S[]`).
+        // When the chosen return still contains an unresolved type param AND the call's
+        // argument is NOT a type-guard predicate, prefer a NON-GENERIC arity-matching
+        // overload with a CONCRETE return (`T[]`, T already substituted from the
+        // receiver). This flows the concrete element type through chained
+        // `.map`/`.filter` calls. FP-safe: only swaps an unresolved-TP return for a
+        // concrete one, and only when the arg isn't a genuine type guard.
+        if (typeContainsUnresolvedTypeParam(chosenRt) && !callHasTypeGuardArg(expr)) {
+            val argCount = expr.arguments.size
+            val concrete = sigs.firstOrNull { s ->
+                s.typeParameters.isNullOrEmpty() &&
+                    argCount >= s.minArgumentCount && argCount <= s.parameters.size &&
+                    s.resolvedReturnType != null && !typeContainsUnresolvedTypeParam(s.resolvedReturnType!!)
+            }
+            if (concrete != null) return concrete.resolvedReturnType ?: anyType
+        }
+        return chosenRt
+    }
+
+    /** Does [type] contain a type parameter that is not bound to a concrete type
+     *  (i.e. an un-inferred `S`/`U`)? Shallow walk over the common shapes. */
+    private fun typeContainsUnresolvedTypeParam(type: Type, depth: Int = 0): Boolean {
+        if (depth > 6) return false
+        return when (type) {
+            is Type.TypeParam -> true
+            is Type.Reference -> type.resolvedTypeArguments?.any { typeContainsUnresolvedTypeParam(it, depth + 1) } ?: false
+            is Type.Union -> type.types.any { typeContainsUnresolvedTypeParam(it, depth + 1) }
+            is Type.Intersection -> type.types.any { typeContainsUnresolvedTypeParam(it, depth + 1) }
+            else -> false
+        }
+    }
+
+    /** Is any argument of [call] a type-guard predicate callback (arrow/function
+     *  whose return type annotation is a `x is T` TypePredicate)? Such calls
+     *  legitimately select the generic `S[]` filter/find overload. */
+    private fun callHasTypeGuardArg(call: CallExpression): Boolean {
+        for (a in call.arguments) {
+            val retType = when (a) {
+                is ArrowFunction -> a.type
+                is FunctionExpression -> a.type
+                else -> null
+            }
+            if (retType is TypePredicate) return true
+        }
+        return false
     }
 
     /**
@@ -73702,6 +73748,24 @@ interface DataView {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
                         checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    }
+                    // B136: populate an UNANNOTATED, CALL-initialized local var's type
+                    // into currentLocalTypes so a SUBSEQUENT chained access resolves the
+                    // receiver — e.g. `var a = xs.map(cb); var b = a.filter(p); b.map(...)`
+                    // flows the element type through the chain (the property-access walker
+                    // otherwise only types params, leaving chained locals as `any`).
+                    // Gated to a CallExpression initializer whose resolved type is CONCRETE
+                    // (no unresolved type param, not any/error) to bound the blast radius
+                    // to call-result locals (mirrors the assignability walker at ~56588).
+                    val nm = decl.name as? Identifier
+                    if (nm != null && decl.type == null && decl.initializer is CallExpression &&
+                        currentLocalTypes[nm.text] == null) {
+                        try {
+                            val t = getTypeOfExpression(decl.initializer!!)
+                            if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
+                                currentLocalTypes[nm.text] = t
+                            }
+                        } catch (_: StackOverflowError) {}
                     }
                 }
             }
