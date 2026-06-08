@@ -1392,6 +1392,8 @@ class Checker(
         checkReferencePathsExist()
         // 82. B98.r13: TS7022 self-referential un-annotated object/array-literal variables.
         checkRecursiveLiteralVariables()
+        // 82a. B147: TS7022+TS7024 circular generic-callback initializer `const X = f(() => X)`.
+        checkCircularGenericCallbackVariables()
         } // end if (!declarationOnly)
     }
 
@@ -69538,6 +69540,143 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /**
+     * B147: TS7022 + TS7024 for the circular generic-callback initializer
+     * `const X = f(() => X)`, where `f` is a GENERIC function with a callback
+     * parameter typed `() => T` (T a type parameter appearing BARE in the
+     * callback's RETURN position). Inferring `X`'s type requires inferring `T`
+     * from the callback's return, which is `X` itself → tsc's inference
+     * deadlocks → TS7022 on `X` + TS7024 on the callback arrow.
+     *
+     * FP firewall (matches tsc for exactly this deadlock shape — flips
+     * `circularReferenceInReturnType`):
+     *  - X is an un-annotated `var/let/const` Identifier.
+     *  - initializer is a CallExpression whose CALLEE is a BARE Identifier `f`
+     *    (NOT a CallExpression — `fn2()(...)` does NOT deadlock, so res2/res3 in
+     *    that test correctly produce nothing).
+     *  - `f` resolves (in this program) to a FunctionDeclaration with type
+     *    parameters, and the argument-position closure maps to a parameter typed
+     *    `() => TP` (a FunctionType whose return is a bare TypeReference to one
+     *    of f's TPs). An unresolvable/imported/non-generic `f` → no emit (conservative).
+     *  - the closure has NO return annotation and its body returns EXACTLY the
+     *    Identifier `X` (concise `=> X` or a single `{ return X; }`).
+     * Gated `!strictExplicitlyFalse` (the TS7022/7024 strict-mode gate). FP-safe
+     * by construction: tsc ALWAYS emits these for this shape, so any passing test
+     * matching the gate already carries them (can only flip-or-be-neutral).
+     */
+    private fun checkCircularGenericCallbackVariables() {
+        if (options.strictExplicitlyFalse) return
+        // f-name -> set of param indices typed `() => <bare type param>`.
+        val genericCallbackParams = mutableMapOf<String, Set<Int>>()
+        for (result in binderResults) {
+            collectGenericCallbackFns(result.sourceFile.statements, genericCallbackParams)
+        }
+        if (genericCallbackParams.isEmpty()) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                checkCircularGenericCallbackVarInStatement(stmt, genericCallbackParams, source, fileName)
+            }
+        }
+    }
+
+    private fun collectGenericCallbackFns(stmts: List<Statement>, out: MutableMap<String, Set<Int>>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    val fname = stmt.name?.text ?: continue
+                    val tps = stmt.typeParameters ?: continue
+                    if (tps.isEmpty()) continue
+                    val tpNames = tps.map { it.name.text }.toSet()
+                    val indices = mutableSetOf<Int>()
+                    stmt.parameters.forEachIndexed { i, p ->
+                        if (paramIsBareTpReturningCallback(p, tpNames)) indices.add(i)
+                    }
+                    if (indices.isNotEmpty()) out[fname] = indices
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                    collectGenericCallbackFns(it, out)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** True if [p]'s type is `() => TP` where TP ∈ [tpNames] (a bare type-param return). */
+    private fun paramIsBareTpReturningCallback(p: Parameter, tpNames: Set<String>): Boolean {
+        val ft = p.type as? FunctionType ?: return false
+        val ret = ft.type as? TypeReference ?: return false
+        val rn = (ret.typeName as? Identifier)?.text ?: return false
+        return rn in tpNames && ret.typeArguments.isNullOrEmpty()
+    }
+
+    private fun checkCircularGenericCallbackVarInStatement(
+        stmt: Statement,
+        genericCallbackParams: Map<String, Set<Int>>,
+        source: String,
+        fileName: String,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val name = (decl.name as? Identifier)?.text ?: continue
+                    val call = decl.initializer as? CallExpression ?: continue
+                    val callee = call.expression as? Identifier ?: continue
+                    val cbIndices = genericCallbackParams[callee.text] ?: continue
+                    call.arguments.forEachIndexed { i, arg ->
+                        if (i !in cbIndices) return@forEachIndexed
+                        if (!closureReturnsExactly(arg, name)) return@forEachIndexed
+                        val (l1, c1) = getLineAndCharacterOfPosition(source, decl.name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'$name' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+                            category = DiagnosticCategory.Error, code = 7022, fileName = fileName,
+                            line = l1, character = c1, start = decl.name.pos, length = name.length,
+                        ))
+                        val (l2, c2) = getLineAndCharacterOfPosition(source, arg.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Function implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+                            category = DiagnosticCategory.Error, code = 7024, fileName = fileName,
+                            line = l2, character = c2, start = arg.pos, length = expressionTrueEnd(arg) - arg.pos,
+                        ))
+                    }
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach {
+                checkCircularGenericCallbackVarInStatement(it, genericCallbackParams, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** True if [arg] is a closure (arrow/function expr) with NO return annotation whose
+     *  body returns EXACTLY the Identifier [name] (concise `=> name` or `{ return name; }`). */
+    private fun closureReturnsExactly(arg: Expression, name: String): Boolean {
+        return when (arg) {
+            is ArrowFunction -> {
+                if (arg.type != null) return false
+                when (val body = arg.body) {
+                    is Identifier -> body.text == name
+                    is Block -> blockReturnsExactly(body, name)
+                    else -> false
+                }
+            }
+            is FunctionExpression -> {
+                if (arg.type != null) return false
+                blockReturnsExactly(arg.body, name)
+            }
+            else -> false
+        }
+    }
+
+    private fun blockReturnsExactly(block: Block, name: String): Boolean {
+        val ret = block.statements.singleOrNull() as? ReturnStatement ?: return false
+        return (ret.expression as? Identifier)?.text == name
     }
 
     /** True if [expr] references [name] directly inside an object/array literal value position
