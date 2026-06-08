@@ -3862,7 +3862,22 @@ class Checker(
                             is ExternalModuleReference -> {
                                 // import A = require("mod") — resolve module then its export
                                 val specifier = (ref.expression as? StringLiteralNode)?.text ?: continue
-                                val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+                                val targetFile = resolveModuleSpecifier(specifier, decl)
+                                if (targetFile == null) {
+                                    // B113: AMBIENT module — `declare module "mod1" { ... }` is
+                                    // bound (Binder) under a symbol whose name == the specifier
+                                    // string, merged into globals at checker init. It is NOT a
+                                    // file, so resolveModuleSpecifier returns null. Resolve the
+                                    // alias to that ambient module symbol so `import m1 =
+                                    // require("mod1"); var x: m1.Foo` finds mod1's exported Foo.
+                                    val ambient = globals[specifier]
+                                    if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
+                                        ambient.exports != null) {
+                                        setSymbolTarget(symbol, ambient)
+                                        return resolveAlias(ambient, visited)
+                                    }
+                                    continue
+                                }
                                 val targetResult = fileResults[targetFile] ?: continue
                                 // Look for export = X in the target module
                                 val exportTarget = resolveModuleExportAssignment(targetResult, visited)
@@ -19609,9 +19624,14 @@ class Checker(
             val differ: Boolean = when {
                 // SIMPLE↔SIMPLE: reliable string compare (existing behavior).
                 firstSimple && isSimpleTypeForTs2403(declType) -> firstTypeName != declTypeName
-                // STRUCTURED↔STRUCTURED: recursive structural identity (generic refs).
+                // STRUCTURED↔STRUCTURED: recursive structural identity (generic refs +
+                // named non-generic class/interface instances). B113: do NOT pre-gate on
+                // the display-name differing — two SAME-displayed-name distinct symbols
+                // (e.g. cross-module `m1.Foo` vs `m2.Foo`, both private-member nominal)
+                // genuinely differ; the recursive comparator decides identity reliably
+                // (UNKNOWN suppresses, so same-symbol/identical types never FP).
                 firstStructured && isStructuredTypeForTs2403(declType) ->
-                    firstTypeName != declTypeName && ts2403TypesDiffer(firstType, declType)
+                    ts2403TypesDiffer(firstType, declType)
                 // Mixed simple/structured, or unsupported kind → conservatively skip.
                 else -> false
             }
@@ -19884,6 +19904,17 @@ class Checker(
                 sym != null && sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) &&
                     sym.name.isNotEmpty() && type.resolvedTypeArguments != null
             }
+            // B113: a named NON-generic class/interface instance (Type.Interface, not a
+            // Reference) is also comparable via the recursive identity comparator — what
+            // lets two distinct private-member classes (`class Foo1{private n}` vs
+            // `class Foo2{private n}`, or cross-module `m1.Foo`/`m2.Foo`) be seen as
+            // DIFFERENT (nominal). The comparator is conservative (UNKNOWN suppresses) so
+            // structurally-identical interfaces still resolve to IDENTICAL (no FP).
+            is Type.Interface -> {
+                val sym = type.symbol
+                sym != null && sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) &&
+                    sym.name.isNotEmpty()
+            }
             else -> false
         }
     }
@@ -20010,6 +20041,20 @@ class Checker(
             }
             return result
         }
+        // B113: private/protected-member nominality. Two DISTINCT class declarations
+        // carrying a private or protected member are never identical (TS treats such
+        // classes nominally), regardless of structural member match. Same-symbol /
+        // same-target refs were already resolved above, so distinct symbols here means
+        // genuinely-different declarations. FP-safe: an identical-for-TS2403 result
+        // requires the SAME declaration, which has the same symbol.
+        run {
+            val aSym = (a as? Type.Reference)?.target?.symbol ?: a.symbol
+            val bSym = (b as? Type.Reference)?.target?.symbol ?: b.symbol
+            if (aSym != null && bSym != null && aSym !== bSym &&
+                (ts2403HasPrivateOrProtectedMember(a) || ts2403HasPrivateOrProtectedMember(b))) {
+                return Ts2403Cmp.DIFFERENT
+            }
+        }
         // Different-target (or one-named-one-anonymous) structured comparison.
         return ts2403StructuralMembers(a, b, depth)
     }
@@ -20074,6 +20119,38 @@ class Checker(
             }
         }
         return result
+    }
+
+    /**
+     * B113: a class type with a private or protected member is NOMINAL — two distinct
+     * class declarations carrying such a member are never identical for TS2403, even
+     * when their member shapes match structurally. Detect via the type's class
+     * declaration(s) (no member-type resolution, so it never produces UNKNOWN).
+     */
+    private fun ts2403HasPrivateOrProtectedMember(t: Type.Object): Boolean {
+        val sym = t.symbol ?: (t as? Type.Reference)?.target?.symbol ?: return false
+        for (decl in sym.declarations) {
+            val members = when (decl) {
+                is ClassDeclaration -> decl.members
+                is ClassExpression -> decl.members
+                else -> continue
+            }
+            for (member in members) {
+                val mods = when (member) {
+                    is PropertyDeclaration -> member.modifiers
+                    is MethodDeclaration -> member.modifiers
+                    is GetAccessor -> member.modifiers
+                    is SetAccessor -> member.modifiers
+                    is Constructor -> { // parameter properties live on the ctor's parameters
+                        if (member.parameters.any { ModifierFlag.Private in it.modifiers || ModifierFlag.Protected in it.modifiers }) return true
+                        null
+                    }
+                    else -> null
+                } ?: continue
+                if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) return true
+            }
+        }
+        return false
     }
 
     /** A member symbol that is declared ONLY in the built-in lib (no user declaration). */
