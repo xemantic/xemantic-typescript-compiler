@@ -92136,6 +92136,37 @@ interface DataView {
             }
             val localNames = varNames + mergeableNames
 
+            // B129: TS2395 — a name declared by BOTH an internal import-equals alias AND
+            // a type-alias (a merged declaration) with MIXED export status (one exported,
+            // one not) → "must be all exported or all local." Emit at each declaration's
+            // name. Narrowly gated to this specific merge (FP-safe: mixed-export of an
+            // import-equals + type-alias is always TS2395). Pairs with the TS2440 below.
+            run {
+                val mergeDecls = HashMap<String, MutableList<Pair<Int, Boolean>>>()
+                val sawImportEq = HashSet<String>()
+                for (s in stmts) when (s) {
+                    is ImportEqualsDeclaration -> if (!s.isTypeOnly && s.moduleReference !is ExternalModuleReference) {
+                        mergeDecls.getOrPut(s.name.text) { mutableListOf() }.add(s.name.pos to (ModifierFlag.Export in s.modifiers))
+                        sawImportEq.add(s.name.text)
+                    }
+                    is TypeAliasDeclaration -> mergeDecls.getOrPut(s.name.text) { mutableListOf() }.add(s.name.pos to (ModifierFlag.Export in s.modifiers))
+                    else -> {}
+                }
+                for ((nm, ds) in mergeDecls) {
+                    if (nm !in sawImportEq || ds.size < 2) continue
+                    if (ds.any { it.second } && ds.any { !it.second }) {
+                        for ((pos, _) in ds) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Individual declarations in merged declaration '$nm' must be all exported or all local.",
+                                category = DiagnosticCategory.Error, code = 2395,
+                                fileName = fileName, line = line, character = character, start = pos, length = nm.length,
+                            ))
+                        }
+                    }
+                }
+            }
+
             // Check imports against local names
             for (stmt in stmts) {
                 when (stmt) {
@@ -92147,12 +92178,15 @@ interface DataView {
                         if (sourceHasClassOnlyModifierBeforeImportEquals(stmt, source)) continue
                         // Internal namespace aliases (import foo = m1) can merge with class/function/interface
                         // but NOT with variable declarations
-                        if (stmt.moduleReference !is ExternalModuleReference) {
-                            val name = stmt.name.text
-                            if (name !in varNames) continue
-                        }
+                        // Internal namespace aliases (import foo = m1) can merge with
+                        // class/function/interface but NOT with variable declarations OR
+                        // type-aliases. B129: a local internal value-side alias colliding
+                        // with a local `type X` is TS2440 — type-aliases never
+                        // declaration-merge with an import alias.
+                        val isInternalAlias = stmt.moduleReference !is ExternalModuleReference
                         val name = stmt.name.text
-                        if (name in localNames) {
+                        if (isInternalAlias && name !in varNames && name !in typeAliasNames) continue
+                        if (name in localNames || (isInternalAlias && name in typeAliasNames)) {
                             // Error on entire import statement
                             val stmtStart = stmt.pos
                             // Find end of statement including semicolon
