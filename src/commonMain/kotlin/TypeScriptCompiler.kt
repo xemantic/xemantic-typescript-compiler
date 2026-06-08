@@ -1320,7 +1320,10 @@ class TypeScriptCompiler {
             val binder = Binder(options)
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
             val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
-                allInputFileNames = parsed.files.map { it.fileName }.toSet())
+                allInputFileNames = parsed.files.map { it.fileName }.toSet(),
+                jsonModuleContents = parsed.files
+                    .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
+                    .associate { it.fileName to it.content })
             diagnostics.addAll(checker.getDiagnostics())
             // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
             // resolves through an `exports` field that exposes no types entry.

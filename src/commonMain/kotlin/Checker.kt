@@ -52,6 +52,13 @@ class Checker(
      * Empty for single-file / declaration-only checks (no JS siblings to consider).
      */
     private val allInputFileNames: Set<String> = emptySet(),
+    /**
+     * Raw contents of `.json` files in the program (filename → content). JSON files are NOT
+     * bound (absent from [fileResults]), so this is the only way the checker can see a JSON
+     * module's value. Used by the B140 empty-JSON-module property-access check. Empty for
+     * single-file checks.
+     */
+    private val jsonModuleContents: Map<String, String> = emptyMap(),
 ) {
     /** Merged symbol tables from all files (global scope). */
     private val globals: SymbolTable = symbolTable()
@@ -76597,6 +76604,28 @@ interface DataView {
                         }
                     } catch (_: StackOverflowError) { /* fall through to bail */ }
                 }
+                // B140: property access on `import X = require("./Y.json")` where Y.json is
+                // EMPTY (or literally `{}`) — its type is `{}`, so ANY property access is
+                // TS2339 "Property 'x' does not exist on type '{}'.". FP-safe: only fires for
+                // an import-equals alias to a JSON file whose content is unambiguously the
+                // empty object (so every property access genuinely doesn't exist). Populated
+                // JSON falls through (we don't model its shape → no emit).
+                run {
+                    if (!isPropertyAccessShape || propName.isEmpty()) return@run
+                    val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
+                    if (!spec.endsWith(".json")) return@run
+                    val content = resolveJsonModuleContent(spec) ?: return@run
+                    val stripped = content.replace(Regex("\\s"), "")
+                    if (stripped.isNotEmpty() && stripped != "{}") return@run
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '{}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
                 // B114: module-namespace property access via `import Foo = require("./b")`
                 // — emit TS2339 when `Foo.x` accesses a member the resolved MODULE does not
                 // export (display `typeof import("b")`). FP firewall (load-bearing): the
@@ -92328,6 +92357,21 @@ interface DataView {
                     return (ref.expression as? StringLiteralNode)?.text
                 }
             }
+        }
+        return null
+    }
+
+    /** B140: resolve a `./Y.json` specifier to its raw content from [jsonModuleContents]
+     *  (JSON files aren't in [fileResults]). Matches by exact key, stripped-prefix key, or basename. */
+    private fun resolveJsonModuleContent(spec: String): String? {
+        if (jsonModuleContents.isEmpty()) return null
+        val base = spec.removePrefix("./").removePrefix("../")
+        jsonModuleContents[spec]?.let { return it }
+        jsonModuleContents[base]?.let { return it }
+        jsonModuleContents["/$base"]?.let { return it }
+        val wantBase = base.substringAfterLast('/')
+        for ((fn, c) in jsonModuleContents) {
+            if (fn.substringAfterLast('/') == wantBase) return c
         }
         return null
     }
