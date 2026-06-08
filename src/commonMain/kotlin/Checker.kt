@@ -57014,6 +57014,16 @@ interface DataView {
                 (isAssignable || targetType.members.isNullOrEmpty())) {
                 checkLiteralValuesAgainstIndexSignatures(init, targetType, source, fileName)
             }
+            // B138: NON-LITERAL object source (a variable/expression) vs an index-sig-only
+            // target — `var z: {[k:string]:T} = x`. Gated to `isAssignable` (relation passes)
+            // so it never double-emits with the relation-failure block.
+            if (isAssignable && init !is ObjectLiteralExpression && init !is ArrayLiteralExpression &&
+                targetType is Type.Object &&
+                (targetType.stringIndexInfo != null || targetType.numberIndexInfo != null) &&
+                targetType.members.isNullOrEmpty()) {
+                checkObjectTypeAgainstIndexSignatures(
+                    sourceType, targetType, name.pos, name.text.length, source, fileName)
+            }
             // Suppress the outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
             // when the source is an array literal and the target is an array type.
             // Per-element TS2322/TS2353 from `checkArrayLiteralElementExcessProps` (or
@@ -58842,6 +58852,16 @@ interface DataView {
                         }
                         val canUse = canUseTypeEngine(sourceType, tt)
                         val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                        // B138 (assignment path): NON-LITERAL object source vs an index-sig-only
+                        // target — `x = a` where `x: {[k:string]:T}`. Gated to `isAssignable`
+                        // (the relation wrongly passes) so it never double-emits.
+                        if (isAssignable && expr.right !is ObjectLiteralExpression &&
+                            expr.right !is ArrayLiteralExpression &&
+                            tt is Type.Object && tt.members.isNullOrEmpty() &&
+                            (tt.stringIndexInfo != null || tt.numberIndexInfo != null)) {
+                            checkObjectTypeAgainstIndexSignatures(
+                                sourceType, tt, target.pos, target.text.length, source, fileName)
+                        }
                         // Excess property check for object literal assignments (TS2353)
                         if (canUse && expr.right is ObjectLiteralExpression) {
                             val displayTarget = excessPropDisplayTarget(tt, typeAnnotation)
@@ -82230,6 +82250,67 @@ interface DataView {
                 }
             }
             else -> {}
+        }
+    }
+
+    /**
+     * B138: A NON-LITERAL object TYPE assigned to an index-signature-only target — each
+     * source property must be assignable to the applicable index-signature value type, else
+     * TS2322 with the "Property 'X' is incompatible with index signature." chain. The
+     * sibling [checkLiteralValuesAgainstIndexSignatures] only handles literal-syntax sources
+     * (and emits a standalone per-value TS2322); this handles a variable/expression whose
+     * resolved type is an anonymous object (`var x = {...}; var z: {[k:string]:T} = x` and
+     * `x = a`).
+     *
+     * FP firewall: both sides must be ANONYMOUS object types (named class/interface sources
+     * use the nominal "missing index signature" rule in [objectTypeRelatedTo]); the source
+     * must carry no index signatures of its own; and the incompatible pair must have at least
+     * ONE primitive side (so [checkTypeRelatedTo] is reliable — named-vs-named is the
+     * documented 39+-regression gate). Reports only the FIRST incompatible property (matches
+     * TypeScript). Callers gate on `isAssignable` (the relation wrongly passes for index-sig
+     * targets) so this never double-emits with a coarse relation-failure TS2322.
+     */
+    private fun checkObjectTypeAgainstIndexSignatures(
+        sourceType: Type, targetType: Type, namePos: Int, nameLen: Int,
+        source: String, fileName: String,
+    ) {
+        if (sourceType !is Type.Object || targetType !is Type.Object) return
+        if (sourceType is Type.Reference || targetType is Type.Reference) return
+        if (sourceType.symbol != null || targetType.symbol != null) return
+        try {
+            resolveStructuredTypeMembers(sourceType); resolveStructuredTypeMembers(targetType)
+        } catch (_: StackOverflowError) { return }
+        val strIdx = targetType.stringIndexInfo
+        val numIdx = targetType.numberIndexInfo
+        if (strIdx == null && numIdx == null) return
+        // Source must not have its own index signatures (those satisfy the target directly).
+        if (sourceType.stringIndexInfo != null || sourceType.numberIndexInfo != null) return
+        val props = sourceType.properties ?: return
+        if (props.isEmpty()) return
+        fun trivial(t: Type?): Boolean =
+            t == null || t === anyType || t === unknownType || t === errorType
+        for (p in props) {
+            val isNumericKey = isCanonicalNumericPropertyName(p.name)
+            val applicable = (if (isNumericKey) (numIdx ?: strIdx) else strIdx) ?: continue
+            val idxValType = applicable.type
+            if (trivial(idxValType)) continue
+            val propType = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            if (trivial(propType)) continue
+            // Reliability gate: at least one side primitive (named-vs-named is unreliable).
+            if (!isSimpleCheckableType(propType) && !isSimpleCheckableType(idxValType)) continue
+            if (checkTypeRelatedTo(propType, idxValType, assignableRelation)) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, namePos)
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(targetType)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = namePos, length = nameLen,
+                messageChain = listOf(
+                    "  Property '${p.name}' is incompatible with index signature.",
+                    "    Type '${typeToString(getWidenedLiteralType(propType))}' is not assignable to type '${typeToString(idxValType)}'.",
+                ),
+            ))
+            return
         }
     }
 
