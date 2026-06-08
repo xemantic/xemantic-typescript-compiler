@@ -87095,28 +87095,58 @@ interface DataView {
         val tpAst: Map<String, TypeParameter>,
         val fnParams: Map<String, FunctionType>,
         val tpVarRefs: Map<String, String>,
+        val classInstVarRefs: Map<String, ClassInstRef>,
     )
+
+    /** A param/local typed as `SomeClass<args...>` where SomeClass resolves to a
+     *  user ClassDeclaration. [argTpNames]`[i]` is the bare in-scope UNCONSTRAINED
+     *  type-param NAME supplied at class-tp position i (e.g. `B<T>` → `["T"]`), or
+     *  null when that position is a concrete/other type. Used to detect method
+     *  calls `x.foo(arg)` / `x.foo<X>(...)` on a generic class instance whose
+     *  effective param type is an unconstrained type param. */
+    private class ClassInstRef(val classDecl: ClassDeclaration, val argTpNames: List<String?>)
 
     private fun unconstrainedTpAst(tps: List<TypeParameter>?): Map<String, TypeParameter> =
         tps?.filter { it.constraint == null }?.associateBy { it.name.text } ?: emptyMap()
 
     /** Build a child ctx that introduces a NEW function/method/arrow scope: adds
      *  the given type-param lists to the accumulated tp sets, and REBUILDS the
-     *  fn-typed-param + tp-var-ref maps from [params]. */
+     *  fn-typed-param + tp-var-ref + class-inst-var-ref maps from [params]. */
     private fun fnParamChildCtx(parent: FnParamCtx, params: List<Parameter>?, vararg tpLists: List<TypeParameter>?): FnParamCtx {
         var names = parent.tparams
         var ast = parent.tpAst
         for (tps in tpLists) { names = names + unconstrainedTpNames(tps); ast = ast + unconstrainedTpAst(tps) }
-        return FnParamCtx(names, ast, collectFnTypedParams(params), collectParamTpRefs(params ?: emptyList(), names))
+        return FnParamCtx(names, ast, collectFnTypedParams(params), collectParamTpRefs(params ?: emptyList(), names), collectClassInstVarRefs(params ?: emptyList(), names))
     }
 
     /** Add type-param scope (e.g. a class's tps for a field initializer) while
-     *  KEEPING the parent's fn-typed-param + tp-var-ref maps. */
+     *  KEEPING the parent's fn-typed-param + tp-var-ref + class-inst maps. */
     private fun fnParamAddTps(parent: FnParamCtx, vararg tpLists: List<TypeParameter>?): FnParamCtx {
         var names = parent.tparams
         var ast = parent.tpAst
         for (tps in tpLists) { names = names + unconstrainedTpNames(tps); ast = ast + unconstrainedTpAst(tps) }
-        return FnParamCtx(names, ast, parent.fnParams, parent.tpVarRefs)
+        return FnParamCtx(names, ast, parent.fnParams, parent.tpVarRefs, parent.classInstVarRefs)
+    }
+
+    /** Params typed as `SomeClass<args...>` where SomeClass resolves (via globals)
+     *  to a user ClassDeclaration. Captures the class-tp-position → bare-in-scope-tp
+     *  mapping so a method call on such a receiver can be arg-checked. */
+    private fun collectClassInstVarRefs(params: List<Parameter>, tparams: Set<String>): Map<String, ClassInstRef> {
+        val m = mutableMapOf<String, ClassInstRef>()
+        for (p in params) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val tr = p.type as? TypeReference ?: continue
+            val cn = (tr.typeName as? Identifier)?.text ?: continue
+            val classDecl = globals[cn]?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: continue
+            val argTpNames = (tr.typeArguments ?: emptyList()).map { ta ->
+                val atr = ta as? TypeReference ?: return@map null
+                if (!atr.typeArguments.isNullOrEmpty()) return@map null
+                val an = (atr.typeName as? Identifier)?.text ?: return@map null
+                if (an in tparams) an else null
+            }
+            m[n] = ClassInstRef(classDecl, argTpNames)
+        }
+        return m
     }
 
     private fun checkFnTypedParamCalls() {
@@ -87125,7 +87155,7 @@ interface DataView {
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
             try {
-                fnParamScanStmts(result.sourceFile.statements, source, fileName, FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap()))
+                fnParamScanStmts(result.sourceFile.statements, source, fileName, FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap()))
             } catch (_: StackOverflowError) {}
         }
     }
@@ -87202,9 +87232,15 @@ interface DataView {
     private fun fnParamScanExpr(expr: Expression, source: String, fileName: String, ctx: FnParamCtx) {
         when (expr) {
             is CallExpression -> {
-                val callee = expr.expression
-                if (callee is Identifier) ctx.fnParams[callee.text]?.let { emitFnTypedParamCallDiag(expr, it, source, fileName, ctx) }
-                fnParamScanExpr(callee, source, fileName, ctx)
+                when (val callee = expr.expression) {
+                    is Identifier -> ctx.fnParams[callee.text]?.let { emitFnTypedParamCallDiag(expr, it, source, fileName, ctx) }
+                    is PropertyAccessExpression -> {
+                        val recv = callee.expression
+                        if (recv is Identifier) ctx.classInstVarRefs[recv.text]?.let { emitGenericMethodCallDiag(expr, callee, it, source, fileName, ctx) }
+                    }
+                    else -> {}
+                }
+                fnParamScanExpr(expr.expression, source, fileName, ctx)
                 expr.arguments.forEach { fnParamScanExpr(it, source, fileName, ctx) }
             }
             is BinaryExpression -> {
@@ -87310,6 +87346,71 @@ interface DataView {
                 category = DiagnosticCategory.Error, code = 2345,
                 fileName = fileName, line = line, character = character, start = start, length = length,
                 messageChain = listOf("  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$display'."),
+            ))
+            return
+        }
+    }
+
+    /** Method call `x.foo(...)` / `x.foo<X>(...)` where `x` is a param typed as a
+     *  generic class instance (`x: B<T>`). Emits, mutually exclusive per call:
+     *  - TS2558 when type-args are supplied and `foo` is a single non-overloaded
+     *    method with NO own type parameters (a class type param is NOT a method
+     *    type param);
+     *  - TS2345 when no type-args and `foo`'s param resolves (via the receiver's
+     *    `B<T>` instantiation) to a bare in-scope UNCONSTRAINED type param and the
+     *    argument is a concrete simple type.
+     *  FP firewall: receiver must be an annotated class-instance var (so the
+     *  object-literal-generic-property shape of `typeAssertionToGenericFunctionType`
+     *  is never matched), and the method must be a single non-overloaded
+     *  MethodDeclaration. */
+    private fun emitGenericMethodCallDiag(call: CallExpression, pae: PropertyAccessExpression, inst: ClassInstRef, source: String, fileName: String, ctx: FnParamCtx) {
+        val methodName = pae.name.text
+        val methodDecls = inst.classDecl.members.filterIsInstance<MethodDeclaration>().filter { (it.name as? Identifier)?.text == methodName }
+        if (methodDecls.size != 1) return  // overloaded or absent → could be generic / inherited; skip
+        val method = methodDecls[0]
+
+        val typeArgs = call.typeArguments
+        if (!typeArgs.isNullOrEmpty()) {
+            if (!method.typeParameters.isNullOrEmpty()) return  // method IS generic → type-args legal
+            val start = typeArgs.first().pos
+            var endPos = typeArgs.last().end
+            while (endPos > start && endPos < source.length) {
+                val ch = source[endPos - 1]
+                if (ch == '>' || ch == ')' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') endPos-- else break
+            }
+            val length = (endPos - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Expected 0 type arguments, but got ${typeArgs.size}.",
+                category = DiagnosticCategory.Error, code = 2558,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+            ))
+            return
+        }
+
+        val classTpNames = inst.classDecl.typeParameters?.map { it.name.text } ?: emptyList()
+        for ((i, p) in method.parameters.withIndex()) {
+            val ptr = p.type as? TypeReference ?: continue
+            if (!ptr.typeArguments.isNullOrEmpty()) continue
+            val pn = (ptr.typeName as? Identifier)?.text ?: continue
+            val classTpPos = classTpNames.indexOf(pn)
+            if (classTpPos < 0) continue
+            // The class tp at this position is instantiated with a bare in-scope
+            // unconstrained type param (the enclosing arrow's `T`)?
+            val mappedTp = inst.argTpNames.getOrNull(classTpPos) ?: continue
+            val arg = call.arguments.getOrNull(i) ?: continue
+            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { continue }
+            if (argType is Type.TypeParam || argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(argType)) continue
+            val display = typeToString(argType)
+            val start = arg.pos
+            val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$display' is not assignable to parameter of type '$mappedTp'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+                messageChain = listOf("  '$mappedTp' could be instantiated with an arbitrary type which could be unrelated to '$display'."),
             ))
             return
         }
