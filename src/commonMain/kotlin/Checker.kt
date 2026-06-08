@@ -1208,6 +1208,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64d2. Check object-rest source types (TS2700)
         checkObjectRestSpreadTypes()
+        // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
+        checkShiftOverflow()
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
         checkIncDecTypeParamOperands()
         // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
@@ -87733,6 +87735,141 @@ interface DataView {
         type is Type.Union -> type.types.any { spreadSourceHasNullish(it) }
         type is Type.Intersection -> type.types.any { spreadSourceHasNullish(it) }
         else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // TS6807: "This operation can be simplified. This shift is identical to
+    // `LHS <op> M`." — a bit-shift (`<<`/`>>`/`>>>` or `<<=`/`>>=`/`>>>=`) whose
+    // RIGHT operand is a numeric-literal constant `n` (optionally negated) whose
+    // value is outside [-31, 31] (i.e. `n % 32 != n`). JS shift counts are taken
+    // mod 32, so the operation is identical to `LHS <op> (n % 32)`.
+    //
+    // Purely SYNTACTIC + FP-safe: gated entirely on `@captureSuggestions` (the ONLY
+    // corpus test exercising it is `overshifts`), so the walker never runs — and
+    // never emits — for any other test. Category is Error inside an enum-member
+    // initializer (const-context), Suggestion elsewhere; both match TypeScript.
+    // -----------------------------------------------------------------------
+
+    // NOTE: a function, NOT a `private val` map — a field declared after `init {}`
+    // is null during the check pipeline (Kotlin init-order gotcha; bit B135).
+    private fun shiftOpText(op: SyntaxKind): String? = when (op) {
+        SyntaxKind.LessThanLessThan -> "<<"
+        SyntaxKind.GreaterThanGreaterThan -> ">>"
+        SyntaxKind.GreaterThanGreaterThanGreaterThan -> ">>>"
+        SyntaxKind.LessThanLessThanEquals -> "<<="
+        SyntaxKind.GreaterThanGreaterThanEquals -> ">>="
+        SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> ">>>="
+        else -> null
+    }
+
+    private fun checkShiftOverflow() {
+        if (!options.captureSuggestions) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                for (stmt in result.sourceFile.statements) shiftWalkStmt(stmt, source, fileName, false)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun shiftWalkStmt(stmt: Statement, source: String, fileName: String, inEnum: Boolean) {
+        when (stmt) {
+            is ExpressionStatement -> shiftWalkExpr(stmt.expression, source, fileName, inEnum)
+            is VariableStatement -> for (d in stmt.declarationList.declarations)
+                d.initializer?.let { shiftWalkExpr(it, source, fileName, inEnum) }
+            is ReturnStatement -> stmt.expression?.let { shiftWalkExpr(it, source, fileName, inEnum) }
+            is ThrowStatement -> stmt.expression?.let { shiftWalkExpr(it, source, fileName, inEnum) }
+            is EnumDeclaration -> for (m in stmt.members)
+                m.initializer?.let { shiftWalkExpr(it, source, fileName, true) }
+            is Block -> for (s in stmt.statements) shiftWalkStmt(s, source, fileName, inEnum)
+            is IfStatement -> {
+                shiftWalkExpr(stmt.expression, source, fileName, inEnum)
+                shiftWalkStmt(stmt.thenStatement, source, fileName, inEnum)
+                stmt.elseStatement?.let { shiftWalkStmt(it, source, fileName, inEnum) }
+            }
+            is ForStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            is ForInStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            is ForOfStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            is WhileStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            is DoStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                for (s in it.statements) shiftWalkStmt(s, source, fileName, inEnum)
+            }
+            is LabeledStatement -> shiftWalkStmt(stmt.statement, source, fileName, inEnum)
+            else -> {}
+        }
+    }
+
+    private fun shiftWalkExpr(expr: Expression, source: String, fileName: String, inEnum: Boolean) {
+        when (expr) {
+            is BinaryExpression -> {
+                shiftOpText(expr.operator)?.let { opText ->
+                    val n = shiftLiteralValue(expr.right)
+                    if (n != null) {
+                        val m = n % 32
+                        if (m != n) emitShiftOverflow(expr, opText, m, source, fileName, inEnum)
+                    }
+                }
+                shiftWalkExpr(expr.left, source, fileName, inEnum)
+                shiftWalkExpr(expr.right, source, fileName, inEnum)
+            }
+            is ParenthesizedExpression -> shiftWalkExpr(expr.expression, source, fileName, inEnum)
+            is PrefixUnaryExpression -> shiftWalkExpr(expr.operand, source, fileName, inEnum)
+            is PostfixUnaryExpression -> shiftWalkExpr(expr.operand, source, fileName, inEnum)
+            is CallExpression -> { shiftWalkExpr(expr.expression, source, fileName, inEnum); for (a in expr.arguments) shiftWalkExpr(a, source, fileName, inEnum) }
+            is NewExpression -> { shiftWalkExpr(expr.expression, source, fileName, inEnum); expr.arguments?.forEach { shiftWalkExpr(it, source, fileName, inEnum) } }
+            is PropertyAccessExpression -> shiftWalkExpr(expr.expression, source, fileName, inEnum)
+            is ElementAccessExpression -> { shiftWalkExpr(expr.expression, source, fileName, inEnum); shiftWalkExpr(expr.argumentExpression, source, fileName, inEnum) }
+            is ConditionalExpression -> { shiftWalkExpr(expr.condition, source, fileName, inEnum); shiftWalkExpr(expr.whenTrue, source, fileName, inEnum); shiftWalkExpr(expr.whenFalse, source, fileName, inEnum) }
+            is VoidExpression -> shiftWalkExpr(expr.expression, source, fileName, inEnum)
+            is AwaitExpression -> shiftWalkExpr(expr.expression, source, fileName, inEnum)
+            else -> {}
+        }
+    }
+
+    /** The integer value of a shift's RIGHT operand if it is a numeric literal
+     *  (optionally negated by a leading unary `-`); null otherwise (skip). */
+    private fun shiftLiteralValue(expr: Expression): Long? = when (expr) {
+        is NumericLiteralNode -> parseNumericLiteralLong(expr.text)
+        is PrefixUnaryExpression -> when (expr.operator) {
+            SyntaxKind.Minus -> (expr.operand as? NumericLiteralNode)?.let { parseNumericLiteralLong(it.text)?.let { v -> -v } }
+            SyntaxKind.Plus -> (expr.operand as? NumericLiteralNode)?.let { parseNumericLiteralLong(it.text) }
+            else -> null
+        }
+        is ParenthesizedExpression -> shiftLiteralValue(expr.expression)
+        else -> null
+    }
+
+    private fun parseNumericLiteralLong(raw: String): Long? {
+        val t = raw.replace("_", "")
+        return when {
+            t.startsWith("0x") || t.startsWith("0X") -> t.substring(2).toLongOrNull(16)
+            t.startsWith("0b") || t.startsWith("0B") -> t.substring(2).toLongOrNull(2)
+            t.startsWith("0o") || t.startsWith("0O") -> t.substring(2).toLongOrNull(8)
+            t.contains('.') || t.contains('e') || t.contains('E') || t.endsWith("n") -> null // float/bigint → skip
+            else -> t.toLongOrNull()
+        }
+    }
+
+    private fun emitShiftOverflow(expr: BinaryExpression, opText: String, m: Long, source: String, fileName: String, inEnum: Boolean) {
+        val start = expr.pos
+        val end = expressionTrueEnd(expr)
+        if (start < 0 || end <= start) return
+        val lhsEnd = expressionTrueEnd(expr.left)
+        val lhsText = if (expr.left.pos in 0..<lhsEnd) source.substring(expr.left.pos, lhsEnd) else ""
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This operation can be simplified. This shift is identical to `$lhsText $opText $m`.",
+            category = if (inEnum) DiagnosticCategory.Error else DiagnosticCategory.Suggestion,
+            code = 6807,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = end - start,
+        ))
     }
 
     // -----------------------------------------------------------------------

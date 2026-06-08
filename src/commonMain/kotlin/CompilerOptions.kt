@@ -185,6 +185,9 @@ data class CompilerOptions(
     val ignoreDeprecations: String? = null,
     val allowImportingTsExtensions: Boolean = false,
     val rewriteRelativeImportExtensions: Boolean = false,
+    /** Test-harness directive `// @captureSuggestions`: include Suggestion-category
+     *  diagnostics (e.g. TS6807 shift simplification) in the error baseline. */
+    val captureSuggestions: Boolean = false,
     /**
      * Simulated TypeScript version for version-gated diagnostics (from `// @typeScriptVersion` test directive).
      * When set, options deprecated at version X emit TS5102/TS5108 ("removed") instead of TS5101/TS5107
@@ -572,6 +575,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "typescriptversion" -> options.copy(simulatedTypeScriptVersion = value.trim())
         "allowimportingtsextensions" -> options.copy(allowImportingTsExtensions = boolValue)
         "rewriterelativeimportextensions" -> options.copy(rewriteRelativeImportExtensions = boolValue)
+        "capturesuggestions" -> options.copy(captureSuggestions = boolValue)
         else -> options
     }
 }
