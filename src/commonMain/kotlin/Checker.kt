@@ -415,6 +415,14 @@ class Checker(
      *  to avoid double-emitting the TS2451. Populated just before 73b runs. */
     private val crossFileIdentifierHandledBlockNames = mutableSetOf<String>()
 
+    /** B100: ids of synthesized member Symbols that a `Readonly<T>` materialization
+     *  marked read-only. The synthesized members copy `T`'s members (so their type
+     *  resolves correctly via the shared declarations) but the `readonly` modifier
+     *  comes from the utility wrapper, NOT the declaration — so [isReadonlySymbol]
+     *  consults this side-channel by Symbol id. Declared before `init` so it is
+     *  non-null during the check pipeline. */
+    private val mappedReadonlyMemberIds = mutableSetOf<Int>()
+
     /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
      *  type's value type recursively references another mapped type / generic alias
      *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
@@ -36614,7 +36622,19 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
+                // B100: track the enclosing class for instance members so `this.X = v`
+                // can resolve `this` to the class instance type in the readonly check
+                // (getTypeOfExpression(this) does not yield the class type — B101).
+                val savedClassForThis = currentClassForThis
                 for (member in stmt.members) {
+                    val memberStatic = when (member) {
+                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        is GetAccessor -> ModifierFlag.Static in member.modifiers
+                        is SetAccessor -> ModifierFlag.Static in member.modifiers
+                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                        else -> false
+                    }
+                    currentClassForThis = if (memberStatic) null else stmt
                     val body = when (member) {
                         is MethodDeclaration -> member.body
                         is Constructor -> member.body
@@ -36628,6 +36648,7 @@ interface DataView {
                         member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
                     }
                 }
+                currentClassForThis = savedClassForThis
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
@@ -36978,6 +36999,36 @@ interface DataView {
     private fun isReadonlyPropertyAccess(expr: PropertyAccessExpression, fileName: String? = null): Boolean {
         val objExpr = expr.expression
         val propName = expr.name.text
+        // B100: `this.X = v` inside a class — resolve `this` to the enclosing class's
+        // instance type (incl. inherited members) so an INHERITED readonly property
+        // fires TS2540. `getTypeOfExpression(this)` does NOT yield the class type
+        // (B101). FP firewall: restricted to INHERITED members — assigning an OWN
+        // readonly property inside the constructor/initializer is LEGAL in TypeScript,
+        // so we never fire for own members here (that case keeps its prior behavior).
+        if (objExpr is Identifier && objExpr.text == "this") {
+            val cls = currentClassForThis
+            val clsName = (cls?.name as? Identifier)?.text
+            if (cls != null && clsName != null) {
+                val isOwnMember = cls.members.any { m ->
+                    when (m) {
+                        is PropertyDeclaration -> (m.name as? Identifier)?.text == propName
+                        is GetAccessor -> (m.name as? Identifier)?.text == propName
+                        is SetAccessor -> (m.name as? Identifier)?.text == propName
+                        else -> false
+                    }
+                }
+                if (!isOwnMember) {
+                    val classSym = globals[clsName] ?: (if (fileName != null) fileResults[fileName]?.locals?.get(clsName) else null)
+                    if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
+                        val classType = try { getDeclaredTypeOfSymbol(classSym) } catch (_: StackOverflowError) { null }
+                        if (classType != null) {
+                            val prop = getPropertyOfType(classType, propName)
+                            if (prop != null && isReadonlySymbol(prop)) return true
+                        }
+                    }
+                }
+            }
+        }
         // Check namespace/module exports for const variables, and enum member access
         if (objExpr is Identifier) {
             val objName = objExpr.text
@@ -37028,6 +37079,10 @@ interface DataView {
 
     /** Check if a symbol is declared readonly. */
     private fun isReadonlySymbol(symbol: Symbol): Boolean {
+        // B100: a member synthesized by `Readonly<T>` materialization carries no
+        // `readonly` MODIFIER on its (copied) declaration — the readonly-ness comes
+        // from the utility wrapper, recorded in the side-channel by Symbol id.
+        if (symbol.id in mappedReadonlyMemberIds) return true
         return symbol.declarations.any { decl ->
             when (decl) {
                 is PropertyDeclaration -> ModifierFlag.Readonly in decl.modifiers
@@ -59966,6 +60021,48 @@ interface DataView {
         return result
     }
 
+    /**
+     * B100: materialize the homomorphic modifier utility type `Readonly<T>` as a
+     * fresh object type that copies `T`'s members but marks each as read-only via the
+     * [mappedReadonlyMemberIds] side-channel (the synthesized member Symbols share
+     * `T`'s declarations so their TYPE resolves correctly, but the `readonly` modifier
+     * is supplied by the wrapper, not the declaration). Gated — like
+     * [materializeMemberSetUtility] — to a concrete NON-generic object `T` with no
+     * index signatures and resolvable members; returns null otherwise so the caller
+     * falls back to errorType (prior display-stub behavior). Only `Readonly` is handled
+     * here; `Partial`/`Required` additionally toggle optionality (a separate
+     * side-channel) and are left for a follow-up. FP-safe: only fires for the exact
+     * name with a resolvable plain-object argument, and the readonly mark only makes a
+     * write an error where TypeScript already does.
+     */
+    private fun materializeModifierUtility(name: String, typeArgs: List<TypeNode>?): Type? {
+        if (name != "Readonly") return null
+        val args = typeArgs ?: return null
+        if (args.size != 1) return null
+        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        if (src === anyType || src === errorType) return null
+        val srcObj = src as? Type.Object ?: return null
+        if (srcObj is Type.Reference) return null // generic instantiations: defer
+        try { resolveStructuredTypeMembers(srcObj) } catch (_: StackOverflowError) { return null }
+        if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
+        val srcProps = srcObj.properties ?: return null
+        val result = Type.Object()
+        val members = symbolTable()
+        val newProps = mutableListOf<Symbol>()
+        for (p in srcProps) {
+            val copy = Symbol(p.flags, p.name)
+            copy.declarations.addAll(p.declarations)
+            copy.valueDeclaration = p.valueDeclaration
+            copy.parent = p.parent
+            mappedReadonlyMemberIds.add(copy.id)
+            members[copy.name] = copy
+            newProps.add(copy)
+        }
+        result.members = members
+        result.properties = newProps
+        return result
+    }
+
     private fun getTypeFromTypeReference(node: TypeReference): Type {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
@@ -60121,6 +60218,10 @@ interface DataView {
         // these exact names with a resolvable object T + string-literal key set K.
         if (name == "Omit" || name == "Pick") {
             materializeMemberSetUtility(name, node.typeArguments)?.let { return it }
+        }
+        // B100: `Readonly<T>` member materialization (modifier utility).
+        if (name == "Readonly") {
+            materializeModifierUtility(name, node.typeArguments)?.let { return it }
         }
         // Not found — return errorType (TS2304 handles the diagnostic separately)
         return errorType
@@ -60346,6 +60447,19 @@ interface DataView {
     /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */
     private fun getTypeFromBaseTypeExpression(expr: ExpressionWithTypeArguments): Type {
         val baseExpr = expr.expression
+        // B100: `class C extends (X as new () => T)` — the base is an AsExpression
+        // (usually paren-wrapped) whose asserted type is a CONSTRUCTOR type; the
+        // class's instance type is that construct signature's RETURN type `T`. Mirrors
+        // TypeScript's getBaseConstructorTypeOfClass for the cast-mixin pattern. The
+        // common case `Readonly<{ … }>` then materializes via materializeModifierUtility.
+        val unwrappedBase = unwrapParens(baseExpr)
+        if (unwrappedBase is AsExpression) {
+            val asType = unwrappedBase.type
+            if (asType is ConstructorType) {
+                val ret = getTypeFromTypeNode(asType.type)
+                if (ret !== errorType) return ret
+            }
+        }
         val symbol = when (baseExpr) {
             is Identifier -> globals[baseExpr.text]
             is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr)
