@@ -36598,7 +36598,20 @@ interface DataView {
                 }
             }
             is FunctionDeclaration -> {
-                stmt.body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, mutableMapOf()) }
+                stmt.body?.let { body ->
+                    // B116-ext: populate parameter local types so `isReadonlyPropertyAccess`
+                    // (which calls getTypeOfExpression on the receiver) can resolve a param
+                    // receiver's type — e.g. `function f(x: B) { x.c = true }` where `B`'s
+                    // `c` is readonly → TS2540. Save/restore mirrors the property-access walker.
+                    val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    populateParameterLocalTypes(stmt.parameters)
+                    checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
+                    currentLocalTypes = savedLocalTypes
+                    currentParamBindingNames = savedParamBindings
+                }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
@@ -59104,6 +59117,7 @@ interface DataView {
             // null/undefined-falls-through path below would FP. Bail for nullish RHS on
             // accessor properties (divergentAccessorsTypes2). Plain data fields are fine.
             var propIsAccessor = false
+            var targetPropSym: Symbol? = null
             if (nsBaseSymbol != null && nsBaseSymbol.flags.hasAny(SymbolFlags.Module)) {
                 val exportSym = nsBaseSymbol.exports?.get(propName)
                 if (exportSym != null) {
@@ -59127,6 +59141,7 @@ interface DataView {
                 if (objType !is Type.Object) return
                 resolveStructuredTypeMembers(objType)
                 val propSym = objType.members?.get(propName) ?: return
+                targetPropSym = propSym
                 // B54.5: For accessor pairs (get + set), `x.x = v` uses the SETTER's
                 // parameter type for the write check (NOT the getter return type). Pairs
                 // with B54.6's accessor-pair-declarations merging — together they let
@@ -59177,6 +59192,12 @@ interface DataView {
             if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
                 if (!strictNullChecks || propIsAccessor ||
                     typeIncludesNull(pt) || typeIncludesUndefined(pt)) return
+                // B116-ext: an OPTIONAL property `b?: T` has effective write-type `T | undefined`
+                // (the property may be absent), so `x.b = undefined` is legal — UNLESS
+                // exactOptionalPropertyTypes is set (then `?` does NOT admit an explicit
+                // `undefined` write). FP-safe: optional + non-exact always accepts undefined.
+                if (valueType.flags.hasAny(TypeFlags.Undefined) && !options.exactOptionalPropertyTypes &&
+                    targetPropSym?.let { isOptionalProperty(it) } == true) return
             }
             // 17.14a: Non-constructible source vs constructible target — `canUseTypeEngine`'s
             // gate at ~31688 short-circuits this case to skip class-instance vs constructor-type
