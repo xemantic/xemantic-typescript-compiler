@@ -40937,7 +40937,23 @@ interface DataView {
                     val left = expr.left
                     // `x = …`, `x.p = …`, `x[i] = …` (or any optional/paren-wrapped of these
                     // rooted at x) concretizes x.
-                    if (evTargetRootsAtName(left, name)) { st.suppressed = true; return }
+                    if (evTargetRootsAtName(left, name)) {
+                        // EXCEPTION: a self-referential spread reassign `x = [...x, e]`
+                        // keeps x undetermined (`any[]`) — tsc still fires here. Record
+                        // the `...x` self-read instead of suppressing; recurse the rest.
+                        val right = expr.right
+                        if (op == SyntaxKind.Equals && left is Identifier && left.text == name &&
+                            right is ArrayLiteralExpression &&
+                            right.elements.any { it is SpreadElement && (it.expression as? Identifier)?.text == name }) {
+                            for (e in right.elements) {
+                                if (e is SpreadElement && (e.expression as? Identifier)?.text == name) {
+                                    st.reads.add((e.expression as Identifier).pos)
+                                } else evUseExpr(e, name, st)
+                            }
+                            return
+                        }
+                        st.suppressed = true; return
+                    }
                     evUseExpr(left, name, st)
                     evUseExpr(expr.right, name, st)
                 } else {
