@@ -34430,11 +34430,15 @@ interface DataView {
                 // to FunctionDeclaration. JS-like files only.
                 val hasJSDocThis = hasJSDocThisTag(stmt.leadingComments, fileName)
                 val newThisIsTyped = hasThisParam || hasJSDocThis
+                // B123: reset to -1 for a function nested inside an already-untyped
+                // function — the outer `this` is implicit-any, so no concrete value is
+                // shadowed and no TS2738 related-info should attach (see the matching
+                // FunctionExpression branch). `function inner(){ this }` inside a regular
+                // `prop = function(){…}` initializer gets NO related (TS attaches it only
+                // to the first concrete-`this`-shadowing function).
                 val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
                     // This function shadows a typed this context
                     stmt.name?.pos ?: stmt.pos
-                } else if (!newThisIsTyped && !thisIsTyped) {
-                    shadowFunctionPos // keep existing shadow info
                 } else -1
                 stmt.body?.let {
                     checkThisInStatements(
@@ -34657,9 +34661,15 @@ interface DataView {
                 val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
                     // This function expression shadows a typed this context
                     expr.name?.pos ?: expr.pos
-                } else if (!newThisIsTyped && !thisIsTyped) {
-                    shadowFunctionPos
                 } else -1
+                // B123: a function nested inside an ALREADY-untyped function does NOT
+                // carry a TS2738 "outer value of 'this' is shadowed" related-info — the
+                // outer `this` is already implicit-any, so there is no concrete outer
+                // value to shadow. TypeScript attaches TS2738 only to the FIRST function
+                // that shadows a concrete (class/arrow-inherited) `this`. Previously the
+                // `!newThisIsTyped && !thisIsTyped` case KEPT `shadowFunctionPos`, wrongly
+                // attaching TS2738 to a nested `function inner(){ this }` inside a regular
+                // function property initializer (thisInPropertyBoundDeclarations).
                 expr.body.let {
                     checkThisInStatements(
                         it.statements, source, fileName,
