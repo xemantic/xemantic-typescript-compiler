@@ -929,6 +929,9 @@ class Checker(
         checkDtsTopLevelDeclarations()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
+        // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
+        // module-local namespace shadowing any file-level namespace of the same name.
+        checkAmbientModuleLocalNamespaceMemberRefs()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -23324,6 +23327,168 @@ class Checker(
                 }
                 else -> false
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Ambient-module-local namespace member references (TS2694)
+    // -----------------------------------------------------------------------
+
+    /**
+     * TS2694 "Namespace 'X' has no exported member 'Y'." for a type reference `X.Y`
+     * written INSIDE a `declare module "m" { ... }` body, where `X` is a namespace
+     * declared LOCALLY in that module body. The module-local `namespace X` shadows any
+     * file-level `declare namespace X`, so `X.Y` resolves against ONLY the local namespace's
+     * members — a member declared only in the OUTER namespace is "not exported" here.
+     *
+     * Purely AST-based (collects the local namespace's member names directly from its body),
+     * which SIDESTEPS the global symbol-merge that would otherwise unify the inner/outer `X`.
+     * FP-safe by construction: fires ONLY when `X` is a module-local namespace, `X` is not
+     * also bound to a non-namespace value/alias in the module body, and `Y` is absent from
+     * EVERY declaration (exported or not) of the local namespace.
+     */
+    private fun checkAmbientModuleLocalNamespaceMemberRefs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if (stmt.name !is StringLiteralNode) continue          // ambient module "m"
+                val body = stmt.body as? ModuleBlock ?: continue
+                // Collect module-local namespace member names (all declarations of a name).
+                val nsMembers = HashMap<String, MutableSet<String>>()
+                // Names bound to a non-namespace value/alias in the module body — these
+                // shadow a same-named namespace (the `export { Y as X }` TS2503 case) and
+                // must NOT be checked as a namespace.
+                val shadowedNames = HashSet<String>()
+                for (s in body.statements) {
+                    when (s) {
+                        is ModuleDeclaration -> {
+                            val n = s.name
+                            if (n is Identifier) {
+                                collectNamespaceLocalMemberNames(s, nsMembers.getOrPut(n.text) { HashSet() })
+                            }
+                        }
+                        is ImportEqualsDeclaration -> s.name?.let { shadowedNames.add(it.text) }
+                        is ExportDeclaration -> {
+                            // `export { Y as X }` (renamed) binds X to Y's entity — shadow.
+                            // `export { X }` (no rename) just re-exports the local namespace.
+                            (s.exportClause as? NamedExports)?.elements?.forEach { sp ->
+                                if (sp.propertyName != null && sp.propertyName.text != sp.name.text) {
+                                    shadowedNames.add(sp.name.text)
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+                if (nsMembers.isEmpty()) continue
+                for (s in body.statements) {
+                    forEachQualifiedTypeRefInStatement(s) { rootName, memberNode ->
+                        if (rootName in shadowedNames) return@forEachQualifiedTypeRefInStatement
+                        val members = nsMembers[rootName] ?: return@forEachQualifiedTypeRefInStatement
+                        if (memberNode.text !in members) {
+                            val (line, ch) = getLineAndCharacterOfPosition(source, memberNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Namespace '$rootName' has no exported member '${memberNode.text}'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2694,
+                                fileName = fileName,
+                                line = line,
+                                character = ch,
+                                start = memberNode.pos,
+                                length = memberNode.text.length,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Collect every member name declared directly in a namespace's body (exported or not). */
+    private fun collectNamespaceLocalMemberNames(modDecl: ModuleDeclaration, out: MutableSet<String>) {
+        val block = modDecl.body as? ModuleBlock ?: return
+        for (m in block.statements) {
+            when (m) {
+                is InterfaceDeclaration -> out.add(m.name.text)
+                is TypeAliasDeclaration -> out.add(m.name.text)
+                is ClassDeclaration -> m.name?.let { out.add(it.text) }
+                is EnumDeclaration -> out.add(m.name.text)
+                is FunctionDeclaration -> m.name?.let { out.add(it.text) }
+                is ModuleDeclaration -> (m.name as? Identifier)?.let { out.add(it.text) }
+                is VariableStatement -> m.declarationList.declarations.forEach { d ->
+                    (d.name as? Identifier)?.let { out.add(it.text) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Walk all type annotations reachable from a module-body [stmt] and invoke [cb] for each
+     * 2-segment qualified type reference `Root.member` whose `Root` is a plain Identifier.
+     * Deeper chains (`A.B.member`) are not checked (FN-safe).
+     */
+    private fun forEachQualifiedTypeRefInStatement(stmt: Statement, cb: (rootName: String, member: Identifier) -> Unit) {
+        when (stmt) {
+            is FunctionDeclaration -> {
+                stmt.type?.let { forEachQualifiedTypeRefInType(it, cb) }
+                stmt.parameters.forEach { p -> p.type?.let { forEachQualifiedTypeRefInType(it, cb) } }
+            }
+            is VariableStatement -> stmt.declarationList.declarations.forEach { d ->
+                d.type?.let { forEachQualifiedTypeRefInType(it, cb) }
+            }
+            is TypeAliasDeclaration -> forEachQualifiedTypeRefInType(stmt.type, cb)
+            is InterfaceDeclaration -> stmt.members.forEach { mem -> forEachQualifiedTypeRefInClassElement(mem, cb) }
+            is ClassDeclaration -> stmt.members.forEach { mem -> forEachQualifiedTypeRefInClassElement(mem, cb) }
+            else -> {}
+        }
+    }
+
+    private fun forEachQualifiedTypeRefInClassElement(mem: ClassElement, cb: (String, Identifier) -> Unit) {
+        when (mem) {
+            is PropertyDeclaration -> mem.type?.let { forEachQualifiedTypeRefInType(it, cb) }
+            is MethodDeclaration -> {
+                mem.type?.let { forEachQualifiedTypeRefInType(it, cb) }
+                mem.parameters.forEach { p -> p.type?.let { forEachQualifiedTypeRefInType(it, cb) } }
+            }
+            is IndexSignature -> mem.type?.let { forEachQualifiedTypeRefInType(it, cb) }
+            else -> {}
+        }
+    }
+
+    private fun forEachQualifiedTypeRefInType(type: TypeNode, cb: (String, Identifier) -> Unit) {
+        when (type) {
+            is TypeReference -> {
+                val tn = type.typeName
+                if (tn is QualifiedName) {
+                    val left = tn.left
+                    if (left is Identifier) cb(left.text, tn.right)
+                }
+                type.typeArguments?.forEach { forEachQualifiedTypeRefInType(it, cb) }
+            }
+            is UnionType -> type.types.forEach { forEachQualifiedTypeRefInType(it, cb) }
+            is IntersectionType -> type.types.forEach { forEachQualifiedTypeRefInType(it, cb) }
+            is ParenthesizedType -> forEachQualifiedTypeRefInType(type.type, cb)
+            is ArrayType -> forEachQualifiedTypeRefInType(type.elementType, cb)
+            is TupleType -> type.elements.forEach { forEachQualifiedTypeRefInType(it, cb) }
+            is TypeOperator -> forEachQualifiedTypeRefInType(type.type, cb)
+            is IndexedAccessType -> {
+                forEachQualifiedTypeRefInType(type.objectType, cb)
+                forEachQualifiedTypeRefInType(type.indexType, cb)
+            }
+            is FunctionType -> {
+                type.parameters.forEach { p -> p.type?.let { forEachQualifiedTypeRefInType(it, cb) } }
+                forEachQualifiedTypeRefInType(type.type, cb)
+            }
+            is ConstructorType -> {
+                type.parameters.forEach { p -> p.type?.let { forEachQualifiedTypeRefInType(it, cb) } }
+                forEachQualifiedTypeRefInType(type.type, cb)
+            }
+            is RestType -> forEachQualifiedTypeRefInType(type.type, cb)
+            is OptionalType -> forEachQualifiedTypeRefInType(type.type, cb)
+            else -> {}
         }
     }
 
