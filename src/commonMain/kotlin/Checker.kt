@@ -69701,29 +69701,67 @@ interface DataView {
                 if (stmt !is ExportAssignment) continue
                 val typeNode = stmt.type ?: continue
                 val obj = stmt.expression as? ObjectLiteralExpression ?: continue
-                val targetType = resolveJsDocExportType(typeNode) ?: continue
+                val (targetType, displayTarget) = resolveJsDocExportType(typeNode, source) ?: continue
                 if (targetType !is Type.Object) continue   // Type.Interface is-a Type.Object
                 // Resolve the interface's members (getDeclaredTypeOfSymbol returns the shell;
-                // collectTargetPropertyNames needs the populated member table).
+                // collectTargetPropertyNames needs the populated member table). No-op for the
+                // already-materialized @typedef-synthesized Type.Object.
                 try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { continue }
                 if (targetType.members.isNullOrEmpty()) continue
                 val sourceType = try { getTypeOfObjectLiteral(obj) } catch (_: StackOverflowError) { continue }
-                // Display via typeToString (the interface name 'Foo'), NOT the garbled
-                // JSDoc-position import-type annotation text.
-                val displayTarget = excessPropDisplayTarget(targetType, null)
                 checkExcessProperties(obj, sourceType, targetType, displayTarget, source, fileName)
             }
         }
     }
 
-    /** Resolve the target type of a JSDoc `@type {T}` on an export-default, LOCALLY (no global
-     *  `getTypeFromTypeNode` ImportType change). Only the cross-file import-type→named shape is
-     *  resolved (via the init-time `globals` cross-file merge); everything else returns null. */
-    private fun resolveJsDocExportType(typeNode: TypeNode): Type? {
-        if (typeNode !is ImportType) return null
-        val qual = typeNode.qualifier as? Identifier ?: return null
-        val sym = globals[qual.text] ?: return null
-        return try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+    /** Resolve the (type, display-name) of a JSDoc `@type {T}` on an export-default, LOCALLY (no
+     *  global `getTypeFromTypeNode` ImportType change). Two resolvable shapes:
+     *   - `import("X").Foo` → the cross-file named interface (via the init-time `globals` merge);
+     *   - a bare `Foo` that names a file-local `@typedef {Object} Foo` (synthesized from source).
+     *  Everything else (incl. a `@typedef {primitive} Foo`) returns null → no emit. */
+    private fun resolveJsDocExportType(typeNode: TypeNode, source: String): Pair<Type, String>? {
+        if (typeNode is ImportType) {
+            val qual = typeNode.qualifier as? Identifier ?: return null
+            val sym = globals[qual.text] ?: return null
+            val t = try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { return null }
+            return t to typeToString(t)
+        }
+        if (typeNode is TypeReference) {
+            val nm = (typeNode.typeName as? Identifier)?.text ?: return null
+            // Only the file-local `@typedef {Object} nm` case (a bound `nm` would have been an
+            // import-type or a real type; this is the unbound-typedef fallback).
+            val synth = synthesizeJsDocTypedefObject(nm, source) ?: return null
+            return synth to nm
+        }
+        return null
+    }
+
+    /** B148b: synthesize a `Type.Object` from a JS-file `@typedef {Object} <name>` + its
+     *  `@property {T} <prop>` tags (scanning the raw source — `@typedef` is file-level and is
+     *  NOT parsed/bound anywhere). Member TYPES are not modeled (only names) — sufficient for the
+     *  excess-property check (`collectTargetPropertyNames` is name-only). Returns null when no
+     *  matching object-typedef with ≥1 property is found. */
+    private fun synthesizeJsDocTypedefObject(name: String, source: String): Type.Object? {
+        val td = Regex("""@typedef\s*\{[Oo]bject\}\s+""" + Regex.escape(name) + """\b""").find(source)
+            ?: return null
+        val rest = source.substring(td.range.last + 1)
+        val blockEnd = rest.indexOf("*/").let { if (it < 0) rest.length else it }
+        val block = rest.substring(0, blockEnd)
+        val propNames = Regex("""@property\s*\{[^}]*\}\s+\[?(\w+)""").findAll(block)
+            .map { it.groupValues[1] }.toList()
+        if (propNames.isEmpty()) return null
+        val obj = Type.Object()
+        obj.symbol = Symbol(SymbolFlags.TypeAlias, name)
+        val members = symbolTable()
+        val props = mutableListOf<Symbol>()
+        for (p in propNames) {
+            val sym = Symbol(SymbolFlags.Property, p)
+            members[p] = sym
+            props.add(sym)
+        }
+        obj.members = members
+        obj.properties = props
+        return obj
     }
 
     /** True if [expr] references [name] directly inside an object/array literal value position
