@@ -1394,6 +1394,8 @@ class Checker(
         checkRecursiveLiteralVariables()
         // 82a. B147: TS7022+TS7024 circular generic-callback initializer `const X = f(() => X)`.
         checkCircularGenericCallbackVariables()
+        // 82b. B148: TS2353 excess-prop for JS `/** @type {import("X").Foo} */ export default {obj}`.
+        checkJsDocTypeExportAssignment()
         } // end if (!declarationOnly)
     }
 
@@ -69677,6 +69679,51 @@ interface DataView {
     private fun blockReturnsExactly(block: Block, name: String): Boolean {
         val ret = block.statements.singleOrNull() as? ReturnStatement ?: return false
         return (ret.expression as? Identifier)?.text == name
+    }
+
+    /**
+     * B148: TS2353 excess-property check for a JS-file `/** @type {T} */ export default { ... }`.
+     * The JSDoc `@type` is parsed onto `ExportAssignment.type` (JS files only, by the Parser).
+     * Today the only resolvable T shape is an import-type to a cross-file named interface
+     * (`import("./a").Foo`); a `@typedef`-declared name is unbound → resolves to null → no emit
+     * (FN, not FP). The import-type is resolved LOCALLY here (via the cross-file `globals` merge)
+     * — NOT through `getTypeFromTypeNode` (whose ImportType branch is `anyType`), so this never
+     * touches existing import-type usages → zero regression surface outside the narrow shape.
+     * FP surface = exactly "JS export-default object literal with a resolvable JSDoc @type" → an
+     * excess property there is always TS2353 (flips `checkJsdocTypeTagOnExportAssignment2`).
+     */
+    private fun checkJsDocTypeExportAssignment() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ExportAssignment) continue
+                val typeNode = stmt.type ?: continue
+                val obj = stmt.expression as? ObjectLiteralExpression ?: continue
+                val targetType = resolveJsDocExportType(typeNode) ?: continue
+                if (targetType !is Type.Object) continue   // Type.Interface is-a Type.Object
+                // Resolve the interface's members (getDeclaredTypeOfSymbol returns the shell;
+                // collectTargetPropertyNames needs the populated member table).
+                try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { continue }
+                if (targetType.members.isNullOrEmpty()) continue
+                val sourceType = try { getTypeOfObjectLiteral(obj) } catch (_: StackOverflowError) { continue }
+                // Display via typeToString (the interface name 'Foo'), NOT the garbled
+                // JSDoc-position import-type annotation text.
+                val displayTarget = excessPropDisplayTarget(targetType, null)
+                checkExcessProperties(obj, sourceType, targetType, displayTarget, source, fileName)
+            }
+        }
+    }
+
+    /** Resolve the target type of a JSDoc `@type {T}` on an export-default, LOCALLY (no global
+     *  `getTypeFromTypeNode` ImportType change). Only the cross-file import-type→named shape is
+     *  resolved (via the init-time `globals` cross-file merge); everything else returns null. */
+    private fun resolveJsDocExportType(typeNode: TypeNode): Type? {
+        if (typeNode !is ImportType) return null
+        val qual = typeNode.qualifier as? Identifier ?: return null
+        val sym = globals[qual.text] ?: return null
+        return try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
     }
 
     /** True if [expr] references [name] directly inside an object/array literal value position

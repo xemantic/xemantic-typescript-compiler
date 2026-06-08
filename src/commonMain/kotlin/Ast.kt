@@ -521,6 +521,11 @@ data class ExportAssignment(
     val expression: Expression,
     val isExportEquals: Boolean = false,
     val modifiers: Set<ModifierFlag> = emptySet(),
+    /** B148: JSDoc `@type {T}` annotation on `export default {obj}` in a JS file.
+     *  Positions point into the JSDoc text (sub-Parser), so consult it only for
+     *  type RESOLUTION (excess-property check), never for position-bearing
+     *  diagnostics on the type node itself. */
+    val type: TypeNode? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
