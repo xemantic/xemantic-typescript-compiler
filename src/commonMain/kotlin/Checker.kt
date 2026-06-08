@@ -65415,9 +65415,14 @@ interface DataView {
             val idx = indexExpr.text
             val prop = objectType.members?.get(idx)
             if (prop != null) return getTypeOfSymbol(prop)
-            // Check number index signature
+            // Check number index signature, then fall back to the string index
+            // signature: a numeric index `obj[1]` is `obj["1"]` at runtime, so a
+            // type with ONLY a string index signature still resolves numeric
+            // access to the string-index value type (TS2322 numericIndexerTyping*).
             val numIdx = objectType.numberIndexInfo
             if (numIdx != null) return numIdx.type
+            val strIdx = objectType.stringIndexInfo
+            if (strIdx != null) return strIdx.type
         }
         // Check index signatures on the apparent type
         val apparent = getApparentType(objectType)
@@ -65438,6 +65443,9 @@ interface DataView {
             if (indexType.flags.hasAny(TypeFlags.NumberLike)) {
                 val numIdx = apparent.numberIndexInfo
                 if (numIdx != null) return numIdx.type
+                // Numeric index falls back to the string index signature (see above).
+                val strIdx = apparent.stringIndexInfo
+                if (strIdx != null) return strIdx.type
             }
         }
         return anyType
