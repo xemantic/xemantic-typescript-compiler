@@ -22940,6 +22940,155 @@ class Checker(
         }
     }
 
+    /**
+     * B142: TS18046 — dereferencing a `unknown`-typed SIMPLE-identifier catch variable
+     * (`catch (e) { e.toUpperCase(); e(); e++ }`). The catch var is `unknown` when (a)
+     * explicitly `: unknown`, or (b) un-annotated AND `useUnknownInCatchVariables` is
+     * effective (explicit flag, else `strict`); a `: any` annotation → no error.
+     *
+     * The walk is deliberately CONSERVATIVE (FP-safe vs the missing full flow graph): it
+     * scans only the STRAIGHT-LINE leading statements of the catch body and STOPS at the
+     * first control-flow statement (if/while/for/switch/try/block/labeled — any of which may
+     * narrow `e`) or at any reassignment of `e`. Within a straight-line expression it skips
+     * the narrowed region of `&&`/`||`/`??`/`?:` whose guard references `e`, and does not
+     * descend into nested functions. So `if (typeof e === "string") { e.toUpperCase() }`
+     * (narrowed) and early-return guards never fire — only genuine dereferences of the
+     * still-`unknown` value before any guard. FP-safe by construction.
+     */
+    private fun checkUnknownCatchVarUsage(cc: CatchClause, source: String, fileName: String) {
+        val vd = cc.variableDeclaration ?: return
+        val nameNode = vd.name
+        if (nameNode !is Identifier) return // binding patterns → checkCatchClauseBindingType
+        val varName = nameNode.text
+        val isUnknown = when (val ann = vd.type) {
+            is KeywordTypeNode -> when (ann.kind) {
+                SyntaxKind.UnknownKeyword -> true
+                else -> return // `: any` or other annotation → not our case
+            }
+            null -> if (options.useUnknownInCatchVariablesExplicitlySet)
+                options.useUnknownInCatchVariables else options.strict
+            else -> return
+        }
+        if (!isUnknown) return
+        for (stmt in cc.block.statements) {
+            when (stmt) {
+                is ExpressionStatement -> {
+                    val e = stmt.expression
+                    // A reassignment of `e` (e = …, e += …) narrows the unknown → stop.
+                    if (e is BinaryExpression && e.left is Identifier &&
+                        (e.left as Identifier).text == varName && isAssignmentOperator(e.operator)) return
+                    walkUnknownCatchDeref(e, varName, source, fileName)
+                }
+                is ReturnStatement -> stmt.expression?.let { walkUnknownCatchDeref(it, varName, source, fileName) }
+                is ThrowStatement -> stmt.expression?.let { walkUnknownCatchDeref(it, varName, source, fileName) }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { walkUnknownCatchDeref(it, varName, source, fileName) }
+                }
+                else -> return // control-flow / block / labeled → may narrow; stop
+            }
+        }
+    }
+
+    private fun isAssignmentOperator(op: SyntaxKind): Boolean = when (op) {
+        SyntaxKind.Equals, SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+        SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+        SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
+        SyntaxKind.BarBarEquals, SyntaxKind.AmpersandAmpersandEquals,
+        SyntaxKind.QuestionQuestionEquals -> true
+        else -> false
+    }
+
+    /** Recursively emit TS18046 for `varName` used as a property-access/element-access
+     *  receiver, a call/new callee, or a `++`/`--` operand. */
+    private fun walkUnknownCatchDeref(expr: Expression, varName: String, source: String, fileName: String) {
+        fun isVar(e: Expression): Boolean = e is Identifier && e.text == varName
+        when (expr) {
+            is PropertyAccessExpression -> {
+                if (isVar(expr.expression)) emitTs18046(expr.expression as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                if (isVar(expr.expression)) emitTs18046(expr.expression as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+                walkUnknownCatchDeref(expr.argumentExpression, varName, source, fileName)
+            }
+            is CallExpression -> {
+                if (isVar(expr.expression)) emitTs18046(expr.expression as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+                for (a in expr.arguments) walkUnknownCatchDeref(a, varName, source, fileName)
+            }
+            is NewExpression -> {
+                if (isVar(expr.expression)) emitTs18046(expr.expression as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+                expr.arguments?.forEach { walkUnknownCatchDeref(it, varName, source, fileName) }
+            }
+            is PostfixUnaryExpression -> {
+                if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && isVar(expr.operand))
+                    emitTs18046(expr.operand as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.operand, varName, source, fileName)
+            }
+            is PrefixUnaryExpression -> {
+                if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && isVar(expr.operand))
+                    emitTs18046(expr.operand as Identifier, varName, source, fileName)
+                else walkUnknownCatchDeref(expr.operand, varName, source, fileName) // void/typeof/!/etc.
+            }
+            is VoidExpression -> walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+            is AwaitExpression -> walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+            is TypeOfExpression -> {} // typeof e is always legal on unknown
+            is ParenthesizedExpression -> walkUnknownCatchDeref(expr.expression, varName, source, fileName)
+            is BinaryExpression -> {
+                walkUnknownCatchDeref(expr.left, varName, source, fileName)
+                val logical = expr.operator == SyntaxKind.AmpersandAmpersand ||
+                    expr.operator == SyntaxKind.BarBar || expr.operator == SyntaxKind.QuestionQuestion
+                if (!(logical && exprReferencesCatchVar(expr.left, varName)))
+                    walkUnknownCatchDeref(expr.right, varName, source, fileName)
+            }
+            is ConditionalExpression -> {
+                walkUnknownCatchDeref(expr.condition, varName, source, fileName)
+                if (!exprReferencesCatchVar(expr.condition, varName)) {
+                    walkUnknownCatchDeref(expr.whenTrue, varName, source, fileName)
+                    walkUnknownCatchDeref(expr.whenFalse, varName, source, fileName)
+                }
+            }
+            else -> {} // literals, identifiers, nested functions/classes → no descent
+        }
+    }
+
+    /** Conservative "does this expression reference the catch var" — defaults TRUE for
+     *  unhandled node kinds so an uncertain guard suppresses (FN-safe, never FP). */
+    private fun exprReferencesCatchVar(expr: Expression, varName: String): Boolean = when (expr) {
+        is Identifier -> expr.text == varName
+        is PropertyAccessExpression -> exprReferencesCatchVar(expr.expression, varName)
+        is ElementAccessExpression -> exprReferencesCatchVar(expr.expression, varName) ||
+            exprReferencesCatchVar(expr.argumentExpression, varName)
+        is CallExpression -> exprReferencesCatchVar(expr.expression, varName) ||
+            expr.arguments.any { exprReferencesCatchVar(it, varName) }
+        is NewExpression -> exprReferencesCatchVar(expr.expression, varName) ||
+            (expr.arguments?.any { exprReferencesCatchVar(it, varName) } ?: false)
+        is BinaryExpression -> exprReferencesCatchVar(expr.left, varName) || exprReferencesCatchVar(expr.right, varName)
+        is PrefixUnaryExpression -> exprReferencesCatchVar(expr.operand, varName)
+        is PostfixUnaryExpression -> exprReferencesCatchVar(expr.operand, varName)
+        is ParenthesizedExpression -> exprReferencesCatchVar(expr.expression, varName)
+        is TypeOfExpression -> exprReferencesCatchVar(expr.expression, varName)
+        is VoidExpression -> exprReferencesCatchVar(expr.expression, varName)
+        is AwaitExpression -> exprReferencesCatchVar(expr.expression, varName)
+        is ConditionalExpression -> exprReferencesCatchVar(expr.condition, varName) ||
+            exprReferencesCatchVar(expr.whenTrue, varName) || exprReferencesCatchVar(expr.whenFalse, varName)
+        is StringLiteralNode, is NumericLiteralNode, is NoSubstitutionTemplateLiteralNode -> false
+        else -> true
+    }
+
+    private fun emitTs18046(id: Identifier, varName: String, source: String, fileName: String) {
+        if (id.pos < 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
+        diagnostics.add(Diagnostic(
+            message = "'$varName' is of type 'unknown'.",
+            category = DiagnosticCategory.Error, code = 18046,
+            fileName = fileName, line = line, character = character,
+            start = id.pos, length = varName.length,
+        ))
+    }
+
     /** Span (start-at-`[`, length-through-matching-`]`) of an array binding pattern, bracket-matched
      *  from source since `node.end` overshoots. */
     private fun arrayBindingPatternSpan(pattern: ArrayBindingPattern, source: String): Pair<Int, Int> {
@@ -22966,6 +23115,8 @@ class Checker(
                     stmt.catchClause?.let { catchClause ->
                         // B139: destructuring a `unknown`-typed catch variable.
                         checkCatchClauseBindingType(catchClause, source, fileName)
+                        // B142: dereferencing a `unknown`-typed simple-identifier catch variable.
+                        checkUnknownCatchVarUsage(catchClause, source, fileName)
                         // Collect catch variable names
                         val catchNames = mutableSetOf<String>()
                         catchClause.variableDeclaration?.let { collectBindingNames(it.name, catchNames) }
