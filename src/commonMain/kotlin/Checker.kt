@@ -75679,6 +75679,45 @@ interface DataView {
                         }
                     } catch (_: StackOverflowError) { /* fall through to bail */ }
                 }
+                // B114: module-namespace property access via `import Foo = require("./b")`
+                // — emit TS2339 when `Foo.x` accesses a member the resolved MODULE does not
+                // export (display `typeof import("b")`). FP firewall (load-bearing): the
+                // target must resolve to a `.ts`/`.d.ts` FILE (explicit `export` statements →
+                // reliable tracking; `.js`/CJS targets are EXCLUDED because our
+                // module.exports analysis is incomplete and would FP), the alias must resolve
+                // to a Module symbol (an `export =` alias resolves to a VALUE, not a module —
+                // handled by the B98.r52 anon-object branch above), the target file must have
+                // NO `export * from` re-export (those add members absent from `locals`), and
+                // the property must be absent from the module's exports.
+                run {
+                    if (!isPropertyAccessShape || propName.isEmpty() ||
+                        propName[0] in '0'..'9' || propName in RUNTIME_PROPERTIES) return@run
+                    val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
+                    val decl = identSymbol.declarations.firstOrNull { it is ImportEqualsDeclaration }
+                    val targetFile = resolveModuleSpecifier(spec, decl) ?: return@run
+                    if (!(targetFile.endsWith(".ts") || targetFile.endsWith(".tsx"))) return@run
+                    val targetResult = fileResults[targetFile] ?: return@run
+                    // FP firewall: a `export * from "..."` re-export contributes members not
+                    // present in `locals` → bail rather than risk a false TS2339.
+                    val hasStarReexport = targetResult.sourceFile.statements.any {
+                        it is ExportDeclaration && it.exportClause == null && it.moduleSpecifier != null
+                    }
+                    if (hasStarReexport) return@run
+                    val resolved = try { resolveAlias(identSymbol) } catch (_: StackOverflowError) { return@run }
+                    if (!resolved.flags.hasAny(SymbolFlags.Module)) return@run
+                    val exports = resolved.exports ?: return@run
+                    if (exports.containsKey(propName)) return@run
+                    val base = targetFile.substringAfterLast('/')
+                        .removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'typeof import(\"$base\")'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
                 // Skip import aliases — can't reliably resolve imported module exports
                 if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
                 if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
