@@ -1078,6 +1078,9 @@ class Checker(
         populateAmbientCyclicBaseClasses()
         // 37. Check block-scoped variable use before declaration (TS2448)
         checkUseBeforeDeclaration()
+        // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
+        //       extending `B.X` where namespace B is declared AFTER A (TS2449).
+        checkCrossNamespaceClassHeritageUBD()
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
         checkSwitchCaseComparable()
         // 38. Check setter parameter count (TS1049)
@@ -40657,6 +40660,96 @@ interface DataView {
         if (binderResults.size > 1) {
             checkCrossFileUseBeforeDeclaration()
         }
+    }
+
+    /**
+     * TS2449 "Class 'X' used before its declaration." for cross-namespace class
+     * heritage: a class DIRECTLY in a top-level namespace A whose `extends B.…X`
+     * names a class X in a top-level namespace B that is declared STRICTLY AFTER A.
+     * A's IIFE runs before B's, so `B.X` is undefined when A's class heritage runs.
+     *
+     * FP-safe by construction: an eager class-heritage reference to a class in a
+     * later-initialized sibling namespace is always a TDZ error in TypeScript. Only
+     * `extends` (eager) is checked — `implements` is type-only/erased. The per-scope
+     * UBD walker cannot see this because the reference and the declaration live in
+     * different sibling scopes.
+     */
+    private fun checkCrossNamespaceClassHeritageUBD() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Top-level namespaces: name -> (earliest decl pos, all blocks).
+            val nsMap = HashMap<String, Pair<Int, MutableList<ModuleDeclaration>>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration) {
+                    val nm = (stmt.name as? Identifier)?.text ?: continue
+                    val existing = nsMap[nm]
+                    if (existing == null) nsMap[nm] = stmt.pos to mutableListOf(stmt)
+                    else { existing.second.add(stmt); if (stmt.pos < existing.first) nsMap[nm] = stmt.pos to existing.second }
+                }
+            }
+            if (nsMap.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val aName = (stmt.name as? Identifier)?.text ?: continue
+                val aPos = nsMap[aName]?.first ?: stmt.pos
+                val body = stmt.body as? ModuleBlock ?: continue
+                for (member in body.statements) {
+                    if (member !is ClassDeclaration) continue
+                    val clauses = member.heritageClauses ?: continue
+                    for (clause in clauses) {
+                        if (clause.token != SyntaxKind.ExtendsKeyword) continue
+                        for (typeExpr in clause.types) {
+                            val pae = typeExpr.expression as? PropertyAccessExpression ?: continue
+                            val rootName = nsChainRoot(pae) ?: continue
+                            if (rootName == aName) continue
+                            val bEntry = nsMap[rootName] ?: continue
+                            if (bEntry.first <= aPos) continue  // B declared before/at A → already initialized
+                            val classDecl = resolveNsMemberClass(bEntry.second, nsChainSegments(pae)) ?: continue
+                            val declPos = classDecl.name?.pos ?: continue
+                            emitTS2449(pae.name, declPos, pae.name.text, source, fileName)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun nsChainRoot(pae: PropertyAccessExpression): String? {
+        var cur: Expression = pae
+        while (cur is PropertyAccessExpression) cur = cur.expression
+        return (cur as? Identifier)?.text
+    }
+
+    /** Property names from just-after-root to the leaf, e.g. `B.Sub.X` → ["Sub", "X"]. */
+    private fun nsChainSegments(pae: PropertyAccessExpression): List<String> {
+        val names = ArrayDeque<String>()
+        var cur: Expression = pae
+        while (cur is PropertyAccessExpression) { names.addFirst(cur.name.text); cur = cur.expression }
+        return names.toList()
+    }
+
+    private fun resolveNsMemberClass(blocks: List<ModuleDeclaration>, segs: List<String>): ClassDeclaration? {
+        if (segs.isEmpty()) return null
+        if (segs.size == 1) {
+            for (b in blocks) {
+                val body = b.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s is ClassDeclaration && (s.name as? Identifier)?.text == segs[0]) return s
+                }
+            }
+            return null
+        }
+        val subBlocks = mutableListOf<ModuleDeclaration>()
+        for (b in blocks) {
+            val body = b.body as? ModuleBlock ?: continue
+            for (s in body.statements) {
+                if (s is ModuleDeclaration && (s.name as? Identifier)?.text == segs[0]) subBlocks.add(s)
+            }
+        }
+        if (subBlocks.isEmpty()) return null
+        return resolveNsMemberClass(subBlocks, segs.drop(1))
     }
 
     private data class CrossFileBlockDecl(
