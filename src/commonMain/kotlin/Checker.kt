@@ -55411,6 +55411,14 @@ interface DataView {
                     for (decl in stmt.declarationList.declarations) {
                         checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
                         decl.initializer?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) }
+                        // B127: type-check an assignment used as a var-decl initializer
+                        // (`const x = a = b` → also check the inner `a = b`). Without this
+                        // the inner assignment is never validated (only top-level
+                        // ExpressionStatement assignments are).
+                        val init = decl.initializer
+                        if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                            checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
+                        }
                     }
                 }
                 is ExpressionStatement -> {
@@ -55906,6 +55914,15 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
+                    // B127: an assignment used as a var-decl initializer (`const x = a = b`)
+                    // must still type-check the INNER assignment (`a = b`). The assignment
+                    // walker otherwise only reaches top-level ExpressionStatements, so a
+                    // nested assignment in an initializer was never checked. Narrow gate:
+                    // the initializer is itself a bare `=` assignment.
+                    val init = decl.initializer
+                    if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                        checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
+                    }
                 }
             }
             is IfStatement -> {
@@ -58349,8 +58366,26 @@ interface DataView {
                         // narrow additive check is safe: source is a class instance, target is a
                         // class/interface, and `collectMissingProperties` (which handles inherited
                         // + Object.prototype members) reports ≥1 required member absent from source.
+                        // B127: also cover PLAIN interface → PLAIN interface (neither a
+                        // class) — but ONLY as a FALLBACK when `canUseTypeEngine` BLOCKS the
+                        // named→named structural path (`!canUseTypeEngine` below). The canUse
+                        // path (~58504) already handles the cases it permits (e.g. cross-file
+                        // same-named interfaces, `errorWithSameNameType`), so this fallback
+                        // never preempts it. Gated to pure property bags (no index/call sigs)
+                        // so name-presence IS the assignability criterion, and `Object`-source
+                        // is excluded (the TS2696 special-case owns that). Reaches the nested
+                        // `a = b` of `const x = a = b` via the var-decl-initializer walk.
+                        val b127SrcIsClassInstance =
+                            sourceType is Type.Interface && sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
+                        val b127BothPlainInterfaces = sourceType is Type.Interface && tt is Type.Interface &&
+                            sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
+                            tt.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
+                            sourceType.symbol?.name != "Object" &&
+                            sourceType.stringIndexInfo == null && sourceType.numberIndexInfo == null &&
+                            tt.stringIndexInfo == null && tt.numberIndexInfo == null &&
+                            !canUseTypeEngine(sourceType, tt)
                         if (sourceType is Type.Interface && tt is Type.Interface &&
-                            sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+                            (b127SrcIsClassInstance || b127BothPlainInterfaces) &&
                             sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
                         ) {
                             val missing = try { collectMissingProperties(sourceType, tt) }
@@ -58373,8 +58408,25 @@ interface DataView {
                                     val mpSym = try { getPropertyOfType(tt, mpName) } catch (_: StackOverflowError) { null }
                                     val declaringDisplay = getDeclaringTypeDisplay(mpSym, tt, displayTarget)
                                     val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                    // B53.1 cross-file disambiguation (mirror of the canUse path):
+                                    // when source/target share a display name but are distinct
+                                    // symbols in different files, render `import("<base>").<name>`.
+                                    var qualSource = displaySource
+                                    var qualDeclaring = declaringDisplay
+                                    if (qualSource == qualDeclaring) {
+                                        val srcSym2 = (sourceType as? Type.Interface)?.symbol
+                                        val tgtSym2 = (tt as? Type.Interface)?.symbol
+                                        if (srcSym2 != null && tgtSym2 != null && srcSym2 !== tgtSym2) {
+                                            val srcImp = getSymbolImportName(srcSym2)
+                                            val tgtImp = getSymbolImportName(tgtSym2)
+                                            if (srcImp != null && tgtImp != null && srcImp != tgtImp) {
+                                                qualSource = "import(\"$srcImp\").$qualSource"
+                                                qualDeclaring = "import(\"$tgtImp\").$qualDeclaring"
+                                            }
+                                        }
+                                    }
                                     diagnostics.add(Diagnostic(
-                                        message = "Property '$mpName' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
+                                        message = "Property '$mpName' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
                                         category = DiagnosticCategory.Error, code = 2741,
                                         fileName = fileName, line = line, character = character,
                                         start = target.pos, length = target.text.length,
@@ -76512,6 +76564,41 @@ interface DataView {
                         character = character,
                         start = arg.pos,
                         length = length,
+                    ))
+                    return
+                }
+            }
+        }
+        // B127: TS2538 — a user-defined OBJECT/INTERFACE/CLASS-INSTANCE-typed value used
+        // directly as a computed index (`obj[x]` where `x: SomeInterface`). An object type
+        // is never a valid index (index must be string/number/symbol/literal/enum), so this
+        // is FP-safe. Gated to a named `Type.Interface` whose symbol is a user-declared
+        // interface/class (NOT a lib wrapper like String/Number/Boolean/Symbol, which may
+        // coerce, and NOT an enum, whose members ARE valid indices). Squiggle covers the
+        // index identifier only (matches TypeScript's span).
+        if (arg is Identifier && arg.text != "null" && arg.text != "undefined") {
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            if (argType is Type.Interface) {
+                val sym = argType.symbol
+                val nm = sym?.name
+                val isWrapper = nm == "String" || nm == "Number" || nm == "Boolean" ||
+                    nm == "Symbol" || nm == "Object" || nm == "Function"
+                val isEnum = sym?.flags?.hasAny(SymbolFlags.Enum) == true
+                val isUserNominal = sym?.declarations?.any {
+                    it is InterfaceDeclaration || it is ClassDeclaration || it is ClassExpression
+                } == true
+                if (!isWrapper && !isEnum && isUserNominal) {
+                    val display = typeToString(argType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$display' cannot be used as an index type.",
+                        category = DiagnosticCategory.Error,
+                        code = 2538,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = arg.pos,
+                        length = arg.text.length,
                     ))
                     return
                 }
