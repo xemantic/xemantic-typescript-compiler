@@ -1291,6 +1291,9 @@ class Checker(
         }
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
+        // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
+        // 0-type-param fn type; TS2345 concrete arg vs bare unconstrained TP param).
+        checkFnTypedParamCalls()
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         checkEnumForwardReferences()
         // 72c. Setter bodies may not return a value (TS2408)
@@ -87016,6 +87019,178 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    // -----------------------------------------------------------------------
+    // B128: calls to a FUNCTION-TYPED PARAMETER. Two diagnostics (mutually
+    // exclusive per call): TS2558 when type-args are supplied to a fn-typed
+    // param whose FunctionType has 0 own type-params; TS2345 (+"could be
+    // instantiated" chain) when a fn-typed param's call-sig param is a bare
+    // UNCONSTRAINED in-scope type-param and the argument is a concrete simple
+    // type. FP-safe by construction (both are always errors in TS for the
+    // matched shape). Mirrors checkIncDecTypeParamOperands' scope threading.
+    // -----------------------------------------------------------------------
+    private fun checkFnTypedParamCalls() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try {
+                fnParamScanStmts(result.sourceFile.statements, source, fileName, emptySet(), emptyMap())
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** Params whose declared type is a `FunctionType` with NO own type
+     *  parameters — calling these with type arguments is TS2558. */
+    private fun collectFnTypedParams(params: List<Parameter>?): Map<String, FunctionType> {
+        if (params.isNullOrEmpty()) return emptyMap()
+        val m = HashMap<String, FunctionType>()
+        for (p in params) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val ft = p.type as? FunctionType ?: continue
+            if (!ft.typeParameters.isNullOrEmpty()) continue
+            m[n] = ft
+        }
+        return m
+    }
+
+    private fun fnParamScanStmts(stmts: List<Statement>, source: String, fileName: String, tparams: Set<String>, fnParams: Map<String, FunctionType>) {
+        for (s in stmts) fnParamScanStmt(s, source, fileName, tparams, fnParams)
+    }
+
+    private fun fnParamScanStmt(stmt: Statement, source: String, fileName: String, tparams: Set<String>, fnParams: Map<String, FunctionType>) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let {
+                fnParamScanStmts(it.statements, source, fileName, tparams + unconstrainedTpNames(stmt.typeParameters), collectFnTypedParams(stmt.parameters))
+            }
+            is ClassDeclaration -> {
+                val newTp = tparams + unconstrainedTpNames(stmt.typeParameters)
+                for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, newTp + unconstrainedTpNames(m.typeParameters), collectFnTypedParams(m.parameters)) }
+                    is Constructor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, newTp, collectFnTypedParams(m.parameters)) }
+                    is GetAccessor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, newTp, emptyMap()) }
+                    is SetAccessor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, newTp, collectFnTypedParams(m.parameters)) }
+                    is PropertyDeclaration -> m.initializer?.let { fnParamScanExpr(it, source, fileName, newTp, fnParams) }
+                    else -> {}
+                }
+            }
+            is ExpressionStatement -> fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+            is ReturnStatement -> stmt.expression?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+            is ThrowStatement -> stmt.expression?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+            is Block -> fnParamScanStmts(stmt.statements, source, fileName, tparams, fnParams)
+            is IfStatement -> {
+                fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams)
+                fnParamScanStmt(stmt.thenStatement, source, fileName, tparams, fnParams)
+                stmt.elseStatement?.let { fnParamScanStmt(it, source, fileName, tparams, fnParams) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> fnParamScanExpr(i, source, fileName, tparams, fnParams) } }
+                (stmt.initializer as? Expression)?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+                stmt.condition?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+                stmt.incrementor?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+                fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams)
+            }
+            is ForInStatement -> { fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams); fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams) }
+            is ForOfStatement -> { fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams); fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams) }
+            is WhileStatement -> { fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams); fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams) }
+            is DoStatement -> { fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams); fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams) }
+            is SwitchStatement -> {
+                fnParamScanExpr(stmt.expression, source, fileName, tparams, fnParams)
+                for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; fnParamScanStmts(cs, source, fileName, tparams, fnParams) }
+            }
+            is TryStatement -> {
+                fnParamScanStmts(stmt.tryBlock.statements, source, fileName, tparams, fnParams)
+                stmt.catchClause?.let { fnParamScanStmts(it.block.statements, source, fileName, tparams, fnParams) }
+                stmt.finallyBlock?.let { fnParamScanStmts(it.statements, source, fileName, tparams, fnParams) }
+            }
+            is LabeledStatement -> fnParamScanStmt(stmt.statement, source, fileName, tparams, fnParams)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { fnParamScanStmts(it.statements, source, fileName, tparams, fnParams) }
+            else -> {}
+        }
+    }
+
+    private fun fnParamScanExpr(expr: Expression, source: String, fileName: String, tparams: Set<String>, fnParams: Map<String, FunctionType>) {
+        when (expr) {
+            is CallExpression -> {
+                val callee = expr.expression
+                if (callee is Identifier) fnParams[callee.text]?.let { emitFnTypedParamCallDiag(expr, it, source, fileName, tparams) }
+                fnParamScanExpr(callee, source, fileName, tparams, fnParams)
+                expr.arguments.forEach { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+            }
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { fnParamScanExpr(cur.right, source, fileName, tparams, fnParams); cur = cur.left }
+                fnParamScanExpr(cur, source, fileName, tparams, fnParams)
+            }
+            is ParenthesizedExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is PrefixUnaryExpression -> fnParamScanExpr(expr.operand, source, fileName, tparams, fnParams)
+            is PostfixUnaryExpression -> fnParamScanExpr(expr.operand, source, fileName, tparams, fnParams)
+            is NewExpression -> { fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams); expr.arguments?.forEach { fnParamScanExpr(it, source, fileName, tparams, fnParams) } }
+            is PropertyAccessExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is ElementAccessExpression -> { fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams); fnParamScanExpr(expr.argumentExpression, source, fileName, tparams, fnParams) }
+            is ConditionalExpression -> { fnParamScanExpr(expr.condition, source, fileName, tparams, fnParams); fnParamScanExpr(expr.whenTrue, source, fileName, tparams, fnParams); fnParamScanExpr(expr.whenFalse, source, fileName, tparams, fnParams) }
+            is ArrayLiteralExpression -> expr.elements.forEach { fnParamScanExpr(it, source, fileName, tparams, fnParams) }
+            is SpreadElement -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is AsExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is NonNullExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is TypeAssertionExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is SatisfiesExpression -> fnParamScanExpr(expr.expression, source, fileName, tparams, fnParams)
+            is ObjectLiteralExpression -> expr.properties.forEach { p -> (p as? PropertyAssignment)?.initializer?.let { fnParamScanExpr(it, source, fileName, tparams, fnParams) } }
+            is ArrowFunction -> {
+                val nt = tparams + unconstrainedTpNames(expr.typeParameters)
+                val np = collectFnTypedParams(expr.parameters)
+                when (val b = expr.body) {
+                    is Block -> fnParamScanStmts(b.statements, source, fileName, nt, np)
+                    is Expression -> fnParamScanExpr(b, source, fileName, nt, np)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> fnParamScanStmts(expr.body.statements, source, fileName, tparams + unconstrainedTpNames(expr.typeParameters), collectFnTypedParams(expr.parameters))
+            else -> {}
+        }
+    }
+
+    private fun emitFnTypedParamCallDiag(call: CallExpression, ft: FunctionType, source: String, fileName: String, tparams: Set<String>) {
+        val typeArgs = call.typeArguments
+        if (!typeArgs.isNullOrEmpty()) {
+            // TS2558 — a fn-typed param's FunctionType has 0 own type parameters.
+            val start = typeArgs.first().pos
+            var endPos = typeArgs.last().end
+            while (endPos > start && endPos < source.length) {
+                val ch = source[endPos - 1]
+                if (ch == '>' || ch == ')' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') endPos-- else break
+            }
+            val length = (endPos - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Expected 0 type arguments, but got ${typeArgs.size}.",
+                category = DiagnosticCategory.Error, code = 2558,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+            ))
+            return
+        }
+        // TS2345 — first call-sig param that is a bare UNCONSTRAINED in-scope type
+        // param whose corresponding argument is a concrete simple type.
+        for ((i, p) in ft.parameters.withIndex()) {
+            val tpName = bareTypeParamRefName(p.type, tparams) ?: continue
+            val arg = call.arguments.getOrNull(i) ?: continue
+            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { continue }
+            if (argType is Type.TypeParam || argType === anyType || argType === errorType) continue
+            if (!isSimpleCheckableType(argType)) continue
+            val display = typeToString(argType)
+            val start = arg.pos
+            val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$display' is not assignable to parameter of type '$tpName'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+                messageChain = listOf("  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$display'."),
+            ))
+            return
+        }
     }
 
     // -----------------------------------------------------------------------
