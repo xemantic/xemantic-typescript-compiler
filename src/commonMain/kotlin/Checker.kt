@@ -69701,6 +69701,26 @@ interface DataView {
                 if (stmt !is ExportAssignment) continue
                 val typeNode = stmt.type ?: continue
                 val (targetType, displayTarget) = resolveJsDocExportType(typeNode, source) ?: continue
+                // B148d: primitive `@typedef {number} Foo` target → assignability check (TS2322).
+                if (targetType is Type.Intrinsic && targetType !== anyType && targetType !== errorType) {
+                    val expr0 = stmt.expression
+                    val sourceType = try { getTypeOfExpression(expr0) } catch (_: StackOverflowError) { continue }
+                    if (sourceType === anyType || sourceType === errorType) continue
+                    val assignable = try { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }
+                        catch (_: StackOverflowError) { continue }
+                    if (assignable) continue
+                    val start = expr0.pos
+                    val length = expressionTrueEnd(expr0) - start
+                    if (length <= 0) continue
+                    val displaySource = typeToString(getWidenedLiteralType(sourceType))
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character, start = start, length = length,
+                    ))
+                    continue
+                }
                 if (targetType !is Type.Object) continue   // Type.Interface is-a Type.Object
                 // Resolve the interface's members (getDeclaredTypeOfSymbol returns the shell;
                 // collectTargetPropertyNames needs the populated member table). No-op for the
@@ -69750,12 +69770,26 @@ interface DataView {
         }
         if (typeNode is TypeReference) {
             val nm = (typeNode.typeName as? Identifier)?.text ?: return null
-            // Only the file-local `@typedef {Object} nm` case (a bound `nm` would have been an
-            // import-type or a real type; this is the unbound-typedef fallback).
-            val synth = synthesizeJsDocTypedefObject(nm, source) ?: return null
-            return synth to nm
+            // Unbound file-local `@typedef {Object} nm` → synthesized object…
+            synthesizeJsDocTypedefObject(nm, source)?.let { return it to nm }
+            // …or `@typedef {<primitive>} nm` → the primitive (display UNFOLDS to the primitive
+            // name, matching TypeScript's display of a primitive-resolving alias — see B119).
+            return synthesizeJsDocTypedefPrimitive(nm, source)
         }
         return null
+    }
+
+    /** B148d: `@typedef {number|string|boolean} <name>` → the primitive intrinsic + its display
+     *  name (unfolded). Tried after the object-typedef path, so `{Object}` never reaches here. */
+    private fun synthesizeJsDocTypedefPrimitive(name: String, source: String): Pair<Type, String>? {
+        val m = Regex("""@typedef\s*\{(\w+)\}\s+""" + Regex.escape(name) + """\b""").find(source)
+            ?: return null
+        return when (m.groupValues[1].lowercase()) {
+            "number" -> numberType to "number"
+            "string" -> stringType to "string"
+            "boolean" -> booleanType to "boolean"
+            else -> null
+        }
     }
 
     /** B148b: synthesize a `Type.Object` from a JS-file `@typedef {Object} <name>` + its
