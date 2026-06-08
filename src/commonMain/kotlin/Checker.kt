@@ -75373,6 +75373,25 @@ interface DataView {
      * related info for spelling suggestions. TypeScript only emits this for property
      * access, not for element access.
      */
+    /** B130: does a `namespace X { ... }` block body declare `name` with an `export`
+     *  modifier? Used to distinguish members contributed by an EXPORTED namespace block
+     *  (externally visible) from those only in a NON-EXPORTED block (not visible). */
+    private fun moduleBlockExports(decl: ModuleDeclaration, name: String): Boolean {
+        val body = decl.body as? ModuleBlock ?: return false
+        for (s in body.statements) when (s) {
+            is VariableStatement -> if (ModifierFlag.Export in s.modifiers &&
+                s.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) return true
+            is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name?.text == name) return true
+            is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name?.text == name) return true
+            is EnumDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name.text == name) return true
+            is ModuleDeclaration -> if (ModifierFlag.Export in s.modifiers && (s.name as? Identifier)?.text == name) return true
+            is TypeAliasDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name.text == name) return true
+            is InterfaceDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name.text == name) return true
+            else -> {}
+        }
+        return false
+    }
+
     private fun checkMemberAccessMissing(
         objectExprIn: Expression,
         propName: String,
@@ -75878,6 +75897,38 @@ interface DataView {
                             start = diagStart, length = diagLength,
                         ))
                         return
+                    }
+                }
+                // B130 (TS2339): a QUALIFIED namespace member declared ONLY in a
+                // NON-EXPORTED `namespace X { export var m }` block of a function+namespace
+                // (or multi-block namespace) merge — e.g. `M.foo.x` where `foo` merges
+                // `export function foo`, `export namespace foo { export var y }` (exported
+                // → y visible) and `namespace foo { export var x }` (NOT exported → x not
+                // externally visible). A member only in a non-exported block is never
+                // accessible from outside → "Property 'x' does not exist on type 'typeof
+                // foo'.". FP-safe by construction (a non-exported-block-only member is
+                // always a TS2339 in TS; mirrors B98.r138's non-exported-member rule).
+                if (objectExpr is PropertyAccessExpression &&
+                    (keySuggestion == null || keySuggestion.startsWith(".")) &&
+                    propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+                    propName !in RUNTIME_PROPERTIES) {
+                    val recvSym = try { resolveQualifiedValueSymbol(objectExpr) } catch (_: StackOverflowError) { null }
+                    val nsBlocks = recvSym?.takeIf {
+                        it.flags.hasAny(SymbolFlags.Module) && !it.flags.hasAny(SymbolFlags.NamespaceModule)
+                    }?.declarations?.filterIsInstance<ModuleDeclaration>() ?: emptyList()
+                    if (nsBlocks.size >= 2 && recvSym?.exports?.containsKey(propName) == true) {
+                        val inExportedBlock = nsBlocks.any { ModifierFlag.Export in it.modifiers && moduleBlockExports(it, propName) }
+                        val inNonExportedBlock = nsBlocks.any { ModifierFlag.Export !in it.modifiers && moduleBlockExports(it, propName) }
+                        if (!inExportedBlock && inNonExportedBlock) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                            return
+                        }
                     }
                 }
                 return
