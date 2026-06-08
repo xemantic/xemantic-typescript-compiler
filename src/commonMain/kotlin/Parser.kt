@@ -3182,10 +3182,11 @@ class Parser(
                     val expr = parseAssignmentExpression()
                     parseSemicolon()
                     val trailing = trailingComments()
-                    // B148: a JS-file `/** @type {T} */ export default { ... }` supplies T as
-                    // the export's expected type (for an excess-property check on the literal).
-                    val jsdocType = if (isJsLikeFile && expr is ObjectLiteralExpression)
-                        parsePropertyTypeFromJSDoc(comments) else null
+                    // B148: a JS-file `/** @type {T} */ export default <expr>` supplies T as the
+                    // export's expected type (excess-prop for an object literal; missing-prop for
+                    // a variable/other expr). parsePropertyTypeFromJSDoc returns null when there is
+                    // no `@type` comment, so this is inert for ordinary export-defaults.
+                    val jsdocType = if (isJsLikeFile) parsePropertyTypeFromJSDoc(comments) else null
                     ExportAssignment(
                         expression = expr,
                         isExportEquals = false,

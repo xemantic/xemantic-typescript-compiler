@@ -69700,7 +69700,6 @@ interface DataView {
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ExportAssignment) continue
                 val typeNode = stmt.type ?: continue
-                val obj = stmt.expression as? ObjectLiteralExpression ?: continue
                 val (targetType, displayTarget) = resolveJsDocExportType(typeNode, source) ?: continue
                 if (targetType !is Type.Object) continue   // Type.Interface is-a Type.Object
                 // Resolve the interface's members (getDeclaredTypeOfSymbol returns the shell;
@@ -69708,8 +69707,31 @@ interface DataView {
                 // already-materialized @typedef-synthesized Type.Object.
                 try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { continue }
                 if (targetType.members.isNullOrEmpty()) continue
-                val sourceType = try { getTypeOfObjectLiteral(obj) } catch (_: StackOverflowError) { continue }
-                checkExcessProperties(obj, sourceType, targetType, displayTarget, source, fileName)
+                val expr = stmt.expression
+                if (expr is ObjectLiteralExpression) {
+                    // Fresh object literal → excess-property check (TS2353).
+                    val sourceType = try { getTypeOfObjectLiteral(expr) } catch (_: StackOverflowError) { continue }
+                    checkExcessProperties(expr, sourceType, targetType, displayTarget, source, fileName)
+                } else {
+                    // Variable/other expr source → missing-required-property check (TS2739/40/41).
+                    val sourceType = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { continue }
+                    if (sourceType !is Type.Object || sourceType === errorType) continue
+                    val missing = try { collectMissingProperties(sourceType, targetType) } catch (_: StackOverflowError) { continue }
+                    if (missing.isEmpty()) continue
+                    val start = expr.pos
+                    val length = expressionTrueEnd(expr) - start
+                    if (length <= 0) continue
+                    val displaySource = typeToString(sourceType)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val (code, msg) = if (missing.size == 1)
+                        2741 to "Property '${missing[0]}' is missing in type '$displaySource' but required in type '$displayTarget'."
+                    else
+                        (if (missing.size <= 4) 2739 else 2740) to formatTs2740Message(displaySource, displayTarget, missing)
+                    diagnostics.add(Diagnostic(
+                        message = msg, category = DiagnosticCategory.Error, code = code,
+                        fileName = fileName, line = line, character = character, start = start, length = length,
+                    ))
+                }
             }
         }
     }
