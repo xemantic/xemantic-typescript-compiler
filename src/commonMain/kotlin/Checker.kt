@@ -1081,6 +1081,10 @@ class Checker(
         // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
         //       extending `B.X` where namespace B is declared AFTER A (TS2449).
         checkCrossNamespaceClassHeritageUBD()
+        // 37a3. Evolving empty-array implicit-any: `let x = []` (no annotation) that is
+        //       only ever READ (never concretized via push/assign/element-write/etc.)
+        //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
+        checkEvolvingEmptyArrayImplicitAny()
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
         checkSwitchCaseComparable()
         // 38. Check setter parameter count (TS1049)
@@ -27740,6 +27744,12 @@ class Checker(
          * Known built-in generic types from lib.d.ts with their type parameter counts
          * and display names. Used for TS2314 checking when lib.d.ts isn't loaded.
          */
+        // Array.prototype methods that mutate the array (so an empty `[]` evolves to a
+        // concrete element type) — used by the evolving-empty-array implicit-any check.
+        private val ARRAY_MUTATOR_METHODS: Set<String> = setOf(
+            "push", "pop", "shift", "unshift", "splice", "fill", "copyWithin", "sort", "reverse",
+        )
+
         private val KNOWN_GENERIC_BUILTINS: Map<String, Pair<Int, String>> = mapOf(
             "Array" to (1 to "Array<T>"),
             "ReadonlyArray" to (1 to "ReadonlyArray<T>"),
@@ -40750,6 +40760,288 @@ interface DataView {
         }
         if (subBlocks.isEmpty()) return null
         return resolveNsMemberClass(subBlocks, segs.drop(1))
+    }
+
+    // -----------------------------------------------------------------------
+    // TS7034 / TS7005: evolving empty-array implicit-any (B135, round 123).
+    //
+    // `let/var x = []` with NO type annotation, under noImplicitAny/strict, that
+    // is ONLY EVER READ — never "concretized" (no element-determining assignment,
+    // push/unshift/…-mutator call, element/property write, spread, call-argument,
+    // or destructuring source) — stays `any[]`, so TypeScript reports TS7034 at the
+    // declaration and TS7005 at each plain (non-optional-chain) read.
+    //
+    // FP firewall — DEFAULT-SUPPRESS: a candidate fires ONLY when EVERY use in its
+    // scope is an explicitly-classified plain read. ANY concretizer, ANY nested
+    // function-like / class (which could capture+mutate x via a closure), ANY
+    // re-declaration, or ANY unhandled context sets `unknown`/`concretized` and
+    // suppresses the whole variable. So a fire can regress a passing test only if
+    // the classification MISSES a concretizing form — and the concretizers are
+    // exhaustively enumerated below. (A passing strict test with a genuinely
+    // purely-read empty array already carries TS7034/TS7005 in its baseline, so
+    // it is currently FAILING, not passing — firing cannot regress it.)
+    // -----------------------------------------------------------------------
+
+    private class EvState {
+        var suppressed = false
+        val reads = ArrayList<Int>()
+    }
+
+    private var evSource: String = ""
+
+    private fun checkEvolvingEmptyArrayImplicitAny() {
+        if (!(options.noImplicitAny || options.strict) || options.noImplicitAnyExplicitlyFalse) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            evSource = source
+            try { evProcessScope(result.sourceFile.statements, source, fileName) } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** Process one scope: emit for its direct `let/var x = []` candidates, then
+     *  recurse into nested function/method/accessor bodies as their own scopes. */
+    private fun evProcessScope(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            if (stmt is VariableStatement) {
+                val kind = stmt.declarationList.flags
+                if (kind != SyntaxKind.LetKeyword && kind != SyntaxKind.VarKeyword) continue
+                if (ModifierFlag.Declare in stmt.modifiers) continue
+                for (d in stmt.declarationList.declarations) {
+                    val nameNode = d.name as? Identifier ?: continue
+                    if (d.type != null) continue                                  // annotated → not implicit any
+                    val init = d.initializer as? ArrayLiteralExpression ?: continue
+                    if (init.elements.isNotEmpty()) continue                       // not an EMPTY array
+                    val name = nameNode.text
+                    val st = EvState()
+                    for (s in stmts) evUseStmt(s, name, nameNode, st)
+                    if (st.suppressed || st.reads.isEmpty()) continue
+                    val (dl, dc) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Variable '$name' implicitly has type 'any[]' in some locations where its type cannot be determined.",
+                        category = DiagnosticCategory.Error, code = 7034,
+                        fileName = fileName, line = dl, character = dc, start = nameNode.pos, length = name.length,
+                    ))
+                    for (pos in st.reads.distinct().sorted()) {
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Variable '$name' implicitly has an 'any[]' type.",
+                            category = DiagnosticCategory.Error, code = 7005,
+                            fileName = fileName, line = rl, character = rc, start = pos, length = name.length,
+                        ))
+                    }
+                }
+            }
+        }
+        // Recurse into nested function-like bodies as their own scopes.
+        for (stmt in stmts) evRecurseScopes(stmt, source, fileName)
+    }
+
+    private fun evRecurseScopes(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let { evProcessScope(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { evProcessScope(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { evProcessScope(it.statements, source, fileName) }
+            is Block -> evProcessScope(stmt.statements, source, fileName)
+            is IfStatement -> { evRecurseScopes(stmt.thenStatement, source, fileName); stmt.elseStatement?.let { evRecurseScopes(it, source, fileName) } }
+            is ForStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is ForInStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is ForOfStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is WhileStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is DoStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is LabeledStatement -> evRecurseScopes(stmt.statement, source, fileName)
+            is SwitchStatement -> for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; for (s in cs) evRecurseScopes(s, source, fileName) }
+            is TryStatement -> { for (s in stmt.tryBlock.statements) evRecurseScopes(s, source, fileName); stmt.catchClause?.let { for (s in it.block.statements) evRecurseScopes(s, source, fileName) }; stmt.finallyBlock?.let { for (s in it.statements) evRecurseScopes(s, source, fileName) } }
+            else -> {}
+        }
+    }
+
+    /** Collect uses of [name] in a statement subtree for the evolving-array check.
+     *  Sets `st.suppressed` on any concretizer / nested function-like / re-decl /
+     *  unhandled context; records plain-read positions otherwise. */
+    private fun evUseStmt(stmt: Statement, name: String, declNode: Identifier, st: EvState) {
+        if (st.suppressed) return
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                // A second declaration of the same name in scope → ambiguous → suppress
+                // (the original decl node is skipped; any OTHER decl of `name` suppresses).
+                if (d.name is Identifier && (d.name as Identifier).text == name && d.name !== declNode) { st.suppressed = true; return }
+                // `const [..] = x` / `const {..} = x` — destructuring source concretizes.
+                val init = d.initializer
+                if (d.name !is Identifier && init is Identifier && init.text == name) { st.suppressed = true; return }
+                init?.let { evUseExpr(it, name, st) }
+            }
+            is ExpressionStatement -> evUseExpr(stmt.expression, name, st)
+            is ReturnStatement -> stmt.expression?.let { evUseExpr(it, name, st) }
+            is ThrowStatement -> stmt.expression?.let { evUseExpr(it, name, st) }
+            is Block -> for (s in stmt.statements) evUseStmt(s, name, declNode, st)
+            is IfStatement -> { evUseExpr(stmt.expression, name, st); evUseStmt(stmt.thenStatement, name, declNode, st); stmt.elseStatement?.let { evUseStmt(it, name, declNode, st) } }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> evUseExpr(i, name, st) } }
+                (stmt.initializer as? Expression)?.let { evUseExpr(it, name, st) }
+                stmt.condition?.let { evUseExpr(it, name, st) }
+                stmt.incrementor?.let { evUseExpr(it, name, st) }
+                evUseStmt(stmt.statement, name, declNode, st)
+            }
+            is ForInStatement -> { evUseReadOrExpr(stmt.expression, name, st); evUseStmt(stmt.statement, name, declNode, st) }
+            is ForOfStatement -> { evUseReadOrExpr(stmt.expression, name, st); evUseStmt(stmt.statement, name, declNode, st) }
+            is WhileStatement -> { evUseExpr(stmt.expression, name, st); evUseStmt(stmt.statement, name, declNode, st) }
+            is DoStatement -> { evUseExpr(stmt.expression, name, st); evUseStmt(stmt.statement, name, declNode, st) }
+            is SwitchStatement -> {
+                evUseExpr(stmt.expression, name, st)
+                for (c in stmt.caseBlock) {
+                    val (caseExpr, cs) = when (c) { is CaseClause -> c.expression to c.statements; is DefaultClause -> null to c.statements; else -> null to emptyList() }
+                    caseExpr?.let { evUseExpr(it, name, st) }
+                    for (s in cs) evUseStmt(s, name, declNode, st)
+                }
+            }
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) evUseStmt(s, name, declNode, st)
+                stmt.catchClause?.let { for (s in it.block.statements) evUseStmt(s, name, declNode, st) }
+                stmt.finallyBlock?.let { for (s in it.statements) evUseStmt(s, name, declNode, st) }
+            }
+            is LabeledStatement -> evUseStmt(stmt.statement, name, declNode, st)
+            // Nested function-like / class / module — a closure could capture + mutate x.
+            // Conservatively suppress (we don't model captures). Only matters if `name`
+            // could be in scope there; suppressing unconditionally is FP-safe.
+            is FunctionDeclaration, is ClassDeclaration, is ModuleDeclaration -> st.suppressed = true
+            else -> { /* declarations with no name-uses (interface/type/enum/import/export) */ }
+        }
+    }
+
+    /** A bare `name` here is a plain read; otherwise recurse into the expression. */
+    private fun evUseReadOrExpr(expr: Expression, name: String, st: EvState) {
+        if (expr is Identifier && expr.text == name) st.reads.add(expr.pos) else evUseExpr(expr, name, st)
+    }
+
+    private fun evUseExpr(expr: Expression, name: String, st: EvState) {
+        if (st.suppressed) return
+        when (expr) {
+            is Identifier -> if (expr.text == name) st.reads.add(expr.pos)
+            is BinaryExpression -> {
+                val op = expr.operator
+                val isAssign = op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals ||
+                    op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals || op == SyntaxKind.PercentEquals ||
+                    op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals ||
+                    op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals ||
+                    op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals || op == SyntaxKind.AsteriskAsteriskEquals ||
+                    op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals || op == SyntaxKind.QuestionQuestionEquals
+                if (isAssign) {
+                    val left = expr.left
+                    // `x = …`, `x.p = …`, `x[i] = …` (or any optional/paren-wrapped of these
+                    // rooted at x) concretizes x.
+                    if (evTargetRootsAtName(left, name)) { st.suppressed = true; return }
+                    evUseExpr(left, name, st)
+                    evUseExpr(expr.right, name, st)
+                } else {
+                    evUseExpr(expr.left, name, st)
+                    evUseExpr(expr.right, name, st)
+                }
+            }
+            is CallExpression -> {
+                val callee = expr.expression
+                // `x.MUTATOR(...)` concretizes; `x.nonMutator(...)` reads x.
+                if (callee is PropertyAccessExpression && callee.expression is Identifier &&
+                    (callee.expression as Identifier).text == name) {
+                    if (callee.name.text in ARRAY_MUTATOR_METHODS) { st.suppressed = true; return }
+                    if (!callee.questionDotToken) st.reads.add((callee.expression as Identifier).pos)  // x read as receiver (guarded if optional)
+                } else {
+                    evUseExpr(callee, name, st)
+                }
+                // `f(x)` — callee might mutate x → concretize.
+                for (a in expr.arguments) {
+                    if (a is Identifier && a.text == name) { st.suppressed = true; return }
+                    evUseExpr(a, name, st)
+                }
+            }
+            is NewExpression -> {
+                evUseExpr(expr.expression, name, st)
+                expr.arguments?.forEach { if (it is Identifier && it.text == name) { st.suppressed = true } else evUseExpr(it, name, st) }
+            }
+            is PropertyAccessExpression -> {
+                // `x.prop` (read): x is a plain read UNLESS via optional chain `x?.prop`.
+                if (expr.expression is Identifier && (expr.expression as Identifier).text == name) {
+                    if (!expr.questionDotToken) st.reads.add((expr.expression as Identifier).pos)
+                    // optional chain → neither read nor concretize (guarded)
+                } else evUseExpr(expr.expression, name, st)
+            }
+            is ElementAccessExpression -> {
+                if (expr.expression is Identifier && (expr.expression as Identifier).text == name) {
+                    if (!expr.questionDotToken) st.reads.add((expr.expression as Identifier).pos)
+                } else evUseExpr(expr.expression, name, st)
+                evUseExpr(expr.argumentExpression, name, st)
+            }
+            is ParenthesizedExpression -> evUseExpr(expr.expression, name, st)
+            is PrefixUnaryExpression -> evUseExpr(expr.operand, name, st)
+            is PostfixUnaryExpression -> evUseExpr(expr.operand, name, st)
+            is ConditionalExpression -> { evUseExpr(expr.condition, name, st); evUseExpr(expr.whenTrue, name, st); evUseExpr(expr.whenFalse, name, st) }
+            is ArrayLiteralExpression -> for (e in expr.elements) {
+                if (e is SpreadElement && e.expression is Identifier && (e.expression as Identifier).text == name) { st.suppressed = true; return }
+                evUseExpr(e, name, st)
+            }
+            is SpreadElement -> { if (expr.expression is Identifier && (expr.expression as Identifier).text == name) { st.suppressed = true } else evUseExpr(expr.expression, name, st) }
+            is AsExpression -> evUseExpr(expr.expression, name, st)
+            is SatisfiesExpression -> evUseExpr(expr.expression, name, st)
+            is NonNullExpression -> evUseExpr(expr.expression, name, st)
+            is TypeAssertionExpression -> evUseExpr(expr.expression, name, st)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> p.initializer?.let { evUseExpr(it, name, st) }
+                is ShorthandPropertyAssignment -> if (p.name.text == name) st.reads.add(p.name.pos)
+                is SpreadAssignment -> { if (p.expression is Identifier && (p.expression as Identifier).text == name) st.suppressed = true else evUseExpr(p.expression, name, st) }
+                else -> {}
+            }
+            // Function-like expressions: a closure could capture + mutate x → suppress.
+            is ArrowFunction, is FunctionExpression, is ClassExpression -> {
+                if (evExprReferencesName(expr, name)) st.suppressed = true
+            }
+            // Anything else that could reference x in an unmodeled context → suppress.
+            else -> if (evExprReferencesName(expr, name)) st.suppressed = true
+        }
+    }
+
+    /** True when [target] (an assignment LHS) is `name`, `name.p`, `name[i]`,
+     *  or those wrapped in parens / non-null. */
+    private fun evTargetRootsAtName(target: Expression, name: String): Boolean {
+        var cur = target
+        while (true) {
+            when (cur) {
+                is Identifier -> return cur.text == name
+                is PropertyAccessExpression -> cur = cur.expression
+                is ElementAccessExpression -> cur = cur.expression
+                is ParenthesizedExpression -> cur = cur.expression
+                is NonNullExpression -> cur = cur.expression
+                else -> return false
+            }
+        }
+    }
+
+    /** Best-effort: does the source span of [expr] textually contain [name] as a
+     *  word? Used only to decide whether to suppress on an unmodeled expression —
+     *  a false "true" only suppresses (FP-safe), but we avoid suppressing on
+     *  literals / unrelated expressions (which never contain [name]). */
+    private fun evExprReferencesName(expr: Expression, name: String): Boolean {
+        val s = evSource
+        val start = expr.pos
+        val end = expr.end
+        if (start < 0 || end <= start || end > s.length) return true  // can't tell → suppress
+        val span = s.substring(start, end)
+        var i = span.indexOf(name)
+        while (i >= 0) {
+            val before = if (i == 0) ' ' else span[i - 1]
+            val afterIdx = i + name.length
+            val after = if (afterIdx >= span.length) ' ' else span[afterIdx]
+            val isWordChar = { c: Char -> c.isLetterOrDigit() || c == '_' || c == '$' }
+            if (!isWordChar(before) && !isWordChar(after)) return true
+            i = span.indexOf(name, i + 1)
+        }
+        return false
     }
 
     private data class CrossFileBlockDecl(
