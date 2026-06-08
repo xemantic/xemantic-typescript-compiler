@@ -23376,6 +23376,66 @@ class Checker(
                             continue // TS reports only TS5097 for this specifier
                         }
                     }
+                    // B141: TS5097 for a BARE specifier carrying a TS-only extension that
+                    // resolves via a `paths` wildcard mapping to a real `.ts`/`.tsx` FILE.
+                    // `foo/bar.ts` matching `"foo/*": ["./dist/*"]` → `./dist/bar.ts` (a file)
+                    // fires (the `.ts` is a literal extension the user wrote). It does NOT fire
+                    // when: (a) the pattern KEY itself ends in the extension (`"baz/*.ts"`
+                    // absorbs the `.ts`, mirroring TS's resolvedUsingTsExtension semantics), or
+                    // (b) the substituted target is a DIRECTORY name rather than a TS file
+                    // (`zone.tsx` matching `"*": ["foo/*"]` → `foo/zone.tsx/index.d.ts`, a
+                    // directory whose `.tsx` is not a file extension). FP firewall: only fires
+                    // when the substituted target ends in `.ts`/`.tsx` AND directly names an
+                    // existing source file — so a bare `.ts` with no paths file resolution
+                    // (TS2307 territory) and directory-named-`.tsx` cases are untouched.
+                    if (!isRelative && !options.allowImportingTsExtensions &&
+                        !options.rewriteRelativeImportExtensions && options.paths.isNotEmpty() &&
+                        (moduleName.endsWith(".ts") || moduleName.endsWith(".tsx")) &&
+                        !moduleName.endsWith(".d.ts")) {
+                        val ext = if (moduleName.endsWith(".tsx")) ".tsx" else ".ts"
+                        fun pathsStar(pattern: String): Int = pattern.indexOf('*')
+                        fun pathsPatternMatches(pattern: String): Boolean {
+                            val star = pathsStar(pattern)
+                            if (star < 0) return pattern == moduleName
+                            val prefix = pattern.substring(0, star)
+                            val suffix = pattern.substring(star + 1)
+                            return moduleName.length >= prefix.length + suffix.length &&
+                                moduleName.startsWith(prefix) && moduleName.endsWith(suffix)
+                        }
+                        fun targetNamesDirectFile(target: String): Boolean {
+                            val norm = target.removePrefix("./")
+                            return target in fileResults || norm in fileResults ||
+                                "/$norm" in fileResults || "./$norm" in fileResults
+                        }
+                        val matchedKey = options.paths.keys
+                            .filter { pathsPatternMatches(it) }
+                            .maxByOrNull { pathsStar(it).let { s -> if (s < 0) it.length else s } }
+                        if (matchedKey != null && !matchedKey.endsWith(ext)) {
+                            val star = pathsStar(matchedKey)
+                            val captured = if (star < 0) "" else moduleName.substring(
+                                matchedKey.substring(0, star).length,
+                                moduleName.length - matchedKey.substring(star + 1).length)
+                            val resolvesToTsFile = options.paths[matchedKey]!!.any { tgt ->
+                                val sub = if (tgt.contains('*')) tgt.replaceFirst("*", captured) else tgt
+                                (sub.endsWith(".ts") || sub.endsWith(".tsx")) &&
+                                    !sub.endsWith(".d.ts") && targetNamesDirectFile(sub)
+                            }
+                            if (resolvesToTsFile) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, specifier.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "An import path can only end with a '$ext' extension when 'allowImportingTsExtensions' is enabled.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 5097,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = specifier.pos,
+                                    length = moduleName.length + 2,
+                                ))
+                                continue // TS reports only TS5097 for this specifier
+                            }
+                        }
+                    }
                     // B98.r61: TS2834 — under node16/nodenext in ESM format, a relative
                     // import MUST carry an explicit file extension (`./foo.js`); an
                     // extensionless relative specifier (`./pkg`, `./node_modules/pkg`)
