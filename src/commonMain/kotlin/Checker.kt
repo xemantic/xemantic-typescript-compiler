@@ -64874,6 +64874,24 @@ interface DataView {
         val rawIndexExpr = expr.argumentExpression ?: return anyType
         // Unwrap parens: `obj[("prop")]` should resolve like `obj["prop"]`.
         val indexExpr = unwrapParensExpr(rawIndexExpr)
+        return elementAccessResultType(objectType, indexExpr)
+    }
+
+    /**
+     * B122: core element-access resolution, factored out so element access can
+     * DISTRIBUTE over union members: `(number[] | null[])[0]` → `number | null`.
+     * Without this a union receiver fell through to `anyType`, masking downstream
+     * overload/argument errors (e.g. the double element access `[[3,4],[null]][0][0]`).
+     * Conservative: the union result is produced only when EVERY member yields a
+     * concrete element type — if any member resolves to `anyType`/`errorType` the
+     * whole access stays `anyType` (preserves prior permissive behavior).
+     */
+    private fun elementAccessResultType(objectType: Type, indexExpr: Expression): Type {
+        if (objectType is Type.Union) {
+            val parts = objectType.types.map { elementAccessResultType(it, indexExpr) }
+            if (parts.none { it === anyType || it === errorType }) return getUnionType(parts)
+            return anyType
+        }
         // String literal key: obj["prop"] → resolve as named property
         if (indexExpr is StringLiteralNode) {
             val prop = getPropertyOfType(objectType, indexExpr.text)
@@ -79046,6 +79064,9 @@ interface DataView {
                     val sigStr = signatureToStringColon(sig, isConstruct = false)
                     chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
                     chain.add("    $errorMsg")
+                    // B122: union-arg vs primitive-param → append the failing-member sub-line.
+                    val unionSub = getUnionMemberFailureSubline(args, sig)
+                    if (unionSub != null) chain.add("      $unionSub")
                     // 17.15b: Add deeper "Types of parameters X and Y are incompatible." chain
                     // when the failing arg is a function type vs function-type param.
                     val firstFailingPair = getFirstFailingFnTypeArgPair(args, sig)
@@ -79148,6 +79169,44 @@ interface DataView {
                 if (propError != null) return propError
                 val displayArgType = getWidenedLiteralType(argType)
                 return "Argument of type '${typeToString(displayArgType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
+            }
+        }
+        return null
+    }
+
+    /**
+     * B122: TS2769 overload-chain nested sub-line. When the first failing argument is a
+     * UNION and the parameter is a PRIMITIVE intrinsic, TypeScript appends a third-level
+     * line naming the specific union member that fails, e.g.
+     * `Type 'undefined' is not assignable to type 'boolean'.` Among failing members TS
+     * reports the NULLISH one first (undefined, then null), else the first failing member
+     * — matching the `[4,2,undefined][0]` / `[null,2,4][0]` chains in `arrayBestCommonTypes`.
+     * Gated to union-arg-vs-primitive-param so it never fires for object/union targets
+     * (which have their own elaboration). Returns null when the first failing arg isn't
+     * this shape.
+     */
+    private fun getUnionMemberFailureSubline(args: List<Expression>, sig: Signature): String? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                if (argType is Type.Union && paramType is Type.Intrinsic) {
+                    val failing = argType.types.filter {
+                        !checkTypeRelatedTo(it, paramType, assignableRelation)
+                    }
+                    val chosen = failing.firstOrNull { it.flags.hasAny(TypeFlags.Undefined) }
+                        ?: failing.firstOrNull { it.flags.hasAny(TypeFlags.Null) }
+                        ?: failing.firstOrNull()
+                    if (chosen != null) {
+                        return "Type '${typeToString(chosen)}' is not assignable to type '${typeToString(paramType)}'."
+                    }
+                }
+                return null
             }
         }
         return null
