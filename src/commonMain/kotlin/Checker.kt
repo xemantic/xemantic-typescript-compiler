@@ -92859,6 +92859,19 @@ interface DataView {
         }
     }
 
+    /** B144: real-lib construct-signature type-param overload ranges for well-known
+     *  collection constructors whose generic `new<...>()` overload our embedded lib
+     *  omits. Returns (overload-ranges, expected-lib-interface-arity). A function (not
+     *  a field) to avoid the Kotlin init-order trap (this runs during the pipeline). */
+    private fun libCtorTypeParamRanges(name: String): Pair<List<IntRange>, Int>? = when (name) {
+        // MapConstructor: `new(): Map<any,any>` (0) + `new <K,V>(entries?)` (2, no defaults).
+        "Map" -> listOf(0..0, 2..2) to 2
+        // WeakMapConstructor: `new()` (0) + `new <K extends object = object, V = any>()` —
+        // both K and V default, so the generic overload accepts 0, 1, or 2 type args.
+        "WeakMap" -> listOf(0..0, 0..2) to 2
+        else -> null
+    }
+
     private fun checkCallOrNewTypeArgCount(
         callee: Expression,
         typeArguments: List<TypeNode>?,
@@ -93012,6 +93025,25 @@ interface DataView {
         // overloaded — they merge into a single declared shape).
         if (lastNonFnMaxParams >= 0) {
             perOverloadRanges.add(lastNonFnMinParams..lastNonFnMaxParams)
+        }
+        // B144: well-known lib CONSTRUCTORS (Map/WeakMap) have an implicit
+        // 0-type-arg `new()` overload IN ADDITION to a generic `new<K,V>()` — but our
+        // embedded lib's MapConstructor/WeakMapConstructor omit the generic ctor
+        // overload, so the symbol-derived range only sees the INTERFACE's arity (2)
+        // and we emit TS2558 "Expected 2, got 1" where TypeScript emits the
+        // overload-aware TS2743 (Map: "either 0 or 2") or NO error (WeakMap: its
+        // generic ctor's K/V have defaults so 1 type arg is accepted). Override with
+        // the real construct-overload type-param ranges. FP-safe: gated to the exact
+        // lib names with NO local shadow, NO user class redefinition, and a matching
+        // lib-interface arity — and only ever changes the 1-type-arg (and >max) case
+        // (`new Map()`/`new Map<a,b>()` short-circuit before/at the `any{in}` check).
+        libCtorTypeParamRanges(name)?.let { (ranges, ifaceArity) ->
+            if (name !in locals && lastNonFnMaxParams == ifaceArity &&
+                resolved.declarations.none { it is ClassDeclaration }) {
+                perOverloadRanges.clear()
+                perOverloadRanges.addAll(ranges)
+                anyFnDecl = true
+            }
         }
         if (perOverloadRanges.isEmpty()) return
         // If only FunctionDeclarations were found AND none have typeParameters,
