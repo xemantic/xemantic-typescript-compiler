@@ -56047,6 +56047,26 @@ interface DataView {
         return true
     }
 
+    /**
+     * B119: target-annotation display for assignability errors. Normally returns the
+     * source-text form via [formatTypeForDisplay] (preserving alias/generic names),
+     * but UNFOLDS a type-alias reference that resolves to a PRIMITIVE intrinsic to the
+     * primitive's name — matching TypeScript, which shows `number` (not the alias) for
+     * `type N = number; let x: N = "s"`. Object/interface/union aliases keep their name
+     * (only `Type.Intrinsic`, excluding any/unknown/error, triggers the unfold).
+     */
+    private fun displayTargetAnnotation(typeAnnotation: TypeNode, targetType: Type): String {
+        if (typeAnnotation is TypeReference && targetType is Type.Intrinsic &&
+            targetType !== anyType && targetType !== unknownType && targetType !== errorType
+        ) {
+            val sym = resolveTypeNameToSymbol(typeAnnotation.typeName)
+            if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                return typeToString(targetType)
+            }
+        }
+        return formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -56527,8 +56547,9 @@ interface DataView {
                 val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
                     else getWidenedLiteralType(sourceType)
                 val displaySource = typeToString(displaySourceType)
-                // Use annotation text for display (handles generics correctly)
-                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                // Use annotation text for display (handles generics correctly); B119
+                // unfolds a primitive-resolving type-alias reference to the primitive.
+                val displayTarget = displayTargetAnnotation(typeAnnotation, targetType)
                 // 17.216: Suppress TS2322 when assigning a function expression/arrow
                 // to an anonymous multi-overload target (Type.Object with 2+ call
                 // signatures, no construct sigs, no properties, no symbol).
@@ -85005,11 +85026,19 @@ interface DataView {
      */
     private fun getTypeFromConditionalType(node: ConditionalType): Type {
         val checkType = try { getTypeFromTypeNode(node.checkType) } catch (_: StackOverflowError) { return anyType }
-        val extendsType = try { getTypeFromTypeNode(node.extendsType) } catch (_: StackOverflowError) { return anyType }
         if (checkType === anyType || checkType === errorType) return anyType
-        if (extendsType === anyType || extendsType === errorType) return anyType
         // Unresolved type parameter — can't evaluate
         if (checkType is Type.TypeParam) return anyType
+        // B119: `X extends Ref<...infer V...> ? V : ...` — when the extends-type is a
+        // TypeReference carrying top-level `infer` placeholders and checkType is a
+        // concrete Reference to the same target, bind the infer vars by positional
+        // unification and resolve the chosen branch. Without this the extends-type
+        // resolves to errorType (infer unresolvable) → the whole conditional returns
+        // anyType, masking the inferred result (e.g. `SyntheticDestination<number,
+        // Synthetic<number,number>>` should resolve to `number`, not `any`).
+        tryEvaluateConditionalWithInfer(checkType, node)?.let { return it }
+        val extendsType = try { getTypeFromTypeNode(node.extendsType) } catch (_: StackOverflowError) { return anyType }
+        if (extendsType === anyType || extendsType === errorType) return anyType
         // Distribution over unions
         if (checkType is Type.Union) {
             val results = checkType.types.map { constituent ->
@@ -85018,6 +85047,56 @@ interface DataView {
             return getUnionType(results)
         }
         return evaluateConditional(checkType, extendsType, node)
+    }
+
+    /**
+     * B119: positional `infer` unification for `X extends Ref<...> ? ... : ...`.
+     * Returns the resolved TRUE branch (with infer vars bound) only when checkType
+     * is a concrete [Type.Reference] to the same target as the extends-clause
+     * TypeReference and all non-infer argument positions are assignable. Returns
+     * null in every other case so the caller falls back to the existing behavior
+     * (which yields anyType for an infer-bearing extends-type) — this keeps the
+     * behavior change confined to genuinely-related infer-conditionals, bounding
+     * the FP surface.
+     */
+    private fun tryEvaluateConditionalWithInfer(checkType: Type, node: ConditionalType): Type? {
+        val extAst = node.extendsType as? TypeReference ?: return null
+        val extArgs = extAst.typeArguments ?: return null
+        if (extArgs.none { it is InferType }) return null
+        val checkRef = checkType as? Type.Reference ?: return null
+        val checkArgs = checkRef.resolvedTypeArguments ?: return null
+        if (checkArgs.size != extArgs.size) return null
+        // Same target interface (compare by name — robust to symbol-instance identity
+        // across merges; the arity + per-position assignability gate prevents FP).
+        val extName = getTypeReferenceLastName(extAst.typeName) ?: return null
+        if (checkRef.target.symbol?.name != extName) return null
+        val bindings = HashMap<String, Type>()
+        for (i in extArgs.indices) {
+            val a = extArgs[i]
+            if (a is InferType) {
+                bindings[a.typeParameter.name.text] = checkArgs[i]
+            } else {
+                val patternArg = try { getTypeFromTypeNode(a) } catch (_: StackOverflowError) { return null }
+                if (patternArg === errorType) return null
+                // Non-infer position must accept checkType's arg for the true branch.
+                if (!checkTypeRelatedTo(checkArgs[i], patternArg, assignableRelation)) return null
+            }
+        }
+        // Related — resolve the true branch with the inferred bindings layered onto
+        // the alias-arg substitution map (consulted by getTypeFromTypeReference's
+        // bare-name lookup; a non-null map also bypasses the nodeTypes cache → fresh).
+        val saved = currentTypeAliasArgs
+        val merged = HashMap<String, Type>()
+        if (saved != null) merged.putAll(saved)
+        merged.putAll(bindings)
+        currentTypeAliasArgs = merged
+        return try {
+            getTypeFromTypeNode(node.trueType)
+        } catch (_: StackOverflowError) {
+            null
+        } finally {
+            currentTypeAliasArgs = saved
+        }
     }
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
