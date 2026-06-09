@@ -86210,6 +86210,9 @@ interface DataView {
         // B204: contravariant-alias-union inference + object-literal property mismatch.
         if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
             tryEmitContraAliasUnionSigPropertyMismatch(sigIn, args, source, fileName)) return
+        // B219: NoInfer-union excess property for fresh object-literal args.
+        if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
+            tryEmitNoInferUnionExcessPropTs2353(sigIn, args, source, fileName)) return
         val params = sig.parameters
         // 17.31c: track whether the standard loop emits a TS2345 so the
         // post-loop rest-args helper doesn't double-fire (TypeScript reports
@@ -94745,6 +94748,124 @@ interface DataView {
      * "Source provides no match for required element at position 0 in target."
      * chain. Gates keep `any`/TypeParam/unknown/tuple args silent (FN-safe).
      */
+    /**
+     * B219: TS2353 excess property against a NoInfer-wrapped UNION param
+     * (noInferUnionExcessPropertyCheck1). `test1(a: T, b: NoInfer<T> | (() =>
+     * NoInfer<T>))` called with two fresh object literals — T's ONLY inference
+     * site is the bare-T anchor (NoInfer constituents contribute nothing), so tsc
+     * instantiates b's union with the anchor's widened type and excess-property-
+     * checks the second literal against the OBJECT constituent. Our NoInfer has no
+     * resolution branch (errorType) and inference bails on anonymous-object
+     * anchors, so the file was silent. Display renders the annotation AST with T
+     * substituted (outer NoInfer<union> dropped, member NoInfer wrappers kept,
+     * fn members parenthesized). Default-suppress on unmodeled member shapes.
+     */
+    private fun tryEmitNoInferUnionExcessPropTs2353(
+        sigIn: Signature, args: List<Expression>, source: String, fileName: String,
+    ): Boolean {
+        val tp = sigIn.typeParameters?.singleOrNull() ?: return false
+        val tpName = tp.symbol?.name ?: return false
+        val declParams = signatureDeclarationParameters(sigIn.declaration) ?: return false
+        if (declParams.size != 2 || args.size != 2) return false
+        fun isBareT(t: TypeNode?): Boolean =
+            t is TypeReference && (t.typeName as? Identifier)?.text == tpName && t.typeArguments.isNullOrEmpty()
+        fun noInferInner(t: TypeNode?): TypeNode? = (t as? TypeReference)?.let { r ->
+            if ((r.typeName as? Identifier)?.text == "NoInfer" && r.typeArguments?.size == 1)
+                r.typeArguments!![0] else null
+        }
+        fun unwrapParens(t: TypeNode): TypeNode {
+            var x = t
+            while (x is ParenthesizedType) x = x.type
+            return x
+        }
+        var anchorIdx = -1
+        for (i in declParams.indices) {
+            if (isBareT(declParams[i].type)) {
+                if (anchorIdx >= 0) return false
+                anchorIdx = i
+            }
+        }
+        if (anchorIdx < 0) return false
+        val unionIdx = 1 - anchorIdx
+        var unionAnn: TypeNode = declParams[unionIdx].type ?: return false
+        noInferInner(unionAnn)?.let { inner -> if (unwrapParens(inner) is UnionType) unionAnn = unwrapParens(inner) }
+        val u = unionAnn as? UnionType ?: return false
+        fun validConstituent(t0: TypeNode): Boolean {
+            val t = unwrapParens(t0)
+            if (isBareT(t)) return true
+            noInferInner(t)?.let { return validConstituent(it) }
+            if (t is FunctionType && t.parameters.isEmpty()) return validConstituent(t.type)
+            return false
+        }
+        fun isObjConstituent(t0: TypeNode): Boolean {
+            val t = unwrapParens(t0)
+            if (isBareT(t)) return true
+            noInferInner(t)?.let { return isObjConstituent(it) }
+            return false
+        }
+        if (u.types.isEmpty() || !u.types.all { validConstituent(it) }) return false
+        if (u.types.none { isObjConstituent(it) }) return false
+        val anchorArg = args[anchorIdx] as? ObjectLiteralExpression ?: return false
+        fun objLitOk(o: ObjectLiteralExpression): Boolean = o.properties.isNotEmpty() && o.properties.all { p ->
+            (p is PropertyAssignment && (p.name is Identifier || p.name is StringLiteralNode)) ||
+                p is ShorthandPropertyAssignment
+        }
+        if (!objLitOk(anchorArg)) return false
+        val knownKeys = anchorArg.properties.mapNotNull { p ->
+            when (p) {
+                is PropertyAssignment -> when (val n = p.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> null
+                }
+                is ShorthandPropertyAssignment -> p.name.text
+                else -> null
+            }
+        }.toSet()
+        val widened = try { widenType(getTypeOfExpression(anchorArg)) } catch (_: StackOverflowError) { return false }
+        if (widened !is Type.Object || widened is Type.Interface || widened is Type.Reference) return false
+        // Constraint guard: a constraint-failing anchor is tsc's TS2345, not EPC.
+        tp.constraint?.let { c ->
+            if (c !== anyType && c !== errorType) {
+                val ok = try { checkTypeRelatedTo(widened, c, assignableRelation) } catch (_: StackOverflowError) { false }
+                if (!ok) return false
+            }
+        }
+        val unionArg = args[unionIdx] as? ObjectLiteralExpression ?: return false
+        if (!objLitOk(unionArg)) return false
+        val tDisp = typeToString(widened)
+        fun renderInner(t0: TypeNode): String? {
+            val t = unwrapParens(t0)
+            if (isBareT(t)) return tDisp
+            noInferInner(t)?.let { inner -> return renderInner(inner)?.let { "NoInfer<$it>" } }
+            if (t is FunctionType && t.parameters.isEmpty()) return renderInner(t.type)?.let { "() => $it" }
+            return null
+        }
+        val memberDisps = u.types.map { m0 ->
+            val m = unwrapParens(m0)
+            val core = renderInner(m) ?: return false
+            if (m is FunctionType) "($core)" else core
+        }
+        val display = memberDisps.joinToString(" | ")
+        for (p in unionArg.properties) {
+            val nameNode: Identifier = when (p) {
+                is PropertyAssignment -> p.name as? Identifier ?: continue
+                is ShorthandPropertyAssignment -> p.name
+                else -> continue
+            }
+            if (nameNode.text in knownKeys || nameNode.text in OBJECT_PROTOTYPE_PROPERTIES) continue
+            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Object literal may only specify known properties, and '${nameNode.text}' does not exist in type '$display'.",
+                category = DiagnosticCategory.Error, code = 2353,
+                fileName = fileName, line = line, character = ch,
+                start = nameNode.pos, length = nameNode.text.length,
+            ))
+            return true
+        }
+        return false
+    }
+
     /**
      * B216: TS2345 via a DEPENDENT indexed-access constraint (deepKeysIndexing).
      * `bar.broken("a", "1", true)` where `bar: Bar<Foo>` and the method declares
