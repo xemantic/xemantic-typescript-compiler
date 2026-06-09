@@ -763,6 +763,10 @@ class Checker(
             // walker is self-contained (no TS6131-style FPs), so it must also run under
             // emitDeclarationOnly (which takes the declarationOnly path).
             if (options.declaration) checkExportTypeAliasPrivateNameRef()
+            // TS2883/TS4023 nameability are declaration-emit diagnostics — self-contained
+            // and FP-safe — so they must also run under emitDeclarationOnly.
+            checkDeclarationEmitNameability()
+            checkDeclarationEmitComputedSymbolNameability()
         }
 
         if (!declarationOnly) {
@@ -907,6 +911,8 @@ class Checker(
         checkUnresolvedModules()
         // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
         checkDeclarationEmitNameability()
+        // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
+        checkDeclarationEmitComputedSymbolNameability()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
         checkJsxImportResolutions()
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
@@ -4825,6 +4831,252 @@ class Checker(
             searchFrom = idx + marker.length
         }
         return g.substringBeforeLast('/', g)
+    }
+
+    // -----------------------------------------------------------------------
+    // TS4023: declaration-emit cannot name a COMPUTED SYMBOL property key. An
+    // exported `const x = { ...typedExpr }` (no annotation) whose inferred type
+    // carries a computed-name member `[Sym]` / `[NS.sym]` keyed by a symbol from
+    // another module that is NOT value-accessible from the importing file —
+    // declaration emit would have to reference an inaccessible name, so an
+    // explicit annotation is required.
+    //
+    // FP-safe: fires only when declaration emit is on, the const has NO
+    // annotation, its initializer object-literal spreads a value whose resolved
+    // type has a computed-symbol-key member, and the key's root identifier is
+    // genuinely not value-accessible in the importing file (a value import /
+    // local value / global suppresses).
+    // -----------------------------------------------------------------------
+    private fun checkDeclarationEmitComputedSymbolNameability() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        if (binderResults.size < 2) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val statements = result.sourceFile.statements
+            if (!isModuleFile(statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in statements) {
+                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val init = decl.initializer as? ObjectLiteralExpression ?: continue
+                    val nameNode = decl.name as? Identifier ?: continue
+                    for (prop in init.properties) {
+                        if (prop !is SpreadAssignment) continue
+                        val (typeDecl, declFile) = resolveSpreadSourceTypeDecl(prop.expression, f) ?: continue
+                        val (rootName, rootFile) = firstComputedSymbolRoot(typeDecl, declFile, mutableSetOf()) ?: continue
+                        if (isValueAccessibleIn(rootName, f)) continue
+                        val moduleBase = moduleBasename(rootFile)
+                        val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Exported variable '${nameNode.text}' has or is using name '$rootName' from external module \"$moduleBase\" but cannot be named.",
+                            category = DiagnosticCategory.Error, code = 4023,
+                            fileName = f, line = l, character = c,
+                            start = nameNode.pos, length = nameNode.text.length,
+                        ))
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /** Resolve the TYPE declaration that an object-spread source expression resolves to: (declNode, declFile). */
+    private fun resolveSpreadSourceTypeDecl(expr0: Expression, f: String): Pair<Declaration, String>? {
+        val expr = if (expr0 is ParenthesizedExpression) expr0.expression else expr0
+        when (expr) {
+            is AsExpression -> {
+                val t = expr.type
+                if (t is TypeReference) {
+                    val n = t.typeName
+                    if (n is Identifier) return resolveTypeReferenceDecl(n.text, f, mutableSetOf())
+                }
+            }
+            is CallExpression -> {
+                val callee = expr.expression as? Identifier ?: return null
+                val (calleeFile, calleeName) = resolveImportedSymbolFile(callee.text, f) ?: return null
+                val cr = fileResults[calleeFile] ?: return null
+                val fd = cr.sourceFile.statements.firstNotNullOfOrNull {
+                    if (it is FunctionDeclaration && it.name?.text == calleeName) it else null
+                } ?: return null
+                val rt = fd.type
+                if (rt is TypeReference && rt.typeName is Identifier) {
+                    return resolveTypeReferenceDecl((rt.typeName as Identifier).text, calleeFile, mutableSetOf())
+                }
+            }
+            else -> {}
+        }
+        return null
+    }
+
+    /** Resolve a type NAME to its declaring Interface/TypeAlias node + file (following imports). */
+    private fun resolveTypeReferenceDecl(typeName: String, usedInFile: String, visited: MutableSet<String>): Pair<Declaration, String>? {
+        val key = "$usedInFile|$typeName"
+        if (!visited.add(key)) return null
+        val r = fileResults[usedInFile] ?: return null
+        for (stmt in r.sourceFile.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> if (stmt.name.text == typeName) return stmt to usedInFile
+                is TypeAliasDeclaration -> if (stmt.name.text == typeName) return stmt to usedInFile
+                else -> {}
+            }
+        }
+        for (stmt in r.sourceFile.statements) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val named = clause.namedBindings as? NamedImports ?: continue
+            for (el in named.elements) {
+                if (el.name.text == typeName) {
+                    val orig = el.propertyName?.text ?: el.name.text
+                    val g = resolveSpecifierAnywhere(spec, usedInFile) ?: return null
+                    return resolveTypeReferenceDecl(orig, g, visited)
+                }
+            }
+        }
+        return null
+    }
+
+    /** Walk a type declaration's members for the FIRST computed-symbol-key member; returns (rootName, rootDeclFile). */
+    private fun firstComputedSymbolRoot(decl: Declaration, declFile: String, seen: MutableSet<Int>): Pair<String, String>? {
+        val members: List<ClassElement> = when (decl) {
+            is InterfaceDeclaration -> decl.members
+            is TypeAliasDeclaration -> (decl.type as? TypeLiteral)?.members ?: emptyList()
+            else -> emptyList()
+        }
+        return firstComputedSymbolRootInMembers(members, declFile, 0)
+    }
+
+    private fun firstComputedSymbolRootInMembers(members: List<ClassElement>, declFile: String, depth: Int): Pair<String, String>? {
+        if (depth > 6) return null
+        for (m in members) {
+            if (m !is PropertyDeclaration) continue
+            val nm = m.name
+            if (nm is ComputedPropertyName) {
+                val root = computedKeyRootName(nm.expression)
+                // Only a genuine SYMBOL-valued key is non-inlinable in declaration emit (→ TS4023).
+                // An enum-member / undefined / string-literal key is a DIFFERENT diagnostic
+                // (TS2464 / TS2304) or is inlinable — those must NOT fire TS4023.
+                if (root != null && computedKeyResolvesToSymbol(nm.expression, declFile)) {
+                    val rootFile = resolveValueNameDeclaringFile(root, declFile) ?: declFile
+                    return root to rootFile
+                }
+            }
+            val pt = m.type
+            if (pt is TypeLiteral) {
+                firstComputedSymbolRootInMembers(pt.members, declFile, depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Leftmost identifier of a computed-property-name key expression (`Foo.sym` → "Foo", `SYMBOL` → "SYMBOL"). */
+    private fun computedKeyRootName(expr: Expression): String? = when (expr) {
+        is Identifier -> expr.text
+        is PropertyAccessExpression -> computedKeyRootName(expr.expression)
+        else -> null
+    }
+
+    /** Does a computed key expression resolve to a SYMBOL-valued declaration (`Symbol()`/`Symbol.for()` init or `unique symbol` type)? */
+    private fun computedKeyResolvesToSymbol(keyExpr: Expression, declFile: String): Boolean = when (keyExpr) {
+        is Identifier -> findVarDeclInFile(keyExpr.text, declFile)?.let { varDeclIsSymbol(it) } ?: false
+        is PropertyAccessExpression -> {
+            val root = keyExpr.expression
+            if (root is Identifier) {
+                findNamespaceMemberVarDecl(root.text, keyExpr.name.text, declFile)?.let { varDeclIsSymbol(it) } ?: false
+            } else false
+        }
+        else -> false
+    }
+
+    private fun findVarDeclInFile(name: String, file: String): VariableDeclaration? {
+        val r = fileResults[file] ?: return null
+        for (stmt in r.sourceFile.statements) {
+            if (stmt is VariableStatement) for (d in stmt.declarationList.declarations)
+                if ((d.name as? Identifier)?.text == name) return d
+        }
+        return null
+    }
+
+    private fun findNamespaceMemberVarDecl(nsName: String, member: String, file: String): VariableDeclaration? {
+        val r = fileResults[file] ?: return null
+        for (stmt in r.sourceFile.statements) {
+            if (stmt is ModuleDeclaration && (stmt.name as? Identifier)?.text == nsName) {
+                val stmts = (stmt.body as? ModuleBlock)?.statements ?: continue
+                for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations)
+                    if ((d.name as? Identifier)?.text == member) return d
+            }
+        }
+        return null
+    }
+
+    /** Is a variable declaration symbol-valued: `unique symbol`-typed or initialized with `Symbol(...)`/`Symbol.for(...)`? */
+    private fun varDeclIsSymbol(d: VariableDeclaration): Boolean {
+        val t = d.type
+        if (t is TypeOperator && t.operator == SyntaxKind.UniqueKeyword) return true
+        val init = d.initializer
+        if (init is CallExpression) {
+            val callee = init.expression
+            if (callee is Identifier && callee.text == "Symbol") return true
+            if (callee is PropertyAccessExpression && (callee.expression as? Identifier)?.text == "Symbol" && callee.name.text == "for") return true
+        }
+        return false
+    }
+
+    /** Find the file declaring a VALUE named [name], starting in [file] and following imports. */
+    private fun resolveValueNameDeclaringFile(name: String, file: String): String? {
+        val r = fileResults[file] ?: return null
+        for (stmt in r.sourceFile.statements) {
+            when (stmt) {
+                is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == name) return file
+                is VariableStatement -> for (d in stmt.declarationList.declarations) if ((d.name as? Identifier)?.text == name) return file
+                is FunctionDeclaration -> if (stmt.name?.text == name) return file
+                is ClassDeclaration -> if (stmt.name?.text == name) return file
+                is EnumDeclaration -> if (stmt.name.text == name) return file
+                else -> {}
+            }
+        }
+        return resolveImportedSymbolFile(name, file)?.first
+    }
+
+    /** Is [name] available as a VALUE (not type-only) in [f]: value import, local value decl, or known global. */
+    private fun isValueAccessibleIn(name: String, f: String): Boolean {
+        val r = fileResults[f] ?: return true
+        for (stmt in r.sourceFile.statements) {
+            when (stmt) {
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    if (clause.isTypeOnly) continue
+                    if (clause.name?.text == name) return true
+                    when (val nb = clause.namedBindings) {
+                        is NamespaceImport -> if (nb.name.text == name) return true
+                        is NamedImports -> for (el in nb.elements) if (el.name.text == name && !el.isTypeOnly) return true
+                        else -> {}
+                    }
+                }
+                is ImportEqualsDeclaration -> if (stmt.name.text == name) return true
+                is VariableStatement -> for (d in stmt.declarationList.declarations) if ((d.name as? Identifier)?.text == name) return true
+                is FunctionDeclaration -> if (stmt.name?.text == name) return true
+                is ClassDeclaration -> if (stmt.name?.text == name) return true
+                is EnumDeclaration -> if (stmt.name.text == name) return true
+                is ModuleDeclaration -> if ((stmt.name as? Identifier)?.text == name) return true
+                else -> {}
+            }
+        }
+        // Do NOT consult `globals` here — the binder merges every file's locals into it
+        // (Blocker #3 conflation), so a symbol exported from ANOTHER module would wrongly
+        // count as accessible. Only a genuine lib global is accessible everywhere.
+        return name in KNOWN_GLOBALS
+    }
+
+    /** Basename of a file path stripped of directory and module extension. */
+    private fun moduleBasename(file: String): String {
+        var b = file.substringAfterLast('/')
+        for (ext in listOf(".d.ts", ".d.mts", ".d.cts", ".tsx", ".ts", ".mts", ".cts", ".jsx", ".js", ".mjs", ".cjs")) {
+            if (b.endsWith(ext)) { b = b.dropLast(ext.length); break }
+        }
+        return b
     }
 
     // -----------------------------------------------------------------------
