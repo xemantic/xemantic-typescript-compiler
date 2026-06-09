@@ -1467,6 +1467,8 @@ class Checker(
         checkDestructuredParamOptionalMemberArgs()
         // 82b. B148: TS2353 excess-prop for JS `/** @type {import("X").Foo} */ export default {obj}`.
         checkJsDocTypeExportAssignment()
+        // 82c. B200: TS2345 for call-of-call args against a typeof-narrowed callback param.
+        checkNarrowedTypeofCallbackCalls()
         } // end if (!declarationOnly)
     }
 
@@ -84584,6 +84586,151 @@ interface DataView {
         return voidType
     }
 
+
+    /**
+     * B200: TS2345 for `test1(0)?.("")` where `test1(a: number | string)` returns — from
+     * INSIDE an `if (typeof a === "number")` guard — a function whose param is annotated
+     * `typeof a`. tsc's CFA-for-function-likes (TS 4.4+) resolves the typeof-query at the
+     * arrow's CREATION site, i.e. NARROWED to `number`, so a string arg to the returned
+     * function always errors. Gates (each excludes a no-error sibling in the fixture):
+     * the returned fn must be an arrow CREATED INSIDE the then-block (an arrow created
+     * before the `if` sees the un-narrowed union — test4); via a direct `return <arrow>`
+     * or an UN-annotated single-decl const returned later in the same block (an annotated
+     * const's TypeLiteral governs and resolves typeof UN-narrowed — test2); the enclosing
+     * param must never be reassigned in the body; the call site is the direct
+     * call-of-call shape with a primitive/literal arg failing the narrowed type.
+     */
+    private fun checkNarrowedTypeofCallbackCalls() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // Definition pass: fnName -> per-param narrowed types (null = unchecked).
+            val fnMap = mutableMapOf<String, List<Type?>>()
+            val multiDecl = mutableSetOf<String>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is FunctionDeclaration) continue
+                val name = stmt.name?.text ?: continue
+                if (name in fnMap) { multiDecl.add(name); continue }
+                if (stmt.type != null) continue
+                val body = stmt.body ?: continue
+                val unionParams = stmt.parameters.mapNotNull { p ->
+                    val pn = (p.name as? Identifier)?.text ?: return@mapNotNull null
+                    if (p.type is UnionType) pn else null
+                }.toSet()
+                if (unionParams.isEmpty()) continue
+                var found: List<Type?>? = null
+                for (s0 in body.statements) {
+                    val ifStmt = s0 as? IfStatement ?: continue
+                    val cond = ifStmt.expression as? BinaryExpression ?: continue
+                    if (cond.operator != SyntaxKind.EqualsEqualsEquals) continue
+                    val tof = cond.left as? TypeOfExpression ?: continue
+                    val subject = (tof.expression as? Identifier)?.text ?: continue
+                    if (subject !in unionParams) continue
+                    val lit = cond.right as? StringLiteralNode ?: continue
+                    val narrowed = typeofTypeGuardToType(lit.text) ?: continue
+                    if (narrowed === anyType || narrowed === errorType) continue
+                    val thenBlock = ifStmt.thenStatement as? Block ?: continue
+                    // The returned arrow: direct `return <arrow>` or un-annotated
+                    // single-decl const returned later in the same block.
+                    var arrow: ArrowFunction? = null
+                    for (ts in thenBlock.statements) {
+                        if (ts is ReturnStatement) {
+                            val re = ts.expression
+                            if (re is ArrowFunction) { arrow = re; break }
+                            if (re is Identifier) {
+                                val constDecl = thenBlock.statements.filterIsInstance<VariableStatement>()
+                                    .flatMap { it.declarationList.declarations }
+                                    .firstOrNull { (it.name as? Identifier)?.text == re.text }
+                                if (constDecl != null && constDecl.type == null) {
+                                    arrow = constDecl.initializer as? ArrowFunction
+                                }
+                                break
+                            }
+                        }
+                    }
+                    val a = arrow ?: continue
+                    val paramTypes = a.parameters.map { p ->
+                        val tq = p.type as? TypeQuery
+                        if ((tq?.exprName as? Identifier)?.text == subject) narrowed else null
+                    }
+                    if (paramTypes.none { it != null }) continue
+                    // The param must never be reassigned in the body.
+                    if (stmtListContainsAssignTo(body.statements, subject)) continue
+                    found = paramTypes
+                    break
+                }
+                if (found != null) fnMap[name] = found
+            }
+            fnMap.keys.removeAll(multiDecl)
+            if (fnMap.isEmpty()) continue
+            // Call-site pass: direct call-of-call ExpressionStatements.
+            for (stmt in result.sourceFile.statements) {
+                val es = stmt as? ExpressionStatement ?: continue
+                val outer = es.expression as? CallExpression ?: continue
+                val inner = outer.expression as? CallExpression ?: continue
+                val callee = (inner.expression as? Identifier)?.text ?: continue
+                val paramTypes = fnMap[callee] ?: continue
+                for ((i, arg) in outer.arguments.withIndex()) {
+                    val narrowed = paramTypes.getOrNull(i) ?: continue
+                    val argType = try {
+                        literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
+                    } catch (_: StackOverflowError) { continue }
+                    val isPrim = argType is Type.Intrinsic || argType is Type.StringLiteral ||
+                        argType is Type.NumberLiteral || argType is Type.BigIntLiteral ||
+                        argType === trueType || argType === falseType
+                    if (!isPrim || argType === anyType || argType === errorType) continue
+                    val ok = try { checkTypeRelatedTo(argType, narrowed, assignableRelation) } catch (_: StackOverflowError) { continue }
+                    if (ok) continue
+                    val start = arg.pos
+                    val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '${typeToString(getWidenedLiteralType(argType))}' is not assignable to parameter of type '${typeToString(narrowed)}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line, character = character,
+                        start = start, length = length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** B200 helper: does any statement assign to / inc-dec [name]? (shallow expr scan
+     *  over assignment shapes; recurses statements only). */
+    private fun stmtListContainsAssignTo(stmts: List<Statement>, name: String): Boolean {
+        for (s in stmts) {
+            when (s) {
+                is ExpressionStatement -> {
+                    val e = s.expression
+                    if (e is BinaryExpression && isAssignmentOperator(e.operator) &&
+                        (e.left as? Identifier)?.text == name) return true
+                    if (e is PrefixUnaryExpression && (e.operand as? Identifier)?.text == name &&
+                        (e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus)) return true
+                    if (e is PostfixUnaryExpression && (e.operand as? Identifier)?.text == name) return true
+                }
+                is Block -> if (stmtListContainsAssignTo(s.statements, name)) return true
+                is IfStatement -> {
+                    if (stmtListContainsAssignTo(listOf(s.thenStatement), name)) return true
+                    if (s.elseStatement?.let { stmtListContainsAssignTo(listOf(it), name) } == true) return true
+                }
+                is WhileStatement -> if (stmtListContainsAssignTo(listOf(s.statement), name)) return true
+                is DoStatement -> if (stmtListContainsAssignTo(listOf(s.statement), name)) return true
+                is ForStatement -> if (stmtListContainsAssignTo(listOf(s.statement), name)) return true
+                is ForInStatement -> if (stmtListContainsAssignTo(listOf(s.statement), name)) return true
+                is ForOfStatement -> if (stmtListContainsAssignTo(listOf(s.statement), name)) return true
+                is TryStatement -> {
+                    if (stmtListContainsAssignTo(s.tryBlock.statements, name)) return true
+                    if (s.catchClause?.block?.statements?.let { stmtListContainsAssignTo(it, name) } == true) return true
+                    if (s.finallyBlock?.statements?.let { stmtListContainsAssignTo(it, name) } == true) return true
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
 
     /** B199 helper: scan [fileName]'s namespace bodies for an InterfaceDeclaration
      *  named [name] with exactly 2 type parameters. */
