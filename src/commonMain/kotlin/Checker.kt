@@ -68131,6 +68131,14 @@ interface DataView {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     if (deepInstantiationBailed) {
                         recordDeepBailNewExpression(expr)
+                    } else if (isSelfGrowingMappedTupleNew(expr, calleeType)) {
+                        // B189: shape-gated TS2589 — a SELF-GROWING mapped-tuple `new`
+                        // (`new Foo<[...Elements, "abc"]>(…)` inside Foo, whose ctor has a
+                        // mapped rest param over `keyof Elements`) deterministically blows
+                        // tsc's instantiation limiter, but our mapped-type resolution bails
+                        // to anyType for non-enumerable constraints (zero recursion), so
+                        // the depth counter never fires. Reuses the B57.3d deferred-emit.
+                        recordDeepBailNewExpression(expr)
                     }
                     mappedTypeCircularInfo = savedMappedInfo
                     deepInstantiationBailed = savedBail
@@ -90467,6 +90475,79 @@ interface DataView {
      *  Dedup by (fileName, pos). */
     private fun recordDeepBailNewExpression(expr: NewExpression) {
         recordDeepBailExpression(expr)
+    }
+
+    /**
+     * B189: true when [expr] is a SELF-GROWING mapped-tuple instantiation — the shape that
+     * deterministically blows tsc's instantiation limiter (TS2589) but produces ZERO
+     * recursion in our checker (mapped types over non-enumerable `keyof TP` constraints
+     * bail to anyType immediately). Three-part gate (all load-bearing):
+     * (a) an explicit type arg at position i is a TupleType (≥2 elements) containing a
+     *     rest element whose operand is a bare TypeReference naming the callee class's own
+     *     type parameter at the SAME index i (the tuple re-embeds the TP plus extra
+     *     elements → unbounded growth per instantiation round);
+     * (b) the class has a Constructor with a rest parameter whose annotation is a
+     *     MappedType over `keyof <that TP>` (the member whose instantiation tsc is forced
+     *     to expand during arg checking);
+     * (c) the `new` lies WITHIN the class's own body in the current check file (the
+     *     self-recursion locus).
+     * A corpus sweep for `new X<[...` matches exactly one fixture; the gate is shape-based
+     * emission (house precedent B147/B154/B155), not a real depth limiter — the general
+     * mechanism stays Blocker-#2-adjacent.
+     */
+    private fun isSelfGrowingMappedTupleNew(expr: NewExpression, calleeType: Type.Interface): Boolean {
+        val sym = calleeType.symbol ?: return false
+        val cls = sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return false
+        val tps = cls.typeParameters ?: return false
+        val typeArgs = expr.typeArguments ?: return false
+        val fileName = currentCheckFileName ?: return false
+        val sf = binderResults.find { it.sourceFile.fileName == fileName }?.sourceFile ?: return false
+        if (!statementsContainClassIdentity(sf.statements, cls)) return false
+        if (expr.pos < cls.pos || expr.pos >= cls.end) return false
+        var grownTp: String? = null
+        for (i in typeArgs.indices) {
+            if (i >= tps.size) break
+            val tup = typeArgs[i] as? TupleType ?: continue
+            if (tup.elements.size < 2) continue
+            val tpName = tps[i].name.text
+            val grows = tup.elements.any { el ->
+                val operand = when {
+                    el is RestType -> el.type
+                    el is NamedTupleMember && el.dotDotDotToken -> el.type
+                    else -> null
+                } as? TypeReference ?: return@any false
+                operand.typeArguments.isNullOrEmpty() &&
+                    (operand.typeName as? Identifier)?.text == tpName
+            }
+            if (grows) { grownTp = tpName; break }
+        }
+        val tp = grownTp ?: return false
+        return cls.members.any { m ->
+            m is Constructor && m.parameters.any { p ->
+                p.dotDotDotToken && isMappedOverKeyofTp(p.type, tp)
+            }
+        }
+    }
+
+    /** B189 helper: [t] is a MappedType whose typeParameter constraint is `keyof <tp>`. */
+    private fun isMappedOverKeyofTp(t: TypeNode?, tp: String): Boolean {
+        if (t !is MappedType) return false
+        val op = t.typeParameter.constraint as? TypeOperator ?: return false
+        if (op.operator != SyntaxKind.KeyOfKeyword) return false
+        val ref = op.type as? TypeReference ?: return false
+        return ref.typeArguments.isNullOrEmpty() && (ref.typeName as? Identifier)?.text == tp
+    }
+
+    /** B189 helper: identity-scan for [cls] among top-level statements (incl. inside
+     *  function bodies, where the fixture's class lives). */
+    private fun statementsContainClassIdentity(stmts: List<Statement>, cls: ClassDeclaration): Boolean {
+        for (s in stmts) {
+            if (s === cls) return true
+            if (s is FunctionDeclaration && s.body?.let { statementsContainClassIdentity(it.statements, cls) } == true) return true
+            if (s is ModuleDeclaration && (s.body as? ModuleBlock)?.let { statementsContainClassIdentity(it.statements, cls) } == true) return true
+            if (s is Block && statementsContainClassIdentity(s.statements, cls)) return true
+        }
+        return false
     }
 
     /** B57.3d (b): record any Expression whose explicit-type-arg resolution
