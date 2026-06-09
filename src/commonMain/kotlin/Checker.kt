@@ -10210,6 +10210,400 @@ class Checker(
             walkTopForFlowTS2454(s, source, fileName, emitted, fileLocals)
             walkExprForNestedFunctionLikes(s, source, fileName, emitted, fileLocals)
         }
+        // B187: TS2345 for a possibly-unassigned nullable-union local read as a loop arg.
+        checkNullableUnionLoopArgs(body, source, fileName, fileLocals)
+    }
+
+    /**
+     * B187: TS2345 "Argument of type 'P | undefined' is not assignable to parameter of
+     * type 'P'." for a NO-initializer local `let x: P | undefined` (P a primitive keyword)
+     * read as a bare-identifier argument INSIDE A LOOP against a single-declaration
+     * FunctionDeclaration whose matching parameter is a non-optional `P`. Consumes the
+     * existing loop-aware definite-assignment engine [isAssignedAtFlow] (built for TS2454):
+     * the read fires only when NO pre-loop-entry path assigns x; an assignment preceding
+     * the loop suppresses (test2 of `controlFlowLoopAnalysis` vs test1).
+     *
+     * FP firewall (load-bearing): a blanket reference-shape pre-scan requires EVERY
+     * reference to x in the function body to be either a plain assignment LHS `x = …` or a
+     * gated bare-identifier argument — ANY other reference (condition position, cast, `x!`,
+     * property access, nested function-like, unresolvable/overloaded/predicate-returning
+     * callee, param mismatch, …) disqualifies the variable. This syntactically excludes
+     * every construct tsc could narrow through, so at a flagged read tsc's flow type
+     * provably still contains `undefined` → tsc always errors the shape (passing-set
+     * argument). Display gates: the union must be exactly {P, undefined} and ≥1 assignment
+     * must exist (so tsc's loop-union display is the full declared union, not bare
+     * 'undefined').
+     */
+    private fun checkNullableUnionLoopArgs(
+        body: Block, source: String, fileName: String, fileLocals: SymbolTable?,
+    ) {
+        if (isJsLikeFileName(fileName)) return
+        // Candidates: direct statements only (the narrow target shape).
+        val candidates = mutableMapOf<String, Pair<VariableDeclaration, SyntaxKind>>()
+        for (stmt in body.statements) {
+            if (stmt !is VariableStatement) continue
+            if (ModifierFlag.Declare in stmt.modifiers) continue
+            for (decl in stmt.declarationList.declarations) {
+                val nm = (decl.name as? Identifier)?.text ?: continue
+                if (decl.initializer != null || decl.exclamationToken) continue
+                val union = decl.type as? UnionType ?: continue
+                if (union.types.size != 2) continue
+                val kinds = union.types.map { it.kind }
+                if (SyntaxKind.UndefinedKeyword !in kinds) continue
+                val primKind = kinds.firstOrNull {
+                    it == SyntaxKind.NumberKeyword || it == SyntaxKind.StringKeyword || it == SyntaxKind.BooleanKeyword
+                } ?: continue
+                candidates[nm] = decl to primKind
+            }
+        }
+        if (candidates.isEmpty()) return
+        for ((name, info) in candidates) {
+            val (decl, primKind) = info
+            val scan = NullableUnionRefScan(name, primKind, fileLocals)
+            for (s in body.statements) scanNullableUnionRefsStmt(s, scan)
+            if (scan.disqualified || scan.assignmentCount == 0 || scan.gatedLoopArgs.isEmpty()) continue
+            val primText = when (primKind) {
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                else -> "boolean"
+            }
+            val unionDisplay = formatTypeForDisplay(decl.type!!) ?: "$primText | undefined"
+            for (arg in scan.gatedLoopArgs) {
+                if (isAssignedAtFlow(getFlowAt(arg), name, mutableSetOf())) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$unionDisplay' is not assignable to parameter of type '$primText'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = arg.pos,
+                    length = name.length,
+                    messageChain = listOf("  Type 'undefined' is not assignable to type '$primText'."),
+                ))
+            }
+        }
+    }
+
+    /** B187 scan state for one candidate variable. */
+    private class NullableUnionRefScan(
+        val name: String,
+        val primKind: SyntaxKind,
+        val fileLocals: SymbolTable?,
+    ) {
+        var disqualified = false
+        var assignmentCount = 0
+        var inLoop = 0
+        /** Bare-identifier args (in loops) that passed the callee gate. */
+        val gatedLoopArgs = mutableListOf<Identifier>()
+    }
+
+    private fun scanNullableUnionRefsStmt(stmt: Statement, scan: NullableUnionRefScan) {
+        if (scan.disqualified) return
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { scanNullableUnionRefsExpr(it, scan) }
+            }
+            is ExpressionStatement -> scanNullableUnionRefsExpr(stmt.expression, scan)
+            is Block -> stmt.statements.forEach { scanNullableUnionRefsStmt(it, scan) }
+            is IfStatement -> {
+                scanNullableUnionRefsExpr(stmt.expression, scan)
+                scanNullableUnionRefsStmt(stmt.thenStatement, scan)
+                stmt.elseStatement?.let { scanNullableUnionRefsStmt(it, scan) }
+            }
+            is WhileStatement -> {
+                scanNullableUnionRefsExpr(stmt.expression, scan)
+                scan.inLoop++
+                scanNullableUnionRefsStmt(stmt.statement, scan)
+                scan.inLoop--
+            }
+            is DoStatement -> {
+                scanNullableUnionRefsExpr(stmt.expression, scan)
+                scan.inLoop++
+                scanNullableUnionRefsStmt(stmt.statement, scan)
+                scan.inLoop--
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+                    d.initializer?.let { scanNullableUnionRefsExpr(it, scan) }
+                }
+                (stmt.initializer as? Expression)?.let { scanNullableUnionRefsExpr(it, scan) }
+                stmt.condition?.let { scanNullableUnionRefsExpr(it, scan) }
+                stmt.incrementor?.let { scanNullableUnionRefsExpr(it, scan) }
+                scan.inLoop++
+                scanNullableUnionRefsStmt(stmt.statement, scan)
+                scan.inLoop--
+            }
+            is ForInStatement, is ForOfStatement -> {
+                // for-in/of over the candidate (or any use in heads) disqualifies via expr scan
+                val head = when (stmt) {
+                    is ForInStatement -> stmt.expression
+                    is ForOfStatement -> stmt.expression
+                    else -> null
+                }
+                head?.let { scanNullableUnionRefsExpr(it, scan) }
+                val inner = when (stmt) {
+                    is ForInStatement -> stmt.statement
+                    is ForOfStatement -> stmt.statement
+                    else -> null
+                }
+                scan.inLoop++
+                inner?.let { scanNullableUnionRefsStmt(it, scan) }
+                scan.inLoop--
+            }
+            is ReturnStatement -> stmt.expression?.let { scanNullableUnionRefsExpr(it, scan) }
+            is SwitchStatement -> {
+                scanNullableUnionRefsExpr(stmt.expression, scan)
+                for (clause in stmt.caseBlock) {
+                    when (clause) {
+                        is CaseClause -> {
+                            scanNullableUnionRefsExpr(clause.expression, scan)
+                            clause.statements.forEach { scanNullableUnionRefsStmt(it, scan) }
+                        }
+                        is DefaultClause -> clause.statements.forEach { scanNullableUnionRefsStmt(it, scan) }
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { scanNullableUnionRefsStmt(it, scan) }
+                stmt.catchClause?.block?.statements?.forEach { scanNullableUnionRefsStmt(it, scan) }
+                stmt.finallyBlock?.statements?.forEach { scanNullableUnionRefsStmt(it, scan) }
+            }
+            is LabeledStatement -> scanNullableUnionRefsStmt(stmt.statement, scan)
+            is ThrowStatement -> stmt.expression?.let { scanNullableUnionRefsExpr(it, scan) }
+            is FunctionDeclaration -> {
+                // Any reference inside a nested function-like disqualifies (closure capture).
+                if (stmt.body?.let { stmtListContainsName(it.statements, scan.name) } == true) scan.disqualified = true
+            }
+            is ClassDeclaration -> if (classContainsName(stmt, scan.name)) scan.disqualified = true
+            else -> {}
+        }
+    }
+
+    private fun scanNullableUnionRefsExpr(exprIn: Expression, scan: NullableUnionRefScan) {
+        if (scan.disqualified) return
+        // Iterative left-spine for deep binary chains (StackOverflow gotcha).
+        var expr = exprIn
+        while (true) {
+            when (val e = expr) {
+                is BinaryExpression -> {
+                    if (e.operator == SyntaxKind.Equals && (e.left as? Identifier)?.text == scan.name) {
+                        scan.assignmentCount++
+                    } else {
+                        scanNullableUnionRefsOperand(e.left, scan)
+                    }
+                    expr = e.right
+                    continue
+                }
+                else -> {
+                    scanNullableUnionRefsOperand(e, scan)
+                    return
+                }
+            }
+        }
+    }
+
+    private fun scanNullableUnionRefsOperand(e: Expression, scan: NullableUnionRefScan) {
+        if (scan.disqualified) return
+        when (e) {
+            is Identifier -> if (e.text == scan.name) scan.disqualified = true
+            is CallExpression -> {
+                val callee = e.expression
+                if (callee is Identifier) {
+                    if (callee.text == scan.name) { scan.disqualified = true; return }
+                } else {
+                    scanNullableUnionRefsExpr(callee, scan)
+                }
+                e.arguments.forEachIndexed { i, arg ->
+                    if (arg is Identifier && arg.text == scan.name) {
+                        val calleeIdent = callee as? Identifier
+                        if (calleeIdent != null && scan.inLoop > 0 &&
+                            nullableUnionCalleeGateOk(calleeIdent, i, scan)) {
+                            scan.gatedLoopArgs.add(arg)
+                        } else {
+                            scan.disqualified = true
+                        }
+                    } else {
+                        scanNullableUnionRefsExpr(arg, scan)
+                    }
+                }
+            }
+            is ParenthesizedExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is PrefixUnaryExpression -> scanNullableUnionRefsExpr(e.operand, scan)
+            is PostfixUnaryExpression -> scanNullableUnionRefsExpr(e.operand, scan)
+            is PropertyAccessExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is ElementAccessExpression -> {
+                scanNullableUnionRefsExpr(e.expression, scan)
+                scanNullableUnionRefsExpr(e.argumentExpression, scan)
+            }
+            is ConditionalExpression -> {
+                scanNullableUnionRefsExpr(e.condition, scan)
+                scanNullableUnionRefsExpr(e.whenTrue, scan)
+                scanNullableUnionRefsExpr(e.whenFalse, scan)
+            }
+            is ArrayLiteralExpression -> e.elements.forEach { scanNullableUnionRefsExpr(it, scan) }
+            is ObjectLiteralExpression -> e.properties.forEach { p ->
+                when (p) {
+                    is PropertyAssignment -> scanNullableUnionRefsExpr(p.initializer, scan)
+                    is ShorthandPropertyAssignment -> if (p.name.text == scan.name) scan.disqualified = true
+                    is SpreadAssignment -> scanNullableUnionRefsExpr(p.expression, scan)
+                    else -> {}
+                }
+            }
+            is SpreadElement -> scanNullableUnionRefsExpr(e.expression, scan)
+            is AsExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is TypeAssertionExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is NonNullExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is SatisfiesExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is NewExpression -> {
+                scanNullableUnionRefsExpr(e.expression, scan)
+                e.arguments?.forEach { scanNullableUnionRefsExpr(it, scan) }
+            }
+            is TemplateExpression -> e.templateSpans.forEach { scanNullableUnionRefsExpr(it.expression, scan) }
+            is AwaitExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is TypeOfExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is VoidExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is DeleteExpression -> scanNullableUnionRefsExpr(e.expression, scan)
+            is YieldExpression -> e.expression?.let { scanNullableUnionRefsExpr(it, scan) }
+            is ArrowFunction, is FunctionExpression, is ClassExpression -> {
+                if (exprContainsName(e, scan.name)) scan.disqualified = true
+            }
+            else -> {}
+        }
+    }
+
+    /** B187 callee gate: bare-Identifier callee resolving (via file locals, then globals)
+     *  to a symbol with EXACTLY ONE FunctionDeclaration whose parameters[argIndex] is a
+     *  non-optional, non-rest, no-default parameter of the candidate's primitive keyword
+     *  type, and whose return annotation is NOT a type predicate. */
+    private fun nullableUnionCalleeGateOk(callee: Identifier, argIndex: Int, scan: NullableUnionRefScan): Boolean {
+        val sym = scan.fileLocals?.get(callee.text) ?: globals[callee.text] ?: return false
+        if (sym.declarations.size != 1) return false
+        val fn = sym.declarations.first() as? FunctionDeclaration ?: return false
+        if (fn.type is TypePredicate) return false
+        val param = fn.parameters.getOrNull(argIndex) ?: return false
+        if (param.questionToken || param.initializer != null || param.dotDotDotToken) return false
+        val pt = param.type ?: return false
+        return pt.kind == scan.primKind
+    }
+
+    /** B187: deep "does this subtree reference [name]" scans for disqualification. */
+    private fun exprContainsName(e: Expression, name: String): Boolean {
+        var found = false
+        fun visitExpr(x: Expression) {
+            if (found) return
+            var cur = x
+            while (true) {
+                when (val c = cur) {
+                    is BinaryExpression -> { visitExpr(c.left); cur = c.right; continue }
+                    is Identifier -> { if (c.text == name) found = true; return }
+                    is CallExpression -> { visitExpr(c.expression); c.arguments.forEach { visitExpr(it) }; return }
+                    is NewExpression -> { visitExpr(c.expression); c.arguments?.forEach { visitExpr(it) }; return }
+                    is ParenthesizedExpression -> { cur = c.expression; continue }
+                    is PropertyAccessExpression -> { cur = c.expression; continue }
+                    is ElementAccessExpression -> { visitExpr(c.expression); cur = c.argumentExpression; continue }
+                    is PrefixUnaryExpression -> { cur = c.operand; continue }
+                    is PostfixUnaryExpression -> { cur = c.operand; continue }
+                    is ConditionalExpression -> { visitExpr(c.condition); visitExpr(c.whenTrue); cur = c.whenFalse; continue }
+                    is ArrayLiteralExpression -> { c.elements.forEach { visitExpr(it) }; return }
+                    is ObjectLiteralExpression -> {
+                        for (p in c.properties) when (p) {
+                            is PropertyAssignment -> visitExpr(p.initializer)
+                            is ShorthandPropertyAssignment -> if (p.name.text == name) found = true
+                            is SpreadAssignment -> visitExpr(p.expression)
+                            else -> {}
+                        }
+                        return
+                    }
+                    is SpreadElement -> { cur = c.expression; continue }
+                    is AsExpression -> { cur = c.expression; continue }
+                    is TypeAssertionExpression -> { cur = c.expression; continue }
+                    is NonNullExpression -> { cur = c.expression; continue }
+                    is SatisfiesExpression -> { cur = c.expression; continue }
+                    is AwaitExpression -> { cur = c.expression; continue }
+                    is TypeOfExpression -> { cur = c.expression; continue }
+                    is VoidExpression -> { cur = c.expression; continue }
+                    is DeleteExpression -> { cur = c.expression; continue }
+                    is TemplateExpression -> { c.templateSpans.forEach { visitExpr(it.expression) }; return }
+                    is YieldExpression -> { c.expression?.let { visitExpr(it) }; return }
+                    is ArrowFunction -> {
+                        when (val b = c.body) {
+                            is Block -> { if (stmtListContainsName(b.statements, name)) found = true }
+                            is Expression -> visitExpr(b)
+                            else -> {}
+                        }
+                        return
+                    }
+                    is FunctionExpression -> { if (stmtListContainsName(c.body.statements, name)) found = true; return }
+                    is ClassExpression -> { if (classMembersContainName(c.members, name)) found = true; return }
+                    else -> return
+                }
+            }
+        }
+        visitExpr(e)
+        return found
+    }
+
+    private fun stmtListContainsName(stmts: List<Statement>, name: String): Boolean {
+        for (s in stmts) if (stmtContainsName(s, name)) return true
+        return false
+    }
+
+    private fun stmtContainsName(stmt: Statement, name: String): Boolean {
+        return when (stmt) {
+            is ExpressionStatement -> exprContainsName(stmt.expression, name)
+            is VariableStatement -> stmt.declarationList.declarations.any {
+                it.initializer?.let { i -> exprContainsName(i, name) } == true
+            }
+            is Block -> stmtListContainsName(stmt.statements, name)
+            is IfStatement -> exprContainsName(stmt.expression, name) ||
+                stmtContainsName(stmt.thenStatement, name) ||
+                (stmt.elseStatement?.let { stmtContainsName(it, name) } == true)
+            is WhileStatement -> exprContainsName(stmt.expression, name) || stmtContainsName(stmt.statement, name)
+            is DoStatement -> exprContainsName(stmt.expression, name) || stmtContainsName(stmt.statement, name)
+            is ForStatement -> ((stmt.initializer as? Expression)?.let { exprContainsName(it, name) } == true) ||
+                ((stmt.initializer as? VariableDeclarationList)?.declarations?.any { it.initializer?.let { i -> exprContainsName(i, name) } == true } == true) ||
+                (stmt.condition?.let { exprContainsName(it, name) } == true) ||
+                (stmt.incrementor?.let { exprContainsName(it, name) } == true) ||
+                stmtContainsName(stmt.statement, name)
+            is ForInStatement -> exprContainsName(stmt.expression, name) || stmtContainsName(stmt.statement, name)
+            is ForOfStatement -> exprContainsName(stmt.expression, name) || stmtContainsName(stmt.statement, name)
+            is ReturnStatement -> stmt.expression?.let { exprContainsName(it, name) } == true
+            is ThrowStatement -> stmt.expression?.let { exprContainsName(it, name) } == true
+            is SwitchStatement -> exprContainsName(stmt.expression, name) || stmt.caseBlock.any { clause ->
+                when (clause) {
+                    is CaseClause -> exprContainsName(clause.expression, name) || stmtListContainsName(clause.statements, name)
+                    is DefaultClause -> stmtListContainsName(clause.statements, name)
+                    else -> false
+                }
+            }
+            is TryStatement -> stmtListContainsName(stmt.tryBlock.statements, name) ||
+                (stmt.catchClause?.block?.statements?.let { stmtListContainsName(it, name) } == true) ||
+                (stmt.finallyBlock?.statements?.let { stmtListContainsName(it, name) } == true)
+            is LabeledStatement -> stmtContainsName(stmt.statement, name)
+            is FunctionDeclaration -> stmt.body?.let { stmtListContainsName(it.statements, name) } == true
+            is ClassDeclaration -> classContainsName(stmt, name)
+            else -> false
+        }
+    }
+
+    private fun classContainsName(cls: ClassDeclaration, name: String): Boolean = classMembersContainName(cls.members, name)
+
+    private fun classMembersContainName(members: List<ClassElement>, name: String): Boolean {
+        for (m in members) {
+            val body = when (m) {
+                is MethodDeclaration -> m.body
+                is Constructor -> m.body
+                is GetAccessor -> m.body
+                is SetAccessor -> m.body
+                is PropertyDeclaration -> { if (m.initializer?.let { exprContainsName(it, name) } == true) return true; null }
+                else -> null
+            }
+            if (body != null && stmtListContainsName(body.statements, name)) return true
+        }
+        return false
     }
 
     private fun collectAllUninitVarsInFunction(
