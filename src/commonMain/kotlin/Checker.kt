@@ -581,6 +581,9 @@ class Checker(
         "BigInt", "BigInt64Array", "BigUint64Array",
     )
 
+    /** B181: the intrinsic string-mapping utility type names (string-only domains). */
+    private val STRING_MAPPING_INTRINSICS = setOf("Uppercase", "Lowercase", "Capitalize", "Uncapitalize")
+
     /** B171: the lib typed-array constructor names (none is an ArrayBuffer). */
     private val TYPED_ARRAY_NAMES = setOf(
         "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
@@ -58749,6 +58752,40 @@ interface DataView {
         // CheckFails` needs; broad `this` typing FP'd the return-assignability path.
         if (tryEmitVoidThisMethodToPrimitiveVar(decl, name, source, fileName)) return
 
+        // B181: a STRING-MAPPING intrinsic annotation (`Uppercase<X>` etc., unshadowed)
+        // accepts ONLY strings — a definitely-non-string literal initializer is TS2322
+        // (stringMappingAssignability). The intrinsics resolve to errorType/anyType in
+        // our engine, so the standard path is silently masked. Unknown initializer
+        // shapes bail (FN-safe).
+        run {
+            val ann = decl.type as? TypeReference ?: return@run
+            val annName = (ann.typeName as? Identifier)?.text ?: return@run
+            if (annName !in STRING_MAPPING_INTRINSICS || ann.typeArguments?.size != 1) return@run
+            if (globals[annName] != null || currentFileLocals?.get(annName) != null) return@run
+            val init = decl.initializer ?: return@run
+            val srcDisplay = when (init) {
+                is NumericLiteralNode -> "number"
+                is BigIntLiteralNode -> "bigint"
+                is ObjectLiteralExpression ->
+                    typeToString(widenType(try { getTypeOfObjectLiteral(init) } catch (_: StackOverflowError) { return@run }))
+                is Identifier -> when (init.text) {
+                    "true", "false" -> "boolean"
+                    else -> return@run
+                }
+                else -> return@run
+            }
+            if (srcDisplay.isEmpty() || srcDisplay == "any" || srcDisplay == "error") return@run
+            val tgtDisplay = formatTypeForDisplay(ann) ?: return@run
+            val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcDisplay' is not assignable to type '$tgtDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = name.pos, length = name.text.length,
+            ))
+            return
+        }
+
         // For unannotated variables with initializers, infer and store the type
         // in currentLocalTypes so downstream references can resolve it.
         // Do NOT change getTypeOfVariableOrProperty (causes TS2403 FPs).
@@ -59208,6 +59245,12 @@ interface DataView {
             if (canUse && !isAssignable && init is ArrayLiteralExpression &&
                 targetType is Type.Reference && targetType.target.symbol?.name == "Array"
             ) {
+                // B180: the per-element PRIMITIVE mismatch loop (long live on the CALL-ARG
+                // path) was never wired here, so `var a: string[] = [1,2,"3"]` emitted
+                // NOTHING — emit the per-element TS2322s before suppressing the outer one
+                // (targetTypeTest3). LITERAL elements only — non-literal elements are
+                // covered by the pre-existing element walker (arraySigChecking double-emit).
+                checkArrayLiteralElementsAgainstType(init, targetType, source, fileName, literalElementsOnly = true)
                 return
             }
             if (canUse && !isAssignable) {
@@ -85796,6 +85839,7 @@ interface DataView {
         arrayParamType: Type.Reference,
         source: String,
         fileName: String,
+        literalElementsOnly: Boolean = false,
     ) {
         val elementType = arrayParamType.resolvedTypeArguments?.firstOrNull() ?: return
         if (elementType === anyType || elementType === errorType) return
@@ -85859,6 +85903,15 @@ interface DataView {
         try {
             for (elem in arrLit.elements) {
                 if (elem is SpreadElement) continue
+                // B180: the var-decl caller covers only LITERAL elements — call-expression
+                // elements (`[myVar.voidFn()]`) are already emitted by the pre-existing
+                // var-decl element walker; without this gate they double-emit
+                // (arraySigChecking).
+                if (literalElementsOnly &&
+                    elem !is NumericLiteralNode && elem !is StringLiteralNode &&
+                    elem !is BigIntLiteralNode && elem !is PrefixUnaryExpression &&
+                    !(elem is Identifier && elem.text in setOf("true", "false", "null", "undefined"))
+                ) continue
                 val elemType = getTypeOfExpression(elem)
                 if (elemType === anyType || elemType === errorType) continue
                 if (!checkTypeRelatedTo(elemType, elementType, assignableRelation)) {
