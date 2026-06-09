@@ -1312,6 +1312,8 @@ class Checker(
         checkIsolatedModulesExportDefaultIsType()
         // 68aa. Check `export import X = Y` where Y is a type-only entity under isolatedModules (TS1269)
         checkIsolatedModulesExportImportIsType()
+        // 68aa'. Check re-export of a type-only name under isolatedModules (TS1205 / TS1448)
+        checkIsolatedModulesReExportType()
         // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
         checkVerbatimModuleSyntax()
         // 69. Check namespace used as type (TS2709)
@@ -94820,6 +94822,140 @@ interface DataView {
     }
 
     /**
+     * Is the module referenced by `require("specifier")` type-only — i.e. its `export = X`
+     * target `X` is declared in the module ONLY as a type (alias/interface) and not as a value?
+     * Used by the isolatedModules TS1269 check for the `export import T = require(...)` form.
+     */
+    private fun isRequireModuleTypeOnly(specifier: String): Boolean {
+        val targetFile = resolveModuleSpecifier(specifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        val exportAssign = targetResult.sourceFile.statements.firstNotNullOfOrNull {
+            if (it is ExportAssignment && it.isExportEquals) it else null
+        } ?: return false
+        val target = exportAssign.expression as? Identifier ?: return false
+        var hasType = false
+        var hasValue = false
+        for (s in targetResult.sourceFile.statements) {
+            when (s) {
+                is TypeAliasDeclaration -> if (s.name.text == target.text) hasType = true
+                is InterfaceDeclaration -> if (s.name.text == target.text) hasType = true
+                is ClassDeclaration -> if (s.name?.text == target.text) hasValue = true
+                is FunctionDeclaration -> if (s.name?.text == target.text) hasValue = true
+                is EnumDeclaration -> if (s.name.text == target.text) hasValue = true
+                is VariableStatement -> if (s.declarationList.declarations.any { (it.name as? Identifier)?.text == target.text }) hasValue = true
+                is ModuleDeclaration -> if ((s.name as? Identifier)?.text == target.text) hasValue = true
+                else -> {}
+            }
+        }
+        return hasType && !hasValue
+    }
+
+    /**
+     * TS1205 / TS1448: under isolatedModules, a re-export of a type-only name must use
+     * `export type`. `export { T } from "m"` (or local `export { T }` of a value-imported
+     * type) is ambiguous to a single-file transpiler. TS1205 when the name is a DIRECT type
+     * in the source; TS1448 when its type-only-ness comes from a type-only re-export
+     * (`export type { X } from ...`) in another file. FP-safe: gated on the EXISTING
+     * `isExportedNameTypeOnly` helper (true only for genuinely type-only exports), skips
+     * `export type` / type-only specifiers / type-only imports / namespace imports / .d.ts.
+     */
+    private fun checkIsolatedModulesReExportType() {
+        if (!options.isolatedModules || options.verbatimModuleSyntax) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            for (stmt in stmts) {
+                if (stmt !is ExportDeclaration || stmt.isTypeOnly) continue
+                val clause = stmt.exportClause as? NamedExports ?: continue
+                val moduleSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                for (spec in clause.elements) {
+                    if (spec.isTypeOnly) continue
+                    val srcName: String
+                    val srcSpec: String
+                    if (moduleSpec != null) {
+                        // `export { X } from "spec"`
+                        srcName = (spec.propertyName ?: spec.name).text
+                        srcSpec = moduleSpec
+                    } else {
+                        // local `export { X (as Y) }` — X must be a NON-type-only named import
+                        val imp = findNonTypeOnlyImport((spec.propertyName ?: spec.name).text, stmts) ?: continue
+                        srcName = imp.first
+                        srcSpec = imp.second
+                    }
+                    if (!isExportedNameTypeOnly(srcName, srcSpec)) continue
+                    val nameNode = spec.propertyName ?: spec.name
+                    // Span covers the WHOLE specifier (`T as T4`), which for a no-rename
+                    // specifier collapses to just the name.
+                    val spanStart = nameNode.pos
+                    val spanEnd = spec.name.pos + spec.name.text.length
+                    val isTs1448 = isTypeOnlyExportName(srcName, srcSpec, fileName)
+                    val code = if (isTs1448) 1448 else 1205
+                    val msg = if (isTs1448)
+                        "'${nameNode.text}' resolves to a type-only declaration and must be re-exported using a type-only re-export when 'isolatedModules' is enabled."
+                    else
+                        "Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'."
+                    // TS1448 carries a related TS1377 pointing at the type-only re-export in the source file.
+                    val related: List<Diagnostic> = if (isTs1448) {
+                        findTypeOnlyReExportSpecifier(srcName, srcSpec)?.let { (declFile, declPos) ->
+                            val declSource = fileResults[declFile]?.sourceFile?.text
+                            if (declSource != null) {
+                                val (rl, rc) = getLineAndCharacterOfPosition(declSource, declPos)
+                                listOf(Diagnostic(
+                                    message = "'${nameNode.text}' was exported here.",
+                                    category = DiagnosticCategory.Message, code = 1377,
+                                    fileName = declFile, line = rl, character = rc,
+                                    start = declPos, length = srcName.length,
+                                ))
+                            } else emptyList()
+                        } ?: emptyList()
+                    } else emptyList()
+                    val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+                    diagnostics.add(Diagnostic(
+                        message = msg, category = DiagnosticCategory.Error, code = code,
+                        fileName = fileName, line = line, character = character,
+                        start = spanStart, length = spanEnd - spanStart,
+                        relatedInformation = related,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Find the `export type { name }` specifier in the module [moduleSpec]; returns (declFile, specPos) for TS1377. */
+    private fun findTypeOnlyReExportSpecifier(name: String, moduleSpec: String): Pair<String, Int>? {
+        val targetFile = resolveModuleSpecifier(moduleSpec, null) ?: return null
+        val targetResult = fileResults[targetFile] ?: return null
+        for (stmt in targetResult.sourceFile.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val clause = stmt.exportClause as? NamedExports ?: continue
+            for (spec in clause.elements) {
+                if (spec.name.text == name && (stmt.isTypeOnly || spec.isTypeOnly)) {
+                    return targetFile to (spec.propertyName ?: spec.name).pos
+                }
+            }
+        }
+        return null
+    }
+
+    /** Find a NON-type-only named import of [localName] in [stmts]; returns (sourceName, moduleSpec) or null. */
+    private fun findNonTypeOnlyImport(localName: String, stmts: List<Statement>): Pair<String, String>? {
+        for (stmt in stmts) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            if (clause.isTypeOnly) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val nb = clause.namedBindings as? NamedImports ?: continue
+            for (el in nb.elements) {
+                if (el.name.text != localName || el.isTypeOnly) continue
+                return (el.propertyName ?: el.name).text to spec
+            }
+        }
+        return null
+    }
+
+    /**
      * B61.5f helper: returns true when the source text leading up to an
      * ImportEqualsDeclaration's pos contains a class-only modifier keyword
      * (public/private/protected/static). Used to suppress TS2440 FP when
@@ -95414,20 +95550,26 @@ interface DataView {
             for (stmt in stmts) {
                 if (stmt !is ImportEqualsDeclaration) continue
                 if (ModifierFlag.Export !in stmt.modifiers) continue
-                // Only fires for `export import X = SomeIdent` where SomeIdent resolves to type-only.
-                // Skip `export import X = require("...")` (external module ref) — different code path.
+                // Fires for `export import X = SomeIdent` where SomeIdent resolves to type-only,
+                // AND `export import X = require("spec")` where the required module is type-only
+                // (its `export = T` target is a type alias/interface).
                 val ref = stmt.moduleReference
-                if (ref is ExternalModuleReference) continue
-                val rootName = when (ref) {
-                    is Identifier -> ref.text
-                    is QualifiedName -> {
-                        var leftmost: Node = ref
-                        while (leftmost is QualifiedName) leftmost = leftmost.left
-                        (leftmost as? Identifier)?.text
+                val isTypeOnlyRef = if (ref is ExternalModuleReference) {
+                    val spec = (ref.expression as? StringLiteralNode)?.text
+                    spec != null && isRequireModuleTypeOnly(spec)
+                } else {
+                    val rootName = when (ref) {
+                        is Identifier -> ref.text
+                        is QualifiedName -> {
+                            var leftmost: Node = ref
+                            while (leftmost is QualifiedName) leftmost = leftmost.left
+                            (leftmost as? Identifier)?.text
+                        }
+                        else -> null
                     }
-                    else -> null
-                } ?: continue
-                if (!importedFromTypeOnlyExport(rootName)) continue
+                    rootName != null && importedFromTypeOnlyExport(rootName)
+                }
+                if (!isTypeOnlyRef) continue
                 // The parser's stmt.pos points to `import` (after the `export` modifier was
                 // consumed). Walk backward through whitespace to find the start of `export`.
                 var startPos = stmt.pos
