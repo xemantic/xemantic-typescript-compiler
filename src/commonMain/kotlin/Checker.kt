@@ -65436,7 +65436,15 @@ interface DataView {
             flags.hasAny(SymbolFlags.Alias) -> {
                 // Import alias — resolve to target symbol's type
                 val target = resolveAliasTarget(symbol)
-                if (target != null && target !== symbol) getTypeOfSymbol(target) else anyType
+                if (target != null && target !== symbol) getTypeOfSymbol(target)
+                // B217: `import B from "./m"` where the target module's
+                // `export default` is an OBJECT LITERAL — the binder creates no
+                // symbol for `export default <expr>`, so resolveAliasTarget is null
+                // and B was silently anyType. Infer (widened — freshness stripped,
+                // matching tsc's export-default rule).
+                else defaultImportObjectLiteralExpr(symbol)?.let { lit ->
+                    try { inferTypeFromInitializer(lit) } catch (_: StackOverflowError) { null }
+                } ?: anyType
             }
             flags.hasAny(SymbolFlags.TypeParameter) -> getDeclaredTypeOfSymbol(symbol)
             else -> anyType
@@ -86818,7 +86826,16 @@ interface DataView {
             // `this` to an interface param it lacks a required member of is always an error).
             val argIsThisAnonObj = arg is Identifier && arg.text == "this" &&
                 argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface
-            if (!isRestParam && (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj) &&
+            // B217: an anonymous object-bag arg with COMPLETE object-literal
+            // provenance (a no-annotation const initialized by a spread-free object
+            // literal, possibly through a default-import alias) — its inferred member
+            // set is exhaustive, so name-presence missing-prop checking is sound.
+            val argIsAnonObjBag = arg is Identifier && arg.text != "this" &&
+                argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface &&
+                argType.callSignatures.isNullOrEmpty() && argType.constructSignatures.isNullOrEmpty() &&
+                argType.stringIndexInfo == null && argType.numberIndexInfo == null &&
+                argHasCompleteObjectLiteralProvenance(arg)
+            if (!isRestParam && (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
                 paramType is Type.Interface && paramType.symbol != null) {
                 try {
                     resolveStructuredTypeMembers(argType as Type.Object)
@@ -93429,7 +93446,22 @@ interface DataView {
             else -> decl.pos
         }
         if (declPos < 0) return null
-        val (declFile, declSource) = resolveDeclarationSourceFile(declPos)
+        // B217: position-only attribution mis-fires in multi-file tests when the
+        // pos fits inside several files' text — prefer the file whose text actually
+        // carries the property NAME at declPos, then fall back to position-fit.
+        var declFile: String? = null
+        var declSource: String? = null
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            if (declPos + propSymbol.name.length <= sf.text.length &&
+                sf.text.regionMatches(declPos, propSymbol.name, 0, propSymbol.name.length)) {
+                declFile = sf.fileName; declSource = sf.text; break
+            }
+        }
+        if (declFile == null || declSource == null) {
+            val (f, s) = resolveDeclarationSourceFile(declPos)
+            declFile = f; declSource = s
+        }
         if (declFile == null || declSource == null) return null
         val declLength = propSymbol.name.length
         val isLib = isLibFileName(declFile)
@@ -94464,6 +94496,44 @@ interface DataView {
             is FunctionExpression -> fnParamScanStmts(expr.body.statements, source, fileName, fnParamChildCtx(ctx, expr.parameters, expr.typeParameters))
             else -> {}
         }
+    }
+
+    /** B217: does the identifier arg's type come from a COMPLETE (spread-free,
+     *  statically-named) object literal — either a no-annotation var/const
+     *  initializer, or a default-import alias of an `export default {…}`? */
+    private fun argHasCompleteObjectLiteralProvenance(arg: Identifier): Boolean {
+        val sym = currentFileLocals?.get(arg.text) ?: globals[arg.text] ?: return false
+        fun completeObjLit(e: Expression?): Boolean {
+            val o = e as? ObjectLiteralExpression ?: return false
+            return o.properties.isNotEmpty() && o.properties.all { p ->
+                p is PropertyAssignment && (p.name is Identifier || p.name is StringLiteralNode)
+            }
+        }
+        val target = try { resolveAliasTarget(sym) } catch (_: StackOverflowError) { null } ?: sym
+        ((target.valueDeclaration ?: target.declarations.firstOrNull()) as? VariableDeclaration)?.let { vd ->
+            if (vd.type == null && completeObjLit(vd.initializer)) return true
+        }
+        if (sym.flags.hasAny(SymbolFlags.Alias)) {
+            defaultImportObjectLiteralExpr(sym)?.let { return completeObjLit(it) }
+        }
+        return false
+    }
+
+    /** B217: the ObjectLiteralExpression behind `import X from "./m"` whose target
+     *  module's `export default` is an object literal (the binder creates no symbol
+     *  for `export default <expr>`, so resolveAliasTarget returns null for X). */
+    private fun defaultImportObjectLiteralExpr(symbol: Symbol): ObjectLiteralExpression? {
+        for (decl in symbol.declarations) {
+            val imp = decl as? ImportDeclaration ?: continue
+            if (imp.importClause?.name?.text != symbol.name) continue
+            val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val resolved = resolveModuleSpecifier(spec) ?: continue
+            val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == resolved } ?: continue
+            val ea = targetResult.sourceFile.statements.filterIsInstance<ExportAssignment>()
+                .firstOrNull { !it.isExportEquals } ?: continue
+            return ea.expression as? ObjectLiteralExpression
+        }
+        return null
     }
 
     /**
