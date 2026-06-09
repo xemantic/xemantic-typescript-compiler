@@ -5279,6 +5279,40 @@ class Checker(
     }
 
     /**
+     * B174: node_modules walk honoring the package.json resolution steps — a STRING
+     * "types"/"typings" first (an ARRAY value is INVALID per tsc and is skipped), then a
+     * STRING "main" (resolved as a file with declaration substitution, or a directory via
+     * `/index.d.ts`). Returns null when no package.json step resolves — callers fall back
+     * to [resolveBareViaNodeModules]'s plain index candidates.
+     */
+    private fun resolveBareViaNodeModulesPkgJson(specifier: String, contextFile: String): String? {
+        var dir: String? = contextFile.substringBeforeLast('/', "")
+        while (dir != null) {
+            val base = if (dir.isEmpty()) "node_modules/$specifier" else "$dir/node_modules/$specifier"
+            val pkg = jsonModuleContents["$base/package.json"]
+            if (pkg != null) {
+                for (field in listOf("types", "typings", "main")) {
+                    val m = Regex("\"$field\"\\s*:\\s*").find(pkg) ?: continue
+                    val rest = pkg.substring(m.range.last + 1).trimStart()
+                    if (!rest.startsWith("\"")) continue // array/object/null → invalid, skip
+                    val target = rest.drop(1).substringBefore("\"")
+                    if (target.isEmpty()) continue
+                    val t = "$base/" + target.removePrefix("./")
+                    for (cand in listOf(
+                        t, "$t.d.ts", "$t.ts",
+                        t.removeSuffix(".js") + ".d.ts",
+                        "$t/index.d.ts", "$t/index.ts",
+                    )) {
+                        if (cand in fileResults) return cand
+                    }
+                }
+            }
+            dir = if (dir.isEmpty()) null else dir.substringBeforeLast('/', "")
+        }
+        return null
+    }
+
+    /**
      * Is the type declared in [g] nameable (referenceable in a portable declaration) from [f]?
      * Rule: find the LAST `node_modules/` segment in [g]; the directory immediately before it
      * (the package's "host" dir) must be an ancestor-or-equal of [f]'s directory. A package in a
@@ -81168,6 +81202,49 @@ interface DataView {
         // 16.4: Instantiate signature when explicit type arguments are provided
         val typeArgs = expr.typeArguments
         if (typeArgs != null && typeArgs.isNotEmpty()) {
+            // B174: `f<typeof import("spec")>(null)` — getTypeFromTypeNode resolves an
+            // import-type to anyType (masking the instantiated param check), but under
+            // strictNullChecks a `null` arg against a bare-TP param mapped to the
+            // import-namespace type is TS2345 with the RESOLVED module path display
+            // (declarationEmitWithInvalidPackageJsonTypings: an ARRAY-valued package.json
+            // "types" is invalid → resolution falls back to "main" → lib/index.d.ts).
+            run {
+                if (!strictNullChecks || typeArgs.size != 1) return@run
+                // `typeof import("spec")` parses as TypeQuery(exprName = ImportType) (the
+                // Parser's Typeof branch); a bare import-type arg is an ImportType directly.
+                val imp = (typeArgs[0] as? ImportType)
+                    ?: ((typeArgs[0] as? TypeQuery)?.exprName as? ImportType)
+                    ?: return@run
+                if (imp.qualifier != null) return@run
+                val specLit = ((imp.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+                    ?: (imp.argument as? StringLiteralNode)?.text ?: return@run
+                val sig = signatures.firstOrNull { it.typeParameters?.size == 1 } ?: return@run
+                val tpName = sig.typeParameters!![0].symbol?.name ?: return@run
+                val sigParams = signatureDeclarationParameters(sig.declaration) ?: return@run
+                val argIdx = sigParams.indexOfFirst { p ->
+                    (p.type as? TypeReference)?.let {
+                        it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName
+                    } == true
+                }
+                if (argIdx < 0) return@run
+                val arg = expr.arguments.getOrNull(argIdx) ?: return@run
+                if (!(arg is Identifier && arg.text == "null")) return@run
+                val g = resolveBareViaNodeModulesPkgJson(specLit, fileName)
+                    ?: resolveBareViaNodeModules(specLit, fileName)
+                    ?: resolveSpecifierAnywhere(specLit, fileName)
+                    ?: return@run
+                val baseDisplay = g.removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type 'null' is not assignable to parameter of type 'typeof import(\"$baseDisplay\")'.",
+                    category = DiagnosticCategory.Error, code = 2345,
+                    fileName = fileName, line = l, character = c,
+                    start = start, length = length,
+                ))
+                return
+            }
             val resolvedTypeArgs = try {
                 typeArgs.map { getTypeFromTypeNode(it) }
             } catch (_: StackOverflowError) { null }
