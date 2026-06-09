@@ -905,6 +905,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
+        checkDeclarationEmitNameability()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
         checkJsxImportResolutions()
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
@@ -4617,6 +4619,212 @@ class Checker(
             }
         }
         return result.joinToString("/")
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2883: declaration-emit nameability — the inferred type of an exported
+    // declaration references a type that lives in a NESTED node_modules package
+    // not reachable (nameable) from the importing file. Declaration emit would
+    // have to write a type annotation referencing a private dependency, which
+    // is not portable, so TypeScript requires an explicit annotation.
+    //
+    // FP-safe by construction: fires ONLY when (a) declaration emit is on,
+    // (b) an EXPORTED const/let/var has NO type annotation, (c) its initializer
+    // is a call to an imported function whose explicit return type references a
+    // type, and (d) that type's declaring file is genuinely non-nameable per
+    // TypeScript's nested-node_modules rule (a top-level node_modules package,
+    // or a sibling within the importer's own package, IS nameable and suppresses).
+    // -----------------------------------------------------------------------
+    private fun checkDeclarationEmitNameability() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        if (binderResults.size < 2) return // cross-file phenomenon
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val statements = result.sourceFile.statements
+            if (!isModuleFile(statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in statements) {
+                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue // explicit annotation → portable
+                    val init = decl.initializer ?: continue
+                    val nameNode = decl.name as? Identifier ?: continue
+                    val refs = inferredTypeReferencedFiles(init, f) ?: continue
+                    for ((typeName, g) in refs) {
+                        if (isFileNameableFrom(g, f)) continue
+                        val pkgPath = nameabilityPackagePath(g, f)
+                        val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "The inferred type of '${nameNode.text}' cannot be named without a reference to '$typeName' from '$pkgPath'. This is likely not portable. A type annotation is necessary.",
+                            category = DiagnosticCategory.Error, code = 2883,
+                            fileName = f, line = l, character = c,
+                            start = nameNode.pos, length = nameNode.text.length,
+                        ))
+                        break // report only the first non-nameable referenced type per declaration
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * For an exported var/const initializer, returns the ORDERED list of
+     * (typeName, declaringFile) for every type the inferred type references.
+     * Currently handles `const x = importedFn()` — resolves the callee's
+     * declaring file, reads its explicit return type, and resolves each
+     * referenced type name to its declaring file. Returns null when the shape
+     * is unsupported (graceful — no diagnostic).
+     */
+    private fun inferredTypeReferencedFiles(init: Expression, contextFile: String): List<Pair<String, String>>? {
+        if (init !is CallExpression) return null
+        val callee = init.expression as? Identifier ?: return null
+        val (calleeFile, calleeName) = resolveImportedSymbolFile(callee.text, contextFile) ?: return null
+        val calleeResult = fileResults[calleeFile] ?: return null
+        val fd = calleeResult.sourceFile.statements.firstNotNullOfOrNull { s ->
+            if (s is FunctionDeclaration && s.name?.text == calleeName) s else null
+        } ?: return null
+        val rt = fd.type ?: return null // need an explicit return type to know the referenced types
+        val names = mutableListOf<String>()
+        collectTypeReferenceNamesOrdered(rt, names)
+        val out = mutableListOf<Pair<String, String>>()
+        for (tn in names) {
+            val g = resolveTypeNameDeclaringFile(tn, calleeFile) ?: continue
+            out.add(tn to g)
+        }
+        return out
+    }
+
+    /** Ordered (source-position) variant of [collectTypeReferenceNames] — TS2883 reports the FIRST non-nameable type. */
+    private fun collectTypeReferenceNamesOrdered(type: TypeNode, out: MutableList<String>) {
+        when (type) {
+            is TypeReference -> {
+                val n = type.typeName
+                if (n is Identifier && n.text !in out) out.add(n.text)
+                type.typeArguments?.forEach { collectTypeReferenceNamesOrdered(it, out) }
+            }
+            is UnionType -> type.types.forEach { collectTypeReferenceNamesOrdered(it, out) }
+            is IntersectionType -> type.types.forEach { collectTypeReferenceNamesOrdered(it, out) }
+            is ParenthesizedType -> collectTypeReferenceNamesOrdered(type.type, out)
+            is ArrayType -> collectTypeReferenceNamesOrdered(type.elementType, out)
+            is TupleType -> type.elements.forEach { collectTypeReferenceNamesOrdered(it, out) }
+            is TypeOperator -> collectTypeReferenceNamesOrdered(type.type, out)
+            is RestType -> collectTypeReferenceNamesOrdered(type.type, out)
+            is OptionalType -> collectTypeReferenceNamesOrdered(type.type, out)
+            else -> {}
+        }
+    }
+
+    /** Resolve a value `name` imported into [contextFile] to (declaringFile, originalName), or null. */
+    private fun resolveImportedSymbolFile(name: String, contextFile: String): Pair<String, String>? {
+        val result = fileResults[contextFile] ?: return null
+        for (stmt in result.sourceFile.statements) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val named = clause.namedBindings as? NamedImports
+            if (named != null) {
+                for (el in named.elements) {
+                    if (el.name.text == name) {
+                        val orig = el.propertyName?.text ?: el.name.text
+                        val g = resolveSpecifierAnywhere(spec, contextFile) ?: return null
+                        return g to orig
+                    }
+                }
+            }
+            if (clause.name?.text == name) {
+                // default import: original name is "default"
+                val g = resolveSpecifierAnywhere(spec, contextFile) ?: return null
+                return g to "default"
+            }
+        }
+        return null
+    }
+
+    /** Resolve a type NAME used in [usedInFile] to the file that declares it (local decl or import target). */
+    private fun resolveTypeNameDeclaringFile(typeName: String, usedInFile: String): String? {
+        val result = fileResults[usedInFile] ?: return null
+        for (stmt in result.sourceFile.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> if (stmt.name.text == typeName) return usedInFile
+                is TypeAliasDeclaration -> if (stmt.name.text == typeName) return usedInFile
+                is ClassDeclaration -> if (stmt.name?.text == typeName) return usedInFile
+                is EnumDeclaration -> if (stmt.name.text == typeName) return usedInFile
+                else -> {}
+            }
+        }
+        // Not declared locally — look for an import of the type name.
+        for (stmt in result.sourceFile.statements) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val named = clause.namedBindings as? NamedImports ?: continue
+            for (el in named.elements) {
+                if (el.name.text == typeName) {
+                    return resolveSpecifierAnywhere(spec, usedInFile)
+                }
+            }
+        }
+        return null
+    }
+
+    /** Resolve a module specifier (relative OR bare via node_modules walk) to a loaded file, or null. */
+    private fun resolveSpecifierAnywhere(specifier: String, contextFile: String): String? {
+        if (specifier.startsWith("./") || specifier.startsWith("../")) {
+            return resolveRelativeIncludingIndex(specifier, contextFile)
+                ?: resolveModuleSpecifierStrictRelative(specifier, contextFile)
+        }
+        return resolveBareViaNodeModules(specifier, contextFile) ?: resolveModuleSpecifier(specifier)
+    }
+
+    /** Walk up the directory tree from [contextFile] looking for `<dir>/node_modules/<specifier>` package files. */
+    private fun resolveBareViaNodeModules(specifier: String, contextFile: String): String? {
+        var dir: String? = contextFile.substringBeforeLast('/', "")
+        while (dir != null) {
+            val base = if (dir.isEmpty()) "node_modules/$specifier" else "$dir/node_modules/$specifier"
+            for (cand in listOf("$base/index.d.ts", "$base.d.ts", "$base/index.ts", "$base.ts",
+                    "$base/index.tsx", "$base.tsx")) {
+                if (cand in fileResults) return cand
+            }
+            dir = if (dir.isEmpty()) null else dir.substringBeforeLast('/', "")
+        }
+        return null
+    }
+
+    /**
+     * Is the type declared in [g] nameable (referenceable in a portable declaration) from [f]?
+     * Rule: find the LAST `node_modules/` segment in [g]; the directory immediately before it
+     * (the package's "host" dir) must be an ancestor-or-equal of [f]'s directory. A package in a
+     * top-level node_modules (host = root) is always nameable; a package nested inside another
+     * package's private node_modules (host = that package dir) is nameable only from inside it.
+     */
+    private fun isFileNameableFrom(g: String, f: String): Boolean {
+        val marker = "node_modules/"
+        val idx = g.lastIndexOf(marker)
+        if (idx < 0) return true // not in any node_modules → local/relative file, nameable
+        val host = g.substring(0, idx).trimEnd('/')
+        if (host.isEmpty()) return true // top-level node_modules
+        val fDir = f.substringBeforeLast('/', "")
+        return fDir == host || fDir.startsWith("$host/")
+    }
+
+    /** The displayed package path for a non-nameable type file: stripped of the first reachable node_modules prefix. */
+    private fun nameabilityPackagePath(g: String, f: String): String {
+        val marker = "node_modules/"
+        val fDir = f.substringBeforeLast('/', "")
+        var searchFrom = 0
+        while (true) {
+            val idx = g.indexOf(marker, searchFrom)
+            if (idx < 0) break
+            val host = g.substring(0, idx).trimEnd('/')
+            val hostReachable = host.isEmpty() || fDir == host || fDir.startsWith("$host/")
+            if (hostReachable) {
+                val rest = g.substring(idx + marker.length)
+                return rest.substringBeforeLast('/', rest)
+            }
+            searchFrom = idx + marker.length
+        }
+        return g.substringBeforeLast('/', g)
     }
 
     // -----------------------------------------------------------------------
