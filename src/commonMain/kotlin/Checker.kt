@@ -84068,6 +84068,74 @@ interface DataView {
         return voidType
     }
 
+    /**
+     * B192: TS2345 for a generic call whose type parameter has a SELF-REFERENTIAL mapped
+     * constraint with an `as` key-remap: `function foo<T extends { [K in keyof T as
+     * `${Extract<K, string>}y`]: number }>(foox: T)` called `foo({x: 1})` — tsc infers
+     * T := {x: number}, instantiates the constraint to {xy: number}, and the constraint
+     * check fails (the remap renames every key, so a non-identity remap NEVER matches the
+     * inferred type unless it already carries the remapped keys). Our signature-build
+     * bakes the constraint to anyType (keyof TP is non-enumerable then), so the standard
+     * path is silent. Gates: the TP's AST constraint is a MappedType over `keyof <sameTP>`
+     * with a TemplateLiteralType nameType and no questionToken; the param is bare `T`; the
+     * arg resolves to a plain anonymous Type.Object; the instantiated constraint resolves
+     * concretely; exactly ONE remapped key is missing (multi → FN).
+     */
+    private fun tryEmitSelfRefMappedConstraintTs2345(
+        args: List<Expression>, sigIn: Signature, source: String, fileName: String,
+    ): Boolean {
+        val fnDecl = sigIn.declaration as? FunctionDeclaration ?: return false
+        val tps = fnDecl.typeParameters ?: return false
+        for (tpAst in tps) {
+            val m = tpAst.constraint as? MappedType ?: continue
+            val mc = m.typeParameter.constraint as? TypeOperator ?: continue
+            if (mc.operator != SyntaxKind.KeyOfKeyword) continue
+            val mcRef = mc.type as? TypeReference ?: continue
+            if ((mcRef.typeName as? Identifier)?.text != tpAst.name.text || !mcRef.typeArguments.isNullOrEmpty()) continue
+            if (m.nameType !is TemplateLiteralType) continue
+            if (m.questionToken || m.type == null) continue
+            for ((i, p) in fnDecl.parameters.withIndex()) {
+                val pRef = p.type as? TypeReference ?: continue
+                if ((pRef.typeName as? Identifier)?.text != tpAst.name.text || !pRef.typeArguments.isNullOrEmpty()) continue
+                val arg = args.getOrNull(i) ?: continue
+                if (arg is SpreadElement) continue
+                val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+                if (argType !is Type.Object || argType is Type.Interface || argType is Type.Reference) continue
+                if (!argType.callSignatures.isNullOrEmpty() || !argType.constructSignatures.isNullOrEmpty()) continue
+                if (argType.stringIndexInfo != null || argType.numberIndexInfo != null) continue
+                val argMembers = argType.members ?: continue
+                val saved = currentTypeAliasArgs
+                val inst = try {
+                    currentTypeAliasArgs = (saved ?: emptyMap()) + (tpAst.name.text to argType)
+                    getTypeFromTypeNode(m)
+                } catch (_: StackOverflowError) { null } finally {
+                    currentTypeAliasArgs = saved
+                }
+                if (inst !is Type.Object || inst === anyType) continue
+                val instMembers = inst.members ?: continue
+                if (instMembers.isEmpty()) continue
+                val missing = instMembers.keys.filter { it !in argMembers }
+                if (missing.size != 1) continue
+                val srcDisplay = typeToString(argType)
+                val tgtDisplay = typeToString(inst)
+                val start = arg.pos
+                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$srcDisplay' is not assignable to parameter of type '$tgtDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line, character = character,
+                    start = start, length = length,
+                    messageChain = listOf("  Property '${missing[0]}' is missing in type '$srcDisplay' but required in type '$tgtDisplay'."),
+                ))
+                return true
+            }
+        }
+        return false
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -84088,6 +84156,12 @@ interface DataView {
         // then arg[1]: "" vs number fires TS2345 via the standard path.
         // 17.31b: pass source/fileName so the helper can emit literal-preserving
         // TS2345 directly for context-sensitive sigs (function-type-T param).
+        // B192: self-referential mapped constraint with `as` key-remap — the inferred T
+        // must satisfy `{ [K in keyof T as `${K}y`]: number }` (instantiated with T :=
+        // the arg's own type), which the standard inference+relation path can't see
+        // (the constraint bakes to anyType at signature build).
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
@@ -89647,6 +89721,28 @@ interface DataView {
      * e.g., { [K in "a" | "b"]: number } → { a: number; b: number }
      * e.g., { [K in keyof T]: T[K] } → homomorphic mapped type
      */
+    /**
+     * B192: evaluate a mapped-type `as` template-literal key remap for a single [key].
+     * [rawText] is the raw template source (B65.1: spans are never parsed — only
+     * head.rawText exists), with or without surrounding backticks. Requires EXACTLY one
+     * placeholder whose trimmed content is the mapped TP name or `Extract<TP, string>`;
+     * returns prefix + key + suffix, or null for any other shape.
+     */
+    private fun evalMappedKeyRemapTemplate(rawText: String, tpName: String, key: String): String? {
+        var t = rawText
+        if (t.startsWith("`")) t = t.removePrefix("`")
+        if (t.endsWith("`")) t = t.removeSuffix("`")
+        val open = t.indexOf("\${")
+        if (open < 0) return null
+        val close = t.indexOf('}', open)
+        if (close < 0) return null
+        if (t.indexOf("\${", close) >= 0) return null  // more than one placeholder
+        val content = t.substring(open + 2, close).trim()
+        val extractRe = Regex("Extract\\s*<\\s*${Regex.escape(tpName)}\\s*,\\s*string\\s*>")
+        if (content != tpName && !extractRe.matches(content)) return null
+        return t.substring(0, open) + key + t.substring(close + 1)
+    }
+
     private fun getTypeFromMappedType(node: MappedType): Type {
         // B57.3b: depth-bail to signal excessive recursion. Mirror the alias-
         // substitution depth-bail pattern at getTypeFromTypeReference (~50362).
@@ -89664,12 +89760,24 @@ interface DataView {
         } catch (_: StackOverflowError) { return anyType }
         if (constraintType === anyType || constraintType === errorType) return anyType
         // Collect all keys from the constraint
-        val keys = when (constraintType) {
+        var keys = when (constraintType) {
             is Type.StringLiteral -> listOf(constraintType.value)
             is Type.Union -> constraintType.types.mapNotNull { (it as? Type.StringLiteral)?.value }
             else -> return anyType // Can't enumerate keys for non-literal constraints
         }
         if (keys.isEmpty()) return anyType
+        // B192: `as` key-remapping. Previously node.nameType was silently IGNORED, so an
+        // `as`-remapped mapped type produced WRONG member names. Handle the template-
+        // literal remap shape (`${K}suffix` / `${Extract<K, string>}suffix`) and bail to
+        // anyType (the prior effective behavior for unmodeled shapes) on anything else.
+        val nameType = node.nameType
+        if (nameType != null) {
+            if (nameType !is TemplateLiteralType) return anyType
+            val raw = nameType.head.rawText ?: return anyType
+            keys = keys.map {
+                evalMappedKeyRemapTemplate(raw, node.typeParameter.name.text, it) ?: return anyType
+            }
+        }
         val isOutermost = mappedTypeResolutionDepth == 0
         // B57.3c: capture bail-flag transition at the outermost mapped-type call so
         // we can record TS2615 circular-property info only when the bail actually
