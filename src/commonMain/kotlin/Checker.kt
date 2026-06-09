@@ -63687,12 +63687,21 @@ interface DataView {
             currentTypeAliasArgs == null
         if (cacheable) {
             nodeTypes[node]?.let { return it }
+            // B202.2: in-progress sentinel (cacheable context only — context-sensitive
+            // resolutions legitimately re-run the same node and are NOT tracked).
+            // Re-entry on the SAME node is a type-level cycle: degrade to errorType
+            // instead of unbounded recursion. Not cached; the outer resolution
+            // stores the real type.
+            if (!nodeTypeResolutionInProgress.add(node)) return errorType
+            try {
+                val type = getTypeFromTypeNodeWorker(node)
+                nodeTypes[node] = type
+                return type
+            } finally {
+                nodeTypeResolutionInProgress.remove(node)
+            }
         }
-        val type = getTypeFromTypeNodeWorker(node)
-        if (cacheable) {
-            nodeTypes[node] = type
-        }
-        return type
+        return getTypeFromTypeNodeWorker(node)
     }
 
     private fun getTypeFromTypeNodeWorker(node: TypeNode): Type {
