@@ -29918,6 +29918,7 @@ interface String {
     trimEnd(): string;
     matchAll(regexp: any): any;
     replaceAll(searchValue: string, replaceValue: string): string;
+    fixed(): string;
     [index: number]: string;
 }
 interface Number {
@@ -76652,6 +76653,35 @@ interface DataView {
                             }
                         } catch (_: StackOverflowError) {}
                     }
+                    // B186: `const [, a = ''] = <string>.match(...) || [];` — RegExpMatchArray
+                    // extends Array<string> and the `|| []` arm contributes never[], so every
+                    // NON-rest element binding (no default, or a string-literal default) is
+                    // `string`. Type those bindings into currentLocalTypes so a subsequent
+                    // `a.toFixed()` resolves the receiver (→ TS2551 'Did you mean fixed?').
+                    val pattern = decl.name as? ArrayBindingPattern
+                    if (pattern != null && decl.type == null) {
+                        val init = decl.initializer
+                        if (init is BinaryExpression &&
+                            (init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
+                            val rightArr = init.right as? ArrayLiteralExpression
+                            val call = init.left as? CallExpression
+                            val callee = call?.expression as? PropertyAccessExpression
+                            if (rightArr != null && rightArr.elements.isEmpty() &&
+                                callee != null && callee.name.text == "match") {
+                                val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { null }
+                                if (recvType === stringType || recvType is Type.StringLiteral) {
+                                    for (el in pattern.elements) {
+                                        val be = el as? BindingElement ?: continue
+                                        if (be.dotDotDotToken) continue
+                                        val bn = be.name as? Identifier ?: continue
+                                        if (be.initializer == null || be.initializer is StringLiteralNode) {
+                                            currentLocalTypes[bn.text] = stringType
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             is ExpressionStatement -> checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
@@ -79541,9 +79571,20 @@ interface DataView {
                 }
 
                 val rawType = getTypeOfSymbol(identSymbol)
+                // B186: a BindingElement-declared name (destructured binding — never typed by
+                // getTypeOfSymbol, which has no BindingElement arm) whose currentLocalTypes
+                // entry is a concrete primitive (populated by the B186 destructuring
+                // recognizer) proceeds through the apparent-type path instead of bailing.
+                var bindingElementPrimitive: Type? = null
                 if (rawType === anyType || rawType === errorType || rawType === unknownType) {
-                    tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
-                    return
+                    val lt = currentLocalTypes[identName]
+                    if (identSymbol.valueDeclaration is BindingElement &&
+                        (lt === stringType || lt === numberType || lt === booleanType)) {
+                        bindingElementPrimitive = lt
+                    } else {
+                        tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
+                        return
+                    }
                 }
                 // For primitive types (e.g. `declare var foo: number`), resolve to the
                 // wrapper interface's apparent type so property lookups fire TS2339 when
@@ -79561,7 +79602,10 @@ interface DataView {
                 // also literal-init eligible — bypass the parent==null check because
                 // namespace-internal vars have a parent. localShadow is irrelevant here
                 // (currentLocalTypes doesn't carry namespace-internal vars).
-                val exprType = if (rawType !is Type.Object) {
+                val exprType = if (bindingElementPrimitive != null) {
+                    displayTypeOverride = bindingElementPrimitive
+                    getApparentType(bindingElementPrimitive)
+                } else if (rawType !is Type.Object) {
                     val decl = identSymbol.valueDeclaration
                     val annotated = decl is VariableDeclaration && decl.type != null
                     val isNsShadow = enclosingNsShadow != null
