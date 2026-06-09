@@ -313,6 +313,21 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** B185: Type ids of NON-WIDENING literal types — a `const x: XY = 'x'` (XY a union of
+     *  string literals) narrows reads of `x` to the literal `"x"`, and that literal must NOT
+     *  widen when propagated into an unannotated `let x2 = x` (TypeScript 3.1 widening-
+     *  propagation rule: literals narrowed THROUGH a literal-union annotation are non-fresh).
+     *  Identity-keyed by [Type.id]; fresh literal instances are minted at registration so
+     *  interned literal types are never marked. Declared before [init] (init-order). */
+    private val nonWideningLiteralTypeIds = mutableSetOf<Int>()
+
+    /** B185: the statement list of the scope currently being walked by
+     *  [checkTypeAssignabilityInStatements] — lets per-decl checks resolve FUNCTION-LOCAL
+     *  type-alias names (not bound by the Binder per the block-scoped-decl gotcha) by
+     *  scanning the enclosing scope's statements. Saved/restored per statement-list walk.
+     *  Declared before [init] (init-order). */
+    private var currentScopeStatements: List<Statement>? = null
+
     /** Cache for [classNamesWithSiblingInterfaces]. Declared BEFORE [init] so the
      *  field exists (as `null`) during init-time helper calls — accessing a `by
      *  lazy {}` property before its declaration line has run produces NPEs because
@@ -58021,10 +58036,16 @@ interface DataView {
         typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
     ) {
+        val savedScopeStatements = currentScopeStatements
+        currentScopeStatements = statements
+        try {
         for (stmt in statements) {
             when (stmt) {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
+                        if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                            registerConstLiteralUnionNarrowing(decl)
+                        }
                         checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
                         decl.initializer?.let {
                             // B183: contextually type the initializer fn-expr's un-annotated
@@ -58300,6 +58321,107 @@ interface DataView {
                 is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 else -> {}
             }
+        }
+        } finally {
+            currentScopeStatements = savedScopeStatements
+        }
+    }
+
+    /**
+     * B185: `const x: XY = 'x'` where XY is a union of string literals (directly or via a
+     * type alias — including FUNCTION-LOCAL aliases resolved by scanning
+     * [currentScopeStatements], since the Binder never binds block-scoped aliases) narrows
+     * reads of `x` to the NON-WIDENING literal `"x"` (TypeScript 3.1 widening-propagation:
+     * a literal that reached the value through a literal-union annotation is non-fresh).
+     * Registers a fresh [Type.StringLiteral] in [currentLocalTypes] and marks its id in
+     * [nonWideningLiteralTypeIds] so the unannotated-var inference (`let x2 = x`) propagates
+     * it UN-widened — making `x2 = 'y'` a TS2322 '"y"' vs '"x"'. A bare-primitive annotation
+     * (`const x: boolean = true`) is deliberately NOT registered: its narrowed literal is
+     * widening-fresh and `let x1 = x; x1 = false` stays legal.
+     */
+    private fun registerConstLiteralUnionNarrowing(decl: VariableDeclaration) {
+        val name = (decl.name as? Identifier)?.text ?: return
+        val annotation = decl.type ?: return
+        val init = decl.initializer as? StringLiteralNode ?: return
+        val unionValues = stringLiteralUnionValues(annotation) ?: return
+        if (init.text !in unionValues) return
+        val lit = Type.StringLiteral(init.text)
+        currentLocalTypes[name] = lit
+        nonWideningLiteralTypeIds.add(lit.id)
+    }
+
+    /** B185 helper: the set of string-literal values of a union-of-string-literals type
+     *  annotation — either a direct `'a' | 'b'` UnionType, or a bare TypeReference to a
+     *  type alias (function-local via [currentScopeStatements], else a global alias) whose
+     *  body is such a union. Null when the annotation isn't exactly this shape. */
+    private fun stringLiteralUnionValues(annotation: TypeNode): Set<String>? {
+        val unionNode: UnionType = when (annotation) {
+            is UnionType -> annotation
+            is TypeReference -> {
+                if (annotation.typeArguments != null) return null
+                val aliasName = (annotation.typeName as? Identifier)?.text ?: return null
+                val localAlias = currentScopeStatements
+                    ?.filterIsInstance<TypeAliasDeclaration>()
+                    ?.firstOrNull { it.name.text == aliasName }
+                val alias = localAlias ?: (globals[aliasName]?.declarations
+                    ?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)
+                alias?.type as? UnionType ?: return null
+            }
+            else -> return null
+        }
+        val values = mutableSetOf<String>()
+        for (member in unionNode.types) {
+            val lit = (member as? LiteralType)?.literal as? StringLiteralNode ?: return null
+            values.add(lit.text)
+        }
+        return if (values.isEmpty()) null else values
+    }
+
+    /**
+     * B185b: emit TS2322 "Type 'string' is not assignable to type '<Alias>'." at each
+     * SpreadElement of [rhs] that spreads an all-string-literal ArrayLiteralExpression,
+     * when [target]'s in-scope declaration is annotated `<Alias>[]` with Alias a union of
+     * string literals (local or global alias). The spread loses freshness so the inner
+     * literals widen to `string` — always an error against a literal-union element type.
+     */
+    private fun tryEmitSpreadFreshnessLossTs2322(
+        target: Identifier, rhs: ArrayLiteralExpression, source: String, fileName: String,
+    ) {
+        val scopeStmts = currentScopeStatements ?: return
+        var annotation: TypeNode? = null
+        for (s in scopeStmts) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == target.text) { annotation = d.type; break }
+            }
+            if (annotation != null) break
+        }
+        val arrAnn = annotation as? ArrayType ?: return
+        val elemRef = arrAnn.elementType as? TypeReference ?: return
+        val elemName = (elemRef.typeName as? Identifier)?.text ?: return
+        if (elemRef.typeArguments != null) return
+        stringLiteralUnionValues(elemRef) ?: return
+        for (el in rhs.elements) {
+            if (el !is SpreadElement) continue
+            var inner: Expression = el.expression
+            while (inner is ParenthesizedExpression) inner = inner.expression
+            if (inner !is ArrayLiteralExpression) continue
+            if (inner.elements.isEmpty()) continue
+            if (!inner.elements.all { it is StringLiteralNode }) continue
+            val start = el.pos
+            val length = expressionTrueEnd(el) - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type 'string' is not assignable to type '$elemName'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 
@@ -58929,8 +59051,10 @@ interface DataView {
                 if (inferred !== anyType && inferred !== errorType &&
                     !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
                     (isFromCall || !inferred.flags.hasAny(TypeFlags.Void))) {
-                    // Widen literal types: 42 → number, "hello" → string
-                    val widened = when (inferred) {
+                    // Widen literal types: 42 → number, "hello" → string.
+                    // B185: a NON-WIDENING literal (const-narrowed through a literal-union
+                    // annotation) propagates AS-IS — `let x2 = x` keeps `"x"`.
+                    val widened = if (inferred.id in nonWideningLiteralTypeIds) inferred else when (inferred) {
                         is Type.StringLiteral -> stringType
                         is Type.NumberLiteral -> numberType
                         is Type.BigIntLiteral -> bigintType
@@ -60721,6 +60845,16 @@ interface DataView {
                 }
             }
             if (target is Identifier) {
+                // B185b: `arr = [...['y']]` where arr's annotation is `<LitUnionAlias>[]` —
+                // a SPREAD of a string-literal array literal loses freshness (the inner
+                // array is NOT contextually typed through `...`), so its elements widen to
+                // `string`, which is never assignable to a literal union → TS2322 at the
+                // spread element with the alias-name display. The DIRECT `arr = ['y']`
+                // form stays legal (contextually typed). FP-safe: a widened `string` never
+                // satisfies a union of string literals, so tsc always errors this shape.
+                if (expr.right is ArrayLiteralExpression) {
+                    tryEmitSpreadFreshnessLossTs2322(target, expr.right as ArrayLiteralExpression, source, fileName)
+                }
                 // B155: `var y: typeof <moduleAliasA> = ...; y = <moduleAliasB>;` — comparing
                 // two module "typeof shapes" (namespace import vs `typeof export=class`) does
                 // missing-property TS2741. Tightly gated; runs before the general engine which
