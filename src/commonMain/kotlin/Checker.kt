@@ -1167,6 +1167,9 @@ class Checker(
         //       only ever READ (never concretized via push/assign/element-write/etc.)
         //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
         checkEvolvingEmptyArrayImplicitAny()
+        // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
+        // assignments (continue back-edges + fall-through) include a failing type.
+        checkForIncrementorReachingAssignments()
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
         checkSwitchCaseComparable()
         // 38. Check setter parameter count (TS1049)
@@ -43578,6 +43581,216 @@ interface DataView {
     // purely-read empty array already carries TS7034/TS7005 in its baseline, so
     // it is currently FAILING, not passing — firing cannot regress it.)
     // -----------------------------------------------------------------------
+
+    /**
+     * B211: TS2322 for `i = v` for-loop INCREMENTORS (controlFlowForStatement-
+     * ContinueIntoIncrementor1). The assignability dispatchers recurse only into the
+     * loop BODY, so the incrementor expression was never assignment-checked; and the
+     * needed type of `v` at the incrementor is its FLOW type — the union of
+     * assignments reaching it via `continue` back-edges and body fall-through.
+     * Self-contained reaching-assignment simulation, DEFAULT-SUPPRESS on any
+     * unmodeled construct (nested loops/switch/try/labels/function-likes/unknown RHS
+     * shapes/paths reaching the incrementor with the unknown pre-loop value all
+     * bail). When the simulation completes, the computed union IS tsc's flow type
+     * at the incrementor, and tsc always errors when a constituent fails — so a
+     * passing test matching the full gate would already carry the diagnostic.
+     */
+    private fun checkForIncrementorReachingAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            friScanStatements(result.sourceFile.statements, result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun friScanStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) friScanStatement(s, source, fileName)
+    }
+
+    private fun friScanStatement(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is Block -> friScanStatements(stmt.statements, source, fileName)
+            is IfStatement -> {
+                friScanStatement(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { friScanStatement(it, source, fileName) }
+            }
+            is WhileStatement -> friScanStatement(stmt.statement, source, fileName)
+            is DoStatement -> friScanStatement(stmt.statement, source, fileName)
+            is ForStatement -> {
+                friCheckForStatement(stmt, source, fileName)
+                friScanStatement(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> friScanStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> friScanStatement(stmt.statement, source, fileName)
+            is TryStatement -> {
+                friScanStatements(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.statements?.let { friScanStatements(it, source, fileName) }
+                stmt.finallyBlock?.statements?.let { friScanStatements(it, source, fileName) }
+            }
+            is SwitchStatement -> stmt.caseBlock.forEach { clause ->
+                when (clause) {
+                    is CaseClause -> friScanStatements(clause.statements, source, fileName)
+                    is DefaultClause -> friScanStatements(clause.statements, source, fileName)
+                    else -> {}
+                }
+            }
+            is LabeledStatement -> friScanStatement(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { friScanStatements(it.statements, source, fileName) }
+            is ClassDeclaration -> stmt.members.forEach { m ->
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { friScanStatements(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { friScanStatements(it.statements, source, fileName) }
+                    is GetAccessor -> m.body?.let { friScanStatements(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { friScanStatements(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
+                friScanStatements(it, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** B211 per-path simulation state: the set of primitive type names v may hold,
+     *  plus whether the unknown pre-loop value is still possible on this path. */
+    private class FriState(val types: LinkedHashSet<String>, var unknown: Boolean)
+
+    private class FriBail : RuntimeException()
+
+    private fun friCheckForStatement(stmt: ForStatement, source: String, fileName: String) {
+        val inc = stmt.incrementor as? BinaryExpression ?: return
+        if (inc.operator != SyntaxKind.Equals) return
+        val iId = inc.left as? Identifier ?: return
+        val vId = inc.right as? Identifier ?: return
+        val iName = iId.text
+        val vName = vId.text
+        if (iName == vName) return
+        // The for-initializer: a single decl of `i` with a resolvable primitive type.
+        val declList = stmt.initializer as? VariableDeclarationList ?: return
+        val decl = declList.declarations.singleOrNull() ?: return
+        if ((decl.name as? Identifier)?.text != iName) return
+        val iType = when {
+            (decl.type as? KeywordTypeNode)?.kind == SyntaxKind.NumberKeyword -> "number"
+            (decl.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword -> "string"
+            (decl.type as? KeywordTypeNode)?.kind == SyntaxKind.BooleanKeyword -> "boolean"
+            decl.type == null && decl.initializer is NumericLiteralNode -> "number"
+            decl.type == null && decl.initializer is StringLiteralNode -> "string"
+            else -> return
+        }
+        val body = stmt.statement as? Block ?: return
+        val contributed = LinkedHashSet<String>()
+        fun resolveRhs(e: Expression): String? = when (e) {
+            is ParenthesizedExpression -> resolveRhs(e.expression)
+            is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is TemplateExpression -> "string"
+            is NumericLiteralNode -> "number"
+            is Identifier -> when (e.text) {
+                "true", "false" -> "boolean"
+                iName -> iType
+                else -> null
+            }
+            is BinaryExpression -> {
+                val l = resolveRhs(e.left)
+                val r = resolveRhs(e.right)
+                when {
+                    l == null || r == null -> null
+                    e.operator == SyntaxKind.Plus ->
+                        if (l == "string" || r == "string") "string"
+                        else if (l == "number" && r == "number") "number" else null
+                    e.operator in setOf(SyntaxKind.Minus, SyntaxKind.Asterisk,
+                        SyntaxKind.Slash, SyntaxKind.Percent) ->
+                        if (l == "number" && r == "number") "number" else null
+                    else -> null
+                }
+            }
+            else -> null
+        }
+        fun exprTouchesV(pos: Int, end: Int): Boolean {
+            if (pos < 0 || end > source.length || end <= pos) return true
+            return source.substring(pos, end).contains(vName)
+        }
+        // Simulates a statement list; returns the fall-through state or null when the
+        // path ends (continue contributes to `contributed`; break/return/throw don't).
+        fun sim(stmts: List<Statement>, entry: FriState): FriState? {
+            var cur = entry
+            for (st in stmts) {
+                when (st) {
+                    is ExpressionStatement -> {
+                        val be = st.expression as? BinaryExpression
+                        if (be != null && be.operator == SyntaxKind.Equals &&
+                            (be.left as? Identifier)?.text == vName) {
+                            val t = resolveRhs(be.right) ?: throw FriBail()
+                            cur = FriState(linkedSetOf(t), false)
+                        } else if (exprTouchesV(st.pos, st.end)) {
+                            throw FriBail()
+                        }
+                    }
+                    is IfStatement -> {
+                        if (exprTouchesV(st.expression.pos, expressionTrueEnd(st.expression))) throw FriBail()
+                        val thenRes = sim(
+                            (st.thenStatement as? Block)?.statements ?: listOf(st.thenStatement),
+                            FriState(LinkedHashSet(cur.types), cur.unknown))
+                        val elseStmt = st.elseStatement
+                        val elseRes = if (elseStmt != null) sim(
+                            (elseStmt as? Block)?.statements ?: listOf(elseStmt),
+                            FriState(LinkedHashSet(cur.types), cur.unknown))
+                        else FriState(LinkedHashSet(cur.types), cur.unknown)
+                        cur = when {
+                            thenRes != null && elseRes != null -> FriState(
+                                LinkedHashSet(thenRes.types + elseRes.types),
+                                thenRes.unknown || elseRes.unknown)
+                            thenRes != null -> thenRes
+                            elseRes != null -> elseRes
+                            else -> return null
+                        }
+                    }
+                    is ContinueStatement -> {
+                        if (st.label != null) throw FriBail()
+                        if (cur.unknown) throw FriBail()
+                        contributed.addAll(cur.types)
+                        return null
+                    }
+                    is BreakStatement -> { if (st.label != null) throw FriBail(); return null }
+                    is ReturnStatement, is ThrowStatement -> return null
+                    is Block -> {
+                        cur = sim(st.statements, cur) ?: return null
+                    }
+                    is VariableStatement -> {
+                        for (d in st.declarationList.declarations) {
+                            val n = (d.name as? Identifier)?.text ?: throw FriBail()
+                            if (n == vName || n == iName) throw FriBail()
+                            d.initializer?.let { if (exprTouchesV(it.pos, expressionTrueEnd(it))) throw FriBail() }
+                        }
+                    }
+                    is EmptyStatement -> {}
+                    else -> throw FriBail()
+                }
+            }
+            return cur
+        }
+        try {
+            val fall = sim(body.statements, FriState(LinkedHashSet(), true))
+            if (fall != null) {
+                if (fall.unknown) throw FriBail()
+                contributed.addAll(fall.types)
+            }
+        } catch (_: FriBail) {
+            return
+        }
+        if (contributed.isEmpty()) return
+        val failing = contributed.filter { it != iType }
+        if (failing.isEmpty()) return
+        val unionDisp = contributed.joinToString(" | ")
+        val (line, ch) = getLineAndCharacterOfPosition(source, iId.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$unionDisp' is not assignable to type '$iType'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = ch,
+            start = iId.pos, length = iName.length,
+            messageChain = if (contributed.size >= 2)
+                failing.map { "  Type '$it' is not assignable to type '$iType'." } else emptyList(),
+        ))
+    }
 
     private class EvState {
         var suppressed = false
