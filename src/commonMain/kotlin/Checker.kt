@@ -24754,6 +24754,25 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
+                    // B166: SCOPED specifier (`@s/p`) under EXPLICIT `typeRoots`
+                    // (moduleResolutionAsTypeReferenceDirectiveScoped). Per tsc's trace, the
+                    // lookup dirs are: each typeRoot (LITERAL scoped name — unless the root
+                    // itself is an `@types` dir, where the MANGLED `s__p` form is required),
+                    // plain `node_modules` dirs (literal), and `node_modules/@types` (mangled
+                    // only — a literal `@s/p` directory under `@types` does NOT count).
+                    // Gated to explicit typeRoots config so ordinary scoped-package corpus
+                    // tests never reach this branch.
+                    else if (!isRelative && !isClassicResolution
+                        && moduleName.startsWith("@")
+                        && moduleName.count { it == '/' } == 1
+                        && options.typeRoots != null
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && moduleName !in ambientModuleNames
+                        && !scopedResolvableForImport(moduleName)
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Node-builtin bare specifier (`"module"`, `"fs"`, etc.) under node resolution
                     // that's NOT an ambient module / .d.ts / node_modules package: TypeScript emits
                     // TS2591 with the @types/node hint. Narrow to known node-builtin names so we
@@ -25428,6 +25447,33 @@ class Checker(
             }
             val exists = candidates.any { it in fileResults || it in jsonModuleContents }
             if (!exists) return true
+        }
+        return false
+    }
+
+    /**
+     * B166: can a SCOPED specifier `@s/p` resolve under the typeRoots-aware lookup model?
+     * Mechanisms (mirroring tsc's trace for moduleResolutionAsTypeReferenceDirectiveScoped):
+     * each explicit typeRoot resolves the LITERAL scoped name — except a root that is itself
+     * an `@types` directory, which resolves only the MANGLED `s__p` form; plain `node_modules`
+     * dirs resolve the literal name (the needle inherently can't match inside
+     * `node_modules/@types/...` — the extra segment breaks it); `node_modules/@types` resolves
+     * only the mangled form.
+     */
+    private fun scopedResolvableForImport(moduleName: String): Boolean {
+        val mangled = moduleName.removePrefix("@").replace("/", "__")
+        val roots = options.typeRoots.orEmpty().map { it.trimEnd('/') }
+        for (fn in fileResults.keys) {
+            for (root in roots) {
+                val name = if (root.endsWith("/@types") || root == "@types") mangled else moduleName
+                if (fn.startsWith("$root/$name/") || fn == "$root/$name.d.ts") return true
+            }
+            if (fn.contains("/node_modules/$moduleName/") || fn.startsWith("node_modules/$moduleName/") ||
+                fn.endsWith("/node_modules/$moduleName.d.ts")
+            ) return true
+            if (fn.contains("/node_modules/@types/$mangled/") || fn.startsWith("node_modules/@types/$mangled/") ||
+                fn.endsWith("/node_modules/@types/$mangled.d.ts")
+            ) return true
         }
         return false
     }

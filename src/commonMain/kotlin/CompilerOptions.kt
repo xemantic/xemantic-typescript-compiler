@@ -127,6 +127,7 @@ data class CompilerOptions(
     val outDir: String? = null,
     val rootDir: String? = null,
     val rootDirs: List<String>? = null,
+    val typeRoots: List<String>? = null,
     val baseUrl: String? = null,
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
@@ -516,6 +517,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "lib" -> options.copy(lib = value.split(",").map { it.trim() })
         "outdir" -> options.copy(outDir = value.trim())
         "rootdir" -> options.copy(rootDir = value.trim())
+        "typeroots" -> options.copy(typeRoots = value.split(',').map { it.trim() }.filter { it.isNotEmpty() })
         "baseurl" -> options.copy(baseUrl = value.trim())
         "moduleresolution" -> options.copy(moduleResolution = value.trim())
         "esmoduleinterop" -> options.copy(
