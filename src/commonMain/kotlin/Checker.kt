@@ -24809,6 +24809,41 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
+                    // B164: bare single-segment specifiers under `resolveJsonModule`
+                    // (requireOfJsonFileNonRelativeWithoutExtension). Two FP-safe sub-shapes,
+                    // both pre-gated by the same no-config guards as r107/r168 plus the
+                    // .ts/.d.ts/package/ambient/builtin suppressions:
+                    //  (a) a specifier literally ENDING in `.json` resolves only via a
+                    //      `<dir>/node_modules/<spec>` JSON file — when none exists anywhere
+                    //      (JSON files live in jsonModuleContents, NOT fileResults) → TS2307;
+                    //  (b) an EXTENSIONLESS specifier whose ONLY node_modules candidate is
+                    //      `<spec>.json` → TS2307: TypeScript never appends `.json` to an
+                    //      extensionless specifier (resolveJsonModule applies to literal
+                    //      `.json` specifiers only), so the present JSON file cannot satisfy it.
+                    else if (!isRelative && options.resolveJsonModule && !isClassicResolution
+                        && !moduleName.startsWith("/")
+                        && !moduleName.contains("/")
+                        && !moduleName.contains(":")
+                        && options.paths.isNullOrEmpty()
+                        && options.baseUrl == null
+                        && options.rootDirs.isNullOrEmpty()
+                        && options.rootDir == null
+                        && options.moduleSuffixes.isNullOrEmpty()
+                        && moduleName !in ambientModuleNames
+                        && !bareDtsResolvableInNodeModules(moduleName)
+                        && !hasNodeModulesPackage(moduleName)
+                        && moduleName !in NODE_BUILTIN_MODULES
+                    ) {
+                        val jsonName = if (moduleName.endsWith(".json")) moduleName else "$moduleName.json"
+                        val jsonInNodeModules = jsonModuleContents.keys.any {
+                            it.endsWith("/node_modules/$jsonName") || it == "node_modules/$jsonName"
+                        }
+                        if (moduleName.endsWith(".json")) {
+                            if (!jsonInNodeModules) emitTS2307(specifier, moduleName, source, fileName)
+                        } else if (jsonInNodeModules) {
+                            emitTS2307(specifier, moduleName, source, fileName)
+                        }
+                    }
                     // Skip TS2307 in multi-file with node resolution — resolveModuleSpecifier is too
                     // simplified for paths, symlinks, json, index resolution; causes FPs. The
                     // bare-specifier-missing case (B98.r2 attempt, reverted round 83) is NOT
