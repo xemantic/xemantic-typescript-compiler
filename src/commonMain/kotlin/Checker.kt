@@ -58820,6 +58820,127 @@ interface DataView {
         }
     }
 
+    /**
+     * B190: TS2322 "Source provides no match for required element at position N in target."
+     * for `k = [<fixed elems>, ...<tuple-annotated ident>]` against a TupleType annotation
+     * whose REQUIRED element count exceeds the spliced source's fixed count. Pure AST: the
+     * source shape is computed by splicing each spread operand's explicit TupleType
+     * annotation (a rest-bearing spread must be last); displays are built locally with a
+     * `...`-aware element renderer (formatTypeForDisplay has no RestType case). All
+     * uncertainty paths suppress (unresolvable element, non-tuple spread operand,
+     * per-position mismatch, excess-fixed-vs-restless-target) — TypeScript unconditionally
+     * errors the gated shape (a source rest can never satisfy a target required element).
+     */
+    private fun tryEmitTupleSpreadArityTs2322(
+        target: Identifier, rhs: ArrayLiteralExpression, source: String, fileName: String,
+    ): Boolean {
+        if (rhs.elements.none { it is SpreadElement }) return false
+        // Find the target's TupleType annotation (in-scope decl scan, then globals).
+        var annotation: TypeNode? = null
+        currentScopeStatements?.let { stmts ->
+            for (s in stmts) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text == target.text) { annotation = d.type; break }
+                }
+                if (annotation != null) break
+            }
+        }
+        if (annotation == null) {
+            annotation = (globals[target.text]?.valueDeclaration as? VariableDeclaration)?.type
+        }
+        val tupleAnn = annotation as? TupleType ?: return false
+        // Parse target shape: fixed element nodes + optional trailing rest.
+        val targetFixed = mutableListOf<TypeNode>()
+        var targetRest: TypeNode? = null
+        for ((i, el) in tupleAnn.elements.withIndex()) {
+            when (el) {
+                is RestType -> {
+                    if (i != tupleAnn.elements.size - 1) return false
+                    targetRest = el.type
+                }
+                is OptionalType, is NamedTupleMember -> return false
+                else -> targetFixed.add(el)
+            }
+        }
+        // Parse source shape by splicing spread operands' tuple annotations.
+        val sourceFixedTypes = mutableListOf<Type>()
+        val sourceFixedDisplays = mutableListOf<String>()
+        var sourceRest: TypeNode? = null
+        fun fmtTupleElem(e: TypeNode): String? =
+            if (e is RestType) formatTypeForDisplay(e.type)?.let { "...$it" } else formatTypeForDisplay(e)
+        for (el in rhs.elements) {
+            if (sourceRest != null) return false  // elements after a rest-bearing spread
+            if (el is SpreadElement) {
+                val opIdent = el.expression as? Identifier ?: return false
+                val sym = currentFileLocals?.get(opIdent.text) ?: globals[opIdent.text] ?: return false
+                val spreadAnn = (sym.valueDeclaration as? VariableDeclaration)?.type as? TupleType ?: return false
+                for ((i, se) in spreadAnn.elements.withIndex()) {
+                    when (se) {
+                        is RestType -> {
+                            if (i != spreadAnn.elements.size - 1) return false
+                            sourceRest = se.type
+                        }
+                        is OptionalType, is NamedTupleMember -> return false
+                        else -> {
+                            val t = try { getTypeFromTypeNode(se) } catch (_: StackOverflowError) { return false }
+                            if (t === anyType || t === errorType) return false
+                            sourceFixedTypes.add(t)
+                            sourceFixedDisplays.add(fmtTupleElem(se) ?: return false)
+                        }
+                    }
+                }
+            } else {
+                val t = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return false }
+                if (t === anyType || t === errorType) return false
+                sourceFixedTypes.add(t)
+                sourceFixedDisplays.add(typeToString(t))
+            }
+        }
+        // Compatibility gates — any failure suppresses (different error shapes own those).
+        val requiredCount = targetFixed.size
+        val targetFixedTypes = targetFixed.map {
+            val t = try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { return false }
+            if (t === anyType || t === errorType) return false
+            t
+        }
+        for (i in 0 until minOf(sourceFixedTypes.size, requiredCount)) {
+            if (!checkTypeRelatedTo(sourceFixedTypes[i], targetFixedTypes[i], assignableRelation)) return false
+        }
+        if (sourceFixedTypes.size > requiredCount) {
+            val tr = targetRest ?: return false
+            val trType = try { getTypeFromTypeNode(tr) } catch (_: StackOverflowError) { return false }
+            for (i in requiredCount until sourceFixedTypes.size) {
+                if (!checkTypeRelatedTo(sourceFixedTypes[i], trType, assignableRelation)) return false
+            }
+        }
+        if (sourceRest != null) {
+            val tr = targetRest ?: return false
+            val srType = try { getTypeFromTypeNode(sourceRest!!) } catch (_: StackOverflowError) { return false }
+            val trType = try { getTypeFromTypeNode(tr) } catch (_: StackOverflowError) { return false }
+            if (!checkTypeRelatedTo(srType, trType, assignableRelation)) return false
+        }
+        if (sourceFixedTypes.size >= requiredCount) return false
+        // Build displays.
+        val targetDisplay = tupleAnn.elements.map { fmtTupleElem(it) ?: return false }
+            .joinToString(", ", prefix = "[", postfix = "]")
+        val sourceDisplay = (sourceFixedDisplays + listOfNotNull(sourceRest?.let { r -> formatTypeForDisplay(r)?.let { "...$it" } ?: return false }))
+            .joinToString(", ", prefix = "[", postfix = "]")
+        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$sourceDisplay' is not assignable to type '$targetDisplay'.",
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = target.pos,
+            length = target.text.length,
+            messageChain = listOf("  Source provides no match for required element at position ${sourceFixedTypes.size} in target."),
+        ))
+        return true
+    }
+
     private fun collectTypeParamNames(typeParameters: List<TypeParameter>?): Set<String> {
         if (typeParameters == null || typeParameters.isEmpty()) return emptySet()
         return typeParameters.mapNotNull { it.name.text }.toSet()
@@ -61249,6 +61370,12 @@ interface DataView {
                 // satisfies a union of string literals, so tsc always errors this shape.
                 if (expr.right is ArrayLiteralExpression) {
                     tryEmitSpreadFreshnessLossTs2322(target, expr.right as ArrayLiteralExpression, source, fileName)
+                    // B190: tuple-spread arity — `k = [1, ...sbb_]` against a TupleType
+                    // annotation with MORE required elements than the spliced source
+                    // provides. AST-shape route (getTypeOfArrayLiteral returns anyType for
+                    // spreads, so no other branch can fire — and the type-engine tuple
+                    // route is canUseTypeEngine-blocked).
+                    if (tryEmitTupleSpreadArityTs2322(target, expr.right as ArrayLiteralExpression, source, fileName)) return
                 }
                 // B155: `var y: typeof <moduleAliasA> = ...; y = <moduleAliasB>;` — comparing
                 // two module "typeof shapes" (namespace import vs `typeof export=class`) does
