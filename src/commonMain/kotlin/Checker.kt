@@ -60103,6 +60103,132 @@ interface DataView {
         return formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
     }
 
+    /** B208: closed-kind structural AST identity over fn/conditional/type-literal
+     *  annotations, where the ONLY tolerated difference is an OPTIONAL TypeLiteral
+     *  member's type differing by exactly a top-level `| undefined` (sets sawDiff[0]).
+     *  Unknown node kinds → false (FN-safe). */
+    private fun eoptAnnSame(a: TypeNode?, b: TypeNode?, sawDiff: BooleanArray): Boolean {
+        if (a == null || b == null) return a == null && b == null
+        if (a is ParenthesizedType) return eoptAnnSame(a.type, b, sawDiff)
+        if (b is ParenthesizedType) return eoptAnnSame(a, b.type, sawDiff)
+        return when {
+            a is FunctionType && b is FunctionType -> {
+                val atp = a.typeParameters.orEmpty(); val btp = b.typeParameters.orEmpty()
+                if (atp.size != btp.size) return false
+                for (i in atp.indices) {
+                    if (atp[i].name.text != btp[i].name.text) return false
+                    if (atp[i].constraint != null || btp[i].constraint != null) return false
+                    if (atp[i].default != null || btp[i].default != null) return false
+                }
+                if (a.parameters.size != b.parameters.size) return false
+                for (i in a.parameters.indices) {
+                    val pa = a.parameters[i]; val pb = b.parameters[i]
+                    if ((pa.name as? Identifier)?.text != (pb.name as? Identifier)?.text) return false
+                    if (pa.questionToken != pb.questionToken || pa.dotDotDotToken != pb.dotDotDotToken) return false
+                    if (!eoptAnnSame(pa.type, pb.type, sawDiff)) return false
+                }
+                eoptAnnSame(a.type, b.type, sawDiff)
+            }
+            a is ConditionalType && b is ConditionalType ->
+                eoptAnnStrictSame(a.checkType, b.checkType) &&
+                    eoptAnnSame(a.extendsType, b.extendsType, sawDiff) &&
+                    eoptAnnStrictSame(a.trueType, b.trueType) &&
+                    eoptAnnStrictSame(a.falseType, b.falseType)
+            a is TypeReference && b is TypeReference -> {
+                val an = (a.typeName as? Identifier)?.text
+                an != null && an == (b.typeName as? Identifier)?.text &&
+                    a.typeArguments.isNullOrEmpty() && b.typeArguments.isNullOrEmpty()
+            }
+            a is KeywordTypeNode && b is KeywordTypeNode -> a.kind == b.kind
+            a is LiteralType && b is LiteralType ->
+                eoptLiteralText(a) != null && eoptLiteralText(a) == eoptLiteralText(b)
+            a is UnionType && b is UnionType ->
+                a.types.size == b.types.size &&
+                    a.types.indices.all { eoptAnnSame(a.types[it], b.types[it], sawDiff) }
+            a is TypeLiteral && b is TypeLiteral -> {
+                if (a.members.size != b.members.size) return false
+                for (i in a.members.indices) {
+                    val ma = a.members[i] as? PropertyDeclaration ?: return false
+                    val mb = b.members[i] as? PropertyDeclaration ?: return false
+                    val na = (ma.name as? Identifier)?.text ?: return false
+                    if (na != (mb.name as? Identifier)?.text) return false
+                    if (ma.questionToken != mb.questionToken) return false
+                    if (eoptAnnStrictSame(ma.type, mb.type)) continue
+                    if (!ma.questionToken) return false
+                    if (eoptUndefDiff(ma.type, mb.type) || eoptUndefDiff(mb.type, ma.type)) {
+                        sawDiff[0] = true; continue
+                    }
+                    return false
+                }
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun eoptAnnStrictSame(a: TypeNode?, b: TypeNode?): Boolean {
+        val f = booleanArrayOf(false)
+        return eoptAnnSame(a, b, f) && !f[0]
+    }
+
+    /** B208: true when `withUndef` is exactly `plain | undefined` (top level). */
+    private fun eoptUndefDiff(plain: TypeNode?, withUndef: TypeNode?): Boolean {
+        val u = withUndef as? UnionType ?: return false
+        val nonUndef = u.types.filter { (it as? KeywordTypeNode)?.kind != SyntaxKind.UndefinedKeyword }
+        if (nonUndef.size == u.types.size) return false
+        return when {
+            plain is UnionType -> plain.types.size == nonUndef.size &&
+                plain.types.indices.all { eoptAnnStrictSame(plain.types[it], nonUndef[it]) }
+            nonUndef.size == 1 -> eoptAnnStrictSame(plain, nonUndef[0])
+            else -> false
+        }
+    }
+
+    private fun eoptLiteralText(l: LiteralType): String? = when (val e = l.literal) {
+        is NumericLiteralNode -> e.text
+        is StringLiteralNode -> "\"${e.text}\""
+        is Identifier -> e.text
+        else -> null
+    }
+
+    /** B208: self-contained display for the eOPT conditional-fn shape — does NOT
+     *  reuse formatTypeForDisplay's TypeLiteral branch (it appends `| undefined` to
+     *  optional members, wrong under exactOptionalPropertyTypes) and adds the
+     *  ConditionalType rendering it lacks. Unknown kinds delegate / null out. */
+    private fun eoptDisplayType(t: TypeNode): String? {
+        return when (t) {
+            is ConditionalType -> {
+                val c = eoptDisplayType(t.checkType) ?: return null
+                val e = eoptDisplayType(t.extendsType) ?: return null
+                val tr = eoptDisplayType(t.trueType) ?: return null
+                val f = eoptDisplayType(t.falseType) ?: return null
+                "$c extends $e ? $tr : $f"
+            }
+            is TypeLiteral -> {
+                val parts = t.members.map { m ->
+                    val p = m as? PropertyDeclaration ?: return null
+                    val n = (p.name as? Identifier)?.text ?: return null
+                    val pt = p.type?.let { eoptDisplayType(it) } ?: return null
+                    "$n${if (p.questionToken) "?" else ""}: $pt;"
+                }
+                "{ ${parts.joinToString(" ")} }"
+            }
+            is UnionType -> {
+                val parts = t.types.map { eoptDisplayType(it) ?: return null }
+                parts.joinToString(" | ")
+            }
+            is FunctionType -> {
+                val tps = t.typeParameters?.takeIf { it.isNotEmpty() }
+                    ?.joinToString(", ", "<", ">") { tpDeclToDisplay(it) } ?: ""
+                val ps = t.parameters.joinToString(", ") { formatParameterDecl(it) }
+                val r = eoptDisplayType(t.type) ?: return null
+                "$tps($ps) => $r"
+            }
+            is ParenthesizedType -> eoptDisplayType(t.type)
+            else -> formatTypeForDisplay(t)
+        }
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -60164,6 +60290,51 @@ interface DataView {
                 category = DiagnosticCategory.Error, code = 2322,
                 fileName = fileName, line = line, character = ch,
                 start = name.pos, length = name.text.length,
+            ))
+            return
+        }
+
+        // B208: exactOptionalPropertyTypes conditional-fn-annotation identity
+        // (exactOptionalPropertyTypesIdentical). `let b: <T>() => T extends
+        // {a?: string | undefined} ? 0 : 1 = a` where a's annotation differs ONLY by
+        // the optional member's top-level `| undefined` — under eOPT tsc treats
+        // `{a?: X}` and `{a?: X | undefined}` as NON-identical, and conditional→
+        // conditional assignability needs identical extends-types, so this is always
+        // TS2322 with the branch-union fallback chain. Our getTypeFromConditionalType
+        // degrades unresolved-TP conditionals to anyType, so the standard path is
+        // silent. Closed-kind AST comparator; unknown node kinds bail (FN-safe).
+        run {
+            if (!options.exactOptionalPropertyTypes) return@run
+            val tgtAnn = decl.type as? FunctionType ?: return@run
+            val tgtCond = tgtAnn.type as? ConditionalType ?: return@run
+            val initId = decl.initializer as? Identifier ?: return@run
+            val srcSym = currentFileLocals?.get(initId.text) ?: globals[initId.text] ?: return@run
+            val srcDecl = srcSym.declarations.filterIsInstance<VariableDeclaration>()
+                .firstOrNull { (it.type as? FunctionType)?.type is ConditionalType } ?: return@run
+            if (srcDecl === decl) return@run
+            val srcAnn = srcDecl.type as FunctionType
+            val srcCond = srcAnn.type as ConditionalType
+            val saw = booleanArrayOf(false)
+            if (!eoptAnnSame(srcAnn, tgtAnn, saw) || !saw[0]) return@run
+            val srcFn = eoptDisplayType(srcAnn) ?: return@run
+            val tgtFn = eoptDisplayType(tgtAnn) ?: return@run
+            val srcCondDisp = eoptDisplayType(srcCond) ?: return@run
+            val tgtCondDisp = eoptDisplayType(tgtCond) ?: return@run
+            val trueDisp = eoptDisplayType(srcCond.trueType) ?: return@run
+            val falseDisp = eoptDisplayType(srcCond.falseType) ?: return@run
+            // A degenerate `? X : X` conditional IS assignable — distinct branches only.
+            if (trueDisp == falseDisp) return@run
+            val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcFn' is not assignable to type '$tgtFn'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = name.pos, length = name.text.length,
+                messageChain = listOf(
+                    "  Type '$srcCondDisp' is not assignable to type '$tgtCondDisp'.",
+                    "    Type '$trueDisp | $falseDisp' is not assignable to type '$tgtCondDisp'.",
+                    "      Type '$trueDisp' is not assignable to type '$tgtCondDisp'.",
+                ),
             ))
             return
         }
