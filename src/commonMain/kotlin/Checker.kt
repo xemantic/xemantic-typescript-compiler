@@ -37423,6 +37423,144 @@ interface DataView {
     }
 
     /** Extract the parameter list from any signature-bearing AST declaration node. */
+    /**
+     * B194: TS2322 per object-literal property for the reverse-mapped callback-ARITY rule:
+     * a generic callee `f<S, T>(selectors: {[K in keyof T]: Alias<S, T[K]>})` called with
+     * an object literal whose function-valued property requires MORE parameters than the
+     * Alias FunctionType provides. tsc reverse-maps T from the literal, instantiates the
+     * template per property, and the signature-arity rule (source minArgumentCount >
+     * target param count) fails unconditionally — while our mapped-type resolution bakes
+     * the param to anyType (keyof TP non-enumerable), so the standard arg loop skips it.
+     * Displays: contravariant template slots (bare callee TPs) get NO inference candidates
+     * (every property violates arity) and render 'unknown'; the `T[K]` slot renders the
+     * property fn's inferred (widened) return type. Emits at each property NAME with the
+     * "Target signature provides too few arguments." chain + TS6500 related info.
+     * Load-bearing gates: alias FunctionType params ALL required (optional/rest defeats
+     * the arity rule); EVERY literal property is a PropertyAssignment whose value is an
+     * arrow/fn-expr with M > N required params (any other member shape bails).
+     */
+    private fun checkReverseMappedCallbackArity(
+        expr: CallExpression, sig: Signature, source: String, fileName: String,
+    ): Boolean {
+        if (sig.typeParameters.isNullOrEmpty()) return false
+        val fnDecl = sig.declaration as? FunctionDeclaration ?: return false
+        val sigParams = fnDecl.parameters
+        if (sigParams.size != 1 || expr.arguments.size != 1) return false
+        val objLit = expr.arguments[0] as? ObjectLiteralExpression ?: return false
+        if (objLit.properties.isEmpty()) return false
+        val mapped = sigParams[0].type as? MappedType ?: return false
+        if (mapped.nameType != null) return false
+        val op = mapped.typeParameter.constraint as? TypeOperator ?: return false
+        if (op.operator != SyntaxKind.KeyOfKeyword) return false
+        val tRef = op.type as? TypeReference ?: return false
+        if (!tRef.typeArguments.isNullOrEmpty()) return false
+        val tName = (tRef.typeName as? Identifier)?.text ?: return false
+        val calleeTpNames = fnDecl.typeParameters?.map { it.name.text } ?: return false
+        if (tName !in calleeTpNames) return false
+        val kName = mapped.typeParameter.name.text
+        // Template: Alias<...> with each arg either CONTRA (bare callee TP != T) or
+        // RET (T[K] indexed access).
+        val tmpl = mapped.type as? TypeReference ?: return false
+        val aliasName = (tmpl.typeName as? Identifier)?.text ?: return false
+        val aliasSym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return false
+        if (!aliasSym.flags.hasAny(SymbolFlags.TypeAlias)) return false
+        val aliasDecl = aliasSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+        val aliasTps = aliasDecl.typeParameters ?: return false
+        val tmplArgs = tmpl.typeArguments ?: return false
+        if (tmplArgs.size != aliasTps.size) return false
+        val aliasFn = aliasDecl.type as? FunctionType ?: return false
+        val n = aliasFn.parameters.count {
+            val nm = it.name
+            !(nm is Identifier && nm.text == "this")
+        }
+        if (aliasFn.parameters.any { it.questionToken || it.dotDotDotToken || it.initializer != null }) return false
+        var retSlot = -1
+        for ((i, a) in tmplArgs.withIndex()) {
+            when {
+                a is TypeReference && a.typeArguments.isNullOrEmpty() &&
+                    (a.typeName as? Identifier)?.text.let { it != null && it in calleeTpNames && it != tName } -> { /* CONTRA */ }
+                a is IndexedAccessType &&
+                    (a.objectType as? TypeReference)?.let { o -> (o.typeName as? Identifier)?.text == tName && o.typeArguments.isNullOrEmpty() } == true &&
+                    (a.indexType as? TypeReference)?.let { x -> (x.typeName as? Identifier)?.text == kName && x.typeArguments.isNullOrEmpty() } == true -> {
+                    if (retSlot >= 0) return false
+                    retSlot = i
+                }
+                else -> return false
+            }
+        }
+        if (retSlot < 0) return false
+        // Every property must be a fn-valued PropertyAssignment with M > N required params.
+        data class Violation(val name: Identifier, val init: Expression, val m: Int)
+        val violations = mutableListOf<Violation>()
+        for (p in objLit.properties) {
+            val pa = p as? PropertyAssignment ?: return false
+            val nameIdent = pa.name as? Identifier ?: return false
+            val fn = pa.initializer
+            val params = when (fn) {
+                is ArrowFunction -> fn.parameters
+                is FunctionExpression -> fn.parameters
+                else -> return false
+            }
+            val m = params.count {
+                !it.questionToken && !it.dotDotDotToken && it.initializer == null &&
+                    !((it.name as? Identifier)?.text == "this")
+            }
+            if (m <= n) return false
+            violations.add(Violation(nameIdent, fn, m))
+        }
+        // Per-property displays and emission.
+        data class Emit(val v: Violation, val srcDisplay: String, val tgtDisplay: String)
+        val emits = mutableListOf<Emit>()
+        for (v in violations) {
+            val fnType = try { getTypeOfExpression(v.init) } catch (_: StackOverflowError) { return false }
+            if (fnType !is Type.Object) return false
+            val callSig = fnType.callSignatures?.singleOrNull() ?: return false
+            val ret = callSig.resolvedReturnType ?: return false
+            if (ret === anyType || ret === errorType) return false
+            val retDisplay = typeToString(getWidenedLiteralType(ret))
+            val fnParams = when (val f = v.init) {
+                is ArrowFunction -> f.parameters
+                is FunctionExpression -> f.parameters
+                else -> return false
+            }
+            val srcParts = mutableListOf<String>()
+            for (p in fnParams) {
+                val nm = (p.name as? Identifier)?.text ?: return false
+                val pt = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+                srcParts.add("$nm: $pt")
+            }
+            val srcDisplay = "(" + srcParts.joinToString(", ") + ") => $retDisplay"
+            val tgtDisplay = aliasName + "<" + tmplArgs.indices.joinToString(", ") { i ->
+                if (i == retSlot) retDisplay else "unknown"
+            } + ">"
+            emits.add(Emit(v, srcDisplay, tgtDisplay))
+        }
+        val objTypeDisplay = "{ " + emits.joinToString(" ") { "${it.v.name.text}: ${it.tgtDisplay};" } + " }"
+        for (e in emits) {
+            val start = e.v.name.pos
+            val length = e.v.name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '${e.srcDisplay}' is not assignable to type '${e.tgtDisplay}'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line, character = character,
+                start = start, length = length,
+                messageChain = listOf("  Target signature provides too few arguments. Expected ${e.v.m} or more, but got $n."),
+                relatedInformation = listOf(Diagnostic(
+                    message = "The expected type comes from property '${e.v.name.text}' which is declared here on type '$objTypeDisplay'",
+                    category = DiagnosticCategory.Message,
+                    code = 6500,
+                    fileName = fileName,
+                    line = line, character = character,
+                    start = start, length = length,
+                )),
+            ))
+        }
+        return emits.isNotEmpty()
+    }
+
     private fun signatureDeclarationParameters(node: Node?): List<Parameter>? = when (node) {
         is FunctionType -> node.parameters
         is ConstructorType -> node.parameters
@@ -82767,6 +82905,12 @@ interface DataView {
                 }
             }
             checkTs2554ForPropertyAccessCall(expr, signatures[0], source, fileName)
+            // B194: reverse-mapped callback arity — `createStructuredSelector({ p: (a, b) =>
+            // … })` against `{[K in keyof T]: Alias<S, T[K]>}` where Alias is a FunctionType
+            // with FEWER all-required params than the property fn requires. tsc's signature
+            // arity rule makes this unconditionally TS2322 per property; our mapped-type
+            // resolution bakes the param to anyType so the standard path skips the arg.
+            if (checkReverseMappedCallbackArity(expr, signatures[0], source, fileName)) return
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
             // Skip overload resolution when any signature has type parameters —
