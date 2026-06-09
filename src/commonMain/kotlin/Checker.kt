@@ -48925,6 +48925,7 @@ interface DataView {
         when (expr) {
             is ParenthesizedExpression -> {
                 emitTS2352IfJSDocVoidCast(expr, source, fileName)
+                emitTS2352IfJSDocImportDefaultNamespaceCast(expr, source, fileName)
                 walkJSDocVoidCastInExpr(expr.expression, source, fileName)
             }
             is BinaryExpression -> {
@@ -48979,6 +48980,48 @@ interface DataView {
             is CommaListExpression -> for (e in expr.elements) walkJSDocVoidCastInExpr(e, source, fileName)
             else -> {}
         }
+    }
+
+    /**
+     * B177: TS2352 for a JSDoc cast `/* @type {import('./m').default} */ ('str')` where the
+     * module's default export is a VALUE-BEARING `declare namespace` — the cast target is
+     * `typeof <ns>` (a namespace object), which never overlaps a string literal
+     * (jsdocImportTypeNodeNamespace). Span = the brace content of the @type tag.
+     */
+    private fun emitTS2352IfJSDocImportDefaultNamespaceCast(
+        expr: ParenthesizedExpression, source: String, fileName: String,
+    ) {
+        val castType = expr.jsdocCastType ?: return
+        val imp = castType as? ImportType ?: return
+        if ((imp.qualifier as? Identifier)?.text != "default") return
+        val spec = ((imp.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+            ?: (imp.argument as? StringLiteralNode)?.text ?: return
+        if (expr.expression !is StringLiteralNode) return
+        val g = resolveSpecifierAnywhere(spec, fileName) ?: return
+        val r = fileResults[g] ?: return
+        val defIdent = r.sourceFile.statements.firstNotNullOfOrNull { s ->
+            (s as? ExportAssignment)?.takeIf { !it.isExportEquals }?.expression as? Identifier
+        }?.text ?: return
+        val ns = r.sourceFile.statements.firstNotNullOfOrNull { s ->
+            (s as? ModuleDeclaration)?.takeIf { (it.name as? Identifier)?.text == defIdent }
+        } ?: return
+        val body = ns.body as? ModuleBlock ?: return
+        val hasValue = body.statements.any {
+            it is VariableStatement || it is FunctionDeclaration || it is ClassDeclaration || it is EnumDeclaration
+        }
+        if (!hasValue) return
+        val typeTagIdx = source.lastIndexOf("@type {", expr.pos)
+        if (typeTagIdx < 0) return
+        val braceStart = typeTagIdx + "@type {".length
+        val braceEnd = source.indexOf('}', braceStart)
+        if (braceEnd < 0 || braceEnd > expr.pos) return
+        val (line, character) = getLineAndCharacterOfPosition(source, braceStart)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type 'string' to type 'typeof $defIdent' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error, code = 2352,
+            fileName = fileName, line = line, character = character,
+            start = braceStart, length = braceEnd - braceStart,
+        ))
     }
 
     private fun emitTS2352IfJSDocVoidCast(
