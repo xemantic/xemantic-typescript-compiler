@@ -59591,6 +59591,56 @@ interface DataView {
      * ParenthesizedExpression, BinaryExpression, CallExpression args,
      * NewExpression args, ConditionalExpression, SpreadElement.
      */
+    /**
+     * B210: the callee's declared AST parameter list for contextual fn-expr-arg
+     * typing in the assignment walker. Returns non-null ONLY for a uniquely-resolved
+     * non-generic callee: [a] a top-level function with exactly ONE
+     * FunctionDeclaration (kills overloads AND cross-file merged symbols), with body,
+     * unshadowed; [b] `super(...)` → the enclosing class's extends base's unique
+     * constructor; [c] `new C(...)` → C's unique constructor. tsc always contextually
+     * types un-annotated fn-expr params from such a callee, so any diagnostic that
+     * then fires is one tsc emits.
+     */
+    private fun calleeDeclaredCtxParams(expr: Expression): List<Parameter>? {
+        when (expr) {
+            is CallExpression -> {
+                if (!expr.typeArguments.isNullOrEmpty()) return null
+                val callee = expr.expression as? Identifier ?: return null
+                if (callee.text == "super") {
+                    val cls = currentClassForThis ?: return null
+                    val baseName = cls.heritageClauses.orEmpty()
+                        .firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.types?.firstOrNull()?.expression as? Identifier ?: return null
+                    return resolveClassCtorParamsForCtx(baseName.text)
+                }
+                if (currentLocalTypes.containsKey(callee.text)) return null
+                val sym = globals[callee.text] ?: return null
+                if (!sym.flags.hasAny(SymbolFlags.Function)) return null
+                val decl = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull() ?: return null
+                if (decl.body == null || !decl.typeParameters.isNullOrEmpty()) return null
+                return decl.parameters
+            }
+            is NewExpression -> {
+                if (!expr.typeArguments.isNullOrEmpty()) return null
+                val callee = expr.expression as? Identifier ?: return null
+                if (currentLocalTypes.containsKey(callee.text)) return null
+                return resolveClassCtorParamsForCtx(callee.text)
+            }
+            else -> return null
+        }
+    }
+
+    /** B210: a class's unique constructor parameters (null for generic classes,
+     *  overloaded ctors, merged symbols, or no-body ctors). */
+    private fun resolveClassCtorParamsForCtx(name: String): List<Parameter>? {
+        val sym = globals[name] ?: return null
+        val cls = sym.declarations.filterIsInstance<ClassDeclaration>().singleOrNull() ?: return null
+        if (!cls.typeParameters.isNullOrEmpty()) return null
+        val ctors = cls.members.filterIsInstance<Constructor>()
+        if (ctors.size != 1 || ctors[0].body == null) return null
+        return ctors[0].parameters
+    }
+
     private fun walkFunctionBodiesInExpr(
         expr: Expression, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -59663,14 +59713,21 @@ interface DataView {
             }
             is CallExpression -> {
                 walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-                expr.arguments.forEach {
-                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                // B210: contextual param typing from the callee's unique non-generic
+                // declared signature (fn decl / class ctor / super → base ctor), so
+                // body assignment checks see `s: string` in `foo(function(s){ s = 5 })`.
+                val ctxParams = calleeDeclaredCtxParams(expr)
+                expr.arguments.forEachIndexed { i, arg ->
+                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let { contextualizeFnExprFromAnnotation(it, arg) }
+                    walkFunctionBodiesInExpr(ctxFn ?: arg, source, fileName, varTypes, typeParams)
                 }
             }
             is NewExpression -> {
                 walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-                expr.arguments?.forEach {
-                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                val ctxParams = calleeDeclaredCtxParams(expr)
+                expr.arguments?.forEachIndexed { i, arg ->
+                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let { contextualizeFnExprFromAnnotation(it, arg) }
+                    walkFunctionBodiesInExpr(ctxFn ?: arg, source, fileName, varTypes, typeParams)
                 }
             }
             is ConditionalExpression -> {
