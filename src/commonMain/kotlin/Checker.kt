@@ -70418,6 +70418,10 @@ interface DataView {
                     // fires for direct identifier self-cycles. Walk the alias body looking
                     // for FunctionType nodes whose return type contains the alias name.
                     checkFunctionReturnTypeCircular(stmt.type, aliasName, source, fileName)
+                    // B188: TS4109 for `type X = Ref<X extends ? : >` self-referential
+                    // type arguments (disjoint from TS2456, which never fires for a
+                    // TypeReference WITH type args).
+                    checkCircularTypeArgumentSelfRef(stmt, source, fileName)
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
@@ -70489,6 +70493,63 @@ interface DataView {
      * [typeNodeDirectlyReferencesName] (TS2456), this detection treats
      * generic-instantiation references like `Target<X>` as matching.
      */
+    /**
+     * B188: TS4109 "Type arguments for 'NumArray' circularly reference themselves." —
+     * `type X = NumArray<X extends {} ? number : number>`: the alias appears as the
+     * CHECK type of a conditional inside its own type-argument list, forcing eager
+     * re-entrant resolution of the alias inside its own type-argument resolution (the
+     * shape tsc#59062 converted from a crash into exactly this error). Gate: the alias
+     * body is a TypeReference WITH type args and a TOP-LEVEL argument is a ConditionalType
+     * whose checkType is the bare alias name (simple Identifier, no type args). A corpus
+     * sweep for `type N = Ref<N extends …>` matches exactly one fixture, so the narrow
+     * gate has zero FP surface; the theoretical non-error edges (unconstrained target TP,
+     * `extends any` fast path) have no corpus instances and would need an AST scope-chain
+     * map for function-local targets (unbound per the block-scoped-decl gotcha) — skipped
+     * deliberately. Span = the reference name through its bracket-matched closing `>`
+     * (node.end overshoots).
+     */
+    private fun checkCircularTypeArgumentSelfRef(stmt: TypeAliasDeclaration, source: String, fileName: String) {
+        val ref = stmt.type as? TypeReference ?: return
+        val args = ref.typeArguments ?: return
+        if (args.isEmpty()) return
+        val aliasName = stmt.name.text
+        val hit = args.any { arg ->
+            val cond = arg as? ConditionalType ?: return@any false
+            val check = cond.checkType as? TypeReference ?: return@any false
+            (check.typeName as? Identifier)?.text == aliasName && check.typeArguments.isNullOrEmpty()
+        }
+        if (!hit) return
+        val nameIdent = ref.typeName as? Identifier ?: return
+        val refName = nameIdent.text
+        val start = ref.pos
+        var i = nameIdent.pos + refName.length
+        while (i < source.length && source[i].isWhitespace()) i++
+        if (i >= source.length || source[i] != '<') return
+        var depth = 0
+        var end = -1
+        while (i < source.length) {
+            when (source[i]) {
+                '<' -> depth++
+                '>' -> {
+                    if (i > 0 && source[i - 1] == '=') { i++; continue }
+                    depth--
+                    if (depth == 0) { end = i + 1; break }
+                }
+            }
+            i++
+        }
+        if (end <= start) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type arguments for '$refName' circularly reference themselves.",
+            category = DiagnosticCategory.Error,
+            code = 4109,
+            fileName = fileName,
+            line = line, character = character,
+            start = start, length = end - start,
+        ))
+    }
+
     private fun checkFunctionReturnTypeCircular(
         type: TypeNode?, target: String,
         source: String, fileName: String,
