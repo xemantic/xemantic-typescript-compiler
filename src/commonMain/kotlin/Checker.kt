@@ -1221,6 +1221,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64d2. Check object-rest source types (TS2700)
         checkObjectRestSpreadTypes()
+        // 64d2a. Check object-SPREAD source types (TS2698)
+        checkObjectSpreadInvalidTypes()
         // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
         checkShiftOverflow()
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
@@ -87196,7 +87198,10 @@ interface DataView {
      * e.g., `{ a: number; b: string }["a"]` → `number`
      */
     private fun getTypeFromIndexedAccess(node: IndexedAccessType): Type {
-        val objectType = getTypeFromTypeNode(node.objectType)
+        val objectTypeRaw = getTypeFromTypeNode(node.objectType)
+        // B156: resolve `T[K]` through a type parameter's constraint (apparent type)
+        // so `T["b"]` (T extends { b: string }) → string rather than anyType.
+        val objectType = if (objectTypeRaw is Type.TypeParam) getApparentType(objectTypeRaw) else objectTypeRaw
         val indexType = getTypeFromTypeNode(node.indexType)
         if (objectType === anyType || objectType === errorType) return anyType
         if (indexType === anyType || indexType === errorType) return anyType
@@ -88609,6 +88614,229 @@ interface DataView {
         type === nullType || type === undefinedType -> true
         type is Type.Union -> type.types.any { spreadSourceHasNullish(it) }
         type is Type.Intersection -> type.types.any { spreadSourceHasNullish(it) }
+        else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // TS2698: "Spread types may only be created from object types." — an object
+    // SPREAD `{ ...x }` whose operand `x` resolves to a non-object type
+    // (primitive / literal / enum / indexed-access-to-primitive / keyof). Sibling
+    // of the TS2700 object-REST check above but for the spread-into-object-literal
+    // direction. `spreadInvalidArgumentType`.
+    //
+    // FP-firewall: `isDefinitelyInvalidSpreadType` returns true ONLY for types that
+    // are unambiguously non-spreadable (primitive intrinsics, literals, enums,
+    // void/never, a union whose non-nullish members are invalid or which is
+    // all-nullish, an intersection with an invalid member). any/unknown/error and
+    // every object-like / typeparam type → false (suppress). So a mis-resolved or
+    // generic operand is a false NEGATIVE, never a false positive. Nullish union
+    // members are filtered before the check (`{a} | undefined` IS a valid spread).
+    // -----------------------------------------------------------------------
+
+    private fun checkObjectSpreadInvalidTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            val source = result.sourceFile.text
+            try {
+                spread2698Stmts(result.sourceFile.statements, source, fileName, mutableMapOf())
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun spread2698Stmts(stmts: List<Statement>, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
+        for (s in stmts) spread2698Stmt(s, source, fileName, anns)
+    }
+
+    private fun spread2698Stmt(stmt: Statement, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
+                d.initializer?.let { spread2698Expr(it, source, fileName, anns) }
+            }
+            is ExpressionStatement -> spread2698Expr(stmt.expression, source, fileName, anns)
+            is ReturnStatement -> stmt.expression?.let { spread2698Expr(it, source, fileName, anns) }
+            is ThrowStatement -> stmt.expression?.let { spread2698Expr(it, source, fileName, anns) }
+            is FunctionDeclaration -> spread2698FuncLike(stmt.typeParameters, stmt.parameters, stmt.body, source, fileName, anns)
+            is Block -> spread2698Stmts(stmt.statements, source, fileName, HashMap(anns))
+            is IfStatement -> {
+                spread2698Expr(stmt.expression, source, fileName, anns)
+                spread2698Stmt(stmt.thenStatement, source, fileName, HashMap(anns))
+                stmt.elseStatement?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
+            }
+            is ForStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
+            is ForInStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
+            is ForOfStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
+            is WhileStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
+            is DoStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
+            is TryStatement -> {
+                spread2698Stmt(stmt.tryBlock, source, fileName, HashMap(anns))
+                stmt.catchClause?.block?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
+                stmt.finallyBlock?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
+                is CaseClause -> spread2698Stmts(clause.statements, source, fileName, HashMap(anns))
+                is DefaultClause -> spread2698Stmts(clause.statements, source, fileName, HashMap(anns))
+                else -> {}
+            }
+            is LabeledStatement -> spread2698Stmt(stmt.statement, source, fileName, anns)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { spread2698Stmts(it.statements, source, fileName, HashMap(anns)) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> spread2698FuncLike(m.typeParameters, m.parameters, m.body, source, fileName, anns)
+                is Constructor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
+                is GetAccessor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
+                is SetAccessor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
+                is PropertyDeclaration -> m.initializer?.let { spread2698Expr(it, source, fileName, anns) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun spread2698FuncLike(
+        tps: List<TypeParameter>?, params: List<Parameter>, bodyNode: Node?,
+        source: String, fileName: String, parentAnns: Map<String, TypeNode>
+    ) {
+        val saved = currentTypeParamScope
+        if (!tps.isNullOrEmpty()) {
+            val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+            val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+            for (tp in tps) {
+                val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                    val p = Type.TypeParam()
+                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                    p
+                }
+                scope[tp.name.text] = typeParam
+                newOnes.add(tp to typeParam)
+            }
+            currentTypeParamScope = scope
+            for ((tp, typeParam) in newOnes) {
+                if (typeParam.constraint == null) tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+            }
+        }
+        try {
+            val anns = HashMap(parentAnns)
+            for (p in params) (p.name as? Identifier)?.let { id -> p.type?.let { anns[id.text] = it } }
+            when (bodyNode) {
+                is Block -> spread2698Stmts(bodyNode.statements, source, fileName, anns)
+                is Expression -> spread2698Expr(bodyNode, source, fileName, anns)
+                else -> {}
+            }
+        } finally {
+            currentTypeParamScope = saved
+        }
+    }
+
+    private fun spread2698Expr(expr: Expression, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
+        when (expr) {
+            is ObjectLiteralExpression -> for (el in expr.properties) when (el) {
+                is SpreadAssignment -> {
+                    spread2698CheckOperand(el, anns, source, fileName)
+                    spread2698Expr(el.expression, source, fileName, anns)
+                }
+                is PropertyAssignment -> spread2698Expr(el.initializer, source, fileName, anns)
+                is MethodDeclaration -> spread2698FuncLike(el.typeParameters, el.parameters, el.body, source, fileName, anns)
+                is GetAccessor -> spread2698FuncLike(null, el.parameters, el.body, source, fileName, anns)
+                is SetAccessor -> spread2698FuncLike(null, el.parameters, el.body, source, fileName, anns)
+                is ShorthandPropertyAssignment -> el.objectAssignmentInitializer?.let { spread2698Expr(it, source, fileName, anns) }
+                else -> {}
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) spread2698Expr(e, source, fileName, anns)
+            is ParenthesizedExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is CallExpression -> {
+                spread2698Expr(expr.expression, source, fileName, anns)
+                for (a in expr.arguments) spread2698Expr(a, source, fileName, anns)
+            }
+            is NewExpression -> {
+                spread2698Expr(expr.expression, source, fileName, anns)
+                expr.arguments?.forEach { spread2698Expr(it, source, fileName, anns) }
+            }
+            is BinaryExpression -> {
+                spread2698Expr(expr.left, source, fileName, anns)
+                spread2698Expr(expr.right, source, fileName, anns)
+            }
+            is ConditionalExpression -> {
+                spread2698Expr(expr.condition, source, fileName, anns)
+                spread2698Expr(expr.whenTrue, source, fileName, anns)
+                spread2698Expr(expr.whenFalse, source, fileName, anns)
+            }
+            is PropertyAccessExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is ElementAccessExpression -> {
+                spread2698Expr(expr.expression, source, fileName, anns)
+                spread2698Expr(expr.argumentExpression, source, fileName, anns)
+            }
+            is SpreadElement -> spread2698Expr(expr.expression, source, fileName, anns)
+            is AsExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is TypeAssertionExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is NonNullExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is PrefixUnaryExpression -> spread2698Expr(expr.operand, source, fileName, anns)
+            is PostfixUnaryExpression -> spread2698Expr(expr.operand, source, fileName, anns)
+            is AwaitExpression -> spread2698Expr(expr.expression, source, fileName, anns)
+            is FunctionExpression -> spread2698FuncLike(expr.typeParameters, expr.parameters, expr.body, source, fileName, anns)
+            is ArrowFunction -> spread2698FuncLike(expr.typeParameters, expr.parameters, expr.body, source, fileName, anns)
+            else -> {}
+        }
+    }
+
+    private fun spread2698CheckOperand(el: SpreadAssignment, anns: Map<String, TypeNode>, source: String, fileName: String) {
+        val operand = el.expression
+        val annType: TypeNode? = (operand as? Identifier)?.let { anns[it.text] }
+        // Enum-typed operand: an enum is never a valid spread source. Detect via the
+        // annotation's TypeReference symbol (enum type resolution may not carry the
+        // Enum flag reliably). This is unambiguously invalid → FP-safe.
+        if (annType is TypeReference) {
+            val nm = (annType.typeName as? Identifier)?.text
+            if (nm != null) {
+                val s = currentFileLocals?.get(nm) ?: globals[nm]
+                if (s != null && s.flags.hasAny(SymbolFlags.Enum)) { spread2698Emit(el, source, fileName); return }
+            }
+        }
+        val t = try {
+            if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(operand)
+        } catch (_: Throwable) { return }
+        if (isDefinitelyInvalidSpreadType(t)) spread2698Emit(el, source, fileName)
+    }
+
+    private fun spread2698Emit(el: SpreadAssignment, source: String, fileName: String) {
+        val start = el.pos
+        val length = expressionTrueEnd(el.expression) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Spread types may only be created from object types.",
+            category = DiagnosticCategory.Error,
+            code = 2698,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** B156: a type DEFINITELY cannot be an object-spread source (TS2698). FP-safe —
+     *  returns true ONLY for unambiguously non-spreadable types; any/unknown/error and
+     *  every object-like / typeparam type → false (suppress, possible FN never FP). */
+    private fun isDefinitelyInvalidSpreadType(type: Type): Boolean = when {
+        type === anyType || type === unknownType || type === errorType -> false
+        type is Type.Object || type is Type.Interface || type is Type.Reference || type is Type.TypeParam -> false
+        type is Type.Union -> {
+            val nonNullish = type.types.filter {
+                it !== nullType && it !== undefinedType && !it.flags.hasAny(TypeFlags.VoidLike)
+            }
+            if (nonNullish.isEmpty()) true else nonNullish.any { isDefinitelyInvalidSpreadType(it) }
+        }
+        type is Type.Intersection -> type.types.any { isDefinitelyInvalidSpreadType(it) }
+        type === nullType || type === undefinedType || type === neverType -> true
+        type.flags.hasAny(
+            TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BigIntLike or
+                TypeFlags.BooleanLike or TypeFlags.EnumLike or TypeFlags.ESSymbol or TypeFlags.Void
+        ) -> true
         else -> false
     }
 
