@@ -85729,6 +85729,105 @@ interface DataView {
      * engine changes. Per-property gates: literal source, simple-checkable target,
      * relation-failed — tsc ALWAYS flags this conjunction.
      */
+    /**
+     * B213: TS2322 for a UNION-discriminant property mismatch in an object-literal
+     * arg (indirectDiscriminantAndExcessProperty). `thing({ type: foo1, ... })`
+     * against `Blah = {type:"foo",...} | {type:"bar",...}` — tsc checks the prop
+     * value against Blah["type"] = '"foo" | "bar"', and a widened `string`
+     * (un-annotated let with a literal init; assignment narrowing can't narrow a
+     * non-union string) always fails. The per-arg loop had no Type.Union paramType
+     * branch for object literals, so the shape was silent. Gates: bare type-alias
+     * annotation (display name); ALL ≥2 constituents anonymous Type.Objects
+     * declaring the prop NON-optionally with a string/number-literal type; the
+     * value type provable from a closed shape set; value fails EVERY constituent.
+     */
+    private fun tryEmitUnionDiscriminantPropMismatch(
+        arg: ObjectLiteralExpression, paramType: Type.Union, paramSym: Symbol,
+        source: String, fileName: String,
+    ): Boolean {
+        val annot = (paramSym.valueDeclaration as? Parameter)?.type as? TypeReference ?: return false
+        if (annot.typeArguments != null) return false
+        val aliasName = (annot.typeName as? Identifier)?.text ?: return false
+        val aliasSym = globals[aliasName] ?: return false
+        if (!aliasSym.flags.hasAny(SymbolFlags.TypeAlias)) return false
+        val constituents = paramType.types
+        if (constituents.size < 2) return false
+        for (c in constituents) {
+            if (c !is Type.Object || c is Type.Interface || c is Type.Reference) return false
+            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return false }
+        }
+        for (prop in arg.properties) {
+            val pa = prop as? PropertyAssignment ?: continue
+            val nameNode = pa.name as? Identifier ?: continue
+            val pName = nameNode.text
+            val discTypes = mutableListOf<Type>()
+            var allHave = true
+            var firstDeclPos = -1
+            for (c in constituents) {
+                val sym = (c as Type.Object).members?.get(pName)
+                if (sym == null || isOptionalProperty(sym)) { allHave = false; break }
+                val t = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                if (t !is Type.StringLiteral && t !is Type.NumberLiteral) { allHave = false; break }
+                discTypes.add(t)
+                if (firstDeclPos < 0) {
+                    val dn = ((sym.valueDeclaration ?: sym.declarations.firstOrNull())
+                        as? PropertyDeclaration)?.name as? Identifier
+                    if (dn != null && dn.pos + pName.length <= source.length &&
+                        source.regionMatches(dn.pos, pName, 0, pName.length)) firstDeclPos = dn.pos
+                }
+            }
+            if (!allHave || discTypes.isEmpty()) continue
+            val valueType: Type? = literalTypeOfExpression(pa.initializer) ?: run {
+                val id = pa.initializer as? Identifier ?: return@run null
+                val sym = currentFileLocals?.get(id.text) ?: globals[id.text] ?: return@run null
+                val vd = (sym.valueDeclaration ?: sym.declarations.firstOrNull())
+                    as? VariableDeclaration ?: return@run null
+                vd.type?.let {
+                    return@run try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                }
+                // Un-annotated: require the declaring keyword to be exactly let/var
+                // (const preserves the literal type — our widening would FP there).
+                val lit = vd.initializer?.let { literalTypeOfExpression(it) } ?: return@run null
+                var e = vd.pos
+                while (e > 0 && source[e - 1].isWhitespace()) e--
+                var s = e
+                while (s > 0 && source[s - 1].isLetter()) s--
+                if (e <= s || source.substring(s, e) !in setOf("let", "var")) return@run null
+                getWidenedLiteralType(lit)
+            }
+            if (valueType == null) continue
+            val vOk = (valueType is Type.Intrinsic &&
+                (valueType.intrinsicName == "string" || valueType.intrinsicName == "number")) ||
+                valueType is Type.StringLiteral || valueType is Type.NumberLiteral
+            if (!vOk) continue
+            val anyPass = discTypes.any { dt ->
+                try { checkTypeRelatedTo(valueType, dt, assignableRelation) } catch (_: StackOverflowError) { true }
+            }
+            if (anyPass) continue
+            val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
+            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            val related = mutableListOf<Diagnostic>()
+            if (firstDeclPos >= 0) {
+                val (rl, rc) = getLineAndCharacterOfPosition(source, firstDeclPos)
+                related.add(Diagnostic(
+                    message = "The expected type comes from property '$pName' which is declared here on type '$aliasName'",
+                    category = DiagnosticCategory.Message, code = 6500,
+                    fileName = fileName, line = rl, character = rc,
+                    start = firstDeclPos, length = pName.length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(valueType)}' is not assignable to type '$discDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = nameNode.pos, length = pName.length,
+                relatedInformation = related,
+            ))
+            return true
+        }
+        return false
+    }
+
     private fun tryEmitContraAliasUnionSigPropertyMismatch(
         sigIn: Signature, args: List<Expression>, source: String, fileName: String,
     ): Boolean {
@@ -86013,6 +86112,12 @@ interface DataView {
                     checkObjectLiteralFnReturnsAgainstIntersection(arg, paramType, source, fileName)) {
                     break
                 }
+            }
+            // B213: union-discriminant property mismatch for object-literal args.
+            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Union &&
+                argType is Type.Object &&
+                tryEmitUnionDiscriminantPropMismatch(arg, paramType, params[i], source, fileName)) {
+                break
             }
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
                 try {
