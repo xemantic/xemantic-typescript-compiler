@@ -59388,6 +59388,82 @@ interface DataView {
         }
     }
 
+    /** B205: per-param FlatArray annotation facts — `FlatArray<arr, any>` vs
+     *  `FlatArray<arr, depthTp>` where depthTp is a number-constrained tp. */
+    private class FlatArrayAnn(val arr: String, val depthAny: Boolean, val depthTp: String?)
+
+    /**
+     * B205: TS2322 for `y = x` where `x: FlatArray<Arr, any>`, `y: FlatArray<Arr, D>`
+     * (flatArrayNoExcessiveStackDepth). The lib's FlatArray is a recursive
+     * conditional type our engine can't evaluate (both annotations resolve to any),
+     * so the standard assignment path is silent. tsc ALWAYS errors here: with
+     * Depth=any the conditional resolves to the union of both branches, so the
+     * source includes bare `Arr`, never assignable to the unresolved conditional
+     * target. The message chain embeds the FIXED lib expansion of FlatArray — only
+     * the tp names interpolate. Gates: no FlatArray symbol in globals (a user
+     * declaration disables it — our embedded lib has none), both sides 2-arg
+     * `FlatArray<sameBareTp, _>` annotations on Identifier params of THIS function,
+     * source arg1 the literal `any` keyword, target arg1 a bare tp constrained
+     * `extends number`, top-level `target = source` in the body.
+     */
+    private fun checkFlatArrayDepthParamAssignments(
+        statements: List<Statement>, parameters: List<Parameter>,
+        funcTypeParams: List<TypeParameter>?, source: String, fileName: String,
+    ) {
+        val tps = funcTypeParams ?: return
+        if (tps.isEmpty() || globals["FlatArray"] != null) return
+        val tpNames = tps.map { it.name.text }.toSet()
+        val numberTps = tps.filter { (it.constraint as? KeywordTypeNode)?.kind == SyntaxKind.NumberKeyword }
+            .map { it.name.text }.toSet()
+        val paramAnn = mutableMapOf<String, FlatArrayAnn>()
+        for (p in parameters) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val tr = p.type as? TypeReference ?: continue
+            if ((tr.typeName as? Identifier)?.text != "FlatArray") continue
+            val ta = tr.typeArguments ?: continue
+            if (ta.size != 2) continue
+            val arrRef = ta[0] as? TypeReference ?: continue
+            if (!arrRef.typeArguments.isNullOrEmpty()) continue
+            val arr = (arrRef.typeName as? Identifier)?.text ?: continue
+            if (arr !in tpNames) continue
+            val depthAny = (ta[1] as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword
+            var depthTp: String? = null
+            (ta[1] as? TypeReference)?.let { r1 ->
+                if (r1.typeArguments.isNullOrEmpty()) {
+                    val t = (r1.typeName as? Identifier)?.text
+                    if (t != null && t in numberTps) depthTp = t
+                }
+            }
+            if (!depthAny && depthTp == null) continue
+            paramAnn[n] = FlatArrayAnn(arr, depthAny, depthTp)
+        }
+        if (paramAnn.size < 2) return
+        for (st in statements) {
+            val be = (st as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (be.operator != SyntaxKind.Equals) continue
+            val l = be.left as? Identifier ?: continue
+            val r = be.right as? Identifier ?: continue
+            val lf = paramAnn[l.text] ?: continue
+            val rf = paramAnn[r.text] ?: continue
+            if (!rf.depthAny || lf.depthTp == null || lf.arr != rf.arr) continue
+            val arr = lf.arr
+            val d = lf.depthTp
+            val tuple = "[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20][$d]"
+            val (line, ch) = getLineAndCharacterOfPosition(source, l.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type 'FlatArray<$arr, any>' is not assignable to type 'FlatArray<$arr, $d>'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = l.pos, length = l.text.length,
+                messageChain = listOf(
+                    "  Type '$arr' is not assignable to type 'FlatArray<$arr, $d>'.",
+                    "    Type '$arr' is not assignable to type '$arr & ($arr extends readonly (infer InnerArr)[] ? FlatArray<InnerArr, $tuple> : $arr)'.",
+                    "      Type '$arr' is not assignable to type '$arr extends readonly (infer InnerArr)[] ? FlatArray<InnerArr, $tuple> : $arr'.",
+                ),
+            ))
+        }
+    }
+
     private fun checkFunctionBody(
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
@@ -59488,6 +59564,10 @@ interface DataView {
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
+            // B205: lib-FlatArray depth-param assignment (both annotations resolve to
+            // any through the unevaluated recursive conditional, so the standard
+            // assignment path below is silent).
+            checkFlatArrayDepthParamAssignments(it.statements, parameters, funcTypeParams, source, fileName)
             try {
                 checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
             } finally {
