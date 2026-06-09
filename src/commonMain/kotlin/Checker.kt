@@ -1297,6 +1297,8 @@ class Checker(
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
         checkIndexedAccessKeyofPrimitiveAssignment()
+        // 72a7. B203: enum-literal assignability for numeric-literal RHS vs enum/enum-member annotations.
+        checkEnumLiteralAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -93626,6 +93628,156 @@ interface DataView {
                         // Body-local re-declaration shadows the param for later statements.
                         params.remove(n)
                     }
+                }
+            }
+        }
+    }
+
+    /** B203: literal-member info for a single-declaration top-level enum. */
+    private class EnumLitInfo(
+        val allLiteral: Boolean,
+        val memberNames: Set<String>,
+        val memberValues: Map<String, Double>,
+    )
+
+    /**
+     * B203: enum-literal assignability for a numeric-literal RHS against an enum /
+     * enum-member annotation (enumAssignmentCompat5).
+     *
+     * TypeScript's union-enum rule: an enum whose members are ALL "literal enum
+     * members" (no initializer, a numeric literal, or unary-minus numeric literal)
+     * is a UNION of its member literal types — a numeric literal outside the
+     * member-value set is not assignable to it (`e = 4` where E = {0,1,2}), and a
+     * literal is assignable to a MEMBER type `E.A` only when it equals that
+     * member's value. An enum with ANY computed member has no union form: the bare
+     * enum type accepts any number, but its MEMBER type `Computed.A` accepts NO
+     * numeric literal at all.
+     *
+     * FP firewall: fires only for a SINGLE-declaration top-level enum whose name is
+     * declared by nothing else in the file (merges/shadows bail), an annotation that
+     * is a bare `E` / `E.A` TypeReference, and a plain numeric-literal (or
+     * unary-minus) RHS in a TOP-LEVEL var-decl initializer or top-level
+     * `x = <lit>` assignment. String-literal or unparseable members skip the whole
+     * enum (FN-safe).
+     */
+    private fun checkEnumLiteralAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val enumGroups = mutableMapOf<String, MutableList<EnumDeclaration>>()
+            for (s in stmts) if (s is EnumDeclaration) enumGroups.getOrPut(s.name.text) { mutableListOf() }.add(s)
+            if (enumGroups.isEmpty()) continue
+            // Bail per name when anything else top-level declares the same name
+            // (clodule/namespace merges, shadowing vars, imports).
+            fun nameDeclaredElsewhere(name: String): Boolean = stmts.any { st ->
+                when (st) {
+                    is ClassDeclaration -> st.name?.text == name
+                    is FunctionDeclaration -> st.name?.text == name
+                    is ModuleDeclaration -> (st.name as? Identifier)?.text == name
+                    is InterfaceDeclaration -> st.name.text == name
+                    is TypeAliasDeclaration -> st.name.text == name
+                    is ImportEqualsDeclaration -> st.name.text == name
+                    is VariableStatement -> st.declarationList.declarations.any { (it.name as? Identifier)?.text == name }
+                    else -> false
+                }
+            }
+            val enums = mutableMapOf<String, EnumLitInfo>()
+            outer@ for ((name, decls) in enumGroups) {
+                if (decls.size != 1 || nameDeclaredElsewhere(name)) continue
+                val memberNames = mutableSetOf<String>()
+                val values = mutableMapOf<String, Double>()
+                var auto = 0.0
+                var allLiteral = true
+                for (m in decls[0].members) {
+                    val mName = when (val n = m.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> continue@outer
+                    }
+                    memberNames.add(mName)
+                    val init = m.initializer
+                    when {
+                        init == null -> if (allLiteral) { values[mName] = auto; auto += 1 }
+                        init is NumericLiteralNode -> {
+                            val v = init.text.toDoubleOrNull() ?: continue@outer
+                            values[mName] = v; auto = v + 1
+                        }
+                        init is PrefixUnaryExpression && init.operator == SyntaxKind.Minus &&
+                            init.operand is NumericLiteralNode -> {
+                            val v = (init.operand as NumericLiteralNode).text.toDoubleOrNull() ?: continue@outer
+                            values[mName] = -v; auto = -v + 1
+                        }
+                        init is StringLiteralNode -> continue@outer
+                        else -> allLiteral = false
+                    }
+                }
+                enums[name] = EnumLitInfo(allLiteral, memberNames, values)
+            }
+            if (enums.isEmpty()) continue
+            fun litValueOf(e: Expression): Pair<Double, String>? = when {
+                e is NumericLiteralNode -> e.text.toDoubleOrNull()?.let { it to e.text }
+                e is PrefixUnaryExpression && e.operator == SyntaxKind.Minus && e.operand is NumericLiteralNode ->
+                    (e.operand as NumericLiteralNode).text.toDoubleOrNull()?.let { (-it) to "-${(e.operand as NumericLiteralNode).text}" }
+                else -> null
+            }
+            fun annoOf(t: TypeNode?): Pair<String, String?>? {
+                val tr = t as? TypeReference ?: return null
+                if (tr.typeArguments != null) return null
+                return when (val tn = tr.typeName) {
+                    is Identifier -> if (tn.text in enums) tn.text to null else null
+                    is QualifiedName -> {
+                        val left = (tn.left as? Identifier)?.text ?: return null
+                        if (left in enums && tn.right.text in enums[left]!!.memberNames) left to tn.right.text else null
+                    }
+                    else -> null
+                }
+            }
+            fun checkOne(anno: Pair<String, String?>, rhs: Expression, nameNode: Identifier) {
+                val (v, display) = litValueOf(rhs) ?: return
+                val info = enums[anno.first] ?: return
+                val member = anno.second
+                val bad = if (member == null) {
+                    info.allLiteral && info.memberValues.values.none { it == v }
+                } else if (info.allLiteral) {
+                    info.memberValues[member]?.let { it != v } ?: false
+                } else {
+                    true
+                }
+                if (bad) {
+                    val typeDisp = if (member == null) anno.first else "${anno.first}.$member"
+                    val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$display' is not assignable to type '$typeDisp'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                }
+            }
+            val varAnno = mutableMapOf<String, Pair<String, String?>>()
+            for (st in stmts) {
+                when (st) {
+                    is VariableStatement -> for (d in st.declarationList.declarations) {
+                        val n = (d.name as? Identifier) ?: continue
+                        val anno = annoOf(d.type)
+                        if (anno != null && n.text !in varAnno) {
+                            varAnno[n.text] = anno
+                            d.initializer?.let { checkOne(anno, it, n) }
+                        } else if (d.type != null && anno == null) {
+                            // re-declaration with a non-enum annotation shadows
+                            varAnno.remove(n.text)
+                        }
+                    }
+                    is ExpressionStatement -> {
+                        val be = st.expression as? BinaryExpression ?: continue
+                        if (be.operator != SyntaxKind.Equals) continue
+                        val target = be.left as? Identifier ?: continue
+                        val anno = varAnno[target.text] ?: continue
+                        checkOne(anno, be.right, target)
+                    }
+                    else -> {}
                 }
             }
         }
