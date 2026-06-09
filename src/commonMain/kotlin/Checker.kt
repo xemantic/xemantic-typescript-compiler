@@ -782,6 +782,7 @@ class Checker(
             // and FP-safe — so they must also run under emitDeclarationOnly.
             checkDeclarationEmitNameability()
             checkDeclarationEmitComputedSymbolNameability()
+            checkDeclarationEmitHugeInferredType()
         }
 
         if (!declarationOnly) {
@@ -928,6 +929,8 @@ class Checker(
         checkDeclarationEmitNameability()
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
         checkDeclarationEmitComputedSymbolNameability()
+        // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
+        checkDeclarationEmitHugeInferredType()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
         checkJsxImportResolutions()
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
@@ -4842,6 +4845,140 @@ class Checker(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * B173: TS7056 — an EXPORTED annotation-less const whose inferred type's SERIALIZED
+     * form would exceed tsc's 1M-char declaration-emit cap. AST-arithmetic estimator (no
+     * type engine): finds `as`-cast type nodes in the initializer and estimates the
+     * serialization size of mapped types whose key domain is a (template-literal cross
+     * product of) string-literal union(s). Unknown shapes estimate 0 → suppressed, so the
+     * only firing path is a CONCRETELY huge mapped type (hugeDeclarationOutputGetsTruncatedWithError:
+     * 676 × 676 entries ≈ several MB > 1M). Span = the const name.
+     */
+    private fun checkDeclarationEmitHugeInferredType() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val init = decl.initializer ?: continue
+                    val nameNode = decl.name as? Identifier ?: continue
+                    val castTypes = mutableListOf<TypeNode>()
+                    collectAsCastTypes(init, castTypes, 0)
+                    val maxSize = castTypes.maxOfOrNull { estimateTypeSerializedSize(it, f, 0) } ?: 0L
+                    if (maxSize > 1_000_000L) {
+                        val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.",
+                            category = DiagnosticCategory.Error, code = 7056,
+                            fileName = f, line = l, character = c,
+                            start = nameNode.pos, length = nameNode.text.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun collectAsCastTypes(e: Expression, out: MutableList<TypeNode>, depth: Int) {
+        if (depth > 6) return
+        when (e) {
+            is AsExpression -> { out.add(e.type); collectAsCastTypes(e.expression, out, depth + 1) }
+            is TypeAssertionExpression -> { out.add(e.type); collectAsCastTypes(e.expression, out, depth + 1) }
+            is ParenthesizedExpression -> collectAsCastTypes(e.expression, out, depth + 1)
+            is ArrayLiteralExpression -> e.elements.forEach { collectAsCastTypes(it, out, depth + 1) }
+            is ElementAccessExpression -> collectAsCastTypes(e.expression, out, depth + 1)
+            is PropertyAccessExpression -> collectAsCastTypes(e.expression, out, depth + 1)
+            else -> {}
+        }
+    }
+
+    /** B173: (memberCount, totalKeyChars) of a string key DOMAIN type, or null when not
+     *  concretely computable. Union of string literals → direct; a TEMPLATE-LITERAL type
+     *  (shallow-parsed — B65.1: spans live only in head.rawText) → the cross product of
+     *  its `${Name}` placeholder domains; a TypeReference follows a local type alias. */
+    private fun keyDomainInfo(t: TypeNode, file: String, depth: Int): Pair<Long, Long>? {
+        if (depth > 6) return null
+        when (t) {
+            is UnionType -> {
+                var count = 0L; var chars = 0L
+                for (m in t.types) {
+                    val lit = ((m as? LiteralType)?.literal as? StringLiteralNode)?.text ?: return null
+                    count++; chars += lit.length
+                }
+                return if (count > 0) count to chars else null
+            }
+            is LiteralType -> {
+                val lit = (t.literal as? StringLiteralNode)?.text ?: return null
+                return 1L to lit.length.toLong()
+            }
+            is TemplateLiteralType -> {
+                val raw = t.head.rawText ?: return null
+                // cross product over `${Name}` placeholders; fixed chars multiply through
+                var count = 1L
+                var avgLen = 0.0
+                var idx = 0
+                while (true) {
+                    val open = raw.indexOf("\${", idx)
+                    if (open < 0) { avgLen += raw.length - idx; break }
+                    avgLen += open - idx
+                    val close = raw.indexOf('}', open)
+                    if (close < 0) return null
+                    val name = raw.substring(open + 2, close).trim()
+                    val r = fileResults[file]
+                    val alias = r?.sourceFile?.statements?.firstNotNullOfOrNull { s ->
+                        (s as? TypeAliasDeclaration)?.takeIf { it.name.text == name }
+                    } ?: return null
+                    val inner = keyDomainInfo(alias.type, file, depth + 1) ?: return null
+                    count *= inner.first
+                    avgLen += inner.second.toDouble() / inner.first
+                    idx = close + 1
+                }
+                return count to (count * avgLen).toLong()
+            }
+            is TypeReference -> {
+                val name = (t.typeName as? Identifier)?.text ?: return null
+                val r = fileResults[file]
+                val alias = r?.sourceFile?.statements?.firstNotNullOfOrNull { s ->
+                    (s as? TypeAliasDeclaration)?.takeIf { it.name.text == name }
+                } ?: return null
+                return keyDomainInfo(alias.type, file, depth + 1)
+            }
+            is ParenthesizedType -> return keyDomainInfo(t.type, file, depth + 1)
+            else -> return null
+        }
+    }
+
+    /** B173: rough serialized-size estimate of a type node; 0 for unknown shapes. */
+    private fun estimateTypeSerializedSize(t: TypeNode, file: String, depth: Int): Long {
+        if (depth > 6) return 0L
+        return when (t) {
+            is MappedType -> {
+                val domain = t.typeParameter.constraint?.let { keyDomainInfo(it, file, depth + 1) } ?: return 0L
+                val (count, totalKeyChars) = domain
+                if (count <= 0) return 0L
+                val valueSize = t.type?.let { v ->
+                    when (v) {
+                        // a template value's length ≈ its key-interpolation length; use the
+                        // average key length as the placeholder contribution
+                        is TemplateLiteralType -> (v.head.rawText?.length ?: 4).toLong() + 2 * (totalKeyChars / count)
+                        else -> estimateTypeSerializedSize(v, file, depth + 1).coerceAtLeast(8L)
+                    }
+                } ?: 8L
+                totalKeyChars + count * (valueSize + 8L)
+            }
+            is TypeLiteral -> t.members.sumOf { m ->
+                8L + ((m as? PropertyDeclaration)?.type?.let { estimateTypeSerializedSize(it, file, depth + 1) } ?: 4L)
+            }
+            is ParenthesizedType -> estimateTypeSerializedSize(t.type, file, depth + 1)
+            is ArrayType -> estimateTypeSerializedSize(t.elementType, file, depth + 1) + 2
+            else -> 0L
         }
     }
 
