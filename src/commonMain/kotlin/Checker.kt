@@ -57966,7 +57966,14 @@ interface DataView {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
-                        decl.initializer?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) }
+                        decl.initializer?.let {
+                            // B183: contextually type the initializer fn-expr's un-annotated
+                            // params from the var's FunctionType annotation before walking
+                            // the body (`var x: (...y: string[]) => void = function (...y) {…}`
+                            // — `y` is `string[]` inside the body).
+                            val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
+                            walkFunctionBodiesInExpr(ctxFn ?: it, source, fileName, varTypes, typeParams)
+                        }
                         // B127: type-check an assignment used as a var-decl initializer
                         // (`const x = a = b` → also check the inner `a = b`). Without this
                         // the inner assignment is never validated (only top-level
@@ -58239,6 +58246,41 @@ interface DataView {
     private fun collectTypeParamNames(typeParameters: List<TypeParameter>?): Set<String> {
         if (typeParameters == null || typeParameters.isEmpty()) return emptySet()
         return typeParameters.mapNotNull { it.name.text }.toSet()
+    }
+
+    /**
+     * B183: contextual typing of an un-annotated function-expression / arrow initializer's
+     * parameters from the var-decl's FunctionType annotation. Returns a COPY of the
+     * function expression whose un-annotated Identifier parameters carry the annotation's
+     * positionally-matching parameter types (rest matches rest only), or null when the
+     * shape doesn't apply / nothing changed. The copy is check-pass-local — it is only
+     * handed to [walkFunctionBodiesInExpr], never published to binder/AST consumers.
+     */
+    private fun contextualizeFnExprFromAnnotation(typeAnnotation: TypeNode?, init: Expression?): Expression? {
+        var annNode: TypeNode? = typeAnnotation ?: return null
+        while (annNode is ParenthesizedType) annNode = annNode.type
+        val ann = annNode as? FunctionType ?: return null
+        val fnParams: List<Parameter> = when (init) {
+            is FunctionExpression -> init.parameters
+            is ArrowFunction -> init.parameters
+            else -> return null
+        }
+        if (fnParams.isEmpty()) return null
+        var changed = false
+        val newParams = fnParams.mapIndexed { i, p ->
+            if (p.type != null || p.name !is Identifier) return@mapIndexed p
+            val annParam = ann.parameters.getOrNull(i) ?: return@mapIndexed p
+            if (annParam.dotDotDotToken != p.dotDotDotToken) return@mapIndexed p
+            val t = annParam.type ?: return@mapIndexed p
+            changed = true
+            p.copy(type = t)
+        }
+        if (!changed) return null
+        return when (init) {
+            is FunctionExpression -> init.copy(parameters = newParams)
+            is ArrowFunction -> init.copy(parameters = newParams)
+            else -> null
+        }
     }
 
     private fun checkFunctionBody(
