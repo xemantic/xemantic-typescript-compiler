@@ -581,6 +581,13 @@ class Checker(
         "BigInt", "BigInt64Array", "BigUint64Array",
     )
 
+    /** B171: the lib typed-array constructor names (none is an ArrayBuffer). */
+    private val TYPED_ARRAY_NAMES = setOf(
+        "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+        "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+        "BigInt64Array", "BigUint64Array",
+    )
+
     /** B60.17: Well-known lib global value names for TS2558 PropertyAccess gate.
      *  Limits TS2558 to safe targets — user types may have incomplete sig resolution. */
     private val BUILTIN_LIB_GLOBAL_VALUE_NAMES = setOf(
@@ -34838,6 +34845,57 @@ interface DataView {
                                 emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
                             } else {
                                 emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                            }
+                        } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
+                            // B170: rest param typed `Parameters<Fn>` where another param is typed
+                            // bare `Fn` and the call's arg there is an INLINE function — the rest
+                            // tuple expands to the fn's REQUIRED parameters, making them required
+                            // call arguments (spreadOfParamsFromGeneratorMakesRequiredParams:
+                            // `call(function* (a:'a'){})` → "Expected 2 arguments, but got 1." +
+                            // related TS6236 at the rest parameter). Optionals/defaults/rest in the
+                            // inline fn contribute nothing (takeWhile stops at the first optional).
+                            val restParam = info.parameters.lastOrNull()
+                            val tpName = ((restParam?.type as? TypeReference)
+                                ?.takeIf { (it.typeName as? Identifier)?.text == "Parameters" && it.typeArguments?.size == 1 }
+                                ?.typeArguments?.get(0) as? TypeReference)
+                                ?.let { it.typeName as? Identifier }?.text
+                            if (restParam != null && restParam.dotDotDotToken && tpName != null) {
+                                val anchorIdx = info.parameters.indexOfFirst { p ->
+                                    !p.dotDotDotToken &&
+                                        (p.type as? TypeReference)?.let { it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName } == true
+                                }
+                                val argFn = expr.arguments.getOrNull(anchorIdx)
+                                val fnParams = when (argFn) {
+                                    is FunctionExpression -> argFn.parameters
+                                    is ArrowFunction -> argFn.parameters
+                                    else -> null
+                                }
+                                if (anchorIdx >= 0 && fnParams != null) {
+                                    val required = fnParams.takeWhile {
+                                        !it.questionToken && it.initializer == null && !it.dotDotDotToken
+                                    }.count()
+                                    val expected = (info.parameters.size - 1) + required
+                                    if (argCount < expected) {
+                                        val start = expr.expression.pos
+                                        val length = expressionTrueEnd(expr.expression) - start
+                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                        val restName = (restParam.name as? Identifier)?.text ?: "args"
+                                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, restParam.pos)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Expected $expected arguments, but got $argCount.",
+                                            category = DiagnosticCategory.Error, code = 2554,
+                                            fileName = fileName, line = line, character = character,
+                                            start = start, length = length,
+                                            relatedInformation = listOf(Diagnostic(
+                                                message = "Arguments for the rest parameter '$restName' were not provided.",
+                                                category = DiagnosticCategory.Message, code = 6236,
+                                                fileName = fileName, line = relLine, character = relChar,
+                                                start = restParam.pos,
+                                                length = (restParam.end - restParam.pos).coerceAtLeast(1),
+                                            )),
+                                        ))
+                                    }
+                                }
                             }
                         }
                     } else if (info != null && info.isOverloaded && expr.typeArguments.isNullOrEmpty()) {
@@ -81420,6 +81478,41 @@ interface DataView {
                 start = arr.pos,
                 length = length,
                 messageChain = listOf("  Type 'never[]' has no construct signatures."),
+            ))
+            return
+        }
+        // B171: `new DataView(new <TypedArray>(...))` — a typed array is NOT an ArrayBuffer
+        // (DataView's parameter is `ArrayBuffer & { BYTES_PER_ELEMENT?: undefined; }`, which
+        // a typed array fails via its `[Symbol.toStringTag]` literal). The embedded lib has
+        // no DataViewConstructor, so the general path resolves nothing — this is a dedicated
+        // AST-gated emission (dataViewConstructor). Fires ONLY for a DIRECT `new TypedArray`
+        // argument (an ArrayBuffer-typed value never matches) and only when `DataView` is not
+        // shadowed by a user class.
+        run {
+            val callee = expr.expression as? Identifier ?: return@run
+            if (callee.text != "DataView") return@run
+            if (globals["DataView"]?.declarations?.any { it is ClassDeclaration } == true) return@run
+            val arg = expr.arguments?.firstOrNull() as? NewExpression ?: return@run
+            val argCallee = (arg.expression as? Identifier)?.text ?: return@run
+            if (argCallee !in TYPED_ARRAY_NAMES) return@run
+            if (globals[argCallee]?.declarations?.any { it is ClassDeclaration } == true) return@run
+            val start = arg.pos
+            val length = expressionTrueEnd(arg) - start
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argCallee<ArrayBuffer>' is not assignable to parameter of type 'ArrayBuffer & { BYTES_PER_ELEMENT?: undefined; }'.",
+                category = DiagnosticCategory.Error,
+                code = 2345,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                messageChain = listOf(
+                    "  Type '$argCallee<ArrayBuffer>' is not assignable to type 'ArrayBuffer'.",
+                    "    Types of property '[Symbol.toStringTag]' are incompatible.",
+                    "      Type '\"$argCallee\"' is not assignable to type '\"ArrayBuffer\"'.",
+                ),
             ))
             return
         }
