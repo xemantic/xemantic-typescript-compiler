@@ -1279,6 +1279,8 @@ class Checker(
         checkMappedIntersectionIndexWrite()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
+        // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
+        checkIndexedAccessKeyofPrimitiveAssignment()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -93069,6 +93071,80 @@ interface DataView {
                         if (tps.size >= 2) stmt.body?.let { scanBody(it.statements, tps, source, fileName) }
                     }
                     else -> {}
+                }
+            }
+        }
+    }
+
+    /**
+     * B197: TS2322 for `let b: <primitive> = a` where `a: T[keyof T]` and `T extends
+     * object` (the literal `object` KEYWORD constraint). Under that constraint `object`
+     * has NO index signatures, so `T[keyof T]`'s base constraint is
+     * `T[string] | T[number] | T[symbol]` — never assignable to a concrete primitive
+     * (strictness-independent; tsc always errors). Our `getTypeFromIndexedAccess`
+     * degrades the annotation to anyType (keyof TP -> string; apparent(`object`) is not
+     * a Type.Object), so the standard path is silent; there is no symbolic
+     * Type.IndexedAccess in the model — AST-shape walker, mirroring B179. Do NOT broaden
+     * the constraint gate past the `object` keyword (e.g. `T extends Record<string,
+     * number>` makes `T[keyof T]` assignable to number -> FP).
+     */
+    private fun checkIndexedAccessKeyofPrimitiveAssignment() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is FunctionDeclaration) continue
+                val objTps = stmt.typeParameters.orEmpty().filter {
+                    (it.constraint as? KeywordTypeNode)?.kind == SyntaxKind.ObjectKeyword
+                }.map { it.name.text }.toSet()
+                if (objTps.isEmpty()) continue
+                val body = stmt.body ?: continue
+                // param name -> TP name, for params annotated `TP[keyof TP]`
+                val params = mutableMapOf<String, String>()
+                for (p in stmt.parameters) {
+                    val pn = (p.name as? Identifier)?.text ?: continue
+                    val ia = p.type as? IndexedAccessType ?: continue
+                    val objRef = ia.objectType as? TypeReference ?: continue
+                    val tpName = (objRef.typeName as? Identifier)?.text ?: continue
+                    if (tpName !in objTps || objRef.typeArguments != null) continue
+                    val op = ia.indexType as? TypeOperator ?: continue
+                    if (op.operator != SyntaxKind.KeyOfKeyword) continue
+                    val keyRef = op.type as? TypeReference ?: continue
+                    if ((keyRef.typeName as? Identifier)?.text != tpName) continue
+                    params[pn] = tpName
+                }
+                if (params.isEmpty()) continue
+                for (s in body.statements) {
+                    if (s !is VariableStatement) continue
+                    for (d in s.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        val target = d.type as? KeywordTypeNode
+                        val prim = when (target?.kind) {
+                            SyntaxKind.NumberKeyword -> "number"
+                            SyntaxKind.StringKeyword -> "string"
+                            SyntaxKind.BooleanKeyword -> "boolean"
+                            else -> null
+                        }
+                        val init = d.initializer as? Identifier
+                        val tp = init?.let { params[it.text] }
+                        if (prim != null && tp != null) {
+                            val nameNode = d.name as Identifier
+                            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$tp[keyof $tp]' is not assignable to type '$prim'.",
+                                category = DiagnosticCategory.Error, code = 2322,
+                                fileName = fileName, line = line, character = ch,
+                                start = nameNode.pos, length = nameNode.text.length,
+                                messageChain = listOf(
+                                    "  Type '$tp[string] | $tp[number] | $tp[symbol]' is not assignable to type '$prim'.",
+                                    "    Type '$tp[string]' is not assignable to type '$prim'.",
+                                ),
+                            ))
+                        }
+                        // Body-local re-declaration shadows the param for later statements.
+                        params.remove(n)
+                    }
                 }
             }
         }
