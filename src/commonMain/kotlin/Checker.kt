@@ -215,6 +215,13 @@ class Checker(
     /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
     private var argCountSuperCtor: FuncParamInfo? = null
 
+    /** B154: per-importer-file cache of "CJS-default-namespace" call shapes (nodenext,
+     *  ESM importer importing a CJS module that uses `export default`). `.first` =
+     *  local default-binding name → display base (`a`/`b`/`c`/`d` → "mod"); `.second` =
+     *  namespace-import name → (member name → display base) (`self` → {default→"mod",
+     *  def→"mod"} via re-exported defaults). Calling any of these is TS2349. */
+    private val cjsDefaultNsShapesCache: MutableMap<String, Pair<Map<String, String>, Map<String, Map<String, String>>>> = mutableMapOf()
+
     /** True while walking a non-arrow function body. Used by 16.4dp to fire TS2322
      *  on `arguments = <primitive>` assignments (implicit `arguments` has type IArguments). */
     private var inNonArrowFunctionBody = false
@@ -26269,6 +26276,69 @@ class Checker(
             }
         }
         return false
+    }
+
+    /** B154: if [spec] (resolved relative to [contextFile]) names a CJS (`.cts`/`.cjs`)
+     *  module that uses `export default`, return its display base (basename minus ext);
+     *  else null. Used to detect the "CJS-default = namespace" interop shape. */
+    private fun cjsExportDefaultBase(spec: String, contextFile: String): String? {
+        val resolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, contextFile) ?: return null
+        if (!(resolved.endsWith(".cts") || resolved.endsWith(".cjs"))) return null
+        val tf = fileResults[resolved]?.sourceFile ?: return null
+        if (tf.statements.none { it is ExportAssignment && !it.isExportEquals }) return null
+        val baseName = resolved.substringAfterLast('/').substringAfterLast('\\')
+        return baseName.removeSuffix(".d.cts").removeSuffix(".cts").removeSuffix(".cjs")
+    }
+
+    /** B154: build the per-importer-file map of CJS-default-namespace call shapes
+     *  (see [cjsDefaultNsShapesCache] doc). Memoized. */
+    private fun cjsDefaultNsShapes(fileName: String): Pair<Map<String, String>, Map<String, Map<String, String>>> {
+        cjsDefaultNsShapesCache[fileName]?.let { return it }
+        val direct = mutableMapOf<String, String>()
+        val nsMembers = mutableMapOf<String, MutableMap<String, String>>()
+        val out: Pair<Map<String, String>, Map<String, Map<String, String>>> = direct to nsMembers
+        cjsDefaultNsShapesCache[fileName] = out
+        // Gate: ESM importer under nodenext.
+        if (!options.effectiveModule.isNodeNext) return out
+        if (!(fileName.endsWith(".mts") || fileName.endsWith(".mjs"))) return out
+        val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return out
+        for (stmt in result.sourceFile.statements) {
+            if (stmt !is ImportDeclaration) continue
+            val clause = stmt.importClause ?: continue
+            if (clause.isTypeOnly) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val base = cjsExportDefaultBase(spec, fileName)
+            if (base != null) {
+                // `import a from` / `import c, {...}` — the default binding.
+                clause.name?.let { direct[it.text] = base }
+                // `import { default as b }` — a named import of the `default` export.
+                (clause.namedBindings as? NamedImports)?.elements?.forEach { spc ->
+                    if (!spc.isTypeOnly && (spc.propertyName?.text ?: spc.name.text) == "default") {
+                        direct[spc.name.text] = base
+                    }
+                }
+            }
+            // `import * as self from "selfSpec"` — read selfSpec's re-exported defaults.
+            val ns = clause.namedBindings as? NamespaceImport
+            if (ns != null) {
+                val selfResolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, fileName) ?: continue
+                val selfFile = fileResults[selfResolved]?.sourceFile ?: continue
+                val memberMap = mutableMapOf<String, String>()
+                for (s2 in selfFile.statements) {
+                    if (s2 !is ExportDeclaration || s2.isTypeOnly) continue
+                    val spec2 = (s2.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val base2 = cjsExportDefaultBase(spec2, selfResolved) ?: continue
+                    val clause2 = s2.exportClause as? NamedExports ?: continue
+                    for (e in clause2.elements) {
+                        if (!e.isTypeOnly && (e.propertyName?.text ?: e.name.text) == "default") {
+                            memberMap[e.name.text] = base2
+                        }
+                    }
+                }
+                if (memberMap.isNotEmpty()) nsMembers[ns.name.text] = memberMap
+            }
+        }
+        return out
     }
 
     // -----------------------------------------------------------------------
@@ -79301,6 +79371,38 @@ interface DataView {
         // spans the whole `<...>` section; `node.end` in this AST already overshoots
         // to the token AFTER the last type arg's `>`, so subtract when computing end.
         val calleeExpr = expr.expression
+        // B154: calling the `default` of a CJS `export default` module from an ESM file
+        // under nodenext is TS2349 — that default IS the CJS namespace `typeof import("mod")`
+        // (no call signatures), not the inner value. Covers default/named-default imports
+        // and namespace-member-of-re-export. Early (before the anyType bail). FP-safe:
+        // tightly gated (nodenext + ESM importer + CJS target + `export default`).
+        run {
+            val (direct, nsMembers) = cjsDefaultNsShapes(fileName)
+            if (direct.isEmpty() && nsMembers.isEmpty()) return@run
+            val base: String? = when (calleeExpr) {
+                is Identifier -> direct[calleeExpr.text]
+                is PropertyAccessExpression -> (calleeExpr.expression as? Identifier)?.let {
+                    nsMembers[it.text]?.get(calleeExpr.name.text)
+                }
+                else -> null
+            }
+            if (base != null) {
+                val (start, length) = if (calleeExpr is PropertyAccessExpression)
+                    calleeExpr.name.pos to calleeExpr.name.text.length
+                else calleeExpr.pos to (expressionTrueEnd(calleeExpr) - calleeExpr.pos)
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf("  Type 'typeof import(\"$base\")' has no call signatures."),
+                    ))
+                    return
+                }
+            }
+        }
         if (calleeExpr is Identifier && calleeExpr.text == "super" && !expr.typeArguments.isNullOrEmpty()) {
             val typeArgs = expr.typeArguments!!
             val start = typeArgs.first().pos - 1
