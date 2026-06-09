@@ -58984,7 +58984,12 @@ interface DataView {
                     val savedThis = currentClassForThis
                     currentClassForThis = null
                     try {
+                        // B212: thread the ENCLOSING type params into the nested function
+                        // (previously dropped — `diamondMiddle<T extends Top>` inside
+                        // `diamondTop<Top>` lost `Top` from typeParams, so bare-TP
+                        // mismatch checks silently never fired in nested generic fns).
                         checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes,
+                            outerTypeParams = typeParams,
                             isAsync = ModifierFlag.Async in stmt.modifiers)
                     } finally {
                         currentClassForThis = savedThis
@@ -63367,10 +63372,22 @@ interface DataView {
                     val isTypeParamToNamed = tgtBareName != null && rhsBareName != null &&
                         rhsBareName in typeParams && tgtBareName !in typeParams &&
                         (tgtBareName == "Object" || tgtBareName == "Function")
+                    // B212: union-of-TPs RHS (`var middle: T | U`) against a bare-TP
+                    // target — fall through so isAssignableTo's union-of-TPs rule runs.
+                    val isTpUnionMismatch = tgtBareName != null && tgtBareName in typeParams &&
+                        rhsVarType != null && rhsVarType.startsWith("|") &&
+                        rhsVarType.removePrefix("|").split(" | ").all { it in typeParams }
+                    // B212b: bare-TP RHS vs union-of-TPs target (`middle = bottom` where
+                    // middle: T | U, Bottom extends Top | T | U).
+                    val isBareTpToTpUnion = rhsBareName != null && rhsBareName in typeParams &&
+                        declaredType.startsWith("|") &&
+                        declaredType.removePrefix("|").split(" | ").all { it in typeParams }
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                         ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType
                             else if (isBareTypeParamMismatch) rhsVarType
                             else if (isTypeParamToNamed) rhsVarType
+                            else if (isTpUnionMismatch) rhsVarType
+                            else if (isBareTpToTpUnion) rhsVarType
                             else null
                     if (exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
@@ -92538,6 +92555,39 @@ interface DataView {
     /** Check if sourceType is assignable to targetType.
      *  Named types (from TypeReference) are prefixed with "@".
      *  Union types are prefixed with "|". */
+    /** B212: does `src`'s constraint chain (in currentTypeParamDecls) reach `tgt`?
+     *  `src == tgt` trivially reaches; a UNION constraint reaches iff ALL members do
+     *  (`T | U ≤ Top` needs both). Depth-capped. */
+    private fun tpConstraintChainReachesTp(src: String, tgt: String, depth: Int = 0): Boolean {
+        if (src == tgt) return true
+        if (depth >= 8) return false
+        val c = currentTypeParamDecls[src]?.constraint ?: return false
+        return tpConstraintNodeReachesTp(c, tgt, depth + 1)
+    }
+
+    private fun tpConstraintNodeReachesTp(c: TypeNode, tgt: String, depth: Int): Boolean = when (c) {
+        is TypeReference -> {
+            val cn = (c.typeName as? Identifier)?.text
+            cn != null && c.typeArguments.isNullOrEmpty() && tpConstraintChainReachesTp(cn, tgt, depth)
+        }
+        is UnionType -> c.types.isNotEmpty() && c.types.all { tpConstraintNodeReachesTp(it, tgt, depth) }
+        is ParenthesizedType -> tpConstraintNodeReachesTp(c.type, tgt, depth)
+        else -> false
+    }
+
+    /** B212b: is a constraint NODE assignable to a union of tp names? A ref part
+     *  must reach SOME member; a union constraint needs EVERY part assignable. */
+    private fun tpConstraintNodeAssignableToTpUnion(c: TypeNode, members: List<String>): Boolean = when (c) {
+        is TypeReference -> {
+            val cn = (c.typeName as? Identifier)?.text
+            cn != null && c.typeArguments.isNullOrEmpty() &&
+                members.any { tpConstraintChainReachesTp(cn, it) }
+        }
+        is UnionType -> c.types.isNotEmpty() && c.types.all { tpConstraintNodeAssignableToTpUnion(it, members) }
+        is ParenthesizedType -> tpConstraintNodeAssignableToTpUnion(c.type, members)
+        else -> false
+    }
+
     private fun isAssignableTo(sourceType: String, targetType: String, typeParams: Set<String> = emptySet()): Boolean {
         if (sourceType == targetType) return true
         if (targetType == "any" || targetType == "unknown") return true
@@ -92552,6 +92602,18 @@ interface DataView {
             // null/undefined are only assignable to union if a member is null/undefined/void
             if (sourceType == "null" || sourceType == "undefined") {
                 return members.any { it == sourceType || it == "any" || it == "unknown" || (sourceType == "undefined" && it == "void") }
+            }
+            // B212b: bare-TP source vs union-of-TPs target — `Bottom ≤ T | U` iff
+            // Bottom is a member, or Bottom's constraint relates to the union:
+            // a union constraint needs EVERY part to reach SOME member (diamond3's
+            // `Bottom extends Top | T | U` vs `T | U` fails on Top).
+            if (sourceType.startsWith("@") && !sourceType.contains('<')) {
+                val srcName = sourceType.removePrefix("@")
+                if (srcName in typeParams && members.all { it in typeParams }) {
+                    if (srcName in members) return true
+                    val c = currentTypeParamDecls[srcName]?.constraint ?: return false
+                    return tpConstraintNodeAssignableToTpUnion(c, members)
+                }
             }
             // For other source types, assignable if it matches any member
             return members.any { isAssignableTo(sourceType, it) }
@@ -92581,22 +92643,13 @@ interface DataView {
                     val srcName = sourceType.removePrefix("@")
                     val tgtName = targetType.removePrefix("@")
                     if (srcName != tgtName && srcName in typeParams && tgtName in typeParams) {
-                        // B60.6e: SKIP when src directly extends tgt (e.g. `B extends A`,
-                        // then B is assignable to A). Walk source's constraint chain looking
-                        // for tgt.
-                        val srcDecl = currentTypeParamDecls[srcName]
-                        var cur: TypeParameter? = srcDecl
-                        var foundSubtype = false
-                        var depth = 0
-                        while (cur != null && depth++ < 8) {
-                            val cnstr = cur.constraint
-                            if (cnstr is TypeReference) {
-                                val cnstrName = (cnstr.typeName as? Identifier)?.text
-                                if (cnstrName == tgtName) { foundSubtype = true; break }
-                                cur = if (cnstrName != null) currentTypeParamDecls[cnstrName] else null
-                            } else break
-                        }
-                        if (!foundSubtype) return false
+                        // B60.6e: SKIP when src's constraint chain reaches tgt (e.g.
+                        // `B extends A` → B assignable to A). B212: a UNION constraint
+                        // (`Bottom extends T | U`) reaches tgt iff ALL members do
+                        // (T|U ≤ Top needs both T ≤ Top and U ≤ Top) — diamond1's
+                        // `T extends Top, U extends Top` is assignable, diamond2's
+                        // unconstrained U is not.
+                        if (!tpConstraintChainReachesTp(srcName, tgtName)) return false
                     }
                     // B60.7: bare TypeParam source → named non-TypeParam target.
                     // Source must be UNCONSTRAINED (no `extends`). With unconstrained T,
@@ -92645,6 +92698,18 @@ interface DataView {
                     // treat as nominally distinct per strict-generic-checks semantics.
                     // typeParameterAssignmentCompat1_ts wants TS2322 for `Foo<T>` vs `Foo<U>`.
                     if (srcArg != tgtArg && srcArg in typeParams && tgtArg in typeParams) return false
+                }
+            }
+            // B212: union-of-TPs source (`T | U`) vs bare-TP target (`Top`) —
+            // assignable only when EVERY member's constraint chain reaches the target
+            // tp. `T extends Top` passes; an unconstrained `U` makes the union fail
+            // (strict-generic-checks semantics; tsc always errors with the
+            // "could be instantiated with an arbitrary type" chain).
+            if (sourceType.startsWith("|") && !targetType.contains('<')) {
+                val tgtName = targetType.removePrefix("@")
+                val members = sourceType.removePrefix("|").split(" | ")
+                if (tgtName in typeParams && members.all { it in typeParams }) {
+                    return members.all { tpConstraintChainReachesTp(it, tgtName) }
                 }
             }
             // null and undefined are never assignable to named types (with strict null checks)
@@ -92931,6 +92996,59 @@ interface DataView {
                             length = decLen,
                         ))
                     }
+                }
+            }
+        }
+        // B212b: bare-TP source vs union-of-TPs target — the constraint-mismatch
+        // chain (`Bottom extends Top | T | U` vs `T | U`): show the constraint
+        // display, then the first failing part; TS2208 at that part's decl when
+        // it is an unconstrained tp.
+        if (sourceType.startsWith("@") && !sourceType.contains('<') && targetType.startsWith("|")) {
+            val srcName = sourceType.removePrefix("@")
+            val members = displayTarget.split(" | ")
+            if (srcName in typeParams && members.all { it in typeParams }) {
+                val c = currentTypeParamDecls[srcName]?.constraint
+                val cDisp = c?.let { formatTypeForDisplay(it) }
+                val failing = (c as? UnionType)?.types?.firstNotNullOfOrNull { part ->
+                    val pn = ((part as? TypeReference)?.typeName as? Identifier)?.text
+                    if (pn != null && members.none { tpConstraintChainReachesTp(pn, it) }) pn else null
+                }
+                if (cDisp != null && failing != null) {
+                    chain.add("  Type '$cDisp' is not assignable to type '$displayTarget'.")
+                    chain.add("    Type '$failing' is not assignable to type '$displayTarget'.")
+                    val fd = currentTypeParamDecls[failing]
+                    if (fd != null && fd.constraint == null) {
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, fd.name.pos)
+                        relatedInfo.add(Diagnostic(
+                            message = "This type parameter might need an `extends $displayTarget` constraint.",
+                            category = DiagnosticCategory.Message, code = 2208,
+                            fileName = fileName, line = relLine, character = relChar,
+                            start = fd.name.pos, length = fd.name.text.length,
+                        ))
+                    }
+                }
+            }
+        }
+        // B212: union-of-TPs source vs bare-TP target — TS2208 at the FIRST member
+        // that is an UNCONSTRAINED tp (the one needing `extends <target>`). `T | U`
+        // vs `Top` where `T extends Top` points at U.
+        if (sourceType.startsWith("|") && targetType.startsWith("@") && !targetType.contains('<')) {
+            val tgtName = targetType.removePrefix("@")
+            if (tgtName in typeParams) {
+                val firstUnconstrained = sourceType.removePrefix("|").split(" | ")
+                    .firstOrNull {
+                        it in typeParams && it != tgtName &&
+                            currentTypeParamDecls[it]?.constraint == null
+                    }
+                val decl = firstUnconstrained?.let { currentTypeParamDecls[it] }
+                if (decl != null) {
+                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, decl.name.pos)
+                    relatedInfo.add(Diagnostic(
+                        message = "This type parameter might need an `extends $tgtName` constraint.",
+                        category = DiagnosticCategory.Message, code = 2208,
+                        fileName = fileName, line = relLine, character = relChar,
+                        start = decl.name.pos, length = decl.name.text.length,
+                    ))
                 }
             }
         }
