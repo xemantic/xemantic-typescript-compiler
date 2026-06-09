@@ -83548,6 +83548,10 @@ interface DataView {
         // spans the whole `<...>` section; `node.end` in this AST already overshoots
         // to the token AFTER the last type arg's `>`, so subtract when computing end.
         val calleeExpr = expr.expression
+        // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
+        // evaluation with the key TPs fixed to this call's string-literal args.
+        if (calleeExpr is PropertyAccessExpression &&
+            try { tryEmitDependentIndexedConstraintTs2345(expr, source, fileName) } catch (_: StackOverflowError) { false }) return
         // B154: calling the `default` of a CJS `export default` module from an ESM file
         // under nodenext is TS2349 — that default IS the CJS namespace `typeof import("mod")`
         // (no call signatures), not the inner value. Covers default/named-default imports
@@ -94472,6 +94476,105 @@ interface DataView {
      * "Source provides no match for required element at position 0 in target."
      * chain. Gates keep `any`/TypeParam/unknown/tuple args silent (FN-safe).
      */
+    /**
+     * B216: TS2345 via a DEPENDENT indexed-access constraint (deepKeysIndexing).
+     * `bar.broken("a", "1", true)` where `bar: Bar<Foo>` and the method declares
+     * `<K1 extends keyof O, K2 extends ..., V extends O[K1][K2]>(k1: K1, k2: K2,
+     * value: V)` — tsc fixes K1/K2 to the literal arg types and evaluates
+     * O[K1][K2] = Foo["a"]["1"] = 123, so `true` fails V's constraint. Our
+     * signature build bakes such a constraint to anyType (indexed access with a
+     * TypeParam index), so the 16.4i constraint branch is silent. AST-driven
+     * per-call evaluation; DEFAULT-SUPPRESS on every unknown shape: concrete
+     * generic-class-instance receiver, single non-overloaded method, the
+     * constraint exactly a ClassTP[Ktp...] chain, every key arg a string literal,
+     * every indexed step concrete, simple-checkable final constraint + arg.
+     */
+    private fun tryEmitDependentIndexedConstraintTs2345(
+        expr: CallExpression, source: String, fileName: String,
+    ): Boolean {
+        if (!expr.typeArguments.isNullOrEmpty()) return false
+        val callee = expr.expression as? PropertyAccessExpression ?: return false
+        val recv = callee.expression
+        if ((recv as? Identifier)?.text == "super") return false
+        val ref = (try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return false })
+            as? Type.Reference ?: return false
+        val classArgs = ref.resolvedTypeArguments ?: return false
+        if (classArgs.isEmpty() || classArgs.any { it is Type.TypeParam || it === anyType || it === errorType }) return false
+        val classDecl = ref.target.symbol?.declarations?.firstOrNull { it is ClassDeclaration }
+            as? ClassDeclaration ?: return false
+        val classTps = classDecl.typeParameters ?: return false
+        if (classTps.size != classArgs.size) return false
+        val method = classDecl.members.filterIsInstance<MethodDeclaration>()
+            .filter { (it.name as? Identifier)?.text == callee.name.text }
+            .singleOrNull() ?: return false
+        val mTps = method.typeParameters ?: return false
+        val mTpNames = mTps.map { it.name.text }.toSet()
+        fun bareRefName(t: TypeNode?): String? = (t as? TypeReference)?.let { r ->
+            if (r.typeArguments.isNullOrEmpty()) (r.typeName as? Identifier)?.text else null
+        }
+        fun paramIdxOfBareTp(name: String): Int = method.parameters.indexOfFirst { p ->
+            !p.dotDotDotToken && bareRefName(p.type) == name
+        }
+        for (tp in mTps) {
+            // Peel the constraint: an IndexedAccessType chain rooted at a CLASS tp
+            // with every index a bare ref to a SIBLING method tp.
+            var c: TypeNode? = tp.constraint
+            val keys = ArrayDeque<String>()
+            while (c is IndexedAccessType) {
+                val idxName = bareRefName(c.indexType) ?: break
+                if (idxName !in mTpNames) break
+                keys.addFirst(idxName)
+                c = c.objectType
+            }
+            if (keys.isEmpty()) continue
+            val rootName = (c as? TypeReference)?.let { r ->
+                if (r.typeArguments.isNullOrEmpty()) (r.typeName as? Identifier)?.text else null
+            } ?: continue
+            val classIdx = classTps.indexOfFirst { it.name.text == rootName }
+            if (classIdx < 0) continue
+            var cur: Type = classArgs[classIdx]
+            var ok = true
+            for (k in keys) {
+                val pIdx = paramIdxOfBareTp(k)
+                if (pIdx < 0 || pIdx >= expr.arguments.size) { ok = false; break }
+                val keyArg = expr.arguments[pIdx] as? StringLiteralNode
+                if (keyArg == null) { ok = false; break }
+                val curObj = cur as? Type.Object
+                if (curObj != null) {
+                    try { resolveStructuredTypeMembers(curObj) } catch (_: StackOverflowError) { ok = false; break }
+                }
+                cur = try { getIndexedAccessType(cur, Type.StringLiteral(keyArg.text)) }
+                    catch (_: StackOverflowError) { ok = false; break }
+                if (cur === anyType || cur === errorType) { ok = false; break }
+            }
+            if (!ok || !isSimpleCheckableType(cur)) continue
+            val vIdx = paramIdxOfBareTp(tp.name.text)
+            if (vIdx < 0 || vIdx >= expr.arguments.size) continue
+            val arg = expr.arguments[vIdx]
+            if (arg is SpreadElement) continue
+            val argType = literalTypeOfExpression(arg)
+                ?: (try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue })
+            if (argType === anyType || argType === errorType || !isSimpleCheckableType(argType)) continue
+            val pass = try { checkTypeRelatedTo(argType, cur, assignableRelation) }
+                catch (_: StackOverflowError) { true }
+            if (pass) continue
+            // B98.r126 display rule: preserve the arg literal iff the target is a literal.
+            val srcDisp = if (getWidenedLiteralType(cur) !== cur) typeToString(argType)
+                else typeToString(getWidenedLiteralType(argType))
+            val start = arg.pos
+            val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$srcDisp' is not assignable to parameter of type '${typeToString(cur)}'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = ch,
+                start = start, length = length,
+            ))
+            return true
+        }
+        return false
+    }
+
     private fun emitFnTypedParamApplyDiag(
         call: CallExpression, callee: PropertyAccessExpression, ft: FunctionType,
         source: String, fileName: String,
