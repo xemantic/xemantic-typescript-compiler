@@ -11692,18 +11692,31 @@ class Transformer(
         // Track folded values for cross-member references (e.g. B = A + 1)
         // Initialize from previous declaration of same enum (merged enums)
         val previousMembers = allEnumMemberValues[enumName]
-        val memberValues = previousMembers?.toMutableMap() ?: mutableMapOf()
+        // B162: same-named top-level enums in PRECEDING script (non-module) files merge via
+        // the global scope and their IIFEs have already run — their members are referencable
+        // unqualified AND fold to their checker-computed values (`enum Enum { E = A }` where
+        // `enum Enum { A }` lives in an earlier file folds to A's value, matching TS).
+        val (crossFileValues, crossFileNames) =
+            if (!nested) checker?.precedingScriptEnumNumericValues(enumName, currentFileName)
+                ?: (emptyMap<String, Long>() to emptySet<String>())
+            else emptyMap<String, Long>() to emptySet<String>()
+        val memberValues = crossFileValues.toMutableMap().apply {
+            previousMembers?.let { putAll(it) }
+        }
         // Track known member names for qualifying bare identifiers in initializers.
         // Collect ALL member names upfront — TypeScript qualifies references to any member,
         // not just previously-declared ones (e.g., `A = A` → `E.A`).
         val knownMemberNames = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf()).apply {
+            addAll(crossFileNames)
             for (m in decl.members) {
                 add(extractEnumMemberName(m.name))
             }
         }
 
         // Track which members have been processed (even if non-constant)
-        val processedMembers = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf())
+        val processedMembers = (previousMembers?.keys?.toMutableSet() ?: mutableSetOf()).apply {
+            addAll(crossFileNames)
+        }
         // Track which members are syntactically string-valued (for skipping reverse mapping)
         val stringValuedMembers = mutableSetOf<String>()
         // Folded string values per member (for cross-member references e.g. `AB = A + B`).
@@ -12642,8 +12655,12 @@ class Transformer(
                 when {
                     obj is Identifier -> allEnumMemberValues[obj.text]?.get(memberName)
                         // Fall back to Checker for cross-file enum references through import aliases
-                        // Skip for same-enum references to avoid resolving forward references
-                        ?: if (obj.text != currentEnumName) checker?.resolveEnumMemberValue(obj.text, memberName, currentFileName) else null
+                        // Skip for same-enum references to avoid resolving forward references —
+                        // B162: but a SAME-enum qualified ref to an already-known member (processed
+                        // earlier in this declaration OR seeded from a preceding script file's
+                        // merged declaration) IS resolvable via memberValues (`Z = Enum.A`).
+                        ?: if (obj.text != currentEnumName) checker?.resolveEnumMemberValue(obj.text, memberName, currentFileName)
+                           else memberValues[memberName]
                     obj is PropertyAccessExpression -> allEnumMemberValues[obj.name.text]?.get(memberName)
                     else -> null
                 }

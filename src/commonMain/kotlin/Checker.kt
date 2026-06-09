@@ -540,6 +540,14 @@ class Checker(
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val strictNullChecks: Boolean = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
 
+    // B162: enumName -> memberName -> set of SCRIPT (non-module, non-.d.ts) file names declaring
+    // it, over top-level EnumDeclarations. Script-file enums with the same name merge via the
+    // global scope, so a member declared in ANOTHER script file is in scope unqualified.
+    // Consumers: TS1281 (isolatedModules cross-file member ref), the TS2304 enum-body scope,
+    // and the TS1066 ambient-enum constant-member-ref suppression.
+    // MUST be declared before init {} (populated lazily during the check pipeline).
+    private var scriptEnumMembersCache: Map<String, Map<String, Set<String>>>? = null
+
     // Stack of scope-shadowed names for TS2774 (push on function entry, pop on exit).
     // MUST be declared before init {} to avoid Kotlin property initialization order issue.
     private val uncalledShadowedScopes: ArrayDeque<MutableSet<String>> = ArrayDeque()
@@ -1314,6 +1322,8 @@ class Checker(
         checkIsolatedModulesExportImportIsType()
         // 68aa'. Check re-export of a type-only name under isolatedModules (TS1205 / TS1448)
         checkIsolatedModulesReExportType()
+        // 68aa''. B162: instantiated namespace in a global script file under isolatedModules (TS1280)
+        checkIsolatedModulesScriptNamespaces()
         // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
         checkVerbatimModuleSyntax()
         // 69. Check namespace used as type (TS2709)
@@ -2278,7 +2288,10 @@ class Checker(
         sourceFileName: String,
     ): ConstantValue? {
         val result = fileResults[sourceFileName] ?: return null
-        val symbol = result.locals[name] ?: return null
+        // B162: a script (non-module) file also sees top-level consts of OTHER script files
+        // unqualified (shared global scope) — fall back to a cross-file script-global scan.
+        val symbol = result.locals[name]
+            ?: return resolveScriptGlobalConstLiteral(name, sourceFileName)
         val target = resolveAlias(symbol)
         for (decl in target.declarations) {
             if (decl !is VariableDeclaration) continue
@@ -2287,6 +2300,100 @@ class Checker(
             val init = decl.initializer ?: continue
             val value = literalConstantValue(init)
             if (value != null) return value
+        }
+        return null
+    }
+
+    /**
+     * B162: for a top-level enum [enumName] in the SCRIPT (non-module) file [sourceFileName],
+     * return (numericValues, memberNames) contributed by same-named top-level enums in
+     * PRECEDING script files (binderResults order = emit/runtime order). Script-file enums
+     * with the same name merge via the global scope, so a member declared in an earlier
+     * file is in scope unqualified — and its IIFE has already run. Values come from the
+     * checker's merged-symbol [enumValues]. Used by the Transformer's `transformEnum` to
+     * seed cross-file member values (`enum Enum { E = A }` folds to A's value).
+     */
+    fun precedingScriptEnumNumericValues(
+        enumName: String,
+        sourceFileName: String,
+    ): Pair<Map<String, Long>, Set<String>> {
+        val empty = emptyMap<String, Long>() to emptySet<String>()
+        val result = fileResults[sourceFileName] ?: return empty
+        if (isModuleFile(result.sourceFile.statements)) return empty
+        val memberFiles = scriptEnumMembersByName()[enumName] ?: return empty
+        val preceding = mutableSetOf<String>()
+        for (br in binderResults) {
+            if (br.sourceFile.fileName == sourceFileName) break
+            preceding.add(br.sourceFile.fileName)
+        }
+        if (preceding.isEmpty()) return empty
+        val mergedSym = globals[enumName]?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
+        val vals = mergedSym?.let { enumValues[it.id] } ?: emptyMap()
+        val numeric = mutableMapOf<String, Long>()
+        val names = mutableSetOf<String>()
+        for ((member, files) in memberFiles) {
+            if (files.none { it in preceding }) continue
+            names.add(member)
+            val v = vals[member] as? ConstantValue.NumberValue ?: continue
+            numeric[member] = v.value.toLong()
+        }
+        return numeric to names
+    }
+
+    /**
+     * B162: enumName -> memberName -> set of script files declaring it, over top-level
+     * EnumDeclarations in NON-module, non-.d.ts files. See field doc on [scriptEnumMembersCache].
+     */
+    private fun scriptEnumMembersByName(): Map<String, Map<String, Set<String>>> {
+        scriptEnumMembersCache?.let { return it }
+        val map = mutableMapOf<String, MutableMap<String, MutableSet<String>>>()
+        for (br in binderResults) {
+            val fn = br.sourceFile.fileName
+            if (isDtsFile(fn)) continue
+            if (isModuleFile(br.sourceFile.statements)) continue
+            for (stmt in br.sourceFile.statements) {
+                if (stmt !is EnumDeclaration) continue
+                val members = map.getOrPut(stmt.name.text) { mutableMapOf() }
+                for (m in stmt.members) {
+                    val mn = when (val n = m.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> null
+                    } ?: continue
+                    members.getOrPut(mn) { mutableSetOf() }.add(fn)
+                }
+            }
+        }
+        scriptEnumMembersCache = map
+        return map
+    }
+
+    /**
+     * B162: resolve a bare identifier to a top-level `const X = <literal>` declared in a
+     * DIFFERENT script (non-module) file — script-file globals share one scope, so the name
+     * is visible unqualified. Fallback for [resolveImportedConstLiteralValue], which only
+     * consults the current file's locals (covering same-file consts and import aliases).
+     * Returns null when the current file has ANY local binding for the name (shadow), or
+     * when either side is a module file.
+     */
+    private fun resolveScriptGlobalConstLiteral(name: String, sourceFileName: String): ConstantValue? {
+        val result = fileResults[sourceFileName] ?: return null
+        if (result.locals[name] != null) return null
+        if (isModuleFile(result.sourceFile.statements)) return null
+        for (br in binderResults) {
+            if (br.sourceFile.fileName == sourceFileName) continue
+            if (isDtsFile(br.sourceFile.fileName)) continue
+            if (isModuleFile(br.sourceFile.statements)) continue
+            for (stmt in br.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (stmt.declarationList.flags != ConstKeyword) continue
+                for (d in stmt.declarationList.declarations) {
+                    val dn = (d.name as? Identifier)?.text ?: continue
+                    if (dn != name) continue
+                    val init = d.initializer ?: continue
+                    literalConstantValue(init)?.let { return it }
+                }
+            }
         }
         return null
     }
@@ -3080,7 +3187,8 @@ class Checker(
     ): ConstantValue? {
         return when (expr) {
             is NumericLiteralNode -> {
-                val value = expr.text.toDoubleOrNull() ?: return null
+                // Numeric separators (`1_000_000`) are kept in the token text — strip them.
+                val value = expr.text.replace("_", "").toDoubleOrNull() ?: return null
                 ConstantValue.NumberValue(value)
             }
             is StringLiteralNode -> ConstantValue.StringValue(expr.text)
@@ -15569,6 +15677,17 @@ class Checker(
                     if (memberName is Identifier) enumScope.names.add(memberName.text)
                     else if (memberName is StringLiteralNode) enumScope.names.add(memberName.text)
                 }
+                // B162: CROSS-FILE merged-enum members — same-named top-level enums in script
+                // (non-module) files merge via the global scope, so `enum Enum { E = A }` sees
+                // an `A` declared by `enum Enum { A }` in another script file. The per-file
+                // binder symbol's exports only cover same-file declarations. Identity-gated to
+                // the file's TOP-LEVEL enum (a namespace-nested enum of the same name must not
+                // inherit the global one's members).
+                if (enumSymbol != null && enumResult.locals[stmt.name.text] === enumSymbol &&
+                    !isModuleFile(enumResult.sourceFile.statements)
+                ) {
+                    scriptEnumMembersByName()[stmt.name.text]?.keys?.forEach { enumScope.names.add(it) }
+                }
                 for (member in stmt.members) {
                     member.initializer?.let { checkUnresolvedInExpr(it, enumScope, source, fileName) }
                 }
@@ -22974,6 +23093,25 @@ class Checker(
                         fileName = fileName, line = line, character = character,
                         start = init.pos, length = init.text.length,
                     ))
+                }
+                // B162: TS1281 — under isolatedModules, an enum member initializer that is a
+                // bare identifier naming a member of the SAME (merged) enum declared ONLY in
+                // ANOTHER script file is un-transpilable file-locally; TS requires the
+                // qualified `Enum.member` form. Ambient enums are excluded (early return
+                // above); a member also declared in the CURRENT file needs no qualification.
+                if (options.isolatedModules && init is Identifier) {
+                    val files = scriptEnumMembersByName()[decl.name.text]?.get(init.text)
+                    if (files != null && fileName !in files &&
+                        fileResults[fileName]?.let { !isModuleFile(it.sourceFile.statements) } == true
+                    ) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, init.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot access '${init.text}' from another file without qualification when 'isolatedModules' is enabled. Use '${decl.name.text}.${init.text}' instead.",
+                            category = DiagnosticCategory.Error, code = 1281,
+                            fileName = fileName, line = line, character = character,
+                            start = init.pos, length = init.text.length,
+                        ))
+                    }
                 }
                 val v = evaluateEnumInitializer(member.initializer, localValues, syntheticSymbol)
                 canAutoIncrement = v is ConstantValue.NumberValue
@@ -45056,6 +45194,18 @@ interface DataView {
                     if (ambient) {
                         for (member in stmt.members) {
                             val init = member.initializer ?: continue
+                            // B162: a bare identifier naming a member of the SAME (merged) enum is
+                            // a constant enum-member reference — a constant expression per TS, so
+                            // TS1066 must not fire (`declare enum Enum { F = A }` where A is a
+                            // member of Enum in this or another script file).
+                            if (init is Identifier && (
+                                    scriptEnumMembersByName()[stmt.name.text]?.containsKey(init.text) == true ||
+                                    stmts.any { s ->
+                                        s is EnumDeclaration && s.name.text == stmt.name.text &&
+                                            s.members.any { m -> (m.name as? Identifier)?.text == init.text }
+                                    }
+                                )
+                            ) continue
                             if (!isConstantEnumMemberExpr(init)) {
                                 val start = init.pos
                                 val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
@@ -94859,6 +95009,36 @@ interface DataView {
      * `isExportedNameTypeOnly` helper (true only for genuinely type-only exports), skips
      * `export type` / type-only specifiers / type-only imports / namespace imports / .d.ts.
      */
+    /**
+     * B162: TS1280 — under isolatedModules, a non-ambient INSTANTIATED namespace declared at the
+     * top level of a global SCRIPT file (non-module, non-.d.ts) cannot be transpiled per-file
+     * (its IIFE would need to merge with same-named namespaces in other files via a shared
+     * global). Uninstantiated (type-only) and `declare` namespaces are erased, so they're fine.
+     */
+    private fun checkIsolatedModulesScriptNamespaces() {
+        if (!options.isolatedModules) return
+        if (options.moduleDetection == "force") return // every file is a module
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if (ModifierFlag.Declare in stmt.modifiers) continue
+                val name = stmt.name as? Identifier ?: continue
+                if (getModuleInstanceState(stmt) != ModuleInstanceState.Instantiated) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Namespaces are not allowed in global script files when 'isolatedModules' is enabled. If this file is not intended to be a global script, set 'moduleDetection' to 'force' or add an empty 'export {}' statement.",
+                    category = DiagnosticCategory.Error, code = 1280,
+                    fileName = fileName, line = line, character = character,
+                    start = name.pos, length = name.text.length,
+                ))
+            }
+        }
+    }
+
     private fun checkIsolatedModulesReExportType() {
         if (!options.isolatedModules || options.verbatimModuleSyntax) return
         for (result in binderResults) {
