@@ -84960,6 +84960,121 @@ interface DataView {
     }
 
     /**
+     * B204: contravariant-alias-union inference + object-literal property mismatch
+     * (coAndContraVariantInferences6). `createElement<P>(type: FC<P> | CC<P> | string,
+     * props?: P | null)` called with `(WrapperIsolated, { value: "C" })` where
+     * `WrapperIsolated: JSXElementConstructor<ExactProps>` (an alias whose body is a
+     * union of fn/ctor types ALL passing the alias TP into param slot 0) — tsc infers
+     * P=ExactProps from the contravariant first-param slot shared by every member of
+     * the alias union, then contextually checks the fresh object literal against P.
+     * Our general inference bails on Reference params mentioning the TP, so the
+     * standard path is silent. AST-guided positional unification (B119 pattern); no
+     * engine changes. Per-property gates: literal source, simple-checkable target,
+     * relation-failed — tsc ALWAYS flags this conjunction.
+     */
+    private fun tryEmitContraAliasUnionSigPropertyMismatch(
+        sigIn: Signature, args: List<Expression>, source: String, fileName: String,
+    ): Boolean {
+        val tp = sigIn.typeParameters?.singleOrNull() ?: return false
+        val tpName = tp.symbol?.name ?: return false
+        val declParams = signatureDeclarationParameters(sigIn.declaration) ?: return false
+        fun isBareTpRef(t: TypeNode?, name: String): Boolean =
+            t is TypeReference && (t.typeName as? Identifier)?.text == name && t.typeArguments.isNullOrEmpty()
+        // STEP 1: anchor param — a union with >=1 generic interface ref funneling the
+        // sig TP into the FIRST param of the interface's SINGLE call/construct sig.
+        var inferred: Type.Interface? = null
+        var anchorIdx = -1
+        for (i in declParams.indices) {
+            if (i >= args.size) break
+            val u = declParams[i].type as? UnionType ?: continue
+            var funnels = 0
+            for (m in u.types) {
+                val r = m as? TypeReference ?: continue
+                val n = (r.typeName as? Identifier)?.text ?: continue
+                val ta = r.typeArguments ?: continue
+                if (ta.size != 1 || !isBareTpRef(ta[0], tpName)) continue
+                val ifaceDecl = globals[n]?.declarations?.firstOrNull { it is InterfaceDeclaration }
+                    as? InterfaceDeclaration ?: continue
+                val ifaceTp = ifaceDecl.typeParameters?.firstOrNull()?.name?.text ?: continue
+                val sigMember = ifaceDecl.members.singleOrNull() as? MethodDeclaration ?: continue
+                val mn = (sigMember.name as? Identifier)?.text ?: continue
+                if (mn != "" && mn != "new") continue
+                if (!isBareTpRef(sigMember.parameters.firstOrNull()?.type, ifaceTp)) continue
+                funnels++
+            }
+            if (funnels == 0) continue
+            // The anchor arg: an Identifier annotated `Alias<Concrete>` where the
+            // alias body is a union of fn/ctor types all passing the alias TP into
+            // param slot 0 (the same contravariant slot as the sig's TP above).
+            val argId = args[i] as? Identifier ?: continue
+            val argSym = globals[argId.text] ?: continue
+            val vd = (argSym.valueDeclaration ?: argSym.declarations.firstOrNull())
+                as? VariableDeclaration ?: continue
+            val annot = vd.type as? TypeReference ?: continue
+            val aliasName = (annot.typeName as? Identifier)?.text ?: continue
+            val concreteArg = annot.typeArguments?.singleOrNull() ?: continue
+            val aliasDecl = globals[aliasName]?.declarations?.firstOrNull { it is TypeAliasDeclaration }
+                as? TypeAliasDeclaration ?: continue
+            val aliasTp = aliasDecl.typeParameters?.singleOrNull()?.name?.text ?: continue
+            val body = aliasDecl.type as? UnionType ?: continue
+            var allFunnel = body.types.isNotEmpty()
+            for (m0 in body.types) {
+                // `(() => void)` is ParenthesizedType (B98.r76) — unwrap.
+                var m: TypeNode = m0
+                while (m is ParenthesizedType) m = m.type
+                val ps = when (m) {
+                    is FunctionType -> m.parameters
+                    is ConstructorType -> m.parameters
+                    else -> { allFunnel = false; break }
+                }
+                if (!isBareTpRef(ps.firstOrNull()?.type, aliasTp)) { allFunnel = false; break }
+            }
+            if (!allFunnel) continue
+            val p = try { getTypeFromTypeNode(concreteArg) } catch (_: StackOverflowError) { continue }
+            if (p !is Type.Interface) continue
+            try { resolveStructuredTypeMembers(p) } catch (_: StackOverflowError) { continue }
+            inferred = p
+            anchorIdx = i
+            break
+        }
+        val pInferred = inferred ?: return false
+        // STEP 2: an object-literal arg against a `P` / `P | nullish` param.
+        for (j in declParams.indices) {
+            if (j == anchorIdx || j >= args.size) continue
+            val t = declParams[j].type
+            val isP = isBareTpRef(t, tpName) || (t is UnionType &&
+                t.types.count { isBareTpRef(it, tpName) } == 1 &&
+                t.types.all {
+                    isBareTpRef(it, tpName) ||
+                        (it as? KeywordTypeNode)?.kind == SyntaxKind.NullKeyword ||
+                        (it as? KeywordTypeNode)?.kind == SyntaxKind.UndefinedKeyword ||
+                        ((it as? LiteralType)?.literal as? Identifier)?.text == "null"
+                })
+            if (!isP) continue
+            val obj = args[j] as? ObjectLiteralExpression ?: continue
+            for (prop in obj.properties) {
+                val pa = prop as? PropertyAssignment ?: continue
+                val nameNode = pa.name as? Identifier ?: continue
+                val targetProp = pInferred.members?.get(nameNode.text) ?: continue
+                val targetType = try { getTypeOfSymbol(targetProp) } catch (_: StackOverflowError) { continue }
+                if (!isSimpleCheckableType(targetType)) continue
+                val srcLit = literalTypeOfExpression(pa.initializer) ?: continue
+                val ok = try { checkTypeRelatedTo(srcLit, targetType, assignableRelation) } catch (_: StackOverflowError) { true }
+                if (ok) continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(srcLit)}' is not assignable to type '${typeToString(targetType)}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = nameNode.pos, length = nameNode.text.length,
+                ))
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
      * B192: TS2345 for a generic call whose type parameter has a SELF-REFERENTIAL mapped
      * constraint with an `as` key-remap: `function foo<T extends { [K in keyof T as
      * `${Extract<K, string>}y`]: number }>(foox: T)` called `foo({x: 1})` — tsc infers
@@ -85065,6 +85180,9 @@ interface DataView {
         // reverted-B126 trap); this bespoke shape check computes the anchor union itself.
         if (sigIn.typeParameters?.size == 1 &&
             tryEmitIdentityFnVsCallSigInterfaceMismatch(sigIn, args, source, fileName)) return
+        // B204: contravariant-alias-union inference + object-literal property mismatch.
+        if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
+            tryEmitContraAliasUnionSigPropertyMismatch(sigIn, args, source, fileName)) return
         val params = sig.parameters
         // 17.31c: track whether the standard loop emits a TS2345 so the
         // post-loop rest-args helper doesn't double-fire (TypeScript reports
