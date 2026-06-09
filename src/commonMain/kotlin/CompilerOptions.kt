@@ -179,6 +179,7 @@ data class CompilerOptions(
     val composite: Boolean = false,
     val declarationDir: String? = null,
     val exactOptionalPropertyTypes: Boolean = false,
+    val noUncheckedIndexedAccess: Boolean = false,
     val pretty: Boolean = false,
     val incremental: Boolean? = null,
     val isolatedDeclarations: Boolean = false,
@@ -505,6 +506,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
             useUnknownInCatchVariablesExplicitlySet = true,
         )
         "exactoptionalpropertytypes" -> options.copy(exactOptionalPropertyTypes = boolValue)
+        "nouncheckedindexedaccess" -> options.copy(noUncheckedIndexedAccess = boolValue)
         "strictpropertyinitialization" -> options.copy(strictPropertyInitializationExplicitlyFalse = !boolValue)
         "nounusedlocals" -> options.copy(noUnusedLocals = boolValue)
         "nounusedparameters" -> options.copy(noUnusedParameters = boolValue)

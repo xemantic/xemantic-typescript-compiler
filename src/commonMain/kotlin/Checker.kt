@@ -30283,6 +30283,11 @@ class Checker(
          * (e.g., `"foo".length` → number, `(42).toFixed()` → string).
          */
         private val BUILTIN_LIB_SOURCE = """
+interface RegExpMatchArray extends Array<string> {
+    0: string;
+    index?: number;
+    input?: string;
+}
 interface String {
     toString(): string;
     charAt(pos: number): string;
@@ -30291,7 +30296,7 @@ interface String {
     indexOf(searchString: string, position?: number): number;
     lastIndexOf(searchString: string, position?: number): number;
     localeCompare(that: string): number;
-    match(regexp: string): any;
+    match(regexp: string | RegExp): RegExpMatchArray | null;
     replace(searchValue: string, replaceValue: string): string;
     search(regexp: string): number;
     slice(start?: number, end?: number): string;
@@ -58756,7 +58761,22 @@ interface DataView {
                 }
                 is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                    // B201: apply null-narrowing in the then-branch (mirrors the nested
+                    // dispatcher's IfStatement arm) — `if (match !== null) { … }` at file
+                    // level narrows currentLocalTypes["match"] for the block walk.
+                    val narrowedNN = extractNullNarrowing(stmt.expression)
+                    if (narrowedNN != null) {
+                        val savedLocalTypesNN = currentLocalTypes
+                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                        currentLocalTypes[narrowedNN.first] = narrowedNN.second
+                        try {
+                            checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                        } finally {
+                            currentLocalTypes = savedLocalTypesNN
+                        }
+                    } else {
+                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                    }
                     stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
                 }
                 is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -59974,6 +59994,43 @@ interface DataView {
         } catch (_: StackOverflowError) { /* circular type */ }
 
         val init = decl.initializer ?: return
+
+        // B201: noUncheckedIndexedAccess — an INDEX-SIGNATURE element access used to
+        // initialize a primitive-annotated const gets `| undefined` injected; a DECLARED
+        // member hit (e.g. RegExpMatchArray's explicit `0: string` for match[0]) stays
+        // clean. Fires only when the base value type passes the relation while bare
+        // `undefined` fails it (so the ONLY failure is the injected undefined).
+        if (options.noUncheckedIndexedAccess && strictNullChecks) {
+            var iaInit: Expression = init
+            while (iaInit is ParenthesizedExpression) iaInit = iaInit.expression
+            val ann = typeAnnotation as? KeywordTypeNode
+            val primName = when (ann?.kind) {
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                else -> null
+            }
+            if (primName != null && iaInit is ElementAccessExpression) {
+                val valueType = elementAccessIndexSigValueType(iaInit)
+                if (valueType != null && valueType !== anyType && valueType !== errorType) {
+                    val baseOk = try { checkTypeRelatedTo(valueType, getTypeFromTypeNode(ann!!), assignableRelation) } catch (_: StackOverflowError) { false }
+                    val undefFails = try { !checkTypeRelatedTo(undefinedType, getTypeFromTypeNode(ann!!), assignableRelation) } catch (_: StackOverflowError) { false }
+                    if (baseOk && undefFails) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(valueType)} | undefined' is not assignable to type '$primName'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = line, character = character,
+                            start = name.pos, length = name.text.length,
+                            messageChain = listOf("  Type 'undefined' is not assignable to type '$primName'."),
+                        ))
+                        return
+                    }
+                }
+            }
+        }
 
         // `null!` / `undefined!` (NonNullExpression of a literal null/undefined) is
         // commonly used as a "trust me" cast under strictNullChecks. The non-null
@@ -90602,6 +90659,38 @@ interface DataView {
         val extractRe = Regex("Extract\\s*<\\s*${Regex.escape(tpName)}\\s*,\\s*string\\s*>")
         if (content != tpName && !extractRe.matches(content)) return null
         return t.substring(0, open) + key + t.substring(close + 1)
+    }
+
+    /**
+     * B201: the INDEX-SIGNATURE value type of an element access, or null when the access
+     * hits a DECLARED member (the `match[0]` firewall — RegExpMatchArray's explicit
+     * `0: string`), a tuple, or an unresolvable receiver. Falls back to a base
+     * Reference-to-Array's element type when the interface declares no own index info.
+     */
+    private fun elementAccessIndexSigValueType(expr: ElementAccessExpression): Type? {
+        val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { return null }
+        if (recvType !is Type.Object || recvType is Type.Union) return null
+        if (recvType === anyType || recvType === errorType) return null
+        try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return null }
+        if (recvType.tupleElementTypes != null) return null
+        var arg: Expression = expr.argumentExpression
+        while (arg is ParenthesizedExpression) arg = arg.expression
+        val idxText = when (arg) {
+            is NumericLiteralNode -> arg.text
+            is StringLiteralNode -> arg.text
+            else -> return null
+        }
+        if (recvType.members?.containsKey(idxText) == true) return null
+        recvType.numberIndexInfo?.let { return it.type }
+        recvType.stringIndexInfo?.let { return it.type }
+        // Inherited index signature: a base Reference to Array<E> supplies E.
+        val bases = (recvType as? Type.Interface)?.baseTypes ?: return null
+        for (b in bases) {
+            if (b is Type.Reference && b.target.symbol?.name == "Array") {
+                return b.resolvedTypeArguments?.firstOrNull()
+            }
+        }
+        return null
     }
 
     private fun getTypeFromMappedType(node: MappedType): Type {
