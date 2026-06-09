@@ -1259,6 +1259,8 @@ class Checker(
         checkGenericIndexWrite()
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
         checkMappedIntersectionIndexWrite()
+        // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
+        checkIndexedAccessTpMismatchAssignment()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -91191,6 +91193,106 @@ interface DataView {
                 if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
                     val tps = stmt.typeParameters!!.filter { it.constraint == null }.map { it.name.text }.toSet()
                     if (tps.isNotEmpty()) stmt.body?.let { scanBody(it.statements, tps, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B179: TS2322 for `const c2: O[T2] = c1` where `c1: O[T1]` and T1/T2 are DISTINCT
+     * in-scope type params sharing the SAME `keyof O` constraint
+     * (errorInfoForRelatedIndexTypesNoConstraintElaboration). Two distinct type params are
+     * never mutually assignable even with identical constraints — TS emits the fixed
+     * "could be instantiated with a different subtype of constraint" chain. Pure AST shape
+     * (the object type need not resolve); displays use the LAST segment of a qualified
+     * object name (`IntrinsicElements[T1]`, `keyof IntrinsicElements`).
+     */
+    private fun checkIndexedAccessTpMismatchAssignment() {
+        fun nameFullText(n: Node): String? = when (n) {
+            is Identifier -> n.text
+            is QualifiedName -> nameFullText(n.left)?.let { "$it.${n.right.text}" }
+            else -> null
+        }
+        fun nameLastSegment(n: Node): String? = when (n) {
+            is Identifier -> n.text
+            is QualifiedName -> n.right.text
+            else -> null
+        }
+        // (objectTypeFullText, indexTpName) of an IndexedAccessType annotation, or null
+        fun idxShape(t: TypeNode?): Pair<String, String>? {
+            val ia = t as? IndexedAccessType ?: return null
+            val objRef = ia.objectType as? TypeReference ?: return null
+            if (objRef.typeArguments != null) return null
+            val objText = nameFullText(objRef.typeName) ?: return null
+            val idxRef = ia.indexType as? TypeReference ?: return null
+            val tp = (idxRef.typeName as? Identifier)?.text ?: return null
+            return objText to tp
+        }
+        fun scanBody(stmts: List<Statement>, tpConstraints: Map<String, String>, source: String, fileName: String) {
+            val locals = mutableMapOf<String, Pair<String, String>>() // var -> (objText, tpName)
+            for (s in stmts) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val shape = idxShape(d.type)
+                    val init = d.initializer
+                    if (shape != null && init is Identifier) {
+                        val srcShape = locals[init.text]
+                        if (srcShape != null && srcShape.first == shape.first &&
+                            srcShape.second != shape.second &&
+                            tpConstraints[srcShape.second] != null &&
+                            tpConstraints[srcShape.second] == tpConstraints[shape.second]
+                        ) {
+                            val lastSeg = shape.first.substringAfterLast('.')
+                            val t1 = srcShape.second; val t2 = shape.second
+                            val nameNode = d.name as Identifier
+                            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$lastSeg[$t1]' is not assignable to type '$lastSeg[$t2]'.",
+                                category = DiagnosticCategory.Error, code = 2322,
+                                fileName = fileName, line = line, character = ch,
+                                start = nameNode.pos, length = nameNode.text.length,
+                                messageChain = listOf(
+                                    "  Type '$t1' is not assignable to type '$t2'.",
+                                    "    '$t1' is assignable to the constraint of type '$t2', but '$t2' could be instantiated with a different subtype of constraint 'keyof $lastSeg'.",
+                                ),
+                            ))
+                        }
+                    }
+                    if (shape != null) locals[n] = shape
+                }
+            }
+        }
+        fun keyofConstraints(tps: List<TypeParameter>?): Map<String, String> {
+            val out = mutableMapOf<String, String>()
+            for (tp in tps.orEmpty()) {
+                val c = tp.constraint as? TypeOperator ?: continue
+                if (c.operator != SyntaxKind.KeyOfKeyword) continue
+                val r = c.type as? TypeReference ?: continue
+                nameFullText(r.typeName)?.let { out[tp.name.text] = it }
+            }
+            return out
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ClassDeclaration -> {
+                        val classTps = keyofConstraints(stmt.typeParameters)
+                        if (classTps.size < 2) continue
+                        for (m in stmt.members) {
+                            if (m is MethodDeclaration) {
+                                m.body?.let { scanBody(it.statements, classTps + keyofConstraints(m.typeParameters), source, fileName) }
+                            }
+                        }
+                    }
+                    is FunctionDeclaration -> {
+                        val tps = keyofConstraints(stmt.typeParameters)
+                        if (tps.size >= 2) stmt.body?.let { scanBody(it.statements, tps, source, fileName) }
+                    }
+                    else -> {}
                 }
             }
         }
