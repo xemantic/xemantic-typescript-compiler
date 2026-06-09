@@ -97,6 +97,20 @@ class Checker(
         val nodeTypes = HashMap<TypeNode, Type>()
         /** Cache of symbol ID → resolved type of that symbol. */
         val symbolTypes = HashMap<Int, Type>()
+        /** B202.1: symbol ids whose [getTypeOfSymbol] resolution is currently in
+         *  progress. A re-entrant request for the SAME symbol (a resolution cycle,
+         *  e.g. mutually-recursive initializers or a self-referential annotation)
+         *  returns anyType instead of recursing into a StackOverflowError that
+         *  consumers silently swallow (zero diagnostics — the NONE bucket). The
+         *  sentinel result is NOT cached: once the outer resolution completes,
+         *  symbolTypes holds the real type. */
+        val symbolTypeResolutionInProgress = HashSet<Int>()
+        /** B202.2: TypeNode instances whose [getTypeFromTypeNode] CACHEABLE
+         *  resolution is currently in progress (context-sensitive resolutions
+         *  legitimately re-run and are not tracked). Re-entry on the same node is
+         *  a type-level cycle — degrade to errorType instead of unbounded
+         *  recursion. Not cached; the outer resolution stores the real type. */
+        val nodeTypeResolutionInProgress = HashSet<TypeNode>()
         /** Cache of symbol ID → declared type (for classes/interfaces). */
         val declaredTypes = HashMap<Int, Type>()
         // Type relation instances
@@ -177,6 +191,8 @@ class Checker(
     private val spellingSuggestionCounts get() = state.spellingSuggestionCounts
     private val nodeTypes get() = state.nodeTypes
     private val symbolTypes get() = state.symbolTypes
+    private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
+    private val nodeTypeResolutionInProgress get() = state.nodeTypeResolutionInProgress
     private val declaredTypes get() = state.declaredTypes
     private val subtypeRelation get() = state.subtypeRelation
     private val assignableRelation get() = state.assignableRelation
@@ -64520,9 +64536,20 @@ interface DataView {
      */
     private fun getTypeOfSymbol(symbol: Symbol): Type {
         symbolTypes[symbol.id]?.let { return it }
-        val type = getTypeOfSymbolWorker(symbol)
-        symbolTypes[symbol.id] = type
-        return type
+        // B202.1: in-progress sentinel — a re-entrant resolution of the SAME symbol
+        // (initializer/annotation cycle, e.g. `var x = cond ? y : 0; var y = x`)
+        // degrades to anyType instead of recursing unboundedly into a silently
+        // swallowed StackOverflowError. getTypeOfFunction additionally stores a
+        // fnType SHELL before resolving signatures (B198), so function
+        // self-references hit the cache fast-path above and never reach this check.
+        if (!symbolTypeResolutionInProgress.add(symbol.id)) return anyType
+        try {
+            val type = getTypeOfSymbolWorker(symbol)
+            symbolTypes[symbol.id] = type
+            return type
+        } finally {
+            symbolTypeResolutionInProgress.remove(symbol.id)
+        }
     }
 
     private fun getTypeOfSymbolWorker(symbol: Symbol): Type {
