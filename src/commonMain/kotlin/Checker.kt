@@ -4770,6 +4770,38 @@ class Checker(
             if (!isModuleFile(statements)) continue
             val source = result.sourceFile.text
             for (stmt in statements) {
+                // B172: `export default Object.assign(A, {...})` — the default export's
+                // inferred type flows from A (Object.assign's FIRST argument). Trace A's
+                // tagged-template tag through the default-imported interface member's
+                // return type into the package's type-alias graph, collecting referenced
+                // type names INCLUDING qualified `ns.Member` refs through namespace
+                // imports. First non-nameable ref → TS2883 named 'default', squiggle over
+                // the whole export-default statement (declarationEmitObjectAssignedDefaultExport).
+                if (stmt is ExportAssignment && !stmt.isExportEquals) {
+                    val call = stmt.expression as? CallExpression
+                    val calleePA = call?.expression as? PropertyAccessExpression
+                    val isObjectAssign = calleePA != null &&
+                        (calleePA.expression as? Identifier)?.text == "Object" && calleePA.name.text == "assign"
+                    val firstArgName = if (isObjectAssign) (call!!.arguments.firstOrNull() as? Identifier)?.text else null
+                    if (firstArgName != null) {
+                        val refs = defaultExportAssignNameabilityRefs(firstArgName, result, f)
+                        for ((typeName, g) in refs) {
+                            if (isFileNameableFrom(g, f)) continue
+                            val pkgPath = nameabilityPackagePath(g, f)
+                            val (l, c) = getLineAndCharacterOfPosition(source, stmt.pos)
+                            val semi = source.indexOf(';', (stmt.expression?.let { expressionTrueEnd(it) } ?: stmt.pos))
+                            val end = if (semi >= 0) semi + 1 else (stmt.expression?.let { expressionTrueEnd(it) } ?: stmt.pos + 1)
+                            diagnostics.add(Diagnostic(
+                                message = "The inferred type of 'default' cannot be named without a reference to '$typeName' from '$pkgPath'. This is likely not portable. A type annotation is necessary.",
+                                category = DiagnosticCategory.Error, code = 2883,
+                                fileName = f, line = l, character = c,
+                                start = stmt.pos, length = end - stmt.pos,
+                            ))
+                            break
+                        }
+                    }
+                    continue
+                }
                 if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
                 for (decl in stmt.declarationList.declarations) {
                     if (decl.type != null) continue // explicit annotation → portable
@@ -4788,6 +4820,7 @@ class Checker(
                         ))
                         break // report only the first non-nameable referenced type per declaration
                     }
+                    // (TS2527 below; B172's ExportAssignment branch lives after this loop)
                     // TS2527: `export const X = importedValue` whose type carries a NESTED
                     // (inaccessible) `unique symbol` cannot be portably emitted.
                     if (init is Identifier) {
@@ -4880,6 +4913,119 @@ class Checker(
      * referenced type name to its declaring file. Returns null when the shape
      * is unsupported (graceful — no diagnostic).
      */
+    /**
+     * B172: type names referenced by the inferred type of a LOCAL const [localName] whose
+     * initializer is a tagged template `imported.member\`\``. Resolves: the tag base (a
+     * default import) → the package's `export default <ident>` → `declare const <ident>: I`
+     * → interface member's FunctionType RETURN type → transitively through locally-declared
+     * type-alias bodies, collecting bare refs (declared file = the package file) and
+     * QUALIFIED `ns.Member` refs through `import * as ns` (declared file = the namespace's
+     * resolved module). Ordered; the caller reports the first non-nameable.
+     */
+    private fun defaultExportAssignNameabilityRefs(
+        localName: String, result: BinderResult, contextFile: String,
+    ): List<Pair<String, String>> {
+        // 1. the local const's initializer
+        var init: Expression? = null
+        for (s in result.sourceFile.statements) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == localName) init = d.initializer
+            }
+        }
+        val tag = (init as? TaggedTemplateExpression)?.tag as? PropertyAccessExpression ?: return emptyList()
+        val baseName = (tag.expression as? Identifier)?.text ?: return emptyList()
+        val memberName = tag.name.text
+        // 2. base is a default import → the package file
+        val (pkgFile, origName) = resolveImportedSymbolFile(baseName, contextFile) ?: return emptyList()
+        if (origName != "default") return emptyList()
+        val pkgResult = fileResults[pkgFile] ?: return emptyList()
+        // 3. `export default <ident>` → `declare const <ident>: <ifaceRef>`
+        val defaultIdent = pkgResult.sourceFile.statements.firstNotNullOfOrNull { s ->
+            (s as? ExportAssignment)?.takeIf { !it.isExportEquals }?.expression as? Identifier
+        }?.text ?: return emptyList()
+        var constType: TypeNode? = null
+        for (s in pkgResult.sourceFile.statements) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == defaultIdent) constType = d.type
+            }
+        }
+        val ifaceName = ((constType as? TypeReference)?.typeName as? Identifier)?.text ?: return emptyList()
+        val iface = pkgResult.sourceFile.statements.firstNotNullOfOrNull { s ->
+            (s as? InterfaceDeclaration)?.takeIf { it.name.text == ifaceName }
+        } ?: return emptyList()
+        // 4. the member's return type
+        val memberType = iface.members.firstNotNullOfOrNull { m ->
+            (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == memberName }?.type
+                ?: (m as? MethodDeclaration)?.takeIf { (it.name as? Identifier)?.text == memberName }?.type
+        }
+        val returnType = (memberType as? FunctionType)?.type ?: memberType ?: return emptyList()
+        // 5. transitive collection through the package's type graph
+        val out = mutableListOf<Pair<String, String>>()
+        collectNameabilityTypeRefs(returnType, pkgFile, out, mutableSetOf(), 0)
+        return out
+    }
+
+    /** B172: ordered transitive type-ref collection following local type-alias bodies and
+     *  qualified `ns.Member` refs through namespace imports. */
+    private fun collectNameabilityTypeRefs(
+        t: TypeNode, file: String, out: MutableList<Pair<String, String>>,
+        visited: MutableSet<String>, depth: Int,
+    ) {
+        if (depth > 6) return
+        when (t) {
+            is TypeReference -> {
+                when (val n = t.typeName) {
+                    is Identifier -> {
+                        val key = "$file|${n.text}"
+                        if (visited.add(key)) {
+                            out.add(n.text to file)
+                            // follow a locally-declared type alias's body
+                            val r = fileResults[file]
+                            val alias = r?.sourceFile?.statements?.firstNotNullOfOrNull { s ->
+                                (s as? TypeAliasDeclaration)?.takeIf { it.name.text == n.text }
+                            }
+                            alias?.let { collectNameabilityTypeRefs(it.type, file, out, visited, depth + 1) }
+                        }
+                    }
+                    is QualifiedName -> {
+                        val ns = (n.left as? Identifier)?.text
+                        if (ns != null) {
+                            // resolve `import * as ns from "spec"` in [file]
+                            val r = fileResults[file]
+                            val spec = r?.sourceFile?.statements?.firstNotNullOfOrNull { s ->
+                                val imp = s as? ImportDeclaration ?: return@firstNotNullOfOrNull null
+                                val nsImp = imp.importClause?.namedBindings as? NamespaceImport ?: return@firstNotNullOfOrNull null
+                                if (nsImp.name.text == ns) (imp.moduleSpecifier as? StringLiteralNode)?.text else null
+                            }
+                            val g = spec?.let { resolveSpecifierAnywhere(it, file) }
+                            if (g != null && visited.add("$g|${n.right.text}")) out.add(n.right.text to g)
+                        }
+                    }
+                    else -> {}
+                }
+                t.typeArguments?.forEach { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+            }
+            is UnionType -> t.types.forEach { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+            is IntersectionType -> t.types.forEach { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+            is ParenthesizedType -> collectNameabilityTypeRefs(t.type, file, out, visited, depth + 1)
+            is ArrayType -> collectNameabilityTypeRefs(t.elementType, file, out, visited, depth + 1)
+            is TupleType -> t.elements.forEach { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+            is TypeOperator -> collectNameabilityTypeRefs(t.type, file, out, visited, depth + 1)
+            is IndexedAccessType -> {
+                collectNameabilityTypeRefs(t.objectType, file, out, visited, depth + 1)
+                collectNameabilityTypeRefs(t.indexType, file, out, visited, depth + 1)
+            }
+            is MappedType -> {
+                t.typeParameter.constraint?.let { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+                t.nameType?.let { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+                t.type?.let { collectNameabilityTypeRefs(it, file, out, visited, depth + 1) }
+            }
+            else -> {}
+        }
+    }
+
     private fun inferredTypeReferencedFiles(init: Expression, contextFile: String): List<Pair<String, String>>? {
         if (init !is CallExpression) return null
         val callee = init.expression as? Identifier ?: return null
