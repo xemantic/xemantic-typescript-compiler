@@ -937,6 +937,8 @@ class Checker(
         checkJsxFactoryValidity()
         // 14a''''. TS2318: essential es5-base global types missing under dotted-only @lib.
         checkMissingEssentialGlobalTypes()
+        // 14a'''''. B178: TS2318 'Iterable' for rest-only array binding patterns under es5-lib.
+        checkGlobalIterableRestOnlyBindingPattern()
         // 14'. Check `import = require()` of a non-module file (TS2306)
         checkImportEqualsRequireOfNonModule()
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
@@ -17051,6 +17053,73 @@ class Checker(
                 character = null,
                 start = -1,
                 length = 0,
+            ))
+        }
+    }
+
+    /** B178: does the explicit `@lib` list provide the `Iterable` type (lib.es2015.iterable)?
+     *  An empty lib list means the default full lib → provided. */
+    private fun libProvidesIterable(): Boolean {
+        if (options.lib.isEmpty()) return true
+        return options.lib.any { l0 ->
+            val l = l0.lowercase().trim()
+            l == "es6" || l == "es7" || l == "esnext" ||
+                (l.startsWith("es2") && !l.contains('.')) ||
+                l == "es2015.iterable"
+        }
+    }
+
+    /**
+     * B178: TS2318 "Cannot find global type 'Iterable'." — the IMPLIED type of an EMPTY or
+     * REST-ONLY array binding pattern (`[...x]`) under target >= ES2015 is
+     * `Iterable<any, void, undefined>`; when the explicit `@lib` lacks lib.es2015.iterable
+     * (e.g. `@lib: es5` with `@target: es2015`), resolving that global fails → ONE
+     * location-less TS2318 per program (sourceMapValidationDestructuringForArrayBindingPattern).
+     * Uses the RAW `options.target` (effectiveTarget maps es5 → ES2015 and would FP the
+     * es5 variant, whose baseline carries only TS5107).
+     */
+    private fun checkGlobalIterableRestOnlyBindingPattern() {
+        if (options.target < ScriptTarget.ES2015) return
+        if (libProvidesIterable()) return
+        fun isRestOnlyOrEmpty(p: ArrayBindingPattern): Boolean =
+            p.elements.isEmpty() ||
+                (p.elements.size == 1 && p.elements.all { it is BindingElement && it.dotDotDotToken })
+        var found = false
+        fun scanDecls(decls: List<VariableDeclaration>) {
+            for (d in decls) {
+                val n = d.name
+                if (n is ArrayBindingPattern && isRestOnlyOrEmpty(n) && d.initializer != null) found = true
+            }
+        }
+        fun scanStmt(stmt: Statement) {
+            if (found) return
+            when (stmt) {
+                is VariableStatement -> scanDecls(stmt.declarationList.declarations)
+                is ForStatement -> {
+                    (stmt.initializer as? VariableDeclarationList)?.let { scanDecls(it.declarations) }
+                    scanStmt(stmt.statement)
+                }
+                is ForOfStatement -> scanStmt(stmt.statement)
+                is ForInStatement -> scanStmt(stmt.statement)
+                is WhileStatement -> scanStmt(stmt.statement)
+                is DoStatement -> scanStmt(stmt.statement)
+                is Block -> stmt.statements.forEach { scanStmt(it) }
+                is IfStatement -> { scanStmt(stmt.thenStatement); stmt.elseStatement?.let { scanStmt(it) } }
+                is FunctionDeclaration -> stmt.body?.statements?.forEach { scanStmt(it) }
+                else -> {}
+            }
+        }
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            result.sourceFile.statements.forEach { scanStmt(it) }
+            if (found) break
+        }
+        if (found) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find global type 'Iterable'.",
+                category = DiagnosticCategory.Error, code = 2318,
+                fileName = null, line = null, character = null,
+                start = -1, length = 0,
             ))
         }
     }
