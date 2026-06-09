@@ -1402,6 +1402,9 @@ class Checker(
         // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
         // 0-type-param fn type; TS2345 concrete arg vs bare unconstrained TP param).
         checkFnTypedParamCalls()
+        // 72a3. B218: TS2353 excess props for reverse-mapped single-object-literal
+        // args (`{[K in keyof T & keyof C]: T[K]}` params — keys ⊆ keyof C).
+        checkReverseMappedExcessProps()
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         checkEnumForwardReferences()
         // 72c. Setter bodies may not return a value (TS2408)
@@ -94365,6 +94368,202 @@ interface DataView {
             m[n] = ClassInstRef(classDecl, argTpNames)
         }
         return m
+    }
+
+    /**
+     * B218: TS2353 excess-property check for a single fresh object-literal arg
+     * against a REVERSE-MAPPED param `{[K in keyof TP & keyof C]: TP[K]}`
+     * (reverseMappedTypeLimitedConstraint). getTypeFromMappedType bakes the param
+     * to anyType (keyof over an un-inferred TP), so the standard excess-prop path
+     * skips the arg — but the instantiated mapped type's key set is ALWAYS a
+     * subset of keyof C, so a literal property outside C's syntactically-known key
+     * set is unconditionally TS2353 in tsc. Two shapes: a direct generic fn call,
+     * and a curried `g<C>()(objLit)` whose g is an arrow-returning-arrow const.
+     * Default-suppress: spread/computed/shorthand props, index/call sigs in C,
+     * unrenderable in-key prop displays all bail.
+     */
+    private fun checkReverseMappedExcessProps() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            try { rmepScanStmts(result.sourceFile.statements, source, fileName, result.locals) }
+            catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun rmepScanStmts(stmts: List<Statement>, source: String, fileName: String, locals: SymbolTable?) {
+        for (s in stmts) rmepScanStmt(s, source, fileName, locals)
+    }
+
+    private fun rmepScanStmt(stmt: Statement, source: String, fileName: String, locals: SymbolTable?) {
+        when (stmt) {
+            is ExpressionStatement -> rmepScanExpr(stmt.expression, source, fileName, locals)
+            is VariableStatement -> stmt.declarationList.declarations.forEach { d ->
+                d.initializer?.let { rmepScanExpr(it, source, fileName, locals) }
+            }
+            is ReturnStatement -> stmt.expression?.let { rmepScanExpr(it, source, fileName, locals) }
+            is Block -> rmepScanStmts(stmt.statements, source, fileName, locals)
+            is IfStatement -> {
+                rmepScanStmt(stmt.thenStatement, source, fileName, locals)
+                stmt.elseStatement?.let { rmepScanStmt(it, source, fileName, locals) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { rmepScanStmts(it.statements, source, fileName, locals) }
+            else -> {}
+        }
+    }
+
+    private fun rmepScanExpr(expr: Expression, source: String, fileName: String, locals: SymbolTable?) {
+        when (expr) {
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { rmepScanExpr(cur.right, source, fileName, locals); cur = cur.left }
+                rmepScanExpr(cur, source, fileName, locals)
+            }
+            is CallExpression -> {
+                (expr.expression as? CallExpression)?.let { rmepScanExpr(it, source, fileName, locals) }
+                rmepCheckCall(expr, source, fileName, locals)
+            }
+            is ParenthesizedExpression -> rmepScanExpr(expr.expression, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    /** B218: the CONCRETE-side type name from `{[K in keyof TP & keyof C]: TP[K]}`
+     *  when the mapped type matches exactly that shape (TP ∈ tpNames), else null. */
+    private fun rmepConcreteKeyofName(t: TypeNode?, tpNames: Set<String>): String? {
+        val m = t as? MappedType ?: return null
+        if (m.nameType != null) return null
+        val ia = m.type as? IndexedAccessType ?: return null
+        val iaObj = ia.objectType as? TypeReference ?: return null
+        val tpName = (iaObj.typeName as? Identifier)?.text ?: return null
+        if (tpName !in tpNames || !iaObj.typeArguments.isNullOrEmpty()) return null
+        val iaIdx = ia.indexType as? TypeReference ?: return null
+        if ((iaIdx.typeName as? Identifier)?.text != m.typeParameter.name.text) return null
+        val cons = m.typeParameter.constraint as? IntersectionType ?: return null
+        if (cons.types.size != 2) return null
+        var concrete: String? = null
+        var sawTp = false
+        for (part in cons.types) {
+            val op = part as? TypeOperator ?: return null
+            if (op.operator != SyntaxKind.KeyOfKeyword) return null
+            val ref = op.type as? TypeReference ?: return null
+            if (!ref.typeArguments.isNullOrEmpty()) return null
+            val n = (ref.typeName as? Identifier)?.text ?: return null
+            if (n == tpName) sawTp = true else concrete = n
+        }
+        return if (sawTp) concrete else null
+    }
+
+    /** B218: the key set of a TypeLiteral whose members are ALL simply-named
+     *  PropertyDeclarations (anything else → null, FN-safe). */
+    private fun rmepTypeLiteralKeys(tl: TypeLiteral): Set<String>? {
+        val keys = mutableSetOf<String>()
+        for (m in tl.members) {
+            val p = m as? PropertyDeclaration ?: return null
+            val n = when (val nn = p.name) {
+                is Identifier -> nn.text
+                is StringLiteralNode -> nn.text
+                else -> return null
+            }
+            keys.add(n)
+        }
+        return keys
+    }
+
+    private fun rmepCheckCall(call: CallExpression, source: String, fileName: String, locals: SymbolTable?) {
+        if (!call.typeArguments.isNullOrEmpty()) return
+        val obj = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
+        for (p in obj.properties) {
+            if (p !is PropertyAssignment) return
+            if (p.name !is Identifier && p.name !is StringLiteralNode) return
+        }
+        val allowedKeys: Set<String> = when (val callee = call.expression) {
+            is Identifier -> {
+                val sym = locals?.get(callee.text) ?: globals[callee.text] ?: return
+                val fd = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull() ?: return
+                val tps = fd.typeParameters ?: return
+                if (tps.isEmpty()) return
+                val param = fd.parameters.singleOrNull() ?: return
+                val cName = rmepConcreteKeyofName(param.type, tps.map { it.name.text }.toSet()) ?: return
+                val cSym = locals?.get(cName) ?: globals[cName] ?: return
+                when (val cDecl = cSym.declarations.singleOrNull()) {
+                    is TypeAliasDeclaration -> (cDecl.type as? TypeLiteral)?.let { rmepTypeLiteralKeys(it) } ?: return
+                    is InterfaceDeclaration -> {
+                        if (cDecl.heritageClauses != null) return
+                        val keys = mutableSetOf<String>()
+                        for (m in cDecl.members) {
+                            val pd = m as? PropertyDeclaration ?: return
+                            keys.add((pd.name as? Identifier)?.text ?: return)
+                        }
+                        keys
+                    }
+                    else -> return
+                }
+            }
+            is CallExpression -> {
+                // curried: g<C>()(objLit) — g a const arrow returning an arrow.
+                val g = callee.expression as? Identifier ?: return
+                val tArgs = callee.typeArguments ?: return
+                if (tArgs.isEmpty() || callee.arguments.isNotEmpty()) return
+                val gSym = locals?.get(g.text) ?: globals[g.text] ?: return
+                val gDecl = (gSym.valueDeclaration ?: gSym.declarations.firstOrNull())
+                    as? VariableDeclaration ?: return
+                var a1: Expression = gDecl.initializer ?: return
+                while (a1 is ParenthesizedExpression) a1 = a1.expression
+                val arrow1 = a1 as? ArrowFunction ?: return
+                val a1Tps = arrow1.typeParameters ?: return
+                if (a1Tps.isEmpty() || arrow1.parameters.isNotEmpty()) return
+                var b: Node = arrow1.body ?: return
+                while (b is ParenthesizedExpression) b = b.expression
+                val arrow2 = b as? ArrowFunction ?: return
+                val a2Tps = arrow2.typeParameters ?: return
+                val param = arrow2.parameters.singleOrNull() ?: return
+                val cName = rmepConcreteKeyofName(param.type, a2Tps.map { it.name.text }.toSet()) ?: return
+                val idx = a1Tps.indexOfFirst { it.name.text == cName }
+                if (idx < 0 || idx >= tArgs.size) return
+                (tArgs[idx] as? TypeLiteral)?.let { rmepTypeLiteralKeys(it) } ?: return
+            }
+            else -> return
+        }
+        // First excess prop; render the in-key props for the display.
+        var excessName: Identifier? = null
+        var excessText: String? = null
+        val parts = mutableListOf<String>()
+        for (p in obj.properties) {
+            val pa = p as PropertyAssignment
+            val n = when (val nn = pa.name) {
+                is Identifier -> nn.text
+                is StringLiteralNode -> nn.text
+                else -> return
+            }
+            if (n !in allowedKeys) {
+                if (excessName == null) {
+                    excessName = pa.name as? Identifier ?: return
+                    excessText = n
+                }
+                continue
+            }
+            val disp = when (val init = pa.initializer) {
+                is NumericLiteralNode -> init.text
+                is StringLiteralNode -> "\"${init.text}\""
+                is Identifier -> if (init.text == "true" || init.text == "false") init.text else return
+                is PrefixUnaryExpression -> if (init.operator == SyntaxKind.Minus &&
+                    init.operand is NumericLiteralNode) "-${(init.operand as NumericLiteralNode).text}" else return
+                is AsExpression -> formatTypeForDisplay(init.type) ?: return
+                else -> return
+            }
+            parts.add("$n: $disp;")
+        }
+        val excess = excessName ?: return
+        val display = "{ ${parts.joinToString(" ")} }"
+        val (line, ch) = getLineAndCharacterOfPosition(source, excess.pos)
+        diagnostics.add(Diagnostic(
+            message = "Object literal may only specify known properties, and '$excessText' does not exist in type '$display'.",
+            category = DiagnosticCategory.Error, code = 2353,
+            fileName = fileName, line = line, character = ch,
+            start = excess.pos, length = excess.text.length,
+        ))
     }
 
     private fun checkFnTypedParamCalls() {
