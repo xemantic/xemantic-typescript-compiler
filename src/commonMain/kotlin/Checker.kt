@@ -67490,9 +67490,61 @@ interface DataView {
     }
 
     /** Get the return type of a call expression by resolving the callee's call signature. */
+    /**
+     * B209: bounded return-type resolution for `Array.from(<single arg>)`. The
+     * embedded lib has no ArrayConstructor / `declare var Array`, so the callee
+     * resolves to anyType and every Array.from call was silently `any` — masking
+     * var-decl TS2322 like `const r: B[] = Array.from(inputA)`. Gates (FP firewall):
+     * unshadowed lib `Array` (no local/user declaration — all declarations in
+     * builtinLibDecls), base-values lib present, no explicit type args, exactly one
+     * arg. Resolution: a 1-arg lib-container Reference (Array/ReadonlyArray/
+     * ArrayLike/Set/Iterable/IterableIterator) with a concrete element → `T[]`;
+     * plus the one confined `recv.values()` shape (receiver `T[]` — the embedded
+     * `values(): any` hides the element type). Everything else → null (caller keeps
+     * today's anyType). tsc types these exact shapes as `T[]`, so newly-resolved
+     * types match tsc for any passing test hitting the gate.
+     */
+    private fun tryResolveArrayFromCall(expr: CallExpression): Type? {
+        val pa = expr.expression as? PropertyAccessExpression ?: return null
+        if (pa.questionDotToken || pa.name.text != "from") return null
+        if ((pa.expression as? Identifier)?.text != "Array") return null
+        if (!expr.typeArguments.isNullOrEmpty()) return null
+        if (expr.arguments.size != 1) return null
+        if (currentLocalTypes.containsKey("Array")) return null
+        val arraySym = currentFileLocals?.get("Array") ?: globals["Array"] ?: return null
+        if (arraySym.declarations.any { it !in builtinLibDecls }) return null
+        if (!libProvidesBaseValues()) return null
+        val arg = expr.arguments[0]
+        if (arg is SpreadElement) return null
+        fun elementOf(t: Type): Type? {
+            val ref = t as? Type.Reference ?: return null
+            val elem = ref.resolvedTypeArguments?.singleOrNull() ?: return null
+            if (elem is Type.TypeParam || elem === anyType || elem === errorType) return null
+            val tn = ref.target.symbol?.name ?: return null
+            if (tn !in setOf("Array", "ReadonlyArray", "ArrayLike", "Set", "Iterable", "IterableIterator")) return null
+            return elem
+        }
+        val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+        elementOf(argType)?.let { return getArrayType(it) }
+        // `recv.values()` where recv: T[] — the embedded Array.values() returns any.
+        if (arg is CallExpression && arg.arguments.isEmpty() && !arg.questionDotToken) {
+            val vpa = arg.expression as? PropertyAccessExpression ?: return null
+            if (vpa.questionDotToken || vpa.name.text != "values") return null
+            val recvType = try { getTypeOfExpression(vpa.expression) } catch (_: StackOverflowError) { return null }
+            val ref = recvType as? Type.Reference ?: return null
+            if (ref.target.symbol?.name != "Array") return null
+            val elem = ref.resolvedTypeArguments?.singleOrNull() ?: return null
+            if (elem is Type.TypeParam || elem === anyType || elem === errorType) return null
+            return getArrayType(elem)
+        }
+        return null
+    }
+
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
         // 16.0: super(...) call inside a constructor returns void
         if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") return voidType
+        // B209: `Array.from(x)` — bounded single-arg resolution to `T[]`.
+        tryResolveArrayFromCall(expr)?.let { return it }
         // Unwrap value-preserving wrappers before classifying the callee.
         // `(fn)()`, `fn!()`, and `(fn satisfies T)()` should resolve like `fn()`.
         var callee: Expression = expr.expression
