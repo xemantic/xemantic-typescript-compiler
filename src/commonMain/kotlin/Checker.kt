@@ -24737,6 +24737,23 @@ class Checker(
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
                     }
+                    // B165: nodenext + a node_modules package whose package.json carries a PRESENT,
+                    // NON-NULL, STRING-form `exports` that names no existing file. Node's `exports`
+                    // field is EXHAUSTIVE: when present it disables both `main` and the index.d.ts
+                    // fallback, so a broken string target makes the package unresolvable → TS2307
+                    // (nodeNextImportModeImplicitIndexResolution2's dedent4; dedent/dedent2 have NO
+                    // exports and dedent3 has `"exports": null` — both keep the index fallback and
+                    // resolve). Object-form exports / wildcard / directory targets are NOT modeled —
+                    // suppressed for FP-safety.
+                    else if (!isRelative && effectiveModuleRes == "nodenext"
+                        && !moduleName.contains("/")
+                        && !moduleName.contains(":")
+                        && moduleName !in ambientModuleNames
+                        && moduleName !in NODE_BUILTIN_MODULES
+                        && brokenStringExportsPackage(moduleName)
+                    ) {
+                        emitTS2307(specifier, moduleName, source, fileName)
+                    }
                     // Node-builtin bare specifier (`"module"`, `"fs"`, etc.) under node resolution
                     // that's NOT an ambient module / .d.ts / node_modules package: TypeScript emits
                     // TS2591 with the @types/node hint. Narrow to known node-builtin names so we
@@ -25377,6 +25394,44 @@ class Checker(
      * `node_modules`). Used to suppress TS2307/TS2882 for bare specifiers that
      * TypeScript would resolve via node_modules.
      */
+    /**
+     * B165: true when the bare package [pkgName] has a `node_modules/<pkg>/package.json` (or
+     * `@types/<pkg>/package.json`) whose `exports` field is PRESENT, NON-NULL, and a STRING
+     * that names no existing file in the package directory. Node's `exports` is exhaustive —
+     * when present it disables `main` and the `index.d.ts` fallback, so such a package is
+     * unresolvable under nodenext. Absent / `null` / object-form / wildcard / directory
+     * targets all return false (FP-safe: only the provably-broken string form fires).
+     */
+    private fun brokenStringExportsPackage(pkgName: String): Boolean {
+        for ((fn, content) in jsonModuleContents) {
+            val isPkgJson = fn.endsWith("/node_modules/@types/$pkgName/package.json") ||
+                fn.endsWith("/node_modules/$pkgName/package.json") ||
+                fn == "node_modules/@types/$pkgName/package.json" ||
+                fn == "node_modules/$pkgName/package.json"
+            if (!isPkgJson) continue
+            val m = Regex("\"exports\"\\s*:\\s*").find(content) ?: continue
+            val rest = content.substring(m.range.last + 1).trimStart()
+            if (!rest.startsWith("\"")) continue // null / object form — not modeled
+            val target = rest.drop(1).substringBefore("\"")
+            if (target.contains('*') || target.endsWith("/")) continue
+            val pkgDir = fn.removeSuffix("package.json")
+            val base = pkgDir + target.removePrefix("./")
+            // A `.js`/`.mjs`/`.cjs` exports target resolves TYPES via the declaration-file
+            // substitution (`entrypoint.js` -> `entrypoint.d.ts`), per node16/nodenext rules.
+            val candidates = buildList {
+                add(base); add("$base.ts"); add("$base.tsx"); add("$base.d.ts")
+                add("$base.js"); add("$base.json")
+                add("$base/index.ts"); add("$base/index.d.ts")
+                if (base.endsWith(".js")) add(base.removeSuffix(".js") + ".d.ts")
+                if (base.endsWith(".mjs")) add(base.removeSuffix(".mjs") + ".d.mts")
+                if (base.endsWith(".cjs")) add(base.removeSuffix(".cjs") + ".d.cts")
+            }
+            val exists = candidates.any { it in fileResults || it in jsonModuleContents }
+            if (!exists) return true
+        }
+        return false
+    }
+
     private fun hasNodeModulesPackage(pkgName: String): Boolean {
         val needle = "/node_modules/$pkgName/"
         for (fn in fileResults.keys) {
