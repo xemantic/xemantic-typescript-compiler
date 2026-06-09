@@ -84584,6 +84584,139 @@ interface DataView {
         return voidType
     }
 
+
+    /** B199 helper: scan [fileName]'s namespace bodies for an InterfaceDeclaration
+     *  named [name] with exactly 2 type parameters. */
+    private fun findNamespaceLocalInterface(fileName: String, name: String): InterfaceDeclaration? {
+        val sf = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile ?: return null
+        fun scan(stmts: List<Statement>): InterfaceDeclaration? {
+            for (st in stmts) {
+                when (st) {
+                    is InterfaceDeclaration -> if (st.name.text == name && st.typeParameters?.size == 2) return st
+                    is ModuleDeclaration -> (st.body as? ModuleBlock)?.let { scan(it.statements)?.let { r -> return r } }
+                    else -> {}
+                }
+            }
+            return null
+        }
+        return scan(sf.statements)
+    }
+
+    /**
+     * B199: TS2345 for an identity-shaped generic function arg against an instantiated
+     * single-call-sig interface param. Shape: `all<T>(list: T[], iterator?: Iterator<T,
+     * C>)` called `all([...literals...], identityFn)` where Iterator's ONLY member is a
+     * call sig `(value: T1, ...anys): T2` (T1/T2 the interface's own TPs) and identityFn
+     * is `<U>(value: U) => U`. tsc anchors T to the array literal's widened element union
+     * and unifies U=T, so the call fails exactly when T isn't assignable to the concrete
+     * return slot C — the self-computed `checkTypeRelatedTo(inferredT, C)` gate IS the
+     * passing-set firewall (assignable -> no emit, e.g. `all([true], identity)`).
+     */
+    private fun tryEmitIdentityFnVsCallSigInterfaceMismatch(
+        sigIn: Signature, args: List<Expression>, source: String, fileName: String,
+    ): Boolean {
+        val tp = sigIn.typeParameters?.singleOrNull() ?: return false
+        val params = sigIn.parameters
+        var inferredT: Type? = null
+        var anchorIdx = -1
+        for (j in params.indices) {
+            if (j >= args.size) break
+            val pt = try { getTypeOfSymbol(params[j]) } catch (_: StackOverflowError) { return false }
+            if (!isArrayOfTypeParam(pt, tp)) continue
+            val arr = args[j] as? ArrayLiteralExpression ?: continue
+            if (arr.elements.isEmpty() || arr.elements.any { it is SpreadElement }) continue
+            val elemTypes = mutableListOf<Type>()
+            var ok = true
+            for (el in arr.elements) {
+                val t = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return false }
+                val isAllowed = t is Type.Intrinsic && t.intrinsicName in setOf("string", "number", "boolean", "null", "undefined")
+                if (!isAllowed) { ok = false; break }
+                if (elemTypes.none { it.id == t.id }) elemTypes.add(t)
+            }
+            if (!ok) continue
+            inferredT = if (elemTypes.size == 1) elemTypes[0] else getUnionType(elemTypes)
+            anchorIdx = j
+            break
+        }
+        val tInferred = inferredT ?: return false
+        for (i in params.indices) {
+            if (i == anchorIdx || i >= args.size) continue
+            val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { continue }
+            val ref = pt as? Type.Reference ?: continue
+            val refArgs = ref.resolvedTypeArguments ?: continue
+            if (refArgs.size != 2) continue
+            // TypeParam instances are interned per AST position, so the sig's `T` and the
+            // `T` inside the `Iterator<T, boolean>` annotation may be DISTINCT instances —
+            // match by kind + symbol name.
+            val slot0 = refArgs[0]
+            if (slot0 !is Type.TypeParam) continue
+            val tpName = tp.symbol?.name
+            if (tpName != null && slot0.symbol?.name != null && slot0.symbol?.name != tpName) continue
+            val c = refArgs[1]
+            if (c !is Type.Intrinsic || c === anyType || c === errorType ||
+                c.intrinsicName in setOf("null", "undefined")) continue
+            val ifaceSym = ref.target.symbol ?: continue
+            // The resolved target may be the embedded LIB's same-named interface (the
+            // namespace-local interface lookup gap — e.g. lib `Iterator<T>` shadowing
+            // `Underscore.Iterator<T, U>`): prefer a same-file NAMESPACE-LOCAL interface
+            // of the expected 2-TP shape when the resolved decl doesn't match.
+            var ifaceDecl = ifaceSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
+            if (ifaceDecl?.typeParameters?.size != 2) {
+                ifaceDecl = findNamespaceLocalInterface(fileName, ifaceSym.name)
+            }
+            if (ifaceDecl == null) continue
+            val ifaceTps = ifaceDecl.typeParameters ?: continue
+            if (ifaceTps.size != 2) continue
+            val members = ifaceDecl.members
+            if (members.size != 1) continue
+            val callSig = members[0] as? MethodDeclaration ?: continue
+            if ((callSig.name as? Identifier)?.text?.isEmpty() != true) continue
+            val sigParams = callSig.parameters
+            if (sigParams.isEmpty()) continue
+            val firstPt = sigParams[0].type as? TypeReference ?: continue
+            if ((firstPt.typeName as? Identifier)?.text != ifaceTps[0].name.text || !firstPt.typeArguments.isNullOrEmpty()) continue
+            if (!sigParams.drop(1).all { (it.type as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword }) continue
+            val retRef = callSig.type as? TypeReference ?: continue
+            if ((retRef.typeName as? Identifier)?.text != ifaceTps[1].name.text || !retRef.typeArguments.isNullOrEmpty()) continue
+            val arg = args[i]
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+            if (argType !is Type.Object || argType is Type.Interface || argType is Type.Reference) continue
+            if (!argType.constructSignatures.isNullOrEmpty() || !argType.members.isNullOrEmpty()) continue
+            val s0 = argType.callSignatures?.singleOrNull() ?: continue
+            val sTp = s0.typeParameters?.singleOrNull() ?: continue
+            if (s0.parameters.size != 1) continue
+            val sParamType = try { getTypeOfSymbol(s0.parameters[0]) } catch (_: StackOverflowError) { continue }
+            if (sParamType !== sTp || s0.resolvedReturnType !== sTp) continue
+            val assignable = try { checkTypeRelatedTo(tInferred, c, assignableRelation) } catch (_: StackOverflowError) { continue }
+            if (assignable) return false
+            val failing = (tInferred as? Type.Union)?.types?.filter {
+                !(try { checkTypeRelatedTo(it, c, assignableRelation) } catch (_: StackOverflowError) { true })
+            } ?: listOf(tInferred)
+            val nullish = failing.firstOrNull { it is Type.Intrinsic && it.intrinsicName == "undefined" }
+                ?: failing.firstOrNull { it is Type.Intrinsic && it.intrinsicName == "null" }
+                ?: failing.firstOrNull() ?: tInferred
+            val tDisplay = typeToString(tInferred)
+            val paramDisplay = "${ifaceSym.name}<$tDisplay, ${typeToString(c)}>"
+            val start = arg.pos
+            val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '${signatureToString(s0, isConstruct = false)}' is not assignable to parameter of type '$paramDisplay'.",
+                category = DiagnosticCategory.Error,
+                code = 2345,
+                fileName = fileName,
+                line = line, character = character,
+                start = start, length = length,
+                messageChain = listOf(
+                    "  Type '$tDisplay' is not assignable to type '${typeToString(c)}'.",
+                    "    Type '${typeToString(nullish)}' is not assignable to type '${typeToString(c)}'.",
+                ),
+            ))
+            return true
+        }
+        return false
+    }
+
     /**
      * B192: TS2345 for a generic call whose type parameter has a SELF-REFERENTIAL mapped
      * constraint with an `as` key-remap: `function foo<T extends { [K in keyof T as
@@ -84682,6 +84815,14 @@ interface DataView {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }
+        // B199: identity-shaped generic fn arg vs an instantiated call-sig interface
+        // param (`_.all([true, 1, null, 'yes'], _.identity)` — T anchors to the array
+        // literal's element union, and `<U>(value: U) => U` unifies U=T, failing iff
+        // T isn't assignable to the interface's concrete return slot). The general
+        // inference path bails at gate (c) for Reference params that mention T (the
+        // reverted-B126 trap); this bespoke shape check computes the anchor union itself.
+        if (sigIn.typeParameters?.size == 1 &&
+            tryEmitIdentityFnVsCallSigInterfaceMismatch(sigIn, args, source, fileName)) return
         val params = sig.parameters
         // 17.31c: track whether the standard loop emits a TS2345 so the
         // post-loop rest-args helper doesn't double-fire (TypeScript reports
