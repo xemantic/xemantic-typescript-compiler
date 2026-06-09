@@ -29754,6 +29754,7 @@ class Checker(
             "Array.at" to ScriptTarget.ES2022,
             "Array.findLast" to ScriptTarget.ES2023,
             "Array.findLastIndex" to ScriptTarget.ES2023,
+            "Array.toSpliced" to ScriptTarget.ES2023,
             "Array.includes" to ScriptTarget.ES2016,
             "ReadonlyArray.at" to ScriptTarget.ES2022,
             "ReadonlyArray.includes" to ScriptTarget.ES2016,
@@ -29856,6 +29857,8 @@ interface Array<T> {
     at(index: number): T | undefined;
     findLast(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
     findLastIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
+    toSpliced(start: number, deleteCount: number, ...items: T[]): T[];
+    toSpliced(start: number, deleteCount?: number): T[];
     keys(): any;
     values(): any;
     entries(): any;
@@ -82703,6 +82706,10 @@ interface DataView {
             if (paramType is Type.TypeParam) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
+            // B176: an explicit `undefined` arg is LEGAL for an OPTIONAL parameter (absent
+            // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
+            if (argType.flags.hasAny(TypeFlags.Undefined) && !options.exactOptionalPropertyTypes &&
+                params[i].declarations.any { d -> d is Parameter && d.questionToken }) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B70.15: Bivariant fallback for function-vs-function under @strict: false.
                 // Also try reverse direction; if param accepts arg's shape going either way,
