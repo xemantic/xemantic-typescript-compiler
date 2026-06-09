@@ -1489,6 +1489,9 @@ class Checker(
         // 82a'. B193: TS2345 for optional-member reads of an annotated destructured param
         // passed where only `undefined` fails (`function f({skills}: Robot) { log(skills.primary) }`).
         checkDestructuredParamOptionalMemberArgs()
+        // 82a''. B221: TS18048 for tuple-rest destructured bindings at indices past
+        // the tuple's guaranteed minimum length (noUncheckedIndexedAccess).
+        checkTupleRestDestructureUndefinedUse()
         // 82b. B148: TS2353 excess-prop for JS `/** @type {import("X").Foo} */ export default {obj}`.
         checkJsDocTypeExportAssignment()
         // 82c. B200: TS2345 for call-of-call args against a typeof-narrowed callback param.
@@ -73870,6 +73873,193 @@ interface DataView {
                 messageChain = listOf("  Type 'undefined' is not assignable to type '${typeToString(paramType)}'."),
             ))
             return
+        }
+    }
+
+    /**
+     * B221: TS18048 "'x' is possibly 'undefined'." for tuple-rest DESTRUCTURED
+     * bindings at indices past the tuple's guaranteed minimum length under
+     * noUncheckedIndexedAccess (destructureTupleWithVariableElement).
+     * `const [s0, s1] = strings` where `strings: [string, ...string[]]` — s1's
+     * index (1) >= minLength (1 fixed-before + 0 fixed-after), so its type carries
+     * `| undefined` and a plain dereference always errors in tsc. The binder never
+     * binds destructured elements and no flow type exists for them, so the shape
+     * was silent. B142-style straight-line scan: statements AFTER the destructure
+     * in the same list, STOPPING at the first control-flow statement or any
+     * assignment to a candidate (narrowing kill-switch); guarded RHS of logical
+     * ops / ?: branches skipped; nested functions not entered.
+     */
+    private fun checkTupleRestDestructureUndefinedUse() {
+        if (!options.noUncheckedIndexedAccess || !strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            trduProcessList(result.sourceFile.statements, result.sourceFile.text, fileName, result.locals)
+        }
+    }
+
+    /** B221: resolve a var annotation to a TupleType — direct, or a bare
+     *  TypeReference to a non-generic type alias with a TupleType body. */
+    private fun trduTupleOf(t: TypeNode?, locals: SymbolTable?): TupleType? {
+        if (t is TupleType) return t
+        val tr = t as? TypeReference ?: return null
+        if (!tr.typeArguments.isNullOrEmpty()) return null
+        val n = (tr.typeName as? Identifier)?.text ?: return null
+        val sym = locals?.get(n) ?: globals[n] ?: return null
+        val alias = sym.declarations.filterIsInstance<TypeAliasDeclaration>().singleOrNull() ?: return null
+        if (!alias.typeParameters.isNullOrEmpty()) return null
+        return alias.type as? TupleType
+    }
+
+    private fun trduProcessList(stmts: List<Statement>, source: String, fileName: String, locals: SymbolTable?) {
+        // Recurse into function bodies with their own statement lists.
+        for (s in stmts) {
+            (s as? FunctionDeclaration)?.body?.let { trduProcessList(it.statements, source, fileName, locals) }
+        }
+        // Pass 1: name -> TupleType annotations in this list.
+        val tupleVars = mutableMapOf<String, TupleType>()
+        for (s in stmts) {
+            val vs = s as? VariableStatement ?: continue
+            for (d in vs.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                trduTupleOf(d.type, locals)?.let { tupleVars[n] = it }
+            }
+        }
+        // Pass 2: per destructure, collect candidates and scan forward.
+        for ((idx, s) in stmts.withIndex()) {
+            val vs = s as? VariableStatement ?: continue
+            for (d in vs.declarationList.declarations) {
+                val pattern = d.name as? ArrayBindingPattern ?: continue
+                val tuple = trduTupleOf(d.type, locals)
+                    ?: (d.initializer as? Identifier)?.let { tupleVars[it.text] } ?: continue
+                // Tuple-shape gates: exactly ONE rest, no optional/named members,
+                // every element type concretely resolvable.
+                var restCount = 0
+                var fixedBefore = 0
+                var fixedAfter = 0
+                var bad = false
+                for (el in tuple.elements) {
+                    when (el) {
+                        is RestType -> restCount++
+                        is OptionalType, is NamedTupleMember -> bad = true
+                        else -> if (restCount == 0) fixedBefore++ else fixedAfter++
+                    }
+                    if (bad) break
+                }
+                if (bad || restCount != 1) continue
+                val resolvable = tuple.elements.all { el ->
+                    val inner = if (el is RestType) el.type else el
+                    val t = try { getTypeFromTypeNode(inner) } catch (_: StackOverflowError) { return@all false }
+                    t !== anyType && t !== errorType && !t.flags.hasAny(TypeFlags.Unknown)
+                }
+                if (!resolvable) continue
+                val minLength = fixedBefore + fixedAfter
+                val candidates = mutableSetOf<String>()
+                pattern.elements.forEachIndexed { i, el ->
+                    val be = el as? BindingElement ?: return@forEachIndexed
+                    if (be.dotDotDotToken || be.initializer != null) return@forEachIndexed
+                    val bn = (be.name as? Identifier)?.text ?: return@forEachIndexed
+                    if (i >= minLength) candidates.add(bn)
+                }
+                if (candidates.isEmpty()) continue
+                trduScanForward(stmts, idx + 1, candidates, source, fileName)
+            }
+        }
+    }
+
+    /** Straight-line forward scan: emit TS18048 at plain dereferences of
+     *  candidates; stop at the first control-flow statement or candidate write. */
+    private fun trduScanForward(
+        stmts: List<Statement>, from: Int, candidates: Set<String>,
+        source: String, fileName: String,
+    ) {
+        fun referencesCandidate(e: Expression?): Boolean {
+            if (e == null) return false
+            val start = e.pos
+            val end = expressionTrueEnd(e).coerceAtMost(source.length)
+            if (start < 0 || end <= start) return true
+            val text = source.substring(start, end)
+            return candidates.any { text.contains(it) }
+        }
+        fun emitAt(id: Identifier) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, id.pos)
+            diagnostics.add(Diagnostic(
+                message = "'${id.text}' is possibly 'undefined'.",
+                category = DiagnosticCategory.Error, code = 18048,
+                fileName = fileName, line = line, character = ch,
+                start = id.pos, length = id.text.length,
+            ))
+        }
+        var stopped = false
+        fun walk(e: Expression) {
+            if (stopped) return
+            when (e) {
+                is CallExpression -> {
+                    val callee = e.expression
+                    if (callee is Identifier && callee.text in candidates && !e.questionDotToken) emitAt(callee)
+                    else walk(callee)
+                    e.arguments.forEach { walk(it) }
+                }
+                is NewExpression -> {
+                    (e.expression as? Identifier)?.let { if (it.text in candidates) emitAt(it) } ?: walk(e.expression)
+                    e.arguments?.forEach { walk(it) }
+                }
+                is PropertyAccessExpression -> {
+                    val recv = e.expression
+                    if (recv is Identifier && recv.text in candidates) {
+                        if (!e.questionDotToken) emitAt(recv)
+                    } else walk(recv)
+                }
+                is ElementAccessExpression -> {
+                    val recv = e.expression
+                    if (recv is Identifier && recv.text in candidates) {
+                        if (!e.questionDotToken) emitAt(recv)
+                    } else walk(recv)
+                    walk(e.argumentExpression)
+                }
+                is BinaryExpression -> {
+                    if (e.operator == SyntaxKind.Equals &&
+                        (e.left as? Identifier)?.text in candidates) { stopped = true; return }
+                    when (e.operator) {
+                        SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
+                            walk(e.left)
+                            // The RHS may be narrowed by the guard — skip when the
+                            // guard references a candidate.
+                            if (!referencesCandidate(e.left)) walk(e.right)
+                        }
+                        else -> { walk(e.left); walk(e.right) }
+                    }
+                }
+                is ConditionalExpression -> {
+                    walk(e.condition)
+                    if (!referencesCandidate(e.condition)) { walk(e.whenTrue); walk(e.whenFalse) }
+                }
+                is ParenthesizedExpression -> walk(e.expression)
+                is AsExpression -> walk(e.expression)
+                is NonNullExpression -> {} // `x!` asserts non-null
+                is PrefixUnaryExpression -> walk(e.operand)
+                is PostfixUnaryExpression -> walk(e.operand)
+                is ArrayLiteralExpression -> e.elements.forEach { walk(it) }
+                is SpreadElement -> walk(e.expression)
+                is ObjectLiteralExpression -> e.properties.forEach { p ->
+                    (p as? PropertyAssignment)?.initializer?.let { walk(it) }
+                }
+                is TemplateExpression -> e.templateSpans.forEach { walk(it.expression) }
+                else -> {}
+            }
+        }
+        for (i in from until stmts.size) {
+            if (stopped) return
+            when (val st = stmts[i]) {
+                is ExpressionStatement -> walk(st.expression)
+                is ReturnStatement -> st.expression?.let { walk(it) }
+                is ThrowStatement -> st.expression?.let { walk(it) }
+                is VariableStatement -> for (d in st.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text in candidates) { stopped = true; return }
+                    d.initializer?.let { walk(it) }
+                }
+                else -> return // control flow may narrow — stop entirely
+            }
         }
     }
 
