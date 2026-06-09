@@ -59009,7 +59009,12 @@ interface DataView {
             // target's required members. Missing-property is NAME-presence only (no
             // recursion → safe; full-suite verified net-zero, zero regressions). Emits at
             // the var name, mirroring the existing var-decl TS2741 position (~48973).
-            if (!canUse && sourceType is Type.Interface && targetType is Type.Interface &&
+            // B175: also run when the relation PASSED (canUse && isAssignable) — the engine
+            // counts a STATIC-only source member as present (statics live in `members` too),
+            // so `var b: B = new C()` (C has only `static prop`) wrongly passes; the
+            // static-aware collectMissingProperties below catches it. When the relation
+            // FAILED the standard path owns the diagnostic (no double-emit).
+            if ((!canUse || isAssignable) && sourceType is Type.Interface && targetType is Type.Interface &&
                 sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
                 sourceType.callSignatures.isNullOrEmpty() && targetType.callSignatures.isNullOrEmpty()
             ) {
@@ -60834,6 +60839,65 @@ interface DataView {
                             ))
                             return
                         }
+                        // B175: RHS is a bare CLASS identifier — the class VALUE is its STATIC
+                        // side (`typeof B`), so the target's required INSTANCE members are
+                        // checked against the class's STATIC member set (`a = B` errors even
+                        // though `new B()` would satisfy; `a = C` with `static prop` is fine).
+                        // Squiggle = the RHS identifier (TS reports the source expression here),
+                        // related TS2728 at the target's declaration + TS6213 "Did you mean to
+                        // use 'new' with this expression?" when the INSTANCE side would satisfy.
+                        // Single-missing only (multi → bail, FN-safe). The class-identifier RHS
+                        // also SKIPS the instance-source branch below (it would mis-classify the
+                        // static side as the instance shape).
+                        val b175RhsClassSym = (expr.right as? Identifier)?.let { r ->
+                            (currentFileLocals?.get(r.text) ?: globals[r.text])?.takeIf { s ->
+                                s.flags.hasAny(SymbolFlags.Class) &&
+                                    s.declarations.any { it is ClassDeclaration } &&
+                                    s.declarations.none { it is InterfaceDeclaration }
+                            }
+                        }
+                        if (b175RhsClassSym != null) {
+                            if (tt is Type.Interface && tt.callSignatures.isNullOrEmpty() &&
+                                tt.constructSignatures.isNullOrEmpty()
+                            ) {
+                                resolveStructuredTypeMembers(tt)
+                                val targetStatics2 = getStaticMembersOfType(tt)
+                                val required = tt.properties.orEmpty().filter { p ->
+                                    !isOptionalProperty(p) &&
+                                        targetStatics2?.containsKey(p.name) != true &&
+                                        p.name !in OBJECT_PROTOTYPE_PROPERTIES
+                                }
+                                val staticNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = true)
+                                val instanceNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = false)
+                                val missing = required.filter { it.name !in staticNames }
+                                if (missing.size == 1) {
+                                    val mpName = missing[0].name
+                                    val displayTarget = if (typeAnnotation != null)
+                                        formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
+                                    val rhs = expr.right as Identifier
+                                    val (line, character) = getLineAndCharacterOfPosition(source, rhs.pos)
+                                    val related = mutableListOf<Diagnostic>()
+                                    val mpSym = try { getPropertyOfType(tt, mpName) } catch (_: StackOverflowError) { null }
+                                    mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { related.add(it) }
+                                    if (required.all { it.name in instanceNames }) {
+                                        related.add(Diagnostic(
+                                            message = "Did you mean to use 'new' with this expression?",
+                                            category = DiagnosticCategory.Message, code = 6213,
+                                            fileName = fileName, line = line, character = character,
+                                            start = rhs.pos, length = rhs.text.length,
+                                        ))
+                                    }
+                                    diagnostics.add(Diagnostic(
+                                        message = "Property '$mpName' is missing in type 'typeof ${rhs.text}' but required in type '$displayTarget'.",
+                                        category = DiagnosticCategory.Error, code = 2741,
+                                        fileName = fileName, line = line, character = character,
+                                        start = rhs.pos, length = rhs.text.length,
+                                        relatedInformation = related,
+                                    ))
+                                    return
+                                }
+                            }
+                        }
                         // B87.4 (round 73): class-instance source → interface/class target
                         // missing-property. `canUseTypeEngine` blocks named→named structural
                         // comparison (recursive-expansion risk), so `i = c` / `d = c` where the
@@ -60860,7 +60924,7 @@ interface DataView {
                             sourceType.stringIndexInfo == null && sourceType.numberIndexInfo == null &&
                             tt.stringIndexInfo == null && tt.numberIndexInfo == null &&
                             !canUseTypeEngine(sourceType, tt)
-                        if (sourceType is Type.Interface && tt is Type.Interface &&
+                        if (b175RhsClassSym == null && sourceType is Type.Interface && tt is Type.Interface &&
                             (b127SrcIsClassInstance || b127BothPlainInterfaces) &&
                             sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
                         ) {
@@ -84858,6 +84922,34 @@ interface DataView {
      * TS2322 instead of TS2739/TS2741. Matches TypeScript's baseline for tests like
      * `assigningFunctionToTupleIssuesError_ts` (`() => void` → `[string]`).
      */
+    /** B175: member NAMES of a class symbol's declarations on one side (static or instance),
+     *  walking the `extends` chain through globals. */
+    private fun classMemberNamesTransitive(sym: Symbol, staticSide: Boolean, depth: Int = 0): Set<String> {
+        if (depth > 8) return emptySet()
+        val out = mutableSetOf<String>()
+        for (d in sym.declarations) {
+            if (d !is ClassDeclaration) continue
+            for (m in d.members) {
+                val (nm, mods) = when (m) {
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                    is MethodDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                    is GetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                    is SetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                    else -> null to null
+                }
+                if (nm != null && mods != null && (ModifierFlag.Static in mods) == staticSide) out.add(nm)
+            }
+            val baseName = d.heritageClauses
+                ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.firstOrNull()?.let { (it.expression as? Identifier)?.text }
+            val baseSym = baseName?.let { globals[it] }
+            if (baseSym != null && baseSym.declarations.any { it is ClassDeclaration }) {
+                out.addAll(classMemberNamesTransitive(baseSym, staticSide, depth + 1))
+            }
+        }
+        return out
+    }
+
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
         resolveStructuredTypeMembers(sourceType)
@@ -84878,7 +84970,22 @@ interface DataView {
             if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
             val isPrototypeProp = prop.name in OBJECT_PROTOTYPE_PROPERTIES
             val isFunctionOwnToString = targetIsFunction && prop.name == "toString"
-            if (prop.name !in sourceMembers && (!isPrototypeProp || isFunctionOwnToString)) {
+            // B175: a source member declared ONLY static does NOT satisfy an instance-side
+            // requirement (statics live in BOTH `members` and `staticMembers` per the
+            // bifurcation model, so name-presence alone over-counts: `class C { static
+            // prop() {} }` instances have NO `prop`).
+            val srcSym = sourceMembers[prop.name]
+            val srcStaticOnly = srcSym != null && srcSym.declarations.isNotEmpty() &&
+                srcSym.declarations.all { d ->
+                    when (d) {
+                        is PropertyDeclaration -> ModifierFlag.Static in d.modifiers
+                        is MethodDeclaration -> ModifierFlag.Static in d.modifiers
+                        is GetAccessor -> ModifierFlag.Static in d.modifiers
+                        is SetAccessor -> ModifierFlag.Static in d.modifiers
+                        else -> false
+                    }
+                }
+            if ((prop.name !in sourceMembers || srcStaticOnly) && (!isPrototypeProp || isFunctionOwnToString)) {
                 missing.add(prop.name)
             }
         }
