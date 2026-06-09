@@ -94269,6 +94269,10 @@ interface DataView {
         val fnParams: Map<String, FunctionType>,
         val tpVarRefs: Map<String, String>,
         val classInstVarRefs: Map<String, ClassInstRef>,
+        /** B215: fn-typed params ACCUMULATED through nested scopes (shadow-safe) —
+         *  `fn.apply(thisArg, arr)` inside a returned closure still sees the outer
+         *  function's `fn` param. */
+        val fnParamsAccum: Map<String, FunctionType> = emptyMap(),
     )
 
     /** A param/local typed as `SomeClass<args...>` where SomeClass resolves to a
@@ -94289,7 +94293,12 @@ interface DataView {
         var names = parent.tparams
         var ast = parent.tpAst
         for (tps in tpLists) { names = names + unconstrainedTpNames(tps); ast = ast + unconstrainedTpAst(tps) }
-        return FnParamCtx(names, ast, collectFnTypedParams(params), collectParamTpRefs(params ?: emptyList(), names), collectClassInstVarRefs(params ?: emptyList(), names))
+        val own = collectFnTypedParams(params)
+        // B215: accumulate fn-typed params through scopes; ANY child param name
+        // (fn-typed or not) shadows the parent's entry.
+        val childNames = params.orEmpty().mapNotNull { (it.name as? Identifier)?.text }
+        val accum = (parent.fnParamsAccum - childNames.toSet()) + own
+        return FnParamCtx(names, ast, own, collectParamTpRefs(params ?: emptyList(), names), collectClassInstVarRefs(params ?: emptyList(), names), accum)
     }
 
     /** Add type-param scope (e.g. a class's tps for a field initializer) while
@@ -94298,7 +94307,7 @@ interface DataView {
         var names = parent.tparams
         var ast = parent.tpAst
         for (tps in tpLists) { names = names + unconstrainedTpNames(tps); ast = ast + unconstrainedTpAst(tps) }
-        return FnParamCtx(names, ast, parent.fnParams, parent.tpVarRefs, parent.classInstVarRefs)
+        return FnParamCtx(names, ast, parent.fnParams, parent.tpVarRefs, parent.classInstVarRefs, parent.fnParamsAccum)
     }
 
     /** Params typed as `SomeClass<args...>` where SomeClass resolves (via globals)
@@ -94410,6 +94419,11 @@ interface DataView {
                     is PropertyAccessExpression -> {
                         val recv = callee.expression
                         if (recv is Identifier) ctx.classInstVarRefs[recv.text]?.let { emitGenericMethodCallDiag(expr, callee, it, source, fileName, ctx) }
+                        // B215: `fn.apply(thisArg, arr)` against a fn-typed param's
+                        // named-tuple under strictBindCallApply.
+                        if (recv is Identifier && callee.name.text == "apply") {
+                            ctx.fnParamsAccum[recv.text]?.let { emitFnTypedParamApplyDiag(expr, callee, it, source, fileName) }
+                        }
                     }
                     else -> {}
                 }
@@ -94446,6 +94460,59 @@ interface DataView {
             is FunctionExpression -> fnParamScanStmts(expr.body.statements, source, fileName, fnParamChildCtx(ctx, expr.parameters, expr.typeParameters))
             else -> {}
         }
+    }
+
+    /**
+     * B215: TS2345 for `fn.apply(thisArg, arr)` where `fn` is a fn-typed PARAMETER
+     * whose FunctionType has a required first (non-this) param, and `arr` is a
+     * definite plain (non-tuple) array (emitSkipsThisWithRestParameter). Under
+     * strictBindCallApply (strict-family; harness-default-on) tsc infers
+     * CallableFunction.apply's A as the callee's NAMED PARAM TUPLE, and a `T[]`
+     * source never satisfies a required element 0 — always TS2345 with the
+     * "Source provides no match for required element at position 0 in target."
+     * chain. Gates keep `any`/TypeParam/unknown/tuple args silent (FN-safe).
+     */
+    private fun emitFnTypedParamApplyDiag(
+        call: CallExpression, callee: PropertyAccessExpression, ft: FunctionType,
+        source: String, fileName: String,
+    ) {
+        if (options.strictExplicitlyFalse) return
+        if (!call.typeArguments.isNullOrEmpty() || call.arguments.size != 2 ||
+            call.questionDotToken || callee.questionDotToken) return
+        // Drop a leading `this` pseudo-param; remaining params must be non-empty
+        // with a REQUIRED first and fully displayable names/types.
+        val ps = ft.parameters.dropWhile { (it.name as? Identifier)?.text == "this" }
+        if (ps.isEmpty()) return
+        val first = ps[0]
+        if (first.questionToken || first.initializer != null || first.dotDotDotToken) return
+        val tupleParts = ps.map { p ->
+            val n = (p.name as? Identifier)?.text ?: return
+            val d = p.type?.let { formatTypeForDisplay(it) } ?: return
+            "${if (p.dotDotDotToken) "..." else ""}$n${if (p.questionToken) "?" else ""}: $d"
+        }
+        val arg = call.arguments[1]
+        if (arg is SpreadElement) return
+        val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return }
+        val argDisplay: String = when {
+            argType is Type.Reference && argType.target.symbol?.name == "Array" &&
+                argType.resolvedTypeArguments?.size == 1 -> typeToString(argType)
+            // `[x].concat(y)` resolves to anyType in our engine (any-typed elements
+            // bail getTypeOfArrayLiteral) — but tsc types it as a plain array.
+            argType === anyType && arg is CallExpression &&
+                (arg.expression as? PropertyAccessExpression)?.name?.text == "concat" &&
+                (arg.expression as? PropertyAccessExpression)?.expression is ArrayLiteralExpression -> "any[]"
+            else -> return
+        }
+        val start = arg.pos
+        val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argDisplay' is not assignable to parameter of type '[${tupleParts.joinToString(", ")}]'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = ch,
+            start = start, length = length,
+            messageChain = listOf("  Source provides no match for required element at position 0 in target."),
+        ))
     }
 
     private fun emitFnTypedParamCallDiag(call: CallExpression, ft: FunctionType, source: String, fileName: String, ctx: FnParamCtx) {
