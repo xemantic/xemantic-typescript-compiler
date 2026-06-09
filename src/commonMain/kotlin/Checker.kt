@@ -26299,6 +26299,122 @@ class Checker(
         }
     }
 
+    /**
+     * B155: the "typeof shape" of an `import X = require("./mod")` MODULE alias, used for
+     * module-namespace-vs-typeof-class TS2741 missing-property assignment errors
+     * (`typeofExternalModules`). Returns `(memberName -> name-decl-pos-for-TS2728-or-null,
+     * displayString)`, or null when [sym] is not an import-equals alias resolving to a
+     * module file in [fileResults].
+     *
+     * Two shapes:
+     *  - `export = D` where D is a class declared in the module -> `typeof D`: members are
+     *    the synthetic `prototype` (no decl pos) plus D's static members. Display `typeof D`.
+     *  - otherwise (a normal module with `export`ed value declarations) -> a namespace:
+     *    members are the module's exported VALUE names (class/function/var/enum). Display
+     *    `typeof import("<base>")`.
+     *
+     * This is INTENTIONALLY a self-contained AST shape (not threaded through the general
+     * type engine) — namespace-as-type flowing into assignability broadly is risky, so the
+     * comparison stays confined to the dedicated `typeof <moduleAlias> = <moduleAlias>`
+     * assignment branch.
+     */
+    private fun moduleAliasTypeofShape(sym: Symbol, contextFile: String): Pair<Map<String, Int?>, String>? {
+        val spec = getImportEqualsSpecifier(sym) ?: return null
+        val resolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, contextFile) ?: return null
+        val tf = fileResults[resolved]?.sourceFile ?: return null
+        val members = linkedMapOf<String, Int?>()
+        // Shape 1: `export = X` where X is a module-local class -> typeof X (static side).
+        val exportEq = tf.statements.firstOrNull { it is ExportAssignment && it.isExportEquals } as? ExportAssignment
+        if (exportEq != null) {
+            val xName = (exportEq.expression as? Identifier)?.text ?: return null
+            val classDecl = tf.statements.firstOrNull {
+                it is ClassDeclaration && it.name?.text == xName
+            } as? ClassDeclaration ?: return null
+            members["prototype"] = null
+            for (m in classDecl.members) {
+                val mods = when (m) {
+                    is PropertyDeclaration -> m.modifiers
+                    is MethodDeclaration -> m.modifiers
+                    is GetAccessor -> m.modifiers
+                    is SetAccessor -> m.modifiers
+                    else -> emptySet()
+                }
+                if (ModifierFlag.Static !in mods) continue
+                val nameNode: Node? = when (m) {
+                    is PropertyDeclaration -> m.name
+                    is MethodDeclaration -> m.name
+                    is GetAccessor -> m.name
+                    is SetAccessor -> m.name
+                    else -> null
+                }
+                val nm = nameNode?.let { getMemberNameText(it) } ?: continue
+                if (nm !in members) members[nm] = (nameNode as? Identifier)?.pos
+            }
+            return members to "typeof $xName"
+        }
+        // Shape 2: normal module — exported VALUE declarations.
+        for (stmt in tf.statements) {
+            when (stmt) {
+                is ClassDeclaration -> if (ModifierFlag.Export in stmt.modifiers) stmt.name?.let { members[it.text] = it.pos }
+                is FunctionDeclaration -> if (ModifierFlag.Export in stmt.modifiers) stmt.name?.let { members[it.text] = it.pos }
+                is EnumDeclaration -> if (ModifierFlag.Export in stmt.modifiers) members[stmt.name.text] = stmt.name.pos
+                is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) {
+                    for (d in stmt.declarationList.declarations) (d.name as? Identifier)?.let { members[it.text] = it.pos }
+                }
+                else -> {}
+            }
+        }
+        if (members.isEmpty()) return null
+        return members to "typeof import(\"${moduleFileBaseNoExt(resolved)}\")"
+    }
+
+    /**
+     * B155: emit TS2741 for `y = z` where `y: typeof <moduleAliasA>` and `z` is
+     * `<moduleAliasB>` — comparing two module "typeof shapes" (see [moduleAliasTypeofShape]).
+     * Returns true when a diagnostic was emitted. Tightly gated: both sides must resolve to
+     * an import-equals module alias shape, so zero general-engine blast radius.
+     */
+    private fun tryEmitModuleNamespaceTs2741(
+        target: Identifier, rhs: Identifier, source: String, fileName: String
+    ): Boolean {
+        // Target var must have a `typeof <moduleAlias>` annotation.
+        val targetSym = currentFileLocals?.get(target.text) ?: globals[target.text] ?: return false
+        val targetDecl = targetSym.valueDeclaration ?: targetSym.declarations.firstOrNull { it is VariableDeclaration }
+        val tq = (targetDecl as? VariableDeclaration)?.type as? TypeQuery ?: return false
+        val tqName = (tq.exprName as? Identifier)?.text ?: return false
+        val tqSym = currentFileLocals?.get(tqName) ?: globals[tqName] ?: return false
+        val targetShape = moduleAliasTypeofShape(tqSym, fileName) ?: return false
+        // RHS must itself be a module alias.
+        val rhsSym = currentFileLocals?.get(rhs.text) ?: globals[rhs.text] ?: return false
+        val sourceShape = moduleAliasTypeofShape(rhsSym, fileName) ?: return false
+        val (targetMembers, targetDisplay) = targetShape
+        val (sourceMembers, sourceDisplay) = sourceShape
+        // First member required by target but absent from source.
+        val missingEntry = targetMembers.entries.firstOrNull { it.key !in sourceMembers } ?: return false
+        val missingName = missingEntry.key
+        val declPos = missingEntry.value
+        val related: Diagnostic? = if (declPos != null && declPos >= 0) {
+            val (df, ds) = resolveDeclarationSourceFile(declPos)
+            if (df != null && ds != null) {
+                val (l, c) = getLineAndCharacterOfPosition(ds, declPos)
+                Diagnostic(
+                    message = "'$missingName' is declared here.",
+                    category = DiagnosticCategory.Message, code = 2728,
+                    fileName = df, line = l, character = c, start = declPos, length = missingName.length,
+                )
+            } else null
+        } else null
+        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+        diagnostics.add(Diagnostic(
+            message = "Property '$missingName' is missing in type '$sourceDisplay' but required in type '$targetDisplay'.",
+            category = DiagnosticCategory.Error, code = 2741,
+            fileName = fileName, line = line, character = character,
+            start = target.pos, length = target.text.length,
+            relatedInformation = listOfNotNull(related),
+        ))
+        return true
+    }
+
     /** B154: if [spec] (resolved relative to [contextFile]) names a module whose DEFAULT
      *  import is a non-callable CJS namespace `typeof import("base")`, return that display
      *  base; else null. Two shapes by [commonjsMode]:
@@ -59106,6 +59222,15 @@ interface DataView {
                 }
             }
             if (target is Identifier) {
+                // B155: `var y: typeof <moduleAliasA> = ...; y = <moduleAliasB>;` — comparing
+                // two module "typeof shapes" (namespace import vs `typeof export=class`) does
+                // missing-property TS2741. Tightly gated; runs before the general engine which
+                // would resolve the `typeof <moduleAlias>` annotation to anyType and skip.
+                if (expr.right is Identifier) {
+                    try {
+                        if (tryEmitModuleNamespaceTs2741(target, expr.right as Identifier, source, fileName)) return
+                    } catch (_: StackOverflowError) { /* circular */ }
+                }
                 // B73.1: cross-file `typeof import("X")` display for module-alias
                 // assignments. Two narrow shapes:
                 //   (1) target was initialized from a module alias (`var x = moduleA`)
