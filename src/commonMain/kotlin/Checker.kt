@@ -14888,6 +14888,26 @@ class Checker(
      * default. Only a bare Identifier that resolves NOWHERE yields false.
      */
     private fun isCalleeResolvable(callee: Expression): Boolean {
+        // B182: a method call on a builtin receiver where the method was dropped by the
+        // LIB_MIN_TARGET filter (e.g. `arr.findLastIndex(...)` under @target: es5) has NO
+        // contextual signature — callback params must still get TS7006 (the paired TS2550
+        // fires on the property access itself). Gate: the receiver's type is a Reference /
+        // Interface to a builtin whose `(iface, member)` is in LIB_MIN_TARGET with
+        // minTarget > options.target. Any resolution failure keeps the default `true`.
+        if (callee is PropertyAccessExpression) {
+            val memberName = callee.name.text
+            val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { null }
+            val ifaceName = when (recvType) {
+                is Type.Reference -> recvType.target.symbol?.name
+                is Type.Interface -> recvType.symbol?.name
+                else -> null
+            }
+            if (ifaceName != null) {
+                val minTarget = LIB_MIN_TARGET["$ifaceName.$memberName"]
+                if (minTarget != null && options.target < minTarget) return false
+            }
+            return true
+        }
         if (callee !is Identifier) return true
         val name = callee.text
         if (name.isEmpty()) return true
@@ -29829,6 +29849,9 @@ class Checker(
             "Array.findLast" to ScriptTarget.ES2023,
             "Array.findLastIndex" to ScriptTarget.ES2023,
             "Array.toSpliced" to ScriptTarget.ES2023,
+            "Array.toSorted" to ScriptTarget.ES2023,
+            "Array.toReversed" to ScriptTarget.ES2023,
+            "Array.with" to ScriptTarget.ES2023,
             "Array.includes" to ScriptTarget.ES2016,
             "ReadonlyArray.at" to ScriptTarget.ES2022,
             "ReadonlyArray.includes" to ScriptTarget.ES2016,
@@ -29933,6 +29956,9 @@ interface Array<T> {
     findLastIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
     toSpliced(start: number, deleteCount: number, ...items: T[]): T[];
     toSpliced(start: number, deleteCount?: number): T[];
+    toSorted(compareFn?: (a: T, b: T) => number): T[];
+    toReversed(): T[];
+    with(index: number, value: T): T[];
     keys(): any;
     values(): any;
     entries(): any;
@@ -79572,6 +79598,33 @@ interface DataView {
         // Check namespace exports (for merged class+namespace symbols like `Observable.someValue`)
         val sym = objectType.symbol
         if (sym != null && sym.flags.hasAny(SymbolFlags.Module) && sym.exports?.containsKey(propName) == true) return
+        // B182: TS2550 "Do you need to change your target library?" — the property is a
+        // KNOWN later-lib member of a builtin interface, dropped by the LIB_MIN_TARGET
+        // filter because `options.target < minTarget`. The lib suggestion is exactly the
+        // minTarget's lib name (matching TypeScript's feature-map suggestion). FP-safe by
+        // construction: the member positively exists at a later lib, so TypeScript always
+        // reports TS2550 (never plain TS2339) for this shape. Fires for BOTH the
+        // array-literal-receiver path (displayTypeOverride set) and identifier receivers
+        // (which otherwise bail at the numberIndexInfo check below — Array's `[n: number]: T`).
+        run {
+            val featureIface = when (objectType) {
+                is Type.Reference -> objectType.target.symbol?.name
+                is Type.Interface -> objectType.symbol?.name
+                else -> null
+            } ?: return@run
+            val minTarget = LIB_MIN_TARGET["$featureIface.$propName"] ?: return@run
+            if (options.target >= minTarget) return@run
+            val libName = minTarget.name.lowercase()
+            val display = typeToString(displayTypeOverride ?: objectType)
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '$libName' or later.",
+                category = DiagnosticCategory.Error, code = 2550,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return
+        }
         // Check index signatures. For primitive apparent-type checks (16.0),
         // a number-index only matches numeric-looking names (so `s.hmm` on string
         // reports TS2339). For other paths, keep the permissive check since
