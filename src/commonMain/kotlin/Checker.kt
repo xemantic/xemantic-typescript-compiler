@@ -60510,6 +60510,44 @@ interface DataView {
                     return
                 }
             }
+            // B207: ternary-of-functions initializer vs anonymous FunctionType
+            // annotation (contextualTypingOfConditionalExpression2). The source
+            // resolves to a UNION of anonymous single-call-sig fn objects, but
+            // canUseTypeEngine has no Union-source→fn-target branch, so the standard
+            // relation path is unreachable (we emit nothing for this shape today).
+            // Pick the LAST union member with a bivariantly-incompatible param pair
+            // (≥1 primitive side — the engine-reliability firewall): tsc errors on
+            // such an assignment under EVERY variance regime, so a passing test
+            // matching the gate would already carry TS2322 in its baseline.
+            run {
+                var initInner: Expression = init
+                while (initInner is ParenthesizedExpression) initInner = initInner.expression
+                if (initInner !is ConditionalExpression) return@run
+                if (targetType !is Type.Object || targetType is Type.Interface ||
+                    targetType is Type.Reference || targetType.symbol != null) return@run
+                if (targetType.callSignatures?.size != 1 || !targetType.constructSignatures.isNullOrEmpty() ||
+                    !targetType.properties.isNullOrEmpty() || targetType.tupleElementTypes != null) return@run
+                val srcU = sourceType as? Type.Union ?: return@run
+                fun isAnonFn(m: Type): Boolean = m is Type.Object && m !is Type.Interface &&
+                    m !is Type.Reference && m.symbol == null && m.callSignatures?.size == 1 &&
+                    m.constructSignatures.isNullOrEmpty() && m.properties.isNullOrEmpty()
+                if (srcU.types.isEmpty() || !srcU.types.all { isAnonFn(it) }) return@run
+                val picked = srcU.types.lastOrNull {
+                    fnMemberFailsBivariantly(it as Type.Object, targetType)
+                } as? Type.Object ?: return@run
+                val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val chain = mutableListOf("  Type '${typeToString(picked)}' is not assignable to type '$displayTarget'.")
+                chain.addAll(getFunctionMismatchElaboration(picked, targetType).map { "  $it" })
+                val (bLine, bCh) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(srcU)}' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = bLine, character = bCh,
+                    start = name.pos, length = name.text.length,
+                    messageChain = chain,
+                ))
+                return
+            }
             lastMissingPropertyName = null // reset before comparison
             lastMissingIndexSigKind = null // reset before comparison (17.74)
             // 17.31f: bypass `canUseTypeEngine`'s nullish-Union gate when the init is a
@@ -88890,6 +88928,35 @@ interface DataView {
             if (!isSimpleCheckableType(pt)) return false
         }
         return true
+    }
+
+    /** B207: definite bivariant incompatibility of a union fn member vs the target fn —
+     *  a positional param pair failing assignability in BOTH directions with ≥1
+     *  primitive/literal side, or source minArgs exceeding the target's param count.
+     *  Rest params and any/error/TypeParam sides are skipped (FN-safe). */
+    private fun fnMemberFailsBivariantly(member: Type.Object, target: Type.Object): Boolean {
+        val srcSig = member.callSignatures?.firstOrNull() ?: return false
+        val tgtSig = target.callSignatures?.firstOrNull() ?: return false
+        if (srcSig.minArgumentCount > tgtSig.parameters.size) return true
+        val srcDecls = signatureDeclarationParameters(srcSig.declaration)
+        val tgtDecls = signatureDeclarationParameters(tgtSig.declaration)
+        val n = minOf(srcSig.parameters.size, tgtSig.parameters.size)
+        for (i in 0 until n) {
+            if (srcDecls?.getOrNull(i)?.dotDotDotToken == true ||
+                tgtDecls?.getOrNull(i)?.dotDotDotToken == true) continue
+            val sp = try { getTypeOfSymbol(srcSig.parameters[i]) } catch (_: StackOverflowError) { continue }
+            val tp = try { getTypeOfSymbol(tgtSig.parameters[i]) } catch (_: StackOverflowError) { continue }
+            if (sp === anyType || sp === errorType || sp is Type.TypeParam) continue
+            if (tp === anyType || tp === errorType || tp is Type.TypeParam) continue
+            val onePrimitive = sp is Type.Intrinsic || tp is Type.Intrinsic ||
+                sp is Type.StringLiteral || sp is Type.NumberLiteral ||
+                tp is Type.StringLiteral || tp is Type.NumberLiteral
+            if (!onePrimitive) continue
+            val d1 = try { checkTypeRelatedTo(tp, sp, assignableRelation) } catch (_: StackOverflowError) { true }
+            val d2 = try { checkTypeRelatedTo(sp, tp, assignableRelation) } catch (_: StackOverflowError) { true }
+            if (!d1 && !d2) return true
+        }
+        return false
     }
 
     private fun getFunctionMismatchElaboration(
