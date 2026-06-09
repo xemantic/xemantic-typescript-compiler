@@ -1245,6 +1245,8 @@ class Checker(
         checkIncDecTypeParamOperands()
         // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
         checkGenericIndexWrite()
+        // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
+        checkMappedIntersectionIndexWrite()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -60869,8 +60871,28 @@ interface DataView {
                 // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
                 checkPropertyAccessAssignment(target, expr.right, source, fileName)
             } else if (target is ElementAccessExpression) {
-                // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
-                checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
+                // B168: `this[key] = value` where `key` is a const with a string-LITERAL value
+                // late-binds to the class member named by that literal (TypeScript's late-bound
+                // assignment candidates; lateBoundAssignmentCandidateJS3's `this[prop] = 12` vs
+                // a `@type {string}` member `prop`). Fold the key and reuse the
+                // varTypes["this.<lit>"] class-property write path.
+                val keyIdent = target.argumentExpression as? Identifier
+                val foldedKey = if ((target.expression as? Identifier)?.text == "this" && keyIdent != null)
+                    (resolveImportedConstLiteralValue(keyIdent.text, fileName) as? ConstantValue.StringValue)?.value
+                else null
+                val foldedDeclared = foldedKey?.let { varTypes["this.$it"] }
+                if (foldedDeclared != null) {
+                    val exprType = inferSimpleExprType(expr.right, varTypes)
+                        ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
+                    if (exprType != null && !isAssignableTo(exprType, foldedDeclared)) {
+                        val start = target.pos
+                        val length = expressionTrueEnd(target) - start
+                        emitTS2322(start, length, exprType, foldedDeclared, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+                    }
+                } else {
+                    // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
+                    checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
+                }
             }
         }
     }
@@ -90412,6 +90434,89 @@ interface DataView {
     }
     private fun collectTpLocalsMapStmt(stmt: Statement, tparams: Set<String>, into: MutableMap<String, String>) = collectTpLocalsMap(listOf(stmt), tparams, into)
 
+    /**
+     * B167: TS2322 for `obj[x] = undefined` where `obj: Alias<T>` instantiates a type alias
+     * whose body is an INTERSECTION containing a generic MappedType, and `x: keyof T` for an
+     * in-scope unconstrained type param T (undefinedAssignableToGenericMappedIntersection).
+     * TypeScript does not simplify the write type of an indexed access on a generic mapped
+     * INTERSECTION, so `undefined` is never assignable to `Alias<T>[keyof T]` — even when the
+     * mapped value type includes `undefined`. AST-level (no type engine); display is built
+     * from the annotations' source shapes. Gated to strictNullChecks + an `undefined` RHS.
+     */
+    private fun checkMappedIntersectionIndexWrite() {
+        if (!strictNullChecks) return
+        fun aliasBodyIsMappedIntersection(name: String): Boolean {
+            val sym = globals[name] ?: return false
+            val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                ?: return false
+            val body = decl.type
+            return body is IntersectionType && body.types.any { it is MappedType }
+        }
+        fun scanBody(stmts: List<Statement>, tps: Set<String>, source: String, fileName: String) {
+            // var -> annotation display for mapped-intersection alias instantiations / keyof-TP
+            val objVars = mutableMapOf<String, String>()
+            val keyVars = mutableMapOf<String, String>()
+            for (s in stmts) {
+                if (s is VariableStatement) {
+                    for (d in s.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        val t = d.type ?: continue
+                        if (t is TypeReference && t.typeName is Identifier) {
+                            val args = t.typeArguments
+                            if (!args.isNullOrEmpty() &&
+                                args.any { a -> (a as? TypeReference)?.typeName.let { it is Identifier && it.text in tps } } &&
+                                aliasBodyIsMappedIntersection((t.typeName as Identifier).text)
+                            ) {
+                                val argDisplay = args.joinToString(", ") { formatTypeForDisplay(it) ?: "?" }
+                                objVars[n] = "${(t.typeName as Identifier).text}<$argDisplay>"
+                            }
+                        }
+                        if (t is TypeOperator && t.operator == SyntaxKind.KeyOfKeyword) {
+                            val inner = (t.type as? TypeReference)?.typeName as? Identifier
+                            if (inner != null && inner.text in tps) keyVars[n] = "keyof ${inner.text}"
+                        }
+                    }
+                }
+                if (s is ExpressionStatement) {
+                    val e = s.expression
+                    if (e is BinaryExpression && e.operator == SyntaxKind.Equals &&
+                        e.right is Identifier && (e.right as Identifier).text == "undefined"
+                    ) {
+                        val lhs = e.left
+                        if (lhs is ElementAccessExpression && lhs.expression is Identifier &&
+                            lhs.argumentExpression is Identifier
+                        ) {
+                            val objDisplay = objVars[(lhs.expression as Identifier).text]
+                            val keyDisplay = keyVars[(lhs.argumentExpression as Identifier).text]
+                            if (objDisplay != null && keyDisplay != null) {
+                                val start = lhs.pos
+                                val length = expressionTrueEnd(lhs) - start
+                                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type 'undefined' is not assignable to type '$objDisplay[$keyDisplay]'.",
+                                    category = DiagnosticCategory.Error, code = 2322,
+                                    fileName = fileName, line = line, character = ch,
+                                    start = start, length = length,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
+                    val tps = stmt.typeParameters!!.filter { it.constraint == null }.map { it.name.text }.toSet()
+                    if (tps.isNotEmpty()) stmt.body?.let { scanBody(it.statements, tps, source, fileName) }
+                }
+            }
+        }
+    }
+
     private fun checkGenericIndexWrite() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -93328,6 +93433,32 @@ interface DataView {
                         start = start,
                         length = length,
                     ))
+                } else {
+                    // B169: `(Foo | Bar)['foo']` where every union constituent declares 'foo'
+                    // NON-PUBLIC and no declaring class is shared across ALL constituents —
+                    // the synthesized union property is inaccessible, so TS reports TS2339
+                    // "Property 'foo' does not exist on type 'Foo | Bar'." TS's actual rule is
+                    // "the property symbols must share a common declaration", which is why
+                    // `(Foo | (Foo & Bar))['foo']` is LEGAL (the intersection prop carries
+                    // Foo's declaration) while `(Foo | Bar)['foo']` is not. Span = the key
+                    // literal including quotes (unionPropertyOfProtectedAndIntersectionProperty).
+                    val unionDisplay = unionUnrelatedNonPublicPropDisplay(type.objectType, keyStr)
+                    if (unionDisplay != null) {
+                        val keyNode = keyLit.literal as StringLiteralNode
+                        val start = keyNode.pos
+                        val length = (keyNode.rawText?.length ?: keyNode.text.length) + 2
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$keyStr' does not exist on type '$unionDisplay'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2339,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
                 }
             }
             is UnionType -> type.types.forEach { walkTypeForIndexedAccess(it, tpConstraints, source, fileName) }
@@ -93363,6 +93494,111 @@ interface DataView {
             is OptionalType -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
             is NamedTupleMember -> walkTypeForIndexedAccess(type.type, tpConstraints, source, fileName)
             else -> {}
+        }
+    }
+
+    /**
+     * B169: for `(C1 | C2 | …)['k']` in TYPE position, returns the union's display string
+     * when the synthesized union property `k` is INACCESSIBLE: every constituent declares
+     * `k` non-public (protected/private, OWN member of a concrete class — type args /
+     * interfaces / unknown shapes bail), and NO declaring class is shared by ALL
+     * constituents (TS's "property symbols must share a common declaration" rule — which
+     * keeps `(Foo | (Foo & Bar))['foo']` legal). Returns null when the access is fine or
+     * the shape is out of model.
+     */
+    private fun unionUnrelatedNonPublicPropDisplay(objType: TypeNode, propName: String): String? {
+        var inner: TypeNode = objType
+        while (inner is ParenthesizedType) inner = inner.type
+        if (inner !is UnionType || inner.types.size < 2) return null
+        val declaringSets = mutableListOf<Set<String>>()
+        val displays = mutableListOf<String>()
+        for (c in inner.types) {
+            val s = nonPublicDeclaringClasses(c, propName) ?: return null
+            if (s.isEmpty()) return null
+            declaringSets.add(s)
+            displays.add(constituentDisplay(c) ?: return null)
+        }
+        val shared = declaringSets.reduce { a, b -> a intersect b }
+        if (shared.isNotEmpty()) return null
+        return displays.joinToString(" | ")
+    }
+
+    /** B169: set of class names declaring [propName] as a NON-PUBLIC own member, for one
+     * union constituent. A bare class ref contributes itself; an intersection contributes
+     * every member class that declares it. Returns null (bail) when the prop is PUBLIC
+     * anywhere, declared by no constituent class, or the shape is unsupported. */
+    private fun nonPublicDeclaringClasses(c: TypeNode, propName: String): Set<String>? {
+        var t: TypeNode = c
+        while (t is ParenthesizedType) t = t.type
+        when (t) {
+            is TypeReference -> {
+                if (t.typeArguments != null) return null
+                val name = (t.typeName as? Identifier)?.text ?: return null
+                return when (ownClassPropVisibility(name, propName)) {
+                    true -> setOf(name)
+                    false -> null // public — access is legal, bail
+                    null -> null // absent / not a concrete class — out of model
+                }
+            }
+            is IntersectionType -> {
+                val out = mutableSetOf<String>()
+                for (m in t.types) {
+                    var mm: TypeNode = m
+                    while (mm is ParenthesizedType) mm = mm.type
+                    val ref = mm as? TypeReference ?: return null
+                    if (ref.typeArguments != null) return null
+                    val name = (ref.typeName as? Identifier)?.text ?: return null
+                    when (ownClassPropVisibility(name, propName)) {
+                        true -> out.add(name)
+                        false -> return null // public member in the intersection — legal
+                        null -> {} // this member doesn't declare it — fine for intersections
+                    }
+                }
+                return out.ifEmpty { null }
+            }
+            else -> return null
+        }
+    }
+
+    /** B169: visibility of [propName] as an OWN member of class [className]:
+     * true = declared private/protected, false = declared public, null = absent or not a
+     * concrete single-declaration class. */
+    private fun ownClassPropVisibility(className: String, propName: String): Boolean? {
+        val sym = globals[className] ?: return null
+        val classDecls = sym.declarations.filterIsInstance<ClassDeclaration>()
+        if (classDecls.isEmpty()) return null
+        for (decl in classDecls) {
+            for (m in decl.members) {
+                val (name, mods) = when (m) {
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                    is MethodDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                    is GetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                    is SetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                    else -> null to null
+                }
+                if (name == propName && mods != null) {
+                    return ModifierFlag.Private in mods || ModifierFlag.Protected in mods
+                }
+            }
+        }
+        return null
+    }
+
+    /** B169: display text for one union constituent (bare ref or intersection of refs). */
+    private fun constituentDisplay(c: TypeNode): String? {
+        var t: TypeNode = c
+        while (t is ParenthesizedType) t = t.type
+        return when (t) {
+            is TypeReference -> (t.typeName as? Identifier)?.text
+            is IntersectionType -> {
+                val parts = t.types.map { m ->
+                    var mm: TypeNode = m
+                    while (mm is ParenthesizedType) mm = mm.type
+                    ((mm as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+                }
+                parts.joinToString(" & ")
+            }
+            else -> null
         }
     }
 
