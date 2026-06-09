@@ -59918,6 +59918,130 @@ interface DataView {
      * with no `return` statement (→ `void`). `void` is never assignable to a primitive
      * annotation, so this is FP-safe. Returns true when emitted.
      */
+    /**
+     * B206: TS2322 for `let p: I = recv.m()` (mergedDeclarations7) where `recv` is a
+     * namespace-import of an AMBIENT `declare module "spec"` whose `export =` const is
+     * annotated as a subinterface S of I, `I` is a named import from the SAME module,
+     * and I directly declares `m(): this`. tsc fixes the polymorphic this-type at the
+     * call to S, and a CONCRETE S is never assignable to annotation I's FREE this-type
+     * — always the 4-line "could be instantiated with a different subtype" chain. Our
+     * resolveAlias has no NamespaceImport→ambient-module fallback (B152b), so the
+     * receiver is anyType and the standard path is silent. Pure AST/binder-scan; no
+     * type engine.
+     */
+    private fun tryEmitThisReturnAssignToBaseInterface(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        val annot = decl.type as? TypeReference ?: return false
+        val iName = (annot.typeName as? Identifier)?.text ?: return false
+        if (!annot.typeArguments.isNullOrEmpty()) return false
+        val call = decl.initializer as? CallExpression ?: return false
+        val pa = call.expression as? PropertyAccessExpression ?: return false
+        val recv = pa.expression as? Identifier ?: return false
+        val methodName = pa.name.text
+        // (2) recv = namespace-import, iName = named import, both from the SAME
+        // unresolvable (ambient) specifier in the CURRENT file.
+        val fileStmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile?.statements ?: return false
+        var spec: String? = null
+        var iImported = false
+        for (st in fileStmts) {
+            val imp = st as? ImportDeclaration ?: continue
+            val sp = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            when (val nb = imp.importClause?.namedBindings) {
+                is NamespaceImport -> if (nb.name.text == recv.text) {
+                    if (spec != null && spec != sp) return false
+                    spec = sp
+                }
+                is NamedImports -> if (nb.elements.any { it.name.text == iName }) {
+                    if (spec != null && spec != sp) return false
+                    spec = sp; iImported = true
+                }
+                else -> {}
+            }
+        }
+        val moduleSpec = spec ?: return false
+        if (!iImported) return false
+        if (resolveModuleSpecifier(moduleSpec) != null) return false
+        // (3) the ambient `declare module "spec"` body (scan binderResults — the
+        // globals entry may be the overwriting import alias, per the binder gotcha).
+        var body: ModuleBlock? = null
+        for (r in binderResults) {
+            for (st in r.sourceFile.statements) {
+                val md = st as? ModuleDeclaration ?: continue
+                if ((md.name as? StringLiteralNode)?.text != moduleSpec) continue
+                body = md.body as? ModuleBlock ?: continue
+            }
+        }
+        val moduleBody = body ?: return false
+        // (4) `export = c` + `const c: <S-annotation>` in the body.
+        val exportTarget = moduleBody.statements.filterIsInstance<ExportAssignment>()
+            .firstOrNull { it.isExportEquals }?.expression as? Identifier ?: return false
+        var sAnnot: TypeReference? = null
+        for (st in moduleBody.statements) {
+            val vs = st as? VariableStatement ?: continue
+            for (d in vs.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == exportTarget.text) {
+                    sAnnot = d.type as? TypeReference
+                }
+            }
+        }
+        val sRef = sAnnot ?: return false
+        // Resolve S: bare Identifier → interface in module body; QualifiedName ns.X →
+        // namespace ns in module body → interface X in its block.
+        fun ifaceIn(stmts: List<Statement>, n: String): InterfaceDeclaration? =
+            stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == n }
+        var container: List<Statement> = moduleBody.statements
+        val sDecl: InterfaceDeclaration? = when (val tn = sRef.typeName) {
+            is Identifier -> ifaceIn(container, tn.text)
+            is QualifiedName -> {
+                val nsName = (tn.left as? Identifier)?.text
+                val ns = moduleBody.statements.filterIsInstance<ModuleDeclaration>()
+                    .firstOrNull { (it.name as? Identifier)?.text == nsName }
+                val nsBody = (ns?.body as? ModuleBlock)?.statements
+                if (nsBody != null) { container = nsBody; ifaceIn(nsBody, tn.right.text) } else null
+            }
+            else -> null
+        }
+        val s = sDecl ?: return false
+        // (5) I in the same container; S != I; I in S's transitive extends chain.
+        val i = ifaceIn(container, iName) ?: return false
+        if (i === s) return false
+        val seen = mutableSetOf<String>()
+        fun extendsTransitively(from: InterfaceDeclaration): Boolean {
+            if (!seen.add(from.name.text)) return false
+            for (hc in from.heritageClauses.orEmpty()) {
+                if (hc.token != SyntaxKind.ExtendsKeyword) continue
+                for (t in hc.types) {
+                    val bn = (t.expression as? Identifier)?.text ?: continue
+                    if (bn == iName) return true
+                    val base = ifaceIn(container, bn) ?: continue
+                    if (extendsTransitively(base)) return true
+                }
+            }
+            return false
+        }
+        if (!extendsTransitively(s)) return false
+        // (6) I directly declares `m(): this`.
+        val m = i.members.filterIsInstance<MethodDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == methodName } ?: return false
+        if (m.type !is ThisType) return false
+        val sName = s.name.text
+        val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$sName' is not assignable to type '$iName'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = ch,
+            start = name.pos, length = name.text.length,
+            messageChain = listOf(
+                "  The types returned by '$methodName()' are incompatible between these types.",
+                "    Type '$sName' is not assignable to type 'this'.",
+                "      '$sName' is assignable to the constraint of type 'this', but 'this' could be instantiated with a different subtype of constraint '$iName'.",
+            ),
+        ))
+        return true
+    }
+
     private fun tryEmitVoidThisMethodToPrimitiveVar(
         decl: VariableDeclaration, name: Identifier, source: String, fileName: String
     ): Boolean {
@@ -60004,6 +60128,11 @@ interface DataView {
         // assignable to a primitive var annotation. This is the one shape `thisWhenType-
         // CheckFails` needs; broad `this` typing FP'd the return-assignability path.
         if (tryEmitVoidThisMethodToPrimitiveVar(decl, name, source, fileName)) return
+
+        // B206: `let p: I = nsImport.m()` where the ambient module's `export =` const
+        // is typed as a subinterface S of I and I declares `m(): this` — tsc fixes the
+        // this-type to S, and S is never assignable to the FREE this-type of I.
+        if (tryEmitThisReturnAssignToBaseInterface(decl, name, source, fileName)) return
 
         // B181: a STRING-MAPPING intrinsic annotation (`Uppercase<X>` etc., unshadowed)
         // accepts ONLY strings — a definitely-non-string literal initializer is TS2322
