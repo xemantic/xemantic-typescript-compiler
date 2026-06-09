@@ -852,6 +852,9 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         checkJSDocTypedefTags()
+        // 7b''''' bis. TS7012: a JSDoc `@overload` block lacking a `@returns`/`@return`
+        // tag → the overload implicitly returns `any`. JS-like files under noImplicitAny.
+        checkJSDocOverloadTags()
         // 7b''''''. TS2855: `super.X` accessing a parent-class instance FIELD
         // (not a prototype method/accessor) in a derived JS class. JS-like files only.
         checkClassFieldSuperAccessJs()
@@ -13104,6 +13107,65 @@ class Checker(
                 }
                 idx = if (i > tagIdx + 8) i else tagIdx + 8
             }
+        }
+    }
+
+    /**
+     * TS7012: a JSDoc `@overload` block (a detached JSDoc comment preceding a
+     * function) that has NO `@returns`/`@return` tag implicitly returns `any`.
+     * JS-like files under noImplicitAny only. Purely syntactic comment scan
+     * (mirrors [checkJSDocTypedefTags]) → FP-safe: an `@overload` lacking a return
+     * annotation is ALWAYS TS7012 under noImplicitAny. Squiggle = the `overload` word
+     * (after `@`), length 8 — matching TypeScript.
+     */
+    private fun checkJSDocOverloadTags() {
+        if (!(options.noImplicitAny || options.strict)) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            checkJSDocOverloadTagsInStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun checkJSDocOverloadTagsInStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            // Only function declarations carry `@overload` blocks as leading comments.
+            if (stmt is FunctionDeclaration) checkJSDocOverloadTagsInComments(stmt.leadingComments, source, fileName)
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let { checkJSDocOverloadTagsInStmts(it.statements, source, fileName) }
+                is Block -> checkJSDocOverloadTagsInStmts(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkJSDocOverloadTagsInStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkJSDocOverloadTagsInComments(comments: List<Comment>?, source: String, fileName: String) {
+        if (comments.isNullOrEmpty()) return
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            val tagIdx = ct.indexOf("@overload")
+            if (tagIdx < 0) continue
+            // Tag boundary: the char after `@overload` must not be a name char.
+            val afterTag = if (tagIdx + 9 < ct.length) ct[tagIdx + 9] else ' '
+            if (afterTag.isLetterOrDigit() || afterTag == '_') continue
+            // A `@returns`/`@return` tag anywhere in the block provides the annotation.
+            if (ct.contains("@returns") || ct.contains("@return")) continue
+            val pos = comment.pos + tagIdx + 1 // the `overload` word (after `@`)
+            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+            diagnostics.add(Diagnostic(
+                message = "This overload implicitly returns the type 'any' because it lacks a return type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 7012,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = pos,
+                length = 8,
+            ))
         }
     }
 
