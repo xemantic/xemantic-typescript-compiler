@@ -59355,6 +59355,157 @@ interface DataView {
      * `Pick`, args are distinct named class/interface symbols, exactly ONE required
      * property missing (multi-missing -> FN, keeps the chain text exact).
      */
+    /**
+     * B214: TS2322 for `x = y` between function-LOCALS annotated with FunctionTypes
+     * that mismatch on a TP-vs-TP / TP-vs-primitive slot (the
+     * typeParameterArgumentEquivalence family). The locals are not in binder tables,
+     * resolveSimpleTypeName returns null for FunctionType (no varTypes entry), and
+     * the relation engine never fails assign-to-bare-TypeParam (B87.1) — so the
+     * shape was silent. The Signature.declaration on the currentLocalTypes-resolved
+     * Type.Object carries the original FunctionType annotation AST; positional
+     * comparison over a CLOSED shape set (any / same primitive keyword / same-name
+     * bare ref → OK; unconstrained-in-scope-TP vs different-TP-or-primitive → FAIL;
+     * anything else → BAIL, FN-safe). Params compare contravariantly (leaf
+     * tgt-param → src-param), returns covariantly (src-ret → tgt-ret); both returns
+     * FunctionType recurse ONE level ('Call signature return types ... are
+     * incompatible.'). Could-line + related TS2208 iff the leaf's RIGHT side is an
+     * unconstrained in-scope TP.
+     */
+    private fun tryEmitFnTypedLocalTpMismatchTs2322(
+        target: Identifier, rhs: Identifier, source: String, fileName: String,
+        typeParams: Set<String>,
+    ): Boolean {
+        fun fnAnnotOf(name: String): FunctionType? {
+            val t = currentLocalTypes[name] as? Type.Object ?: return null
+            if (t is Type.Interface || t is Type.Reference) return null
+            if (!t.constructSignatures.isNullOrEmpty() || !t.members.isNullOrEmpty() ||
+                !t.properties.isNullOrEmpty()) return null
+            val sig = t.callSignatures?.singleOrNull() ?: return null
+            if (!sig.typeParameters.isNullOrEmpty()) return null
+            return sig.declaration as? FunctionType
+        }
+        val tgtFn = fnAnnotOf(target.text) ?: return false
+        val srcFn = fnAnnotOf(rhs.text) ?: return false
+        if (tgtFn === srcFn) return false
+        fun primName(t: TypeNode?): String? = (t as? KeywordTypeNode)?.let {
+            when (it.kind) {
+                SyntaxKind.AnyKeyword -> "any"
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                else -> null
+            }
+        }
+        fun bareTp(t: TypeNode?): String? = (t as? TypeReference)?.let { r ->
+            if (!r.typeArguments.isNullOrEmpty()) return@let null
+            (r.typeName as? Identifier)?.text?.takeIf {
+                it in typeParams && currentTypeParamDecls[it]?.constraint == null
+            }
+        }
+        // 0=OK, 1=FAIL, 2=BAIL
+        fun classify(a: TypeNode?, b: TypeNode?): Int {
+            if (a == null || b == null) return 2
+            val ap = primName(a); val bp = primName(b)
+            if (ap == "any" || bp == "any") return 0
+            if (ap != null && ap == bp) return 0
+            val at = bareTp(a); val bt = bareTp(b)
+            if (at != null && at == bt) return 0
+            val aOk = at != null || ap != null
+            val bOk = bt != null || bp != null
+            return if (aOk && bOk && (at != null || bt != null)) 1 else 2
+        }
+        fun paramsBailOrFailIdx(s: FunctionType, t: FunctionType): Pair<Int, Boolean> {
+            // returns (failIdx or -1, bail)
+            if (s.parameters.size != t.parameters.size) return -1 to true
+            for (i in s.parameters.indices) {
+                val sp = s.parameters[i]; val tp = t.parameters[i]
+                if (sp.dotDotDotToken || tp.dotDotDotToken || sp.questionToken || tp.questionToken ||
+                    sp.initializer != null || tp.initializer != null) return -1 to true
+                when (classify(tp.type, sp.type)) {  // contravariant: A=tgt, B=src
+                    1 -> return i to false
+                    2 -> return -1 to true
+                }
+            }
+            return -1 to false
+        }
+        fun emit(chain: List<String>, leafA: TypeNode, leafB: TypeNode, couldIndent: String): Boolean {
+            val srcDisp = formatTypeForDisplay(srcFn) ?: return false
+            val tgtDisp = formatTypeForDisplay(tgtFn) ?: return false
+            val aDisp = formatTypeForDisplay(leafA) ?: return false
+            val bDisp = formatTypeForDisplay(leafB) ?: return false
+            val fullChain = chain.toMutableList()
+            val related = mutableListOf<Diagnostic>()
+            // Could-line keys on the leaf's RIGHT (B) side being a TP...
+            if (bareTp(leafB) != null) {
+                fullChain.add("$couldIndent'$bDisp' could be instantiated with an arbitrary type which could be unrelated to '$aDisp'.")
+            }
+            // ...but TS2208 keys on the LEFT (A) side — the SOURCE of the failing
+            // leaf relation is the tp that "might need an `extends <B>` constraint".
+            bareTp(leafA)?.let { at ->
+                currentTypeParamDecls[at]?.let { decl ->
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, decl.name.pos)
+                    related.add(Diagnostic(
+                        message = "This type parameter might need an `extends $bDisp` constraint.",
+                        category = DiagnosticCategory.Message, code = 2208,
+                        fileName = fileName, line = rl, character = rc,
+                        start = decl.name.pos, length = decl.name.text.length,
+                    ))
+                }
+            }
+            val (line, ch) = getLineAndCharacterOfPosition(source, target.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcDisp' is not assignable to type '$tgtDisp'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = target.pos, length = target.text.length,
+                messageChain = fullChain,
+                relatedInformation = related,
+            ))
+            return true
+        }
+        val (failIdx, bail) = paramsBailOrFailIdx(srcFn, tgtFn)
+        if (bail) return false
+        if (failIdx >= 0) {
+            val sp = srcFn.parameters[failIdx]; val tp = tgtFn.parameters[failIdx]
+            val spName = (sp.name as? Identifier)?.text ?: return false
+            val tpName = (tp.name as? Identifier)?.text ?: return false
+            val a = tp.type ?: return false
+            val b = sp.type ?: return false
+            val aDisp = formatTypeForDisplay(a) ?: return false
+            val bDisp = formatTypeForDisplay(b) ?: return false
+            return emit(listOf(
+                "  Types of parameters '$spName' and '$tpName' are incompatible.",
+                "    Type '$aDisp' is not assignable to type '$bDisp'.",
+            ), a, b, "      ")
+        }
+        // Returns: covariant (A=src ret, B=tgt ret).
+        when (classify(srcFn.type, tgtFn.type)) {
+            1 -> {
+                val aDisp = formatTypeForDisplay(srcFn.type) ?: return false
+                val bDisp = formatTypeForDisplay(tgtFn.type) ?: return false
+                return emit(listOf(
+                    "  Type '$aDisp' is not assignable to type '$bDisp'.",
+                ), srcFn.type, tgtFn.type, "    ")
+            }
+            2 -> {
+                val sInner = srcFn.type as? FunctionType ?: return false
+                val tInner = tgtFn.type as? FunctionType ?: return false
+                val (iFail, iBail) = paramsBailOrFailIdx(sInner, tInner)
+                if (iBail || iFail >= 0) return false
+                if (classify(sInner.type, tInner.type) != 1) return false
+                val srcRetDisp = formatTypeForDisplay(sInner) ?: return false
+                val tgtRetDisp = formatTypeForDisplay(tInner) ?: return false
+                val aDisp = formatTypeForDisplay(sInner.type) ?: return false
+                val bDisp = formatTypeForDisplay(tInner.type) ?: return false
+                return emit(listOf(
+                    "  Call signature return types '$srcRetDisp' and '$tgtRetDisp' are incompatible.",
+                    "    Type '$aDisp' is not assignable to type '$bDisp'.",
+                ), sInner.type, tInner.type, "      ")
+            }
+        }
+        return false
+    }
+
     private fun tryEmitSameAliasPickVarianceTs2322(
         target: Identifier, rhs: Identifier, source: String, fileName: String,
     ): Boolean {
@@ -62542,6 +62693,11 @@ interface DataView {
                     // general path stays silent.
                     try {
                         if (tryEmitSameAliasPickVarianceTs2322(target, expr.right as Identifier, source, fileName)) return
+                        // B214: fn-typed locals whose FunctionType annotations mismatch
+                        // on a TP-vs-TP / TP-vs-primitive param or return slot.
+                        if (try {
+                                tryEmitFnTypedLocalTpMismatchTs2322(target, expr.right as Identifier, source, fileName, typeParams)
+                            } catch (_: StackOverflowError) { false }) return
                     } catch (_: StackOverflowError) { /* circular */ }
                 }
                 // B73.1: cross-file `typeof import("X")` display for module-alias
