@@ -4656,7 +4656,7 @@ class Checker(
                     if (decl.type != null) continue // explicit annotation → portable
                     val init = decl.initializer ?: continue
                     val nameNode = decl.name as? Identifier ?: continue
-                    val refs = inferredTypeReferencedFiles(init, f) ?: continue
+                    val refs = inferredTypeReferencedFiles(init, f) ?: emptyList()
                     for ((typeName, g) in refs) {
                         if (isFileNameableFrom(g, f)) continue
                         val pkgPath = nameabilityPackagePath(g, f)
@@ -4669,8 +4669,87 @@ class Checker(
                         ))
                         break // report only the first non-nameable referenced type per declaration
                     }
+                    // TS2527: `export const X = importedValue` whose type carries a NESTED
+                    // (inaccessible) `unique symbol` cannot be portably emitted.
+                    if (init is Identifier) {
+                        val imp = resolveImportedSymbolFile(init.text, f)
+                        if (imp != null) {
+                            val (declFile, origName) = imp
+                            val valType = importedValueTypeAnnotation(origName, declFile)
+                            if (valType != null &&
+                                typeAnnotationHasInaccessibleUniqueSymbol(valType, declFile, mutableSetOf(), 0, true)) {
+                                val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "The inferred type of '${nameNode.text}' references an inaccessible 'unique symbol' type. A type annotation is necessary.",
+                                    category = DiagnosticCategory.Error, code = 2527,
+                                    fileName = f, line = l, character = c,
+                                    start = nameNode.pos, length = nameNode.text.length,
+                                ))
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /** The explicit type annotation of an exported value `name` declared in [file] (const/var with `: T`). */
+    private fun importedValueTypeAnnotation(name: String, file: String): TypeNode? {
+        val r = fileResults[file] ?: return null
+        for (stmt in r.sourceFile.statements) {
+            if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == name) return d.type
+            }
+        }
+        return null
+    }
+
+    /**
+     * Does a value's resolved type annotation contain a NESTED `unique symbol` (a property type
+     * inside a type literal / interface), which declaration emit cannot reference portably?
+     * A TOP-LEVEL `unique symbol` (the value's own type) IS accessible via `typeof value`, so
+     * [topLevel] suppresses it. Follows type-alias references across files.
+     */
+    private fun typeAnnotationHasInaccessibleUniqueSymbol(
+        t: TypeNode, file: String, visited: MutableSet<String>, depth: Int, topLevel: Boolean,
+    ): Boolean {
+        if (depth > 6) return false
+        return when (t) {
+            is TypeOperator ->
+                if (t.operator == SyntaxKind.UniqueKeyword) !topLevel
+                else typeAnnotationHasInaccessibleUniqueSymbol(t.type, file, visited, depth + 1, topLevel)
+            is TypeReference -> {
+                val n = t.typeName
+                if (n is Identifier) {
+                    val key = "$file|${n.text}"
+                    if (!visited.add(key)) return false
+                    when (val decl = resolveTypeReferenceDecl(n.text, file, mutableSetOf())) {
+                        null -> false
+                        else -> {
+                            val (d, df) = decl
+                            when (d) {
+                                is TypeAliasDeclaration -> typeAnnotationHasInaccessibleUniqueSymbol(d.type, df, visited, depth + 1, topLevel)
+                                is InterfaceDeclaration -> d.members.any { m ->
+                                    m is PropertyDeclaration && m.type?.let {
+                                        typeAnnotationHasInaccessibleUniqueSymbol(it, df, visited, depth + 1, false)
+                                    } == true
+                                }
+                                else -> false
+                            }
+                        }
+                    }
+                } else false
+            }
+            is TypeLiteral -> t.members.any { m ->
+                m is PropertyDeclaration && m.type?.let {
+                    typeAnnotationHasInaccessibleUniqueSymbol(it, file, visited, depth + 1, false)
+                } == true
+            }
+            is ArrayType -> typeAnnotationHasInaccessibleUniqueSymbol(t.elementType, file, visited, depth + 1, false)
+            is UnionType -> t.types.any { typeAnnotationHasInaccessibleUniqueSymbol(it, file, visited, depth + 1, false) }
+            is IntersectionType -> t.types.any { typeAnnotationHasInaccessibleUniqueSymbol(it, file, visited, depth + 1, false) }
+            is ParenthesizedType -> typeAnnotationHasInaccessibleUniqueSymbol(t.type, file, visited, depth + 1, topLevel)
+            else -> false
         }
     }
 
