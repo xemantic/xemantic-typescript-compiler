@@ -87989,9 +87989,38 @@ interface DataView {
                 else -> anyType
             }
         } else null
+        // B196: SOURCE-side rest expansion. When the SOURCE's last param is a rest
+        // `...x: E[]` and the target side is NON-rest, TypeScript relates target
+        // positions at/after the source rest index against the rest ELEMENT type E —
+        // `(...x: number[]) => void` is NOT assignable to `(x: number[], y: string) =>
+        // void` (number[] vs number fails). Gated to a concrete Array/ReadonlyArray
+        // element (never/any/TypeParam rests keep the prior permissive behavior, e.g.
+        // genericRestTypes' `...args: never`). Element comparisons are BIVARIANT
+        // (tsc's method-param rule) so legitimate contravariant cases stay legal.
+        val sourceLastParam = sourceParams.lastOrNull()
+        val sourceLastIsRest = (sourceLastParam?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        val sourceRestElement: Type? = if (sourceLastIsRest && !targetLastIsRest && sourceLastParam != null) {
+            val raw = getTypeOfSymbol(sourceLastParam)
+            if (raw is Type.Reference && raw.target.symbol?.name in setOf("Array", "ReadonlyArray"))
+                raw.resolvedTypeArguments?.firstOrNull()?.takeIf {
+                    it !== anyType && it !== errorType && it !is Type.TypeParam
+                }
+            else null
+        } else null
         for (i in 0 until len) {
-            val sourceParamType = getTypeOfSymbol(sourceParams[i])
+            val sourceParamTypeRaw = getTypeOfSymbol(sourceParams[i])
             val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            // B196: at the source's rest position (target non-rest), compare the
+            // target param against the rest ELEMENT bivariantly.
+            if (sourceIsRest && i == sourceParams.size - 1 && sourceRestElement != null) {
+                val t = getTypeOfSymbol(targetParams[i])
+                if (t !== anyType && t !== errorType && t !is Type.TypeParam) {
+                    if (!checkTypeRelatedTo(t, sourceRestElement, relation) &&
+                        !checkTypeRelatedTo(sourceRestElement, t, relation)) return false
+                }
+                continue
+            }
+            val sourceParamType = sourceParamTypeRaw
             // For the target's rest param position, if source is also rest, compare U[] vs T[]
             // normally. If source is non-rest at the same position, compare element vs source.
             val targetParamType = if (i == targetParams.size - 1 && targetLastIsRest && !sourceIsRest && targetRestElement != null) {
@@ -88155,6 +88184,27 @@ interface DataView {
                     }
                 }
                 continue
+            }
+            // B196: source-rest element elaboration — target's param at the source's
+            // rest position compares against the rest ELEMENT type (matches the
+            // signatureRelatedTo expansion); the chain displays the element.
+            run {
+                val sourceIsRest = (sourceParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                val targetIsRest = (targetParams[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+                if (!sourceIsRest || i != sourceParams.size - 1 || targetIsRest) return@run
+                val raw = sourceParamType
+                val e = if (raw is Type.Reference && raw.target.symbol?.name in setOf("Array", "ReadonlyArray"))
+                    raw.resolvedTypeArguments?.firstOrNull()?.takeIf {
+                        it !== anyType && it !== errorType && it !is Type.TypeParam
+                    } else null
+                if (e == null) return@run
+                if (!checkTypeRelatedTo(targetParamType, e, assignableRelation) &&
+                    !checkTypeRelatedTo(e, targetParamType, assignableRelation)) {
+                    return listOf(
+                        "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                        "    Type '${typeToString(targetParamType)}' is not assignable to type '${typeToString(e)}'.",
+                    )
+                }
             }
             if (!checkTypeRelatedTo(targetParamType, sourceParamType, assignableRelation)) {
                 // B70.7: When source's param at position i is REST and target has
