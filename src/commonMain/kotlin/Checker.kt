@@ -47514,6 +47514,7 @@ interface DataView {
                     emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
                     emitTS2352IfNullAsCast(expr, source, fileName)
                     emitTS1355IfInvalidConstAssertion(expr, source, fileName)
+                    emitTS2352IfClassInstanceToRecordCast(expr, source, fileName)
                 }
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
@@ -47652,6 +47653,65 @@ interface DataView {
     private fun emitTS2352IfNullAsCast(expr: AsExpression, source: String, fileName: String) {
         val spanEnd = if (expr.tightEnd > expr.pos) expr.tightEnd else expr.end
         emitTS2352NullishCastCore(expr.expression, expr.type, expr.pos, spanEnd, source, fileName)
+    }
+
+    /**
+     * B184: TS2352 for `new C() as Record<string, unknown>` — a CLASS instance never gets
+     * an implied index signature (classes are nominal for index-sig purposes), so the cast
+     * fails comparability BOTH ways when the value type is `unknown`: C→Record misses the
+     * string index signature, Record→C can't satisfy any concrete member with `unknown`.
+     * Load-bearing gates (comparability needs only ONE direction to pass, so each rules
+     * out a legitimately-overlapping shape): the value type arg must be the literal
+     * `unknown` keyword (with `any`, Record→C succeeds → no error); the class must declare
+     * ≥1 non-static METHOD (an empty class or all-property class may be satisfiable by the
+     * Record side); no own IndexSignature member; no heritage clause (a base could carry an
+     * index signature); non-generic (display simplicity + instantiation unknowns). The
+     * `C3 as Record<…>` namespace-object shape is naturally excluded (operand must be a
+     * NewExpression) — anonymous object types get implied index signatures and DO overlap.
+     */
+    private fun emitTS2352IfClassInstanceToRecordCast(expr: AsExpression, source: String, fileName: String) {
+        val t = expr.type as? TypeReference ?: return
+        if ((t.typeName as? Identifier)?.text != "Record") return
+        val args = t.typeArguments ?: return
+        if (args.size != 2) return
+        val keyArg = args[0]
+        val valArg = args[1]
+        if (keyArg !is KeywordTypeNode || keyArg.kind != SyntaxKind.StringKeyword) return
+        if (valArg !is KeywordTypeNode || valArg.kind != SyntaxKind.UnknownKeyword) return
+        // A user-declared `Record` shadow takes the normal (unmodeled) path.
+        if (globals["Record"]?.declarations?.any { it is TypeAliasDeclaration || it is InterfaceDeclaration || it is ClassDeclaration } == true) return
+        var operand: Expression = expr.expression
+        while (operand is ParenthesizedExpression) operand = operand.expression
+        if (operand !is NewExpression) return
+        val ctor = operand.expression as? Identifier ?: return
+        val ctorSym = globals[ctor.text] ?: return
+        if (!ctorSym.flags.hasAny(SymbolFlags.Class)) return
+        val classDecl = ctorSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return
+        if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return
+        if (!classDecl.typeParameters.isNullOrEmpty()) return
+        if (!classDecl.heritageClauses.isNullOrEmpty()) return
+        if (classDecl.members.any { it is IndexSignature }) return
+        val hasConcreteMethod = classDecl.members.any {
+            it is MethodDeclaration && ModifierFlag.Static !in it.modifiers
+        }
+        if (!hasConcreteMethod) return
+        val className = classDecl.name?.text ?: return
+        val targetDisplay = formatTypeForDisplay(expr.type) ?: return
+        val spanEnd = if (expr.tightEnd > expr.pos) expr.tightEnd else expr.end
+        val length = spanEnd - expr.pos
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '$className' to type '$targetDisplay' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error,
+            code = 2352,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = length,
+            messageChain = listOf("  Index signature for type 'string' is missing in type '$className'."),
+        ))
     }
 
     /**
@@ -78665,11 +78725,16 @@ interface DataView {
                 }
                 if (ctorSym == null) ctorSym = globals[ctor.text]
                 if (ctorSym != null && ctorSym.flags.hasAny(SymbolFlags.Class)) {
-                    // Skip when the class symbol has multiple declarations — interface or
-                    // namespace merging (including module augmentation) may contribute
-                    // properties that the ClassDeclaration alone doesn't show.
-                    if (ctorSym.declarations.size > 1) return
-                    val classDecl = ctorSym.declarations.firstOrNull() as? ClassDeclaration
+                    // Skip when the class symbol has multiple declarations that could
+                    // contribute INSTANCE members: an interface merge (or a second class /
+                    // ambient re-declaration) adds instance properties the ClassDeclaration
+                    // alone doesn't show. B184: a NAMESPACE merge contributes only STATIC
+                    // members (the bifurcation model), so `class C2 {} namespace C2 {…}`
+                    // keeps instance-side access checkable — `new C2().unrelated` is TS2339
+                    // even though `C2.unrelated` (static side) is fine.
+                    if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return
+                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration }) return
+                    val classDecl = ctorSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                         // Walk own members + extends chain. `false` means the chain
                         // resolves cleanly (no IndexSignature, no ambient base, no
