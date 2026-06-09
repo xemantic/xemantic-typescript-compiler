@@ -58821,6 +58821,108 @@ interface DataView {
     }
 
     /**
+     * B191: TS2322 for same-alias Pick-body variance: `b = a` where both vars are annotated
+     * with the SAME single-type-param alias `type T<X> = Pick<X, keys>` and DISTINCT
+     * class/interface type args. tsc's alias-variance shortcut compares the args directly
+     * (T is covariant by construction) with no structural fallback — A missing a required
+     * property of B is a definitive failure even though `Pick<A,'x'>` and `Pick<B,'x'>` are
+     * structurally identical (which is why the general engine stays silent, and exactly
+     * what the fixture pins). Gates: same alias symbol (different aliases like `c = d`
+     * deliberately do NOT error), body is `Pick<ownTP, string-literal keys>` with no user
+     * `Pick`, args are distinct named class/interface symbols, exactly ONE required
+     * property missing (multi-missing -> FN, keeps the chain text exact).
+     */
+    private fun tryEmitSameAliasPickVarianceTs2322(
+        target: Identifier, rhs: Identifier, source: String, fileName: String,
+    ): Boolean {
+        fun annotationOf(name: String): TypeReference? {
+            val sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+            val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+            return decl.type as? TypeReference
+        }
+        val tgtAnn = annotationOf(target.text) ?: return false
+        val srcAnn = annotationOf(rhs.text) ?: return false
+        val aliasName = (tgtAnn.typeName as? Identifier)?.text ?: return false
+        if ((srcAnn.typeName as? Identifier)?.text != aliasName) return false
+        if (tgtAnn.typeArguments?.size != 1 || srcAnn.typeArguments?.size != 1) return false
+        val aliasSym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return false
+        if (!aliasSym.flags.hasAny(SymbolFlags.TypeAlias)) return false
+        val aliasDecl = aliasSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+        if (aliasDecl.typeParameters?.size != 1) return false
+        val ownTp = aliasDecl.typeParameters!![0].name.text
+        val body = aliasDecl.type as? TypeReference ?: return false
+        if ((body.typeName as? Identifier)?.text != "Pick") return false
+        if (globals["Pick"] != null) return false
+        val bodyArgs = body.typeArguments ?: return false
+        if (bodyArgs.size != 2) return false
+        val first = bodyArgs[0] as? TypeReference ?: return false
+        if ((first.typeName as? Identifier)?.text != ownTp || !first.typeArguments.isNullOrEmpty()) return false
+        val keys = bodyArgs[1]
+        val keysOk = when (keys) {
+            is LiteralType -> keys.literal is StringLiteralNode
+            is UnionType -> keys.types.all { (it as? LiteralType)?.literal is StringLiteralNode }
+            else -> false
+        }
+        if (!keysOk) return false
+        fun argSymbol(ann: TypeReference): Symbol? {
+            val ref = ann.typeArguments!![0] as? TypeReference ?: return null
+            if (!ref.typeArguments.isNullOrEmpty()) return null
+            val nm = (ref.typeName as? Identifier)?.text ?: return null
+            val s = currentFileLocals?.get(nm) ?: globals[nm] ?: return null
+            return if (s.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) s else null
+        }
+        val srcArgSym = argSymbol(srcAnn) ?: return false
+        val tgtArgSym = argSymbol(tgtAnn) ?: return false
+        if (srcArgSym === tgtArgSym) return false
+        val srcArgType = getDeclaredTypeOfSymbol(srcArgSym)
+        val tgtArgType = getDeclaredTypeOfSymbol(tgtArgSym)
+        if (srcArgType !is Type.Object || tgtArgType !is Type.Object) return false
+        resolveStructuredTypeMembers(srcArgType)
+        resolveStructuredTypeMembers(tgtArgType)
+        val missing = collectMissingProperties(srcArgType, tgtArgType)
+        if (missing.size != 1) return false
+        val missingName = missing[0]
+        val propSym = tgtArgType.members?.get(missingName) ?: return false
+        val propDecl = propSym.valueDeclaration ?: propSym.declarations.firstOrNull()
+        val relatedInfo = mutableListOf<Diagnostic>()
+        if (propDecl != null) {
+            val declPos = when (propDecl) {
+                is PropertyDeclaration -> (propDecl.name as? Identifier)?.pos ?: propDecl.pos
+                is MethodDeclaration -> (propDecl.name as? Identifier)?.pos ?: propDecl.pos
+                else -> propDecl.pos
+            }
+            val (declFile, declSource) = resolveDeclarationSourceFile(declPos)
+            val rFile = declFile ?: fileName
+            val rSource = declSource ?: source
+            val (dl, dc) = getLineAndCharacterOfPosition(rSource, declPos)
+            relatedInfo.add(Diagnostic(
+                message = "'$missingName' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = rFile,
+                line = dl, character = dc,
+                start = declPos, length = missingName.length,
+            ))
+        }
+        val srcDisplay = formatTypeForDisplay(srcAnn) ?: return false
+        val tgtDisplay = formatTypeForDisplay(tgtAnn) ?: return false
+        val srcArgName = ((srcAnn.typeArguments!![0] as TypeReference).typeName as Identifier).text
+        val tgtArgName = ((tgtAnn.typeArguments!![0] as TypeReference).typeName as Identifier).text
+        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcDisplay' is not assignable to type '$tgtDisplay'.",
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line, character = character,
+            start = target.pos, length = target.text.length,
+            messageChain = listOf("  Property '$missingName' is missing in type '$srcArgName' but required in type '$tgtArgName'."),
+            relatedInformation = relatedInfo,
+        ))
+        return true
+    }
+
+    /**
      * B190: TS2322 "Source provides no match for required element at position N in target."
      * for `k = [<fixed elems>, ...<tuple-annotated ident>]` against a TupleType annotation
      * whose REQUIRED element count exceeds the spliced source's fixed count. Pure AST: the
@@ -61384,6 +61486,15 @@ interface DataView {
                 if (expr.right is Identifier) {
                     try {
                         if (tryEmitModuleNamespaceTs2741(target, expr.right as Identifier, source, fileName)) return
+                    } catch (_: StackOverflowError) { /* circular */ }
+                    // B191: same-alias Pick-body variance — `b = a` where both vars are
+                    // annotated `T<Arg>` with the SAME single-TP alias whose body is
+                    // `Pick<TP, keys>`. tsc compares the type ARGS directly (alias
+                    // variance, covariant by construction) with NO structural fallback;
+                    // our materialized Pick objects are mutually assignable so the
+                    // general path stays silent.
+                    try {
+                        if (tryEmitSameAliasPickVarianceTs2322(target, expr.right as Identifier, source, fileName)) return
                     } catch (_: StackOverflowError) { /* circular */ }
                 }
                 // B73.1: cross-file `typeof import("X")` display for module-alias
