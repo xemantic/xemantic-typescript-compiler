@@ -1460,6 +1460,9 @@ class Checker(
         checkRecursiveLiteralVariables()
         // 82a. B147: TS7022+TS7024 circular generic-callback initializer `const X = f(() => X)`.
         checkCircularGenericCallbackVariables()
+        // 82a'. B193: TS2345 for optional-member reads of an annotated destructured param
+        // passed where only `undefined` fails (`function f({skills}: Robot) { log(skills.primary) }`).
+        checkDestructuredParamOptionalMemberArgs()
         // 82b. B148: TS2353 excess-prop for JS `/** @type {import("X").Foo} */ export default {obj}`.
         checkJsDocTypeExportAssignment()
         } // end if (!declarationOnly)
@@ -72342,6 +72345,183 @@ interface DataView {
      * by construction: tsc ALWAYS emits these for this shape, so any passing test
      * matching the gate already carries them (can only flip-or-be-neutral).
      */
+    /**
+     * B193: TS2345 "Argument of type 'T | undefined' is not assignable to parameter of
+     * type 'T'." for an OPTIONAL-property read `binding.prop` of an explicitly-annotated
+     * object-binding parameter, passed to a single-signature callee whose param rejects
+     * `undefined`. The binding itself is never-undefined (element default or non-optional
+     * source property); the standard call walker can't see this because destructured-param
+     * bindings are never typed (the binder doesn't bind params; populateParameterLocalTypes
+     * registers only NAMES for patterns) and optional reads never widen to `| undefined`.
+     *
+     * FP firewall: strictNullChecks-gated; straight-line prefix scan of the body that
+     * STOPS at the first control-flow statement, any reassignment of a binding, and after
+     * the FIRST statement referencing a binding (so an asserts-style guard preceding the
+     * read kills the candidate before the read is reached); callee must resolve to exactly
+     * ONE non-generic call signature; only-undefined-fails gate: the member type WITHOUT
+     * undefined must pass the relation while bare `undefined` must fail it.
+     */
+    private fun checkDestructuredParamOptionalMemberArgs() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val savedLocals = currentFileLocals
+            val savedCheckFile = currentCheckFileName
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                for (stmt in result.sourceFile.statements) {
+                    walkDestrParamOptStmt(stmt, source, fileName)
+                }
+            } catch (_: StackOverflowError) {
+            } finally {
+                currentFileLocals = savedLocals
+                currentCheckFileName = savedCheckFile
+            }
+        }
+    }
+
+    private fun walkDestrParamOptStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let { checkDestrParamOptFn(stmt.parameters, it, source, fileName) }
+            is Block -> stmt.statements.forEach { walkDestrParamOptStmt(it, source, fileName) }
+            is IfStatement -> {
+                walkDestrParamOptStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { walkDestrParamOptStmt(it, source, fileName) }
+            }
+            is WhileStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is DoStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is ForStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is ForInStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is LabeledStatement -> walkDestrParamOptStmt(stmt.statement, source, fileName)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkDestrParamOptStmt(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { walkDestrParamOptStmt(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { walkDestrParamOptStmt(it, source, fileName) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                when (clause) {
+                    is CaseClause -> clause.statements.forEach { walkDestrParamOptStmt(it, source, fileName) }
+                    is DefaultClause -> clause.statements.forEach { walkDestrParamOptStmt(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkDestrParamOptStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkDestrParamOptFn(
+        parameters: List<Parameter>, body: Block, source: String, fileName: String,
+    ) {
+        // Collect never-undefined object-typed bindings from annotated object-binding params.
+        val bindings = mutableMapOf<String, Type>()
+        for (param in parameters) {
+            val pattern = param.name as? ObjectBindingPattern ?: continue
+            val annNode = param.type ?: continue
+            val annType = try { getApparentType(getTypeFromTypeNode(annNode)) } catch (_: StackOverflowError) { continue }
+            if (annType !is Type.Object) continue
+            try { resolveStructuredTypeMembers(annType) } catch (_: StackOverflowError) { continue }
+            for (el in pattern.elements) {
+                val be = el as? BindingElement ?: continue
+                if (be.dotDotDotToken) continue
+                val nm = be.name as? Identifier ?: continue
+                val propName = (be.propertyName as? Identifier)?.text ?: nm.text
+                val prop = try { getPropertyOfType(annType, propName) } catch (_: StackOverflowError) { continue } ?: continue
+                if (be.initializer == null && isOptionalProperty(prop)) continue  // binding may be undefined
+                val mt = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { continue }
+                if (mt !is Type.Object) continue
+                bindings[nm.text] = mt
+            }
+        }
+        if (bindings.isEmpty()) return
+        // Drop bindings shadowed by hoisted vars/functions in the body.
+        for (s in body.statements) {
+            when (s) {
+                is VariableStatement -> s.declarationList.declarations.forEach {
+                    (it.name as? Identifier)?.text?.let { n -> bindings.remove(n) }
+                }
+                is FunctionDeclaration -> s.name?.text?.let { bindings.remove(it) }
+                else -> {}
+            }
+        }
+        if (bindings.isEmpty()) return
+        // Straight-line prefix scan: stop at the first control-flow statement, any
+        // reassignment, and after the first statement referencing a binding.
+        for (s in body.statements) {
+            when (s) {
+                is ExpressionStatement -> {
+                    val e = s.expression
+                    if (e is BinaryExpression && e.operator == SyntaxKind.Equals) {
+                        (e.left as? Identifier)?.text?.let { bindings.remove(it) }
+                    } else if (e is CallExpression) {
+                        checkDestrParamOptCall(e, bindings, source, fileName)
+                    }
+                    val end = minOf(s.end, source.length)
+                    if (s.pos in 0 until end) {
+                        val slice = source.substring(s.pos, end)
+                        if (bindings.keys.any { slice.contains(it) }) return
+                    }
+                }
+                is VariableStatement -> {
+                    val end = minOf(s.end, source.length)
+                    if (s.pos in 0 until end) {
+                        val slice = source.substring(s.pos, end)
+                        if (bindings.keys.any { slice.contains(it) }) return
+                    }
+                }
+                else -> return
+            }
+        }
+    }
+
+    private fun checkDestrParamOptCall(
+        call: CallExpression, bindings: Map<String, Type>, source: String, fileName: String,
+    ) {
+        // Resolve the callee to exactly one non-generic call signature.
+        val calleeType = try { getTypeOfExpression(call.expression) } catch (_: StackOverflowError) { return }
+        if (calleeType !is Type.Object) return
+        try { resolveStructuredTypeMembers(calleeType) } catch (_: StackOverflowError) { return }
+        val sigs = calleeType.callSignatures ?: return
+        if (sigs.size != 1) return
+        val sig = sigs[0]
+        if (!sig.typeParameters.isNullOrEmpty()) return
+        for ((i, arg) in call.arguments.withIndex()) {
+            if (arg !is PropertyAccessExpression) continue
+            val recv = arg.expression as? Identifier ?: continue
+            val recvType = bindings[recv.text] ?: continue
+            val prop = try { getPropertyOfType(recvType, arg.name.text) } catch (_: StackOverflowError) { continue } ?: continue
+            if (!isOptionalProperty(prop)) continue
+            val propType = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { continue }
+            if (propType === anyType || propType === errorType) continue
+            val paramSym = sig.parameters.getOrNull(i) ?: continue
+            val paramType = try { getTypeOfSymbol(paramSym) } catch (_: StackOverflowError) { continue }
+            if (paramType === anyType || paramType === errorType) continue
+            // Only-undefined-fails gate: member type passes, bare undefined fails.
+            val memberOk = try { checkTypeRelatedTo(propType, paramType, assignableRelation) } catch (_: StackOverflowError) { continue }
+            if (!memberOk) continue
+            val undefFails = try { !checkTypeRelatedTo(undefinedType, paramType, assignableRelation) } catch (_: StackOverflowError) { continue }
+            if (!undefFails) continue
+            val display = "${typeToString(propType)} | undefined"
+            val start = arg.pos
+            val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$display' is not assignable to parameter of type '${typeToString(paramType)}'.",
+                category = DiagnosticCategory.Error,
+                code = 2345,
+                fileName = fileName,
+                line = line, character = character,
+                start = start, length = length,
+                messageChain = listOf("  Type 'undefined' is not assignable to type '${typeToString(paramType)}'."),
+            ))
+            return
+        }
+    }
+
     private fun checkCircularGenericCallbackVariables() {
         if (options.strictExplicitlyFalse) return
         // f-name -> set of param indices typed `() => <bare type param>`.
