@@ -26278,16 +26278,54 @@ class Checker(
         return false
     }
 
-    /** B154: if [spec] (resolved relative to [contextFile]) names a CJS (`.cts`/`.cjs`)
-     *  module that uses `export default`, return its display base (basename minus ext);
-     *  else null. Used to detect the "CJS-default = namespace" interop shape. */
-    private fun cjsExportDefaultBase(spec: String, contextFile: String): String? {
-        val resolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, contextFile) ?: return null
-        if (!(resolved.endsWith(".cts") || resolved.endsWith(".cjs"))) return null
-        val tf = fileResults[resolved]?.sourceFile ?: return null
-        if (tf.statements.none { it is ExportAssignment && !it.isExportEquals }) return null
+    private fun moduleFileBaseNoExt(resolved: String): String {
         val baseName = resolved.substringAfterLast('/').substringAfterLast('\\')
-        return baseName.removeSuffix(".d.cts").removeSuffix(".cts").removeSuffix(".cjs")
+        return baseName.removeSuffix(".d.cts").removeSuffix(".d.cjs").removeSuffix(".d.ts")
+            .removeSuffix(".cts").removeSuffix(".cjs").removeSuffix(".tsx").removeSuffix(".ts")
+    }
+
+    /** Does file [zf] define a proper NAMESPACE (ESM exports / `export default`), i.e.
+     *  `typeof import(z)` is a non-callable object — as opposed to `export = <callable>`
+     *  (where the namespace IS the callable)? */
+    private fun isProperNamespaceModule(zf: SourceFile): Boolean {
+        if (zf.statements.any { it is ExportAssignment && it.isExportEquals }) return false
+        return moduleHasDefaultExport(zf) || zf.statements.any {
+            it is ExportDeclaration ||
+            (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
+            (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
+            (it is VariableStatement && ModifierFlag.Export in it.modifiers) ||
+            (it is InterfaceDeclaration && ModifierFlag.Export in it.modifiers) ||
+            (it is TypeAliasDeclaration && ModifierFlag.Export in it.modifiers)
+        }
+    }
+
+    /** B154: if [spec] (resolved relative to [contextFile]) names a module whose DEFAULT
+     *  import is a non-callable CJS namespace `typeof import("base")`, return that display
+     *  base; else null. Two shapes by [commonjsMode]:
+     *   - nodenext (false): an ESM importer hitting a CJS `.cts`/`.cjs` module with a
+     *     direct `export default` — the default IS the whole CJS module.exports namespace.
+     *   - commonjs+esModuleInterop (true): a module using `export = Y` where `Y` is
+     *     `import Y = require("./Z")` (a require-alias to a proper NAMESPACE module Z) —
+     *     the default import is Z's namespace. Base = Z's basename. */
+    private fun cjsExportDefaultBase(spec: String, contextFile: String, commonjsMode: Boolean): String? {
+        val resolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, contextFile) ?: return null
+        val tf = fileResults[resolved]?.sourceFile ?: return null
+        if (!commonjsMode) {
+            if (!(resolved.endsWith(".cts") || resolved.endsWith(".cjs"))) return null
+            if (tf.statements.none { it is ExportAssignment && !it.isExportEquals }) return null
+            return moduleFileBaseNoExt(resolved)
+        }
+        // commonjs + esModuleInterop: follow `export = Y` -> `import Y = require("./Z")` -> Z.
+        val exportEq = tf.statements.firstOrNull { it is ExportAssignment && it.isExportEquals } as? ExportAssignment ?: return null
+        val yName = (exportEq.expression as? Identifier)?.text ?: return null
+        val importEq = tf.statements.firstOrNull {
+            it is ImportEqualsDeclaration && it.name.text == yName && it.moduleReference is ExternalModuleReference
+        } as? ImportEqualsDeclaration ?: return null
+        val zSpec = ((importEq.moduleReference as ExternalModuleReference).expression as? StringLiteralNode)?.text ?: return null
+        val zResolved = resolveModuleSpecifier(zSpec) ?: resolveRelativeIncludingIndex(zSpec, resolved) ?: return null
+        val zf = fileResults[zResolved]?.sourceFile ?: return null
+        if (!isProperNamespaceModule(zf)) return null
+        return moduleFileBaseNoExt(zResolved)
     }
 
     /** B154: build the per-importer-file map of CJS-default-namespace call shapes
@@ -26298,16 +26336,21 @@ class Checker(
         val nsMembers = mutableMapOf<String, MutableMap<String, String>>()
         val out: Pair<Map<String, String>, Map<String, Map<String, String>>> = direct to nsMembers
         cjsDefaultNsShapesCache[fileName] = out
-        // Gate: ESM importer under nodenext.
-        if (!options.effectiveModule.isNodeNext) return out
-        if (!(fileName.endsWith(".mts") || fileName.endsWith(".mjs"))) return out
+        // Gate: (a) nodenext ESM importer (.mts/.mjs), or (b) @module commonjs +
+        // esModuleInterop with a .ts importer (the `export =`->require-alias chain).
+        val nodenextEsm = options.effectiveModule.isNodeNext &&
+            (fileName.endsWith(".mts") || fileName.endsWith(".mjs"))
+        val commonjsMode = options.effectiveModule == ModuleKind.CommonJS &&
+            options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
+            fileName.endsWith(".ts") && !isDtsFile(fileName)
+        if (!nodenextEsm && !commonjsMode) return out
         val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return out
         for (stmt in result.sourceFile.statements) {
             if (stmt !is ImportDeclaration) continue
             val clause = stmt.importClause ?: continue
             if (clause.isTypeOnly) continue
             val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            val base = cjsExportDefaultBase(spec, fileName)
+            val base = cjsExportDefaultBase(spec, fileName, commonjsMode)
             if (base != null) {
                 // `import a from` / `import c, {...}` — the default binding.
                 clause.name?.let { direct[it.text] = base }
@@ -26327,7 +26370,7 @@ class Checker(
                 for (s2 in selfFile.statements) {
                     if (s2 !is ExportDeclaration || s2.isTypeOnly) continue
                     val spec2 = (s2.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                    val base2 = cjsExportDefaultBase(spec2, selfResolved) ?: continue
+                    val base2 = cjsExportDefaultBase(spec2, selfResolved, commonjsMode) ?: continue
                     val clause2 = s2.exportClause as? NamedExports ?: continue
                     for (e in clause2.elements) {
                         if (!e.isTypeOnly && (e.propertyName?.text ?: e.name.text) == "default") {
