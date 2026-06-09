@@ -37424,6 +37424,128 @@ interface DataView {
 
     /** Extract the parameter list from any signature-bearing AST declaration node. */
     /**
+     * B195: TS2322 for an object-literal property's function RETURN against an
+     * ALL-ANONYMOUS intersection param (`{ a: () => "foo" } & { [k: string]: () => any }`):
+     * for property 'a', the CONCRETE member from constituent 1 supplies the contextual
+     * return type ("foo"); the index signature is consulted only for properties with no
+     * concrete member (whose value types here return any → never checked). Two emission
+     * shapes: (A) literal return expr vs literal-typed declared return → TS2322 at the
+     * returned literal + TS6502 at the member FunctionType node; (B) object-literal return
+     * whose property mismatches the declared return TypeLiteral's literal-typed member →
+     * TS2322 at the inner property NAME + TS6500 at the declared member's name. Gates:
+     * every constituent is an anonymous Type.Object (named intersections skip — never
+     * re-opens the canUseTypeEngine gate; relations run only on literal/simple pairs);
+     * concrete member in EXACTLY ONE constituent; single non-generic call sig; the arg
+     * value is an un-annotated arrow/fn-expr with a single return expression.
+     */
+    private fun checkObjectLiteralFnReturnsAgainstIntersection(
+        arg: ObjectLiteralExpression, paramType: Type.Intersection, source: String, fileName: String,
+    ): Boolean {
+        for (c in paramType.types) {
+            if (c !is Type.Object || c is Type.Interface || c is Type.Reference || c.symbol != null) return false
+        }
+        var emitted = false
+        for (p in arg.properties) {
+            val pa = p as? PropertyAssignment ?: continue
+            val propName = (pa.name as? Identifier)?.text ?: continue
+            val fn = pa.initializer
+            val retExprRaw: Expression? = when (fn) {
+                is ArrowFunction -> if (fn.type != null) null else when (val b = fn.body) {
+                    is Expression -> b
+                    is Block -> (b.statements.singleOrNull() as? ReturnStatement)?.expression
+                    else -> null
+                }
+                is FunctionExpression -> if (fn.type != null) null
+                    else (fn.body.statements.singleOrNull() as? ReturnStatement)?.expression
+                else -> null
+            }
+            var retExpr = retExprRaw ?: continue
+            while (retExpr is ParenthesizedExpression) retExpr = retExpr.expression
+            val concrete = paramType.types.mapNotNull { (it as? Type.Object)?.members?.get(propName) }
+            if (concrete.size != 1) continue
+            val memberType = try { getTypeOfSymbol(concrete[0]) } catch (_: StackOverflowError) { continue }
+            if (memberType !is Type.Object) continue
+            val callSig = memberType.callSignatures?.singleOrNull() ?: continue
+            if (!callSig.typeParameters.isNullOrEmpty()) continue
+            val r = callSig.resolvedReturnType ?: continue
+            if (r === anyType || r === errorType || r is Type.TypeParam) continue
+            val memberFnNode = concrete[0].declarations.firstNotNullOfOrNull {
+                (it as? PropertyDeclaration)?.type as? FunctionType
+            }
+            if (r is Type.StringLiteral || r is Type.NumberLiteral) {
+                // Path A: literal-typed declared return vs a literal return expr.
+                val srcRet = literalTypeOfExpression(retExpr) ?: continue
+                val ok = try { checkTypeRelatedTo(srcRet, r, assignableRelation) } catch (_: StackOverflowError) { continue }
+                if (ok) continue
+                val start = retExpr.pos
+                val length = (expressionTrueEnd(retExpr) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                val related = mutableListOf<Diagnostic>()
+                if (memberFnNode != null) {
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, memberFnNode.pos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Message, code = 6502,
+                        fileName = fileName, line = rl, character = rc,
+                        start = memberFnNode.pos, length = 1,
+                    ))
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(srcRet)}' is not assignable to type '${typeToString(r)}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                    relatedInformation = related,
+                ))
+                emitted = true
+            } else if (r is Type.Object && r !is Type.Interface && r !is Type.Reference && r.symbol == null &&
+                retExpr is ObjectLiteralExpression) {
+                // Path B: object-literal return vs an anonymous declared return type.
+                try { resolveStructuredTypeMembers(r) } catch (_: StackOverflowError) { continue }
+                val retTypeLit = (memberFnNode?.type as? TypeLiteral)
+                for (ip in retExpr.properties) {
+                    val ipa = ip as? PropertyAssignment ?: continue
+                    val ipName = (ipa.name as? Identifier)?.text ?: continue
+                    val declSym = r.members?.get(ipName) ?: continue
+                    val declType = try { getTypeOfSymbol(declSym) } catch (_: StackOverflowError) { continue }
+                    if (declType !is Type.StringLiteral && declType !is Type.NumberLiteral) continue
+                    val srcLit = literalTypeOfExpression(ipa.initializer) ?: continue
+                    val ok = try { checkTypeRelatedTo(srcLit, declType, assignableRelation) } catch (_: StackOverflowError) { continue }
+                    if (ok) continue
+                    val start = (ipa.name as Identifier).pos
+                    val length = ipName.length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    val related = mutableListOf<Diagnostic>()
+                    // TS6500 at the declared member's NAME in the FunctionType's return TypeLiteral.
+                    val declProp = retTypeLit?.members?.firstNotNullOfOrNull { m ->
+                        (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == ipName }
+                    }
+                    if (declProp != null && retTypeLit != null) {
+                        val declNamePos = (declProp.name as Identifier).pos
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, declNamePos)
+                        val typeDisplay = formatTypeForDisplay(retTypeLit) ?: typeToString(r)
+                        related.add(Diagnostic(
+                            message = "The expected type comes from property '$ipName' which is declared here on type '$typeDisplay'",
+                            category = DiagnosticCategory.Message, code = 6500,
+                            fileName = fileName, line = rl, character = rc,
+                            start = declNamePos, length = ipName.length,
+                        ))
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(srcLit)}' is not assignable to type '${typeToString(declType)}'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        relatedInformation = related,
+                    ))
+                    emitted = true
+                }
+            }
+        }
+        return emitted
+    }
+
+    /**
      * B194: TS2322 per object-literal property for the reverse-mapped callback-ARITY rule:
      * a generic callee `f<S, T>(selectors: {[K in keyof T]: Alias<S, T[K]>})` called with
      * an object literal whose function-valued property requires MORE parameters than the
@@ -84555,6 +84677,13 @@ interface DataView {
                 val displayTarget = typeToString(paramType)
                 if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
                     break // TS2353 emitted — one error per call
+                }
+                // B195: per-property RETURN contextual check against an all-anonymous
+                // intersection — the CONCRETE member (present in exactly one constituent)
+                // wins over the index signature for that property's contextual type.
+                if (sigIn.typeParameters.isNullOrEmpty() && !calleeGenericInstantiation &&
+                    checkObjectLiteralFnReturnsAgainstIntersection(arg, paramType, source, fileName)) {
+                    break
                 }
             }
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
