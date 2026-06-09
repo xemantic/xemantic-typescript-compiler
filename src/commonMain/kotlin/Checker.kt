@@ -840,6 +840,10 @@ class Checker(
         if (shouldCheckDefiniteAssignment) {
             checkDefiniteAssignment()
             checkDefiniteAssignmentViaFlowGraph()
+            // B223: TS2454 for vars whose ONLY assignment sits inside a try block
+            // with a normally-completing catch (the catch-entry path leaves them
+            // unassigned at the post-try merge).
+            checkTryCatchOnlyAssignedVarReads()
         }
         // 6. Check for class properties without initializer (TS2564)
         // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
@@ -10153,6 +10157,228 @@ class Checker(
     // successful positive type-guard as implicit assignment for subsequent
     // reads). This pass models that by walking through `FlowCondition` nodes
     // and recognizing a small set of conditions that imply assignment.
+    /**
+     * B223: TS2454 "Variable 'X' is used before being assigned." for a `var` whose
+     * ONLY assignment sits inside a TRY block with a normally-completing catch
+     * (controlFlowDestructuringVariablesInTryCatch). tsc's definite-assignment uses
+     * AND-semantics at the post-try merge — the catch-entry path equals the pre-try
+     * state (an exception may fire before any assignment), so the var is possibly
+     * unassigned after the try. Our isAssignedAtFlow deliberately uses
+     * OR-semantics (FP-conservative) and both TS2454 mechanisms only track
+     * NO-initializer declarations — `var x = init` inside a try was invisible.
+     * Self-contained walker; default-suppress: candidates need concrete inferred
+     * types excluding undefined (incl. tuple/object destructure elements and
+     * defaults); ANY other assignment/declaration of the name in the scope (incl.
+     * catch/finally/nested fns) drops it; the read scan is straight-line and stops
+     * at the first control-flow statement; `typeof x` and write-targets exempt.
+     */
+    private fun checkTryCatchOnlyAssignedVarReads() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            tcvProcessScope(result.sourceFile.statements, result.sourceFile.text, fileName, emptySet())
+        }
+    }
+
+    private fun tcvProcessScope(stmts: List<Statement>, source: String, fileName: String, paramNames: Set<String>) {
+        // Recurse into nested function scopes first.
+        for (s in stmts) {
+            (s as? FunctionDeclaration)?.let { fd ->
+                fd.body?.let { b ->
+                    val ps = fd.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                    tcvProcessScope(b.statements, source, fileName, ps)
+                }
+            }
+        }
+        for ((idx, s) in stmts.withIndex()) {
+            val ts = s as? TryStatement ?: continue
+            val catchBlock = ts.catchClause?.block ?: continue
+            if (tcvHasTerminator(catchBlock.statements)) continue
+            // Candidates: try-block DIRECT `var` decls WITH initializers whose
+            // inferred type is concrete and excludes undefined.
+            val candidates = mutableSetOf<String>()
+            for (st in ts.tryBlock.statements) {
+                val vs = st as? VariableStatement ?: continue
+                if (vs.declarationList.flags != SyntaxKind.VarKeyword) continue
+                for (d in vs.declarationList.declarations) {
+                    val init = d.initializer ?: continue
+                    val initType: Type? = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { null }
+                    fun concreteNonUndef(t: Type?): Boolean = t != null && t !== errorType &&
+                        t !== anyType && !t.flags.hasAny(TypeFlags.Unknown) && !typeIncludesUndefined(t)
+                    fun defaultOk(e: Expression): Boolean =
+                        concreteNonUndef(literalTypeOfExpression(e)
+                            ?: try { getTypeOfExpression(e) } catch (_: StackOverflowError) { null })
+                    when (val n = d.name) {
+                        is Identifier -> if (concreteNonUndef(initType)) candidates.add(n.text)
+                        is ArrayBindingPattern -> n.elements.forEachIndexed { i, el ->
+                            val be = el as? BindingElement ?: return@forEachIndexed
+                            if (be.dotDotDotToken) return@forEachIndexed
+                            val bn = (be.name as? Identifier)?.text ?: return@forEachIndexed
+                            val beInit = be.initializer
+                            if (beInit != null) {
+                                if (defaultOk(beInit)) candidates.add(bn)
+                            } else {
+                                val elems = (initType as? Type.Object)?.tupleElementTypes
+                                if (elems != null && i < elems.size && concreteNonUndef(elems[i])) candidates.add(bn)
+                            }
+                        }
+                        is ObjectBindingPattern -> for (el in n.elements) {
+                            val be = el as? BindingElement ?: continue
+                            if (be.dotDotDotToken || be.propertyName != null) continue
+                            val bn = (be.name as? Identifier)?.text ?: continue
+                            val beInit = be.initializer
+                            if (beInit != null) {
+                                if (defaultOk(beInit)) candidates.add(bn)
+                            } else if (initType != null) {
+                                val prop = try { getPropertyOfType(initType, bn) } catch (_: StackOverflowError) { null }
+                                if (prop != null && !isOptionalProperty(prop)) {
+                                    val pt = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { null }
+                                    if (concreteNonUndef(pt)) candidates.add(bn)
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            if (candidates.isEmpty()) continue
+            candidates.removeAll(paramNames)
+            // "Try is the ONLY assignment" gate: any assignment OR other declaration
+            // of the name anywhere else in the scope (incl. catch/finally) drops it.
+            val found = mutableSetOf<String>()
+            for ((j, other) in stmts.withIndex()) {
+                if (j == idx) continue
+                collectAllAssignmentsAnywhere(other, candidates, found)
+                tcvCollectDeclared(other, candidates, found)
+            }
+            for (st in catchBlock.statements) {
+                collectAllAssignmentsAnywhere(st, candidates, found)
+                tcvCollectDeclared(st, candidates, found)
+            }
+            ts.finallyBlock?.statements?.forEach { st ->
+                collectAllAssignmentsAnywhere(st, candidates, found)
+                tcvCollectDeclared(st, candidates, found)
+            }
+            candidates.removeAll(found)
+            if (candidates.isEmpty()) continue
+            // Straight-line read scan after the try.
+            tcvScanReads(stmts, idx + 1, candidates, source, fileName)
+        }
+    }
+
+    /** B223: does the statement list contain a return/throw/break/continue anywhere
+     *  (not descending into nested function-likes)? */
+    private fun tcvHasTerminator(stmts: List<Statement>): Boolean = stmts.any { tcvStmtTerminates(it) }
+
+    private fun tcvStmtTerminates(stmt: Statement): Boolean = when (stmt) {
+        is ReturnStatement, is ThrowStatement, is BreakStatement, is ContinueStatement -> true
+        is Block -> tcvHasTerminator(stmt.statements)
+        is IfStatement -> tcvStmtTerminates(stmt.thenStatement) ||
+            (stmt.elseStatement?.let { tcvStmtTerminates(it) } == true)
+        is WhileStatement -> tcvStmtTerminates(stmt.statement)
+        is DoStatement -> tcvStmtTerminates(stmt.statement)
+        is ForStatement -> tcvStmtTerminates(stmt.statement)
+        is ForInStatement -> tcvStmtTerminates(stmt.statement)
+        is ForOfStatement -> tcvStmtTerminates(stmt.statement)
+        is SwitchStatement -> stmt.caseBlock.any { c ->
+            when (c) {
+                is CaseClause -> tcvHasTerminator(c.statements)
+                is DefaultClause -> tcvHasTerminator(c.statements)
+                else -> false
+            }
+        }
+        is TryStatement -> tcvHasTerminator(stmt.tryBlock.statements) ||
+            (stmt.catchClause?.block?.statements?.let { tcvHasTerminator(it) } == true) ||
+            (stmt.finallyBlock?.statements?.let { tcvHasTerminator(it) } == true)
+        is LabeledStatement -> tcvStmtTerminates(stmt.statement)
+        else -> false
+    }
+
+    /** B223: other DECLARATIONS of a candidate name (any kind, any pattern). */
+    private fun tcvCollectDeclared(stmt: Statement, candidates: Set<String>, found: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                fun collectNames(n: Node?) {
+                    when (n) {
+                        is Identifier -> if (n.text in candidates && d.initializer != null) found.add(n.text)
+                        is ArrayBindingPattern -> n.elements.forEach { (it as? BindingElement)?.name?.let(::collectNames) }
+                        is ObjectBindingPattern -> n.elements.forEach { (it as? BindingElement)?.name?.let(::collectNames) }
+                        else -> {}
+                    }
+                }
+                collectNames(d.name)
+            }
+            is Block -> stmt.statements.forEach { tcvCollectDeclared(it, candidates, found) }
+            is IfStatement -> {
+                tcvCollectDeclared(stmt.thenStatement, candidates, found)
+                stmt.elseStatement?.let { tcvCollectDeclared(it, candidates, found) }
+            }
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { tcvCollectDeclared(it, candidates, found) }
+                stmt.catchClause?.block?.statements?.forEach { tcvCollectDeclared(it, candidates, found) }
+                stmt.finallyBlock?.statements?.forEach { tcvCollectDeclared(it, candidates, found) }
+            }
+            else -> {}
+        }
+    }
+
+    /** B223: straight-line forward read scan — first bare-Identifier read per
+     *  candidate emits TS2454; stops entirely at the first control-flow statement. */
+    private fun tcvScanReads(
+        stmts: List<Statement>, from: Int, candidates: MutableSet<String>,
+        source: String, fileName: String,
+    ) {
+        fun emitAt(id: Identifier) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, id.pos)
+            diagnostics.add(Diagnostic(
+                message = "Variable '${id.text}' is used before being assigned.",
+                category = DiagnosticCategory.Error, code = 2454,
+                fileName = fileName, line = line, character = ch,
+                start = id.pos, length = id.text.length,
+            ))
+            candidates.remove(id.text)
+        }
+        fun walk(e: Expression) {
+            if (candidates.isEmpty()) return
+            when (e) {
+                is Identifier -> if (e.text in candidates) emitAt(e)
+                is TypeOfExpression -> {} // tsc-exempt
+                is BinaryExpression -> {
+                    if (e.operator == SyntaxKind.Equals && e.left is Identifier) walk(e.right)
+                    else { walk(e.left); walk(e.right) }
+                }
+                is CallExpression -> { walk(e.expression); e.arguments.forEach { walk(it) } }
+                is NewExpression -> { walk(e.expression); e.arguments?.forEach { walk(it) } }
+                is PropertyAccessExpression -> walk(e.expression)
+                is ElementAccessExpression -> { walk(e.expression); walk(e.argumentExpression) }
+                is ParenthesizedExpression -> walk(e.expression)
+                is PrefixUnaryExpression -> walk(e.operand)
+                is PostfixUnaryExpression -> walk(e.operand)
+                is ArrayLiteralExpression -> e.elements.forEach { walk(it) }
+                is SpreadElement -> walk(e.expression)
+                is ObjectLiteralExpression -> e.properties.forEach { p ->
+                    (p as? PropertyAssignment)?.initializer?.let { walk(it) }
+                }
+                is TemplateExpression -> e.templateSpans.forEach { walk(it.expression) }
+                is AsExpression -> walk(e.expression)
+                is ConditionalExpression -> { walk(e.condition); walk(e.whenTrue); walk(e.whenFalse) }
+                else -> {}
+            }
+        }
+        for (i in from until stmts.size) {
+            if (candidates.isEmpty()) return
+            when (val st = stmts[i]) {
+                is ExpressionStatement -> walk(st.expression)
+                is ReturnStatement -> st.expression?.let { walk(it) }
+                is ThrowStatement -> st.expression?.let { walk(it) }
+                is VariableStatement -> for (d in st.declarationList.declarations) {
+                    d.initializer?.let { walk(it) }
+                }
+                else -> return // control flow may narrow/assign — stop
+            }
+        }
+    }
+
     private fun checkDefiniteAssignmentViaFlowGraph() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
