@@ -64126,6 +64126,9 @@ interface DataView {
                 // constituent contributing via SetAccessor — preserves existing
                 // behavior for plain property intersections.
                 if (objType is Type.Intersection) {
+                    // B222: TS2412 pre-check — eOPT undefined-write to an optional
+                    // intersection prop lacking undefined in ≥1 constituent.
+                    if (tryEmitTs2412IntersectionOptionalUndefinedWrite(target, value, objType, propName, source, fileName)) return
                     if (checkIntersectionPropertyAssignment(target, value, objType, propName, source, fileName)) return
                     return
                 }
@@ -64284,6 +64287,65 @@ interface DataView {
      * the path didn't apply (caller may continue but typically returns since
      * we've already handled the intersection case).
      */
+    /**
+     * B222: TS2412 for `recv.prop = undefined` on an INTERSECTION-typed receiver
+     * whose optional property lacks `undefined` in ≥1 constituent under
+     * exactOptionalPropertyTypes (intersectionsAndOptionalProperties2/3). The
+     * intersection write-type drops `undefined` when any constituent's prop type
+     * lacks it, and eOPT forbids explicit undefined writes to `?` props — tsc
+     * always emits TS2412 for the shape. The 17.72 path bails (no setter
+     * contribution + nullish-RHS bail), so this pre-check runs first.
+     * Default-suppress: non-Object constituents, accessor declarations,
+     * non-optional props, unresolved member types all bail.
+     */
+    private fun tryEmitTs2412IntersectionOptionalUndefinedWrite(
+        target: PropertyAccessExpression, value: Expression, objType: Type.Intersection,
+        propName: String, source: String, fileName: String,
+    ): Boolean {
+        if (!options.exactOptionalPropertyTypes || !strictNullChecks) return false
+        val valueType = try { getTypeOfExpression(value) } catch (_: StackOverflowError) { return false }
+        if (valueType is Type.Union || !valueType.flags.hasAny(TypeFlags.Undefined) ||
+            valueType.flags.hasAny(TypeFlags.Any) || valueType === errorType) return false
+        fun includesUndefined(t: Type): Boolean =
+            t.flags.hasAny(TypeFlags.Undefined) ||
+                (t is Type.Union && t.types.any { it.flags.hasAny(TypeFlags.Undefined) })
+        var anyLacksUndefined = false
+        var declared = 0
+        val contributions = LinkedHashSet<String>()
+        for (c in objType.types) {
+            if (c !is Type.Object) return false
+            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return false }
+            val propSym = c.members?.get(propName) ?: continue
+            if (propSym.declarations.any { it is GetAccessor || it is SetAccessor }) return false
+            if (!isOptionalProperty(propSym)) return false
+            val pt = try { getPropertyTypeForRelation(c, propSym) } catch (_: StackOverflowError) { return false }
+            if (pt === anyType || pt === errorType || pt.flags.hasAny(TypeFlags.Unknown)) return false
+            declared++
+            if (!includesUndefined(pt)) anyLacksUndefined = true
+            val stripped: Type? = if (pt is Type.Union) {
+                val kept = pt.types.filter { !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Void) }
+                when {
+                    kept.isEmpty() -> null
+                    kept.size == 1 -> kept[0]
+                    else -> getUnionType(kept)
+                }
+            } else pt
+            stripped?.let { contributions.add(typeToString(it)) }
+        }
+        if (declared == 0 || !anyLacksUndefined || contributions.isEmpty()) return false
+        val displayTarget = contributions.joinToString(" & ")
+        val start = target.expression.pos
+        val length = target.name.pos + target.name.text.length - start
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type 'undefined' is not assignable to type '$displayTarget' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.",
+            category = DiagnosticCategory.Error, code = 2412,
+            fileName = fileName, line = line, character = ch,
+            start = start, length = length,
+        ))
+        return true
+    }
+
     private fun checkIntersectionPropertyAssignment(
         target: PropertyAccessExpression,
         value: Expression,
