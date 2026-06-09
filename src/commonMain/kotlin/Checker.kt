@@ -56747,11 +56747,36 @@ interface DataView {
             is ArrayLiteralExpression -> expr.elements.forEach {
                 walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
             }
-            is ObjectLiteralExpression -> expr.properties.forEach { prop ->
-                when (prop) {
-                    is PropertyAssignment -> walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams)
-                    is SpreadAssignment -> walkFunctionBodiesInExpr(prop.expression, source, fileName, varTypes, typeParams)
-                    else -> {}
+            is ObjectLiteralExpression -> {
+                // B150: in JS files, descend into object-literal METHOD/ACCESSOR bodies
+                // (shorthand `{ a() {...} }`) and type `this` as the object-literal type
+                // so `this.X = v` (X a member of the same literal) is type-checked
+                // (TS2322). Function-VALUED properties (`{ a: function(){} }`) already
+                // descend via PropertyAssignment below. Gated to JS-like files: in .ts
+                // an un-annotated object-method `this` is TS2683 (implicit-any-this),
+                // not the object type — so this typing would be wrong there.
+                var objLitThisType: Type? = null
+                val jsLike = isJsLikeFileName(fileName)
+                fun objLitThis(): Type {
+                    if (objLitThisType == null) objLitThisType =
+                        try { getTypeOfObjectLiteral(expr) } catch (_: StackOverflowError) { anyType }
+                    return objLitThisType!!
+                }
+                expr.properties.forEach { prop ->
+                    when (prop) {
+                        is PropertyAssignment -> walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams)
+                        is SpreadAssignment -> walkFunctionBodiesInExpr(prop.expression, source, fileName, varTypes, typeParams)
+                        is MethodDeclaration -> if (jsLike) walkObjectLiteralMemberBody(
+                            prop.body, prop.type, prop.parameters, prop.typeParameters, objLitThis(),
+                            source, fileName, varTypes, typeParams, ModifierFlag.Async in prop.modifiers)
+                        is GetAccessor -> if (jsLike) walkObjectLiteralMemberBody(
+                            prop.body, prop.type, prop.parameters, null, objLitThis(),
+                            source, fileName, varTypes, typeParams, false)
+                        is SetAccessor -> if (jsLike) walkObjectLiteralMemberBody(
+                            prop.body, prop.type, prop.parameters, null, objLitThis(),
+                            source, fileName, varTypes, typeParams, false)
+                        else -> {}
+                    }
                 }
             }
             is ParenthesizedExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
@@ -56809,6 +56834,28 @@ interface DataView {
                 walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
             }
             else -> {}
+        }
+    }
+
+    /** B150: walk an object-literal method/accessor body with `this` bound to the
+     *  object-literal type, so `this.X = v` is type-checked. An object-literal
+     *  method rebinds `this` away from any enclosing class. */
+    private fun walkObjectLiteralMemberBody(
+        body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
+        funcTypeParams: List<TypeParameter>?, thisType: Type,
+        source: String, fileName: String, varTypes: MutableMap<String, String>,
+        typeParams: Set<String>, isAsync: Boolean,
+    ) {
+        if (body == null) return
+        val savedClassForThis = currentClassForThis
+        currentClassForThis = null
+        val savedLocal = currentLocalTypes
+        currentLocalTypes = currentLocalTypes.toMutableMap().apply { put("this", thisType) }
+        try {
+            checkFunctionBody(body, returnTypeNode, parameters, funcTypeParams, source, fileName, varTypes, typeParams, isAsync = isAsync)
+        } finally {
+            currentLocalTypes = savedLocal
+            currentClassForThis = savedClassForThis
         }
     }
 
@@ -59681,6 +59728,13 @@ interface DataView {
                         val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
                         emitTS2322(squiggleStart, squiggleLength, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
+                } else {
+                    // B150: no class-property type string in varTypes (e.g. `this.X = v`
+                    // inside an OBJECT-LITERAL method, where `this` is the object-literal
+                    // type set in currentLocalTypes by walkObjectLiteralMemberBody). Route
+                    // through the type-engine path. FP-safe for class methods: there
+                    // getTypeOfExpression(this) yields anyType (B101) so the helper bails.
+                    checkPropertyAccessAssignment(target, expr.right, source, fileName)
                 }
             } else if (target is PropertyAccessExpression) {
                 // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
