@@ -86276,7 +86276,7 @@ interface DataView {
                     if (constituent is Type.Object) resolveStructuredTypeMembers(constituent)
                 }
                 val displayTarget = typeToString(paramType)
-                if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
+                if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
                     break // TS2353 emitted — one error per call
                 }
                 // B195: per-property RETURN contextual check against an all-anonymous
@@ -86302,7 +86302,7 @@ interface DataView {
                     val hasTargetProps = !paramType.properties.isNullOrEmpty()
                     if (hasTargetProps && canUseTypeEngine(argType, paramType)) {
                         val displayTarget = typeToString(paramType)
-                        if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName)) {
+                        if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
                             break // TS2353 emitted — one error per call
                         }
                         // 16.4dn: Missing-required-property check for object literal arguments.
@@ -89401,6 +89401,13 @@ interface DataView {
         displayTarget: String,
         source: String,
         fileName: String,
+        // B220: TS6500 "expected type comes from property ..." built by the PARENT
+        // level's recursion (attached to nested TS2353/TS2561 emissions). tsc
+        // attaches these only on the CALL-ARG path (contextual typing through a
+        // signature) — var-decl/assignment nested EPC stays related-free
+        // (nestedFreshLiteral), so the flag is set only at the call-arg sites.
+        buildNestedRelated: Boolean = false,
+        parentRelated: Diagnostic? = null,
     ): Boolean {
         if (sourceType !is Type.Object) return false
         val sourceProps = sourceType.properties ?: return false
@@ -89452,6 +89459,7 @@ interface DataView {
                     character = character,
                     start = propPos,
                     length = propName.length,
+                    relatedInformation = listOfNotNull(parentRelated),
                 ))
             } else {
                 diagnostics.add(Diagnostic(
@@ -89463,6 +89471,7 @@ interface DataView {
                     character = character,
                     start = propPos,
                     length = propName.length,
+                    relatedInformation = listOfNotNull(parentRelated),
                 ))
             }
             emitted = true
@@ -89484,13 +89493,36 @@ interface DataView {
                 if (nestedInit !is ObjectLiteralExpression) continue
                 val nestedTargetType = getTargetPropertyType(targetType, propName) ?: continue
                 if (nestedTargetType !is Type.Object) continue
+                // B220: an object literal vs an array/tuple member is a TS2322
+                // shape in tsc, never TS2353 — don't descend.
+                if (nestedTargetType is Type.Reference &&
+                    nestedTargetType.target.symbol?.name in setOf("Array", "ReadonlyArray")) continue
+                if (nestedTargetType.tupleElementTypes != null) continue
                 resolveStructuredTypeMembers(nestedTargetType)
                 if (nestedTargetType.properties.isNullOrEmpty()) continue
                 val nestedSourceType = getTypeOfExpression(nestedInit)
                 if (nestedSourceType !is Type.Object) continue
                 if (!canUseTypeEngine(nestedSourceType, nestedTargetType)) continue
                 val nestedDisplay = typeToString(nestedTargetType)
-                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName)) {
+                // B220: TS6500 for the nested emission — only when THIS level's
+                // target is not a union (tsc's getPropertyOfType-on-union rule;
+                // nonObjectUnionNestedExcessPropertyCheck must stay related-free).
+                val nextRelated: Diagnostic? = if (buildNestedRelated && targetType !is Type.Union) {
+                    val ownerSym = when (targetType) {
+                        is Type.Intersection -> targetType.types.firstNotNullOfOrNull {
+                            (it as? Type.Object)?.members?.get(propName)
+                        }
+                        is Type.Object -> targetType.members?.get(propName)
+                        else -> null
+                    }
+                    ownerSym?.let { sym ->
+                        createPropertyDeclaredHereRelatedInfo(sym)?.copy(
+                            message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetType)}'",
+                            code = 6500,
+                        )
+                    }
+                } else null
+                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName, buildNestedRelated, nextRelated)) {
                     emitted = true
                 }
             }
@@ -89505,8 +89537,13 @@ interface DataView {
     private fun getTargetPropertyType(targetType: Type, propName: String): Type? {
         when (targetType) {
             is Type.Object -> {
+                resolveStructuredTypeMembers(targetType)
                 val sym = targetType.members?.get(propName) ?: return null
-                return getTypeOfSymbol(sym)
+                // B220: route through getPropertyTypeForRelation so a GENERIC
+                // Reference target's member resolves INSTANTIATED (`props: TProps`
+                // on NestedProp<ITestProps> → ITestProps, not the unscoped
+                // errorType that raw getTypeOfSymbol returns).
+                return getPropertyTypeForRelation(targetType, sym)
             }
             is Type.Intersection -> {
                 for (c in targetType.types) {
