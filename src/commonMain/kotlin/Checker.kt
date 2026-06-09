@@ -64008,6 +64008,12 @@ interface DataView {
         val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+            // B149: `c['foo'](args)` — an element-access callee with a literal key
+            // resolves to the named property/method type (incl. overload signatures)
+            // via `getTypeOfElementAccess`, so overload resolution below picks the
+            // right return type (e.g. `var r: string = c['foo'](1)` → number → TS2322).
+            // Non-literal keys / unresolvable accesses yield anyType (handled below).
+            is ElementAccessExpression -> getTypeOfElementAccess(callee)
             else -> return anyType
         }
         if (calleeType === anyType || calleeType === errorType) return anyType
