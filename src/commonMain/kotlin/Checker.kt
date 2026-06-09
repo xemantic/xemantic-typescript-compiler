@@ -61351,7 +61351,11 @@ interface DataView {
                         catch (_: StackOverflowError) { emptyList() }
                     if (missing.isNotEmpty()) {
                         val displaySource = typeToString(sourceType)
-                        val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                        val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
+                            targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
+                            targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
+                            typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
+                        else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                         val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                         if (missing.size >= 2) {
                             diagnostics.add(Diagnostic(
@@ -61393,7 +61397,11 @@ interface DataView {
                     val srcCtorElab = getNonConstructibleElaboration(sourceType, targetType)
                     if (srcCtorElab != null) {
                         val displaySource = typeToString(sourceType)
-                        val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                        val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
+                            targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
+                            targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
+                            typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
+                        else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                         val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                         diagnostics.add(Diagnostic(
                             message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
@@ -61455,7 +61463,11 @@ interface DataView {
                     val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
                         else getWidenedLiteralType(sourceType)
                     val displaySource = typeToString(displaySourceType)
-                    val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                    val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
+                            targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
+                            targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
+                            typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
+                        else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val returnKeywordLength = 6
                     val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                     // B49.3: TS2739/TS2740 missing-properties emission for return-statement
@@ -64624,6 +64636,14 @@ interface DataView {
         // otherwise use the implementation declaration
         val sigDecls = if (overloadDecls.isNotEmpty()) overloadDecls else listOfNotNull(implDecl)
         if (sigDecls.isEmpty()) return anyType
+
+        // B198: in-progress sentinel — store fnType BEFORE resolving signatures so a
+        // SELF-REFERENTIAL return annotation (`function foo(...): typeof foo`) resolves
+        // through getTypeFromTypeQuery → getTypeOfSymbol to THIS instance instead of
+        // recursing unboundedly (StackOverflow silently swallowed by every consumer →
+        // zero diagnostics). Same pattern as the getDeclaredTypeOfClassOrInterface
+        // cache-before-bases gotcha. getTypeOfSymbol re-stores the same instance.
+        symbolTypes[symbol.id] = fnType
 
         val signatures = sigDecls.map { decl ->
             // 16.4: Create type parameters FIRST, then set currentTypeParamScope
@@ -69313,6 +69333,39 @@ interface DataView {
         return "$prefix$tpStr($params): $retType"
     }
 
+    /** B198: Object-branch rendering for a FUNCTION-symbol type, entered with the
+     *  [typeToStringInProgress] recursion guard held (see typeToString) so a
+     *  self-referential `typeof foo` return renders as `typeof foo`. */
+    private fun typeToStringObjectBody(type: Type.Object): String {
+        val callSigs = type.callSignatures
+        val ctorSigs = type.constructSignatures
+        val hasSignatures = !callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()
+        val hasProperties = !type.properties.isNullOrEmpty()
+        if (hasSignatures && hasProperties) {
+            val parts = mutableListOf<String>()
+            callSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = false)) }
+            ctorSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = true)) }
+            for (p in type.properties!!) {
+                val propType = symbolTypes[p.id]
+                parts.add("${p.name}: ${if (propType != null) typeToString(propType) else "any"}")
+            }
+            return "{ ${parts.joinToString("; ")}; }"
+        }
+        if (hasSignatures) {
+            val totalSigs = (callSigs?.size ?: 0) + (ctorSigs?.size ?: 0)
+            return if (totalSigs == 1) {
+                if (!callSigs.isNullOrEmpty()) signatureToString(callSigs.first(), isConstruct = false)
+                else signatureToString(ctorSigs!!.first(), isConstruct = true)
+            } else {
+                val parts = mutableListOf<String>()
+                callSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = false)) }
+                ctorSigs?.forEach { parts.add(signatureToStringColon(it, isConstruct = true)) }
+                "{ ${parts.joinToString("; ")}; }"
+            }
+        }
+        return type.symbol?.name ?: "{}"
+    }
+
     private fun typeToString(type: Type): String {
         // B50.2: alias-display preservation. When a Type was produced by the B50.1
         // generic-alias-substitution path, render with the alias name + arg display
@@ -69380,6 +69433,21 @@ interface DataView {
                 val tupleElems = type.tupleElementTypes
                 if (tupleElems != null) {
                     return "[${tupleElems.joinToString(", ") { typeToString(it) }}]"
+                }
+                // B198: self-recursion cut for function-symbol types — a function whose
+                // return annotation is `typeof <itself>` renders the nested occurrence as
+                // `typeof foo` (matching tsc's `() => typeof fn` convention) instead of
+                // recursing through signatureToString unboundedly.
+                val fnSym = type.symbol
+                if (fnSym != null && fnSym.flags.hasAny(SymbolFlags.Function) &&
+                    !fnSym.flags.hasAny(SymbolFlags.Class)) {
+                    if (type.id in typeToStringInProgress) return "typeof ${fnSym.name}"
+                    typeToStringInProgress.add(type.id)
+                    try {
+                        return typeToStringObjectBody(type)
+                    } finally {
+                        typeToStringInProgress.remove(type.id)
+                    }
                 }
                 val callSigs = type.callSignatures
                 val ctorSigs = type.constructSignatures
