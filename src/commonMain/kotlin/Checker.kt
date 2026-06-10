@@ -66000,6 +66000,9 @@ interface DataView {
         val arg = target.argumentExpression
         val keys: List<String> = when {
             arg is StringLiteralNode -> listOf(arg.text)
+            // B244: numeric-literal keys late-bind to the same-named member
+            // (`x[1]` on `interface { 1: string }` — members store the name "1").
+            arg is NumericLiteralNode -> listOf(arg.text)
             arg is Identifier -> {
                 val keyType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return false }
                 when {
@@ -66016,6 +66019,7 @@ interface DataView {
         if (recvType === anyType || recvType === errorType) return false
 
         var anySetter = false
+        var anyDataPrim = false
         val perKeyWriteTypes = mutableListOf<Type>()
         for (key in keys) {
             when (recvType) {
@@ -66030,18 +66034,44 @@ interface DataView {
                     try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return false }
                     val propSym = recvType.members?.get(key) ?: return false
                     val setterDecl = propSym.declarations.firstOrNull { it is SetAccessor } as? SetAccessor
-                    if (setterDecl == null) return false  // data-prop / getter-only: keep prior behavior
-                    anySetter = true
-                    val wt = setterDecl.parameters.firstOrNull()?.type?.let {
-                        try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
-                    } ?: return false
+                    val wt: Type
+                    if (setterDecl != null) {
+                        anySetter = true
+                        wt = setterDecl.parameters.firstOrNull()?.type?.let {
+                            try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                        } ?: return false
+                    } else {
+                        // B244: DATA-property literal-keyed writes — a narrow,
+                        // primitive-only mirror of the dot-notation data path.
+                        // Bails for every shape another check owns: getter-only
+                        // (TS2540), readonly (TS2540), optional (B117 undefined-write
+                        // legality), tuples (TS2493 bounds), index-signature receivers
+                        // (B85.1d), enums (TS2540 member writes), and private/protected
+                        // members (TS2341/TS2445).
+                        if (propSym.declarations.any { it is GetAccessor }) return false
+                        if (recvType.tupleElementTypes != null) return false
+                        if (recvType.stringIndexInfo != null || recvType.numberIndexInfo != null) return false
+                        if (recvType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return false
+                        if (isReadonlySymbol(propSym)) return false
+                        if (isOptionalProperty(propSym)) return false
+                        if (propSym.declarations.any { d ->
+                                d is PropertyDeclaration &&
+                                    (ModifierFlag.Private in d.modifiers || ModifierFlag.Protected in d.modifiers)
+                            }) return false
+                        val resolved = try {
+                            resolveGenericPropertyType(recvType, propSym) ?: getTypeOfSymbol(propSym)
+                        } catch (_: StackOverflowError) { return false }
+                        if (!isPrimitiveOnlyWriteType(resolved)) return false
+                        anyDataPrim = true
+                        wt = resolved
+                    }
                     if (wt === anyType || wt === errorType) return false
                     perKeyWriteTypes.add(wt)
                 }
                 else -> return false
             }
         }
-        if (!anySetter) return false
+        if (!anySetter && !anyDataPrim) return false
         val writeType = reduceIntersectionForWriteType(perKeyWriteTypes)
         if (writeType === anyType || writeType === errorType) return false
         if (writeType.flags.hasAny(TypeFlags.Never)) return false
