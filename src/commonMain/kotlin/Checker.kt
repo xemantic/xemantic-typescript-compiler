@@ -601,6 +601,10 @@ class Checker(
     // checkUnresolvedInExprCore (B276). MUST be declared before init {} (init-order).
     private val destructuringPatternPos = HashSet<Int>()
 
+    // B281: per-file cache of (top-level ambient module names, file declares ANY
+    // string-named module anywhere). MUST be declared before init {} (init-order).
+    private val fileAmbientModuleInfoCache = HashMap<String, Triple<Set<String>, Boolean, Set<String>>>()
+
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
@@ -1358,6 +1362,8 @@ class Checker(
         checkDestructuringDefaultTypeMismatches()
         // 72a4e3 (B279): TS18048 for optional number params used in straight-line arithmetic
         checkOptionalParamNullishArithmetic()
+        // 72a4e4 (B281): TS2435 nested ambient modules + TS2668 export on ambient modules
+        checkNestedAmbientModules()
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
         checkEmptyDestructuringNullishSource()
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
@@ -21690,6 +21696,25 @@ class Checker(
                     if (unresolved) {
                         emitTS2307(expr, moduleName, source, fileName)
                     }
+                } else if (expr is StringLiteralNode && ModifierFlag.Export !in stmt.modifiers) {
+                    // B281 (single-file): tsc pairs TS2307 with the TS1147 only when the
+                    // FILE declares ambient modules (its program then collects/resolves
+                    // module references) and the bare name is not a TOP-LEVEL ambient
+                    // module — a NESTED `declare module "X"` never registers
+                    // (privacyImportParseErrors lines 59/69 vs
+                    // importDeclarationInModuleDeclaration1 which has no ambient modules).
+                    // An `export import … = require(…)` gets ONLY TS1147 (lines 81/82).
+                    // Exemption set = ALL top-level string-module names (raw — in a
+                    // module file augmentation names also suppress the namespace-nested
+                    // TS2307; lines 273/277 of privacyImportParseErrors get TS1147 only).
+                    val moduleName = expr.text
+                    val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
+                    if (!isRelative) {
+                        val amInfo = fileAmbientModuleInfo(fileName)
+                        if (amInfo.second && moduleName !in amInfo.third) {
+                            emitTS2307(expr, moduleName, source, fileName)
+                        }
+                    }
                 }
             }
             else -> {}
@@ -26524,7 +26549,8 @@ class Checker(
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
 
-            for (stmt in flattenImportLikeStatements(result.sourceFile.statements)) {
+            val ambientBodyImportPositions = mutableSetOf<Int>()
+            for (stmt in flattenImportLikeStatements(result.sourceFile.statements, ambientBodyImportPositions)) {
                 val isSideEffectImport = stmt is ImportDeclaration && stmt.importClause == null
                 val specifier = when (stmt) {
                     is ImportDeclaration -> stmt.moduleSpecifier
@@ -27033,6 +27059,15 @@ class Checker(
                     // and some scoped packages — all rooted in the resolver's inability to model
                     // node_modules layout / untyped .js / symlinks.
                 } else {
+                    // B281: in single-file mode the flatten walker reaches imports INSIDE
+                    // ambient module bodies — a bare specifier naming a TOP-LEVEL ambient
+                    // module of the same file resolves (privacyGloImportParseErrors line
+                    // 112: `require("glo_M2_public")` inside `declare module "use_…"`).
+                    // In a MODULE file, top-level string modules are AUGMENTATIONS
+                    // (unregistered) so TOP-LEVEL imports of them fail TS2307 — but an
+                    // import inside an ambient BODY still resolves via the merged symbol.
+                    val amInfo = fileAmbientModuleInfo(fileName)
+                    if (moduleName in amInfo.first) continue
                     if (isSideEffectImport) {
                         emitTS2882(specifier, moduleName, source, fileName)
                     } else {
@@ -27361,7 +27396,103 @@ class Checker(
      * Identifier-named namespaces (`namespace N { ... }`, `declare global { ... }`) are NOT
      * recursed into because imports there use different diagnostics (TS1147/TS2667/TS1194).
      */
-    private fun flattenImportLikeStatements(statements: List<Statement>): List<Statement> {
+    /** B281: (REGISTERED top-level ambient module names — empty for external-module
+     *  files where top-level `declare module "X"` is an augmentation; file declares ANY
+     *  string-named module; ALL top-level string-module names regardless of file kind). */
+    private fun fileAmbientModuleInfo(fileName: String): Triple<Set<String>, Boolean, Set<String>> =
+        fileAmbientModuleInfoCache.getOrPut(fileName) {
+            val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+                ?: return@getOrPut Triple(emptySet(), false, emptySet())
+            val topLevel = mutableSetOf<String>()
+            var hasAny = false
+            // In an EXTERNAL MODULE file, top-level `declare module "X"` is an
+            // AUGMENTATION (registers nothing) — only script files define ambient
+            // modules (tsc collectModuleReferences).
+            val isScript = !isModuleFile(result.sourceFile.statements)
+            fun walk(stmts: List<Statement>, top: Boolean) {
+                for (s in stmts) {
+                    if (s !is ModuleDeclaration) continue
+                    val n = s.name
+                    if (n is StringLiteralNode) {
+                        hasAny = true
+                        if (top) topLevel.add(n.text)
+                    }
+                    (s.body as? ModuleBlock)?.let { walk(it.statements, false) }
+                }
+            }
+            walk(result.sourceFile.statements, true)
+            Triple(if (isScript) topLevel else emptySet(), hasAny, topLevel)
+        }
+
+    /**
+     * B281: TS2435 "Ambient modules cannot be nested in other modules or namespaces."
+     * (at the module's string-literal name, for every string-named ModuleDeclaration
+     * nested inside ANY module/namespace body) + TS2668 "'export' modifier cannot be
+     * applied to ambient modules and module augmentations since they are always
+     * visible." (at the `export` keyword, for every exported string-named module —
+     * top-level or nested). Purely syntactic (privacyImportParseErrors family).
+     */
+    private fun checkNestedAmbientModules() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val isScript = !isModuleFile(result.sourceFile.statements)
+        for (stmt in result.sourceFile.statements) namWalk(stmt, 0, isScript, source, fileName)
+        }
+    }
+
+    /** [container]: 0 = file top level, 1 = immediate child of a TOP-LEVEL string-named
+     *  module in a SCRIPT file (an augmentation position — legal, no TS2435; in a
+     *  MODULE file only top-level string modules are augmentations), 2 = other. */
+    private fun namWalk(stmt: Statement, container: Int, isScript: Boolean, source: String, fileName: String) {
+        if (stmt !is ModuleDeclaration) return
+        val name = stmt.name
+        if (name is StringLiteralNode) {
+            if (ModifierFlag.Export in stmt.modifiers) {
+                // tsc anchors TS2668 at the FIRST modifier keyword with its own length
+                // (`export declare` → at `export` len 6; `declare export` → at `declare`
+                // len 7). The node's pos may sit AFTER the modifiers — scan the line.
+                val lineStart = source.lastIndexOf('\n', name.pos).let { if (it < 0) 0 else it + 1 }
+                val exportAt = source.indexOf("export", lineStart)
+                val declareAt = source.indexOf("declare", lineStart)
+                val (kwStart, kwLen) = when {
+                    declareAt in lineStart until name.pos && (exportAt < lineStart || declareAt < exportAt) ->
+                        declareAt to 7
+                    exportAt in lineStart until name.pos -> exportAt to 6
+                    else -> -1 to 0
+                }
+                if (kwStart >= 0) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, kwStart)
+                    diagnostics.add(Diagnostic(
+                        message = "'export' modifier cannot be applied to ambient modules and module augmentations since they are always visible.",
+                        category = DiagnosticCategory.Error, code = 2668,
+                        fileName = fileName, line = line, character = ch,
+                        start = kwStart, length = kwLen,
+                    ))
+                }
+            }
+            if (container == 2) {
+                val len = (name.rawText?.length ?: name.text.length) + 2
+                val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Ambient modules cannot be nested in other modules or namespaces.",
+                    category = DiagnosticCategory.Error, code = 2435,
+                    fileName = fileName, line = line, character = ch,
+                    start = name.pos, length = len,
+                ))
+            }
+            val childContainer = if (container == 0 && isScript) 1 else 2
+            (stmt.body as? ModuleBlock)?.statements?.forEach { namWalk(it, childContainer, isScript, source, fileName) }
+        } else {
+            (stmt.body as? ModuleBlock)?.statements?.forEach { namWalk(it, 2, isScript, source, fileName) }
+        }
+    }
+
+    private fun flattenImportLikeStatements(
+        statements: List<Statement>,
+        ambientBodyPositions: MutableSet<Int>? = null,
+    ): List<Statement> {
         val out = mutableListOf<Statement>()
         for (s in statements) {
             when (s) {
@@ -27370,7 +27501,9 @@ class Checker(
                     if (s.name is StringLiteralNode) {
                         val body = s.body
                         if (body is ModuleBlock) {
-                            out.addAll(flattenImportLikeStatements(body.statements))
+                            val inner = flattenImportLikeStatements(body.statements, ambientBodyPositions)
+                            if (ambientBodyPositions != null) inner.forEach { ambientBodyPositions.add(it.pos) }
+                            out.addAll(inner)
                         }
                     }
                 }
