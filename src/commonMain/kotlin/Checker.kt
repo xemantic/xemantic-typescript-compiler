@@ -1331,6 +1331,8 @@ class Checker(
         checkShiftOverflow()
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
         checkIncDecTypeParamOperands()
+        // 64d3b (B265). Mixin class-expression extending a type-param-typed value (TS2507/TS2545/TS2322)
+        checkMixinClassExtendsTypeParam()
         // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
         checkGenericIndexWrite()
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
@@ -97756,6 +97758,150 @@ interface DataView {
                 incDecScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), emptySet())
             } catch (_: StackOverflowError) {}
         }
+    }
+
+    /** B265: `return class X extends superClass { ... }` inside a generic function where
+     *  `superClass` is a parameter typed as a bare type-param `TFunction`.
+     *  - Unconstrained TP: its apparent type has no construct signatures, so the heritage
+     *    expression gets TS2507 + related TS2735 at the TP declaration, and (when the
+     *    function's return annotation is the same bare TP) the return gets TS2322 with the
+     *    "could be instantiated" chain — the base resolution errored, so the class static
+     *    type is plain `typeof X`, never assignable to the bare TP.
+     *  - TP constrained to a ConstructorType: the class static type is `(anon) & TFunction`
+     *    whose MERGED construct signature must be a mixin constructor (single `...rest: any[]`).
+     *    Mixin-shaped constituents are discarded and their returns mixed into the others, so
+     *    the merged sig is mixin-shaped iff BOTH the constraint's sig and the class's own
+     *    ctor (when present) are `(...args: any[])` — else TS2545 at the class name. */
+    private fun checkMixinClassExtendsTypeParam() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            try {
+                mixinTpScanStatements(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun mixinTpScanStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is FunctionDeclaration -> {
+                val body = stmt.body ?: continue
+                val tps = stmt.typeParameters
+                if (!tps.isNullOrEmpty()) {
+                    val tpMap = tps.associateBy { it.name.text }
+                    val paramTp = mutableMapOf<String, String>()
+                    for (p in stmt.parameters) {
+                        val n = (p.name as? Identifier)?.text ?: continue
+                        val tr = p.type as? TypeReference ?: continue
+                        if (!tr.typeArguments.isNullOrEmpty()) continue
+                        val tn = (tr.typeName as? Identifier)?.text ?: continue
+                        if (tn in tpMap) paramTp[n] = tn
+                    }
+                    if (paramTp.isNotEmpty()) {
+                        mixinTpScanBody(body.statements, source, fileName, tpMap, paramTp, stmt.type)
+                    }
+                }
+                mixinTpScanStatements(body.statements, source, fileName)
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { mixinTpScanStatements(it.statements, source, fileName) }
+            is Block -> mixinTpScanStatements(stmt.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun mixinTpScanBody(
+        stmts: List<Statement>, source: String, fileName: String,
+        tpMap: Map<String, TypeParameter>, paramTp: Map<String, String>, returnAnnotation: TypeNode?,
+    ) {
+        for (stmt in stmts) when (stmt) {
+            is ReturnStatement -> {
+                val cls = stmt.expression as? ClassExpression ?: continue
+                mixinTpCheckClass(cls, stmt, source, fileName, tpMap, paramTp, returnAnnotation)
+            }
+            is Block -> mixinTpScanBody(stmt.statements, source, fileName, tpMap, paramTp, returnAnnotation)
+            is IfStatement -> {
+                mixinTpScanBody(listOf(stmt.thenStatement), source, fileName, tpMap, paramTp, returnAnnotation)
+                stmt.elseStatement?.let { mixinTpScanBody(listOf(it), source, fileName, tpMap, paramTp, returnAnnotation) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun mixinTpCheckClass(
+        cls: ClassExpression, ret: ReturnStatement, source: String, fileName: String,
+        tpMap: Map<String, TypeParameter>, paramTp: Map<String, String>, returnAnnotation: TypeNode?,
+    ) {
+        val extendsClause = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return
+        val base = extendsClause.types.singleOrNull() ?: return
+        if (!base.typeArguments.isNullOrEmpty()) return
+        val baseIdent = base.expression as? Identifier ?: return
+        val tpName = paramTp[baseIdent.text] ?: return
+        val tp = tpMap[tpName] ?: return
+        val constraint = tp.constraint
+        if (constraint == null) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, baseIdent.pos)
+            val (dLine, dCh) = getLineAndCharacterOfPosition(source, tp.name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$tpName' is not a constructor function type.",
+                category = DiagnosticCategory.Error, code = 2507,
+                fileName = fileName, line = line, character = ch,
+                start = baseIdent.pos, length = baseIdent.text.length,
+                relatedInformation = listOf(Diagnostic(
+                    message = "Did you mean for '$tpName' to be constrained to type 'new (...args: any[]) => unknown'?",
+                    category = DiagnosticCategory.Message, code = 2735,
+                    fileName = fileName, line = dLine, character = dCh,
+                    start = tp.name.pos, length = tp.name.text.length,
+                )),
+            ))
+            if (isBareTypeParamRef(returnAnnotation, setOf(tpName))) {
+                val clsName = cls.name?.text ?: "(Anonymous class)"
+                val (rLine, rCh) = getLineAndCharacterOfPosition(source, ret.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'typeof $clsName' is not assignable to type '$tpName'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = rLine, character = rCh,
+                    start = ret.pos, length = 6,
+                    messageChain = listOf("  '$tpName' could be instantiated with an arbitrary type which could be unrelated to 'typeof $clsName'."),
+                ))
+            }
+            return
+        }
+        val ctorType = constraint as? ConstructorType ?: return
+        if (!ctorType.typeParameters.isNullOrEmpty()) return
+        val constraintMixin = mixinParamListIsAnyRest(ctorType.parameters)
+        val ctors = cls.members.filterIsInstance<Constructor>()
+        val sigCtors = ctors.filter { it.body == null }.ifEmpty { ctors }
+        if (sigCtors.size > 1) return // overloaded constructor — conservative skip
+        val ownMixin = if (sigCtors.isEmpty()) constraintMixin else mixinParamListIsAnyRest(sigCtors[0].parameters)
+        if (constraintMixin && ownMixin) return
+        val pos = cls.name?.pos ?: cls.pos
+        val len = cls.name?.text?.length ?: 5
+        val (line, ch) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "A mixin class must have a constructor with a single rest parameter of type 'any[]'.",
+            category = DiagnosticCategory.Error, code = 2545,
+            fileName = fileName, line = line, character = ch,
+            start = pos, length = len,
+        ))
+    }
+
+    /** Is this parameter list a single rest parameter of type `any[]` (the mixin-constructor shape)?
+     *  An un-annotated rest parameter is implicitly `any[]`. */
+    private fun mixinParamListIsAnyRest(params: List<Parameter>): Boolean {
+        val p = params.singleOrNull() ?: return false
+        if (!p.dotDotDotToken) return false
+        val t = p.type ?: return true
+        if (t is ArrayType) {
+            val el = t.elementType
+            return el is KeywordTypeNode && el.kind == SyntaxKind.AnyKeyword
+        }
+        if (t is TypeReference) {
+            val arg = t.typeArguments?.singleOrNull()
+            return (t.typeName as? Identifier)?.text == "Array" &&
+                arg is KeywordTypeNode && arg.kind == SyntaxKind.AnyKeyword
+        }
+        return false
     }
 
     private fun unconstrainedTpNames(tps: List<TypeParameter>?): Set<String> =
