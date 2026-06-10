@@ -17140,7 +17140,18 @@ class Checker(
                 }
             }
             is ClassDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
+                if (ModifierFlag.Declare in stmt.modifiers) {
+                    // B295: an AMBIENT class skips the unresolved-name walk, but its
+                    // heritage clause still gets the TS2314 arity check
+                    // (`declare class xyz extends abc {` where abc is generic) —
+                    // mirrors checkHeritageClausesInDeclareNamespace for top level.
+                    for (clause in stmt.heritageClauses ?: emptyList()) {
+                        for (type in clause.types) {
+                            checkHeritageTypeArgCount(type, scope, source, fileName)
+                        }
+                    }
+                    return
+                }
                 // Check class decorators
                 stmt.decorators?.forEach { checkUnresolvedInExpr(it.expression, scope, source, fileName) }
                 val classCtx = buildClassContext(stmt, scope, fileName)
@@ -89551,6 +89562,35 @@ interface DataView {
                     }
                 }
             }
+        }
+        // B295: `new X()` where X is a ctor-less class whose DIRECT extends-base is a
+        // generic class referenced WITHOUT type arguments (the heritage carries
+        // TS2314) — the inherited base constructor is an error type, so `typeof X`
+        // has no construct signatures (tsc resolves the implicit ctor through the
+        // errored base). Chain mirrors tsc.
+        run {
+            val callee = expr.expression as? Identifier ?: return@run
+            val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return@run
+            val cls = sym.declarations.singleOrNull() as? ClassDeclaration ?: return@run
+            if (cls.members.any { it is Constructor }) return@run
+            val ext = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.singleOrNull() ?: return@run
+            if (ext.typeArguments != null) return@run
+            val baseName = (ext.expression as? Identifier)?.text ?: return@run
+            val baseSym = currentFileLocals?.get(baseName) ?: globals[baseName] ?: return@run
+            val baseCls = baseSym.declarations.singleOrNull() as? ClassDeclaration ?: return@run
+            if (baseCls in builtinLibDecls) return@run
+            val tps = baseCls.typeParameters ?: return@run
+            if (tps.isEmpty() || tps.any { it.default != null }) return@run
+            val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not constructable.",
+                category = DiagnosticCategory.Error, code = 2351,
+                fileName = fileName, line = line, character = character,
+                start = callee.pos, length = callee.text.length,
+                messageChain = listOf("  Type 'typeof ${callee.text}' has no construct signatures."),
+            ))
+            return
         }
         val args = expr.arguments ?: return
         val calleeType = getCalleeType(expr.expression)
