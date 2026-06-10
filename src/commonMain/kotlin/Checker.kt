@@ -31571,6 +31571,23 @@ interface DataView {
         }
     }
 
+    /** B228: does the active @lib provide the `Symbol` VALUE (`declare var Symbol`)?
+     *  It lives in lib.es2015.symbol.d.ts — provided by any FULL es2015+ lib (es6 /
+     *  es7 / es20xx / esnext, non-dotted) or a dotted `*.symbol*` lib. `es5` and
+     *  `es2015.core` provide only the es5 wrapper TYPE. Empty @lib = full default lib.
+     *  Distinct from [isLibTypeUnavailableEs2015], whose `es2015.*`-provides rule is
+     *  right for forward-declarable TYPES but wrong for the Symbol value. */
+    private fun libProvidesSymbolValue(): Boolean {
+        if (options.noLib) return false
+        if (options.lib.isEmpty()) return true
+        return options.lib.any { lname ->
+            val l = lname.lowercase()
+            l == "es6" || l == "es7" || l == "esnext" ||
+                (l.startsWith("es2") && !l.contains('.')) ||
+                l.contains(".symbol")
+        }
+    }
+
     private fun isLibTypeUnavailableEs2015(name: String): Boolean {
         if (name !in FORWARD_DECLARABLE_LIB_TYPES_ES2015) return false
         if (options.noLib) return true
@@ -34100,6 +34117,15 @@ interface DataView {
             // loads the value; synthesize the type-only treatment for that name.
             if (!libProvidesBaseValues() && "Array" !in valueNames) {
                 typeOnlyNames.add("Array")
+            }
+            // B228: the `Symbol` VALUE (`declare var Symbol`) lives in lib.es2015.symbol —
+            // an explicit @lib of only es5/es2015.core etc. provides the wrapper TYPE but
+            // not the value, so `Symbol.isConcatSpreadable` in value position is TS2585
+            // ("change your target library"). Our embedded lib always loads the value;
+            // synthesize the type-only treatment + the TS2585 message routing.
+            if (!libProvidesSymbolValue() && "Symbol" !in valueNames) {
+                typeOnlyNames.add("Symbol")
+                forwardLibTypeNames.add("Symbol")
             }
             currentForwardLibTypeNames = forwardLibTypeNames
             try {
@@ -64212,6 +64238,43 @@ interface DataView {
         varTypes: Map<String, String>
     ) {
         try {
+            // B228: `arr[Symbol.X] = value` when the @lib does NOT provide the Symbol VALUE
+            // (es5 / es2015.core only): tsc resolves the index to an error type (→ any),
+            // falls through to the array's number-index element type, and reports TS2322
+            // for a mismatched RHS — `a[Symbol.isConcatSpreadable] = false` on string[] is
+            // "Type 'boolean' is not assignable to type 'string'." at the whole LHS. Our
+            // embedded lib ALWAYS carries the Symbol value, so the type engine can't see
+            // the unavailability; gate on the same libProvidesSymbolValue() predicate that
+            // routes the paired TS2585. With the Symbol value available, the index is a
+            // well-known unique symbol (late-bound write, legal) — never checked here.
+            run {
+                if (libProvidesSymbolValue()) return@run
+                val recvIdent = target.expression as? Identifier ?: return@run
+                val idxPA = target.argumentExpression as? PropertyAccessExpression ?: return@run
+                if ((idxPA.expression as? Identifier)?.text != "Symbol") return@run
+                val recvType = getTypeOfExpression(recvIdent)
+                if (recvType !is Type.Reference || recvType.target.symbol?.name != "Array") return@run
+                val elem = recvType.resolvedTypeArguments?.singleOrNull() as? Type.Intrinsic ?: return@run
+                if (elem.intrinsicName !in setOf("string", "number", "boolean", "bigint")) return@run
+                val rhsType = getTypeOfExpression(value)
+                if (rhsType === anyType || rhsType === errorType) return@run
+                val widened = getWidenedLiteralType(rhsType)
+                if (checkTypeRelatedTo(widened, elem, assignableRelation)) return@run
+                val start = target.expression.pos
+                val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(widened)}' is not assignable to type '${typeToString(elem)}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
             // Only handle PropertyAccess receivers rooted at `this` for now — the most common
             // shape and the one B85.1b's varTypes population is designed for.
             val receiverExpr = target.expression as? PropertyAccessExpression ?: return
