@@ -1340,6 +1340,8 @@ class Checker(
         checkImportAttributeValues()
         // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
         checkJsDocNongenericInstantiation()
+        // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
+        checkDecoratorUseBeforeDeclaration()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99077,6 +99079,136 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B260: use-before-declaration in DECORATOR expressions + default-mode TS7006 for
+     * decorated parameters (decoratorUsedBeforeDeclaration). Decorators evaluate at
+     * class-definition time, so a decorator referencing a top-level const/let or enum
+     * declared LATER is TS2448/TS2450 (+TS2728 related). Position-dependent extras
+     * (straight from the baseline): the CLASS decorator's const callee ALSO gets
+     * TS2454 (the const's assignment has definitely not run at class-definition
+     * time); an `Enum.Member` decorator ARG gets TS2729 (+related) ONLY on PROPERTY
+     * decorators (tsc quirk — class/method/param decorator args get only the
+     * TS2450). A parameter carrying decorators with no annotation/initializer gets
+     * TS7006 even in pure-default mode — emitted here only when the full
+     * implicit-any walker is OFF (mirrors checkImplicitAnyDefaultVarFunctions's
+     * gate) to avoid double-emit.
+     */
+    private fun checkDecoratorUseBeforeDeclaration() {
+        val emit7006 = !(options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // top-level block-scoped value decls + enums
+            class BlockDecl(val namePos: Int, val isConst: Boolean, val hasInit: Boolean)
+            val blockDecls = mutableMapOf<String, BlockDecl>()
+            val enums = mutableMapOf<String, EnumDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is VariableStatement -> {
+                        val flags = stmt.declarationList.flags
+                        if (flags != SyntaxKind.ConstKeyword && flags != SyntaxKind.LetKeyword) continue
+                        for (d in stmt.declarationList.declarations) {
+                            val n = d.name as? Identifier ?: continue
+                            blockDecls[n.text] = BlockDecl(
+                                n.pos, flags == SyntaxKind.ConstKeyword, d.initializer != null)
+                        }
+                    }
+                    is EnumDeclaration -> enums[stmt.name.text] = stmt
+                    else -> {}
+                }
+            }
+            if (blockDecls.isEmpty() && enums.isEmpty()) continue
+
+            // kind: 0=class, 1=property, 2=method/accessor, 3=parameter
+            fun checkDecorator(dec: Decorator, kind: Int) {
+                val expr = dec.expression
+                val callee: Identifier?
+                val args: List<Expression>
+                when (expr) {
+                    is CallExpression -> { callee = expr.expression as? Identifier; args = expr.arguments }
+                    is Identifier -> { callee = expr; args = emptyList() }
+                    else -> return
+                }
+                if (callee != null) {
+                    val bd = blockDecls[callee.text]
+                    if (bd != null && bd.namePos > callee.pos) {
+                        emitTS2448(callee, bd.namePos, callee.text, source, fileName, isConst = bd.isConst)
+                        if (kind == 0 && strictNullChecks && bd.hasInit && bd.isConst) {
+                            // class decorators flow-evaluate before the const's assignment
+                            val (line, ch) = getLineAndCharacterOfPosition(source, callee.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Variable '${callee.text}' is used before being assigned.",
+                                category = DiagnosticCategory.Error, code = 2454,
+                                fileName = fileName, line = line, character = ch,
+                                start = callee.pos, length = callee.text.length,
+                            ))
+                        }
+                    }
+                }
+                for (arg in args) {
+                    val pa = arg as? PropertyAccessExpression ?: continue
+                    val root = pa.expression as? Identifier ?: continue
+                    val en = enums[root.text] ?: continue
+                    if (en.name.pos <= root.pos) continue
+                    emitTS2450(root, en.name.pos, root.text, source, fileName)
+                    if (kind == 1) {
+                        val member = en.members.firstOrNull {
+                            (it.name as? Identifier)?.text == pa.name.text
+                        } ?: continue
+                        emitTS2729CrossClass(
+                            pa.name, pa.name.text, (member.name as Identifier).pos, source, fileName)
+                    }
+                }
+            }
+
+            fun checkParams(params: List<Parameter>) {
+                for (p in params) {
+                    p.decorators?.forEach { checkDecorator(it, 3) }
+                    if (emit7006 && !p.decorators.isNullOrEmpty() && p.type == null &&
+                        p.initializer == null && p.name is Identifier
+                    ) {
+                        val n = p.name as Identifier
+                        // span covers the WHOLE parameter incl. its decorators
+                        // (Parameter.pos is captured before modifiers/decorators)
+                        val start = minOf(p.pos, p.decorators!!.first().pos)
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Parameter '${n.text}' implicitly has an 'any' type.",
+                            category = DiagnosticCategory.Error, code = 7006,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = n.pos + n.text.length - start,
+                        ))
+                    }
+                }
+            }
+
+            for (stmt in result.sourceFile.statements) {
+                val cls = stmt as? ClassDeclaration ?: continue
+                cls.decorators?.forEach { checkDecorator(it, 0) }
+                for (m in cls.members) {
+                    when (m) {
+                        is PropertyDeclaration -> m.decorators?.forEach { checkDecorator(it, 1) }
+                        is MethodDeclaration -> {
+                            m.decorators?.forEach { checkDecorator(it, 2) }
+                            checkParams(m.parameters)
+                        }
+                        is GetAccessor -> {
+                            m.decorators?.forEach { checkDecorator(it, 2) }
+                            checkParams(m.parameters)
+                        }
+                        is SetAccessor -> {
+                            m.decorators?.forEach { checkDecorator(it, 2) }
+                            checkParams(m.parameters)
+                        }
+                        is Constructor -> checkParams(m.parameters)
+                        else -> {}
+                    }
                 }
             }
         }
