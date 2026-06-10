@@ -1750,11 +1750,33 @@ class Scanner(private val text: String) {
             }
 
             else -> {
-                tokenValue = ch.toString()
-                SyntaxKind.Unknown
+                if (ch == '\uFFFD') {
+                    // tsc scanner rule (CharacterCodes.replacementCharacter): a literal
+                    // U+FFFD marks the file as binary — the parser reports TS1490 at (0,0)
+                    // via [sawBinaryFileMarker] and the REST of the file becomes ONE
+                    // marker token (tsc's NonTextFileMarkerTrivia: `pos = end`), so the
+                    // statement-recovery TS1128 squiggles everything after it and no
+                    // further per-character TS1127s are produced.
+                    sawBinaryFileMarker = true
+                    binaryMarkerTokenPos = tokenPos
+                    tokenValue = text.substring(tokenPos, end)
+                    pos = end
+                    SyntaxKind.Unknown
+                } else {
+                    tokenValue = ch.toString()
+                    SyntaxKind.Unknown
+                }
             }
         }
     }
+
+    /** True once a literal U+FFFD (binary-file marker) has been scanned in token position. */
+    var sawBinaryFileMarker: Boolean = false
+        private set
+
+    /** Token start of the binary-file marker token (the U+FFFD-to-EOF Unknown token), or -1. */
+    var binaryMarkerTokenPos: Int = -1
+        private set
 
     // -- Character classification utilities -----------------------------------
 

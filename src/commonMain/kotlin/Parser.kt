@@ -66,22 +66,6 @@ class Parser(
     private val lineStarts: IntArray = computeLineStarts(source)
 
     fun parse(): SourceFile {
-        // TS1490: Detect binary files via C0 control char heuristic — emit TS1490
-        // at (1,1) and short-circuit parsing so we don't flood with TS1127. This
-        // matches TypeScript's behavior for `corrupted_ts`. Tests like
-        // `TransportStream_ts` that mix binary content with parseable tokens
-        // need additional per-byte TS1127 emission and span-merging which we
-        // don't yet implement — they remain failing.
-        if (isBinaryFile(source)) {
-            reportError("File appears to be binary.", code = 1490,
-                overrideStart = 0, overrideLength = 0)
-            return SourceFile(
-                fileName = fileName,
-                statements = emptyList(),
-                text = source,
-                end = source.length,
-            )
-        }
         // 16.0: Check triple-slash reference path directives for self-reference (TS1006).
         checkTripleSlashSelfReference()
         nextToken()
@@ -103,31 +87,23 @@ class Parser(
 
     fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
 
-    /**
-     * Heuristic: a file appears to be binary if it contains 3 or more C0 control
-     * characters (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) within the first 512 bytes.
-     * Single occurrences may legitimately appear inside string literals (e.g.
-     * embedded SHIFT-OUT in `unicodeStringLiteral_ts`); 3+ usually indicate
-     * binary content (corrupted_ts has 0x1F/0x03/0x03/0x19/0x1F).
-     */
-    private fun isBinaryFile(text: String): Boolean {
-        val limit = minOf(text.length, 512)
-        var count = 0
-        for (i in 0 until limit) {
-            val c = text[i].code
-            if (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) {
-                count++
-                if (count >= 3) return true
-            }
-        }
-        return false
-    }
-
     // ── Infrastructure ──────────────────────────────────────────────────────
+
+    /** True once the binary-file TS1490 has been reported (the scanner's U+FFFD marker). */
+    private var binaryMarkerReported = false
 
     private fun nextToken(): SyntaxKind {
         prevToken = token
         token = scanner.scan()
+        // tsc scanner: scanning a literal U+FFFD reports TS1490 "File appears to be
+        // binary." at (0,0) AT SCAN TIME (so the same-start dedup interacts with the
+        // surrounding diagnostics exactly as in tsc — e.g. corrupted_ts's follow-up
+        // TS1128 at start 0 is suppressed by it, TransportStream_ts's at (1,4) is not).
+        if (scanner.sawBinaryFileMarker && !binaryMarkerReported) {
+            binaryMarkerReported = true
+            reportError("File appears to be binary.", code = 1490,
+                overrideStart = 0, overrideLength = 0)
+        }
         return token
     }
 
@@ -690,6 +666,12 @@ class Parser(
         if (stmt is ClassDeclaration && decorators != null) {
             return stmt.copy(decorators = decorators)
         }
+        // Decorators followed by unparseable garbage (the recovered expression is an
+        // EMPTY error-recovery Identifier) — tsc produces a MissingDeclaration that
+        // emits NOTHING; discard instead of keeping a stray `;` expression statement.
+        if (stmt is ExpressionStatement && (stmt.expression as? Identifier)?.text == "") {
+            return null
+        }
         return stmt
     }
 
@@ -1138,9 +1120,13 @@ class Parser(
         // same-start dedup from swallowing the literal's own scanner diagnostic
         // (TS1353 at the literal). Narrow dot-gate: other `ident <numeric>` shapes
         // keep the TS1005 path.
+        // The At-token arm mirrors tsc's parseErrorForMissingSemicolonAfter fallthrough:
+        // a bare identifier followed on the same line by `@` (e.g. binary garbage `G@...`)
+        // is TS1434 at the identifier, not a silent ASI.
         val missingSemiAsUnexpectedIdent = expr is Identifier && !scanner.hasPrecedingLineBreak() &&
-            (token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) &&
-            scanner.getTokenText().startsWith(".")
+            ((token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) &&
+                scanner.getTokenText().startsWith(".") ||
+                token == SyntaxKind.At)
         if (missingSemiAsUnexpectedIdent) {
             reportError("Unexpected keyword or identifier.", code = 1434,
                 overrideStart = (expr as Identifier).pos, overrideLength = expr.text.length.coerceAtLeast(1))
@@ -5272,10 +5258,25 @@ class Parser(
                 if (isIdentifier() || isKeyword()) {
                     parseIdentifier()
                 } else if (token == SyntaxKind.Unknown) {
-                    // Unknown token = invalid character (e.g. `\` from an incomplete unicode escape).
-                    // Report TS1127 "Invalid character." but do NOT consume the token —
-                    // parseStatements' safety mechanism will skip it and discard this "statement".
-                    reportError("Invalid character.", code = 1127, overrideLength = 0)
+                    if (scanner.getTokenPos() == scanner.binaryMarkerTokenPos) {
+                        // The binary-file marker token (U+FFFD to EOF, tsc's
+                        // NonTextFileMarkerTrivia): source-elements recovery reports
+                        // TS1128 spanning the WHOLE token (same-start-deduped away when
+                        // the marker starts at offset 0, where TS1490 already sits).
+                        // NOT consumed — parseStatements' safety mechanism skips it and
+                        // discards the statement (no stray `;` in the JS emit).
+                        reportError("Declaration or statement expected.", code = 1128)
+                    } else {
+                        // Unknown token = invalid character (e.g. `\` from an incomplete unicode escape).
+                        // Report TS1127 "Invalid character." but do NOT consume the token —
+                        // parseStatements' safety mechanism will skip it and discard this "statement".
+                        // tsc's scanner-level invalid-character error spans the char — mirrored
+                        // here for C0 control chars (binary garbage) only; `\`-style recovery
+                        // keeps the legacy zero-width span.
+                        val tokText = scanner.getTokenText()
+                        val w = if (tokText.length == 1 && tokText[0].code < 0x20) 1 else 0
+                        reportError("Invalid character.", code = 1127, overrideLength = w)
+                    }
                     Identifier(text = "", pos = pos, end = getEnd())
                 } else {
                     // At EOF, position the error at the end of the previous token
