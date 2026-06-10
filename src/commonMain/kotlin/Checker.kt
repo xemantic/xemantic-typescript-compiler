@@ -705,6 +705,11 @@ class Checker(
             when (stmt) {
                 is InterfaceDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
                 is ClassDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                // B237: a `declare var Map: MapConstructor` lib statement binds its
+                // SYMBOL declarations to the inner VariableDeclaration nodes, not the
+                // statement — add them so "is this symbol user-declared?" identity
+                // checks (`decl !in builtinLibDecls`) see lib var declarations too.
+                is VariableStatement -> stmt.declarationList.declarations.forEach { builtinLibDecls.add(it) }
                 else -> {}
             }
         }
@@ -16453,6 +16458,7 @@ class Checker(
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) {
                 fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
                 fileScope.names.addAll(TEST_RUNNER_GLOBALS_TS2593)
+                fileScope.names.addAll(JQUERY_GLOBALS_TS2592)
             }
             fileScope.names.addAll(globalAugmentationNames)
             // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
@@ -19862,18 +19868,30 @@ class Checker(
             name !in NODE_BUILTIN_GLOBALS_TS2591) return
         if (name == "abstract" && (inTypePosition || scope.has(name))) return
         if (name == "declare" && (inTypePosition || scope.has(name))) return
-        // TS2583: forward-declarable ES2015+ lib type referenced in type position
-        // under `@noLib: true` or `@lib` that excludes es2015+. The KNOWN_GLOBALS set
-        // contains these names, so they would otherwise pass via `scope.has` silently.
-        // When the lib doesn't actually provide them, emit TS2583 with a migration hint
-        // instead. Skip if name shadowed by a real user declaration in scope (binder local).
-        if (inTypePosition && isLibTypeUnavailableEs2015(name) &&
-            currentFileLocals?.get(name) == null) {
+        // TS2583: ES2015+ lib global referenced (type OR value position) under
+        // `@noLib: true` or `@lib`/default-lib that excludes the introducing lib.
+        // The KNOWN_GLOBALS set contains these names, so they would otherwise pass
+        // via `scope.has` silently. When the lib doesn't actually provide them, emit
+        // TS2583 with a migration hint instead. Skip if name shadowed by a real user
+        // declaration (own-file binder local, a non-root scope binding, or a non-lib
+        // declaration merged into globals from another file).
+        run {
+            if (currentFileLocals?.get(name) != null) return@run
+            if (scope.hasLocalShadow(name)) return@run
+            if (globals[name]?.declarations?.any { it !in builtinLibDecls } == true) return@run
+            val suggestion: String = when {
+                isLibTypeUnavailableEs2015(name) -> "es2015"
+                else -> {
+                    val intro = LIB_GLOBAL_INTRODUCING[name] ?: return@run
+                    if (libProvidesGlobalAt(name, intro)) return@run
+                    intro.name.lowercase()
+                }
+            }
             val start = node.pos
             val length = name.length
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
-                message = "Cannot find name '$name'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2015' or later.",
+                message = "Cannot find name '$name'. Do you need to change your target library? Try changing the 'lib' compiler option to '$suggestion' or later.",
                 category = DiagnosticCategory.Error,
                 code = 2583,
                 fileName = fileName,
@@ -19883,6 +19901,37 @@ class Checker(
                 length = length,
             ))
             return
+        }
+        // B237: TS2584 — console/document under an explicit @lib that excludes dom and
+        // webworker. `console` stays in the file scope (it is not in DOM_GLOBAL_NAMES),
+        // so this must run BEFORE the scope.has bail; `document` is stripped and would
+        // otherwise fall through to a wrong TS2552 "Did you mean 'Document'?".
+        if (name in DOM_SUGGEST_GLOBALS_TS2584 &&
+            currentFileLocals?.get(name) == null && !scope.hasLocalShadow(name) &&
+            name !in globalAugmentationNames &&
+            globals[name]?.declarations?.any { it !in builtinLibDecls } != true) {
+            val libExcludesDomHost = options.lib.isNotEmpty() &&
+                options.lib.none { lname ->
+                    val lower = lname.lowercase()
+                    lower == "dom" || lower == "webworker" || lower == "scripthost" ||
+                        lower.startsWith("dom.") || lower.startsWith("webworker.")
+                }
+            if (libExcludesDomHost) {
+                val start = node.pos
+                val length = name.length
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find name '$name'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2584,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                return
+            }
         }
         // Skip well-known globals that don't need declaration
         if (scope.has(name)) {
@@ -19972,6 +20021,23 @@ class Checker(
                 message = "Cannot find name '$name'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.",
                 category = DiagnosticCategory.Error,
                 code = 2593,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
+        }
+
+        // B237: TS2592 for the jQuery globals ($ / jQuery) — no TypeScript lib ever
+        // declares them, so an unresolved use always gets the @types/jquery hint.
+        // Mirrors the TS2591/TS2593 blocks above (incl. `.js`/`.jsx` re-seed).
+        if (name in JQUERY_GLOBALS_TS2592 && name !in globalAugmentationNames) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find name '$name'. Do you need to install type definitions for jQuery? Try `npm i --save-dev @types/jquery` and then add 'jquery' to the types field in your tsconfig.",
+                category = DiagnosticCategory.Error,
+                code = 2592,
                 fileName = fileName,
                 line = line,
                 character = character,
@@ -30608,8 +30674,31 @@ class Checker(
          */
         private val FORWARD_DECLARABLE_LIB_TYPES_ES2015 = setOf(
             "Promise", "Symbol", "Map", "WeakMap", "Set", "WeakSet",
-            "Iterable", "IterableIterator", "Iterator",
+            "Iterable", "IterableIterator", "Iterator", "AsyncIterator",
         )
+
+        /** B237: globals introduced ABOVE es2015 (plus Reflect) with the lib level
+         *  TypeScript's TS2583 suggestion names for them (per the baseline corpus —
+         *  note AsyncIterator suggests es2015 and lives in FORWARD_DECLARABLE above).
+         *  Suggestion text = `name.lowercase()` of the ScriptTarget. */
+        private val LIB_GLOBAL_INTRODUCING: Map<String, ScriptTarget> = mapOf(
+            "Reflect" to ScriptTarget.ES2015,
+            "Atomics" to ScriptTarget.ES2017, "SharedArrayBuffer" to ScriptTarget.ES2017,
+            "AsyncGenerator" to ScriptTarget.ES2018, "AsyncGeneratorFunction" to ScriptTarget.ES2018,
+            "AsyncIterable" to ScriptTarget.ES2018, "AsyncIterableIterator" to ScriptTarget.ES2018,
+            "BigInt" to ScriptTarget.ES2020, "BigInt64Array" to ScriptTarget.ES2020,
+            "BigUint64Array" to ScriptTarget.ES2020,
+        )
+
+        /** B237: names that get TS2584 ("change your 'lib' to include 'dom'") when the
+         *  explicit @lib excludes dom/webworker — TypeScript's special-cased DOM hint
+         *  set (corpus-derived; window/navigator etc. fall through to TS2304/TS2552). */
+        private val DOM_SUGGEST_GLOBALS_TS2584: Set<String> = setOf("console", "document")
+
+        /** B237: unresolved uses of these get TS2592 ("install type definitions for
+         *  jQuery?...") — mirrors TEST_RUNNER_GLOBALS_TS2593 incl. the `.js` re-seed.
+         *  NOT in KNOWN_GLOBALS (seeding would mask the diagnostic). */
+        private val JQUERY_GLOBALS_TS2592: Set<String> = setOf("$", "jQuery")
 
         /**
          * Keywords/reserved words that parse as Identifier nodes in our AST.
@@ -30809,8 +30898,10 @@ class Checker(
             // for `.js`/`.jsx` files (see the B66.1-style addAll in checkUnresolvedNames).
             "expect", "jest", "beforeEach", "afterEach",
             "beforeAll", "afterAll",
-            // jQuery / common libraries
-            "$", "jQuery",
+            // NOTE: `$`/`jQuery` are NOT here — they live in JQUERY_GLOBALS_TS2592 (B237):
+            // TypeScript emits TS2592 ("install type definitions for jQuery") for
+            // unresolved uses, so seeding them would mask that diagnostic. They are
+            // still seeded for `.js`/`.jsx` files (see checkUnresolvedNames).
             // Common global augmentations
             "Symbol",
             // JSX namespace (available when JSX is enabled)
@@ -31976,8 +32067,59 @@ interface DataView {
         }
     }
 
+    /** B237: does the active @lib provide the `Promise` VALUE (`declare var Promise`)?
+     *  It lives in lib.es2015.promise.d.ts — provided by any FULL es2015+ lib or a
+     *  dotted `*.promise` lib. `es5` provides only the Promise TYPE. */
+    private fun libProvidesPromiseValue(): Boolean {
+        if (options.noLib) return false
+        if (options.lib.isEmpty()) return true
+        return options.lib.any { lname ->
+            val l = lname.lowercase()
+            l == "es6" || l == "es7" || l == "esnext" ||
+                (l.startsWith("es2") && !l.contains('.')) ||
+                l.contains(".promise")
+        }
+    }
+
+    /** B237: does the active lib config provide the global [name] introduced at [intro]?
+     *  Empty @lib = the DEFAULT lib derives from the target (lib.es5+dom for es5, …), so
+     *  availability is `options.target >= intro`. An explicit @lib provides the name via
+     *  a cumulative full es-version >= intro or the name's dotted home sub-library. */
+    private fun libProvidesGlobalAt(name: String, intro: ScriptTarget): Boolean {
+        if (options.noLib) return false
+        if (options.lib.isEmpty()) return options.target >= intro
+        val introNum = intro.name.removePrefix("ES").toIntOrNull() ?: return true
+        return options.lib.any { l0 ->
+            val l = l0.lowercase()
+            val full = when {
+                l == "es6" -> 2015
+                l == "es7" -> 2016
+                l == "esnext" -> 9999
+                l.startsWith("es2") && '.' !in l -> l.removePrefix("es").toIntOrNull() ?: 0
+                else -> 0
+            }
+            full >= introNum || dottedLibProvidesGlobal(l, name)
+        }
+    }
+
+    private fun dottedLibProvidesGlobal(lib: String, name: String): Boolean {
+        if ('.' !in lib) return false
+        return when (name) {
+            "Reflect" -> lib.endsWith(".reflect")
+            "Atomics", "SharedArrayBuffer" -> lib.endsWith(".sharedmemory")
+            "AsyncGenerator", "AsyncGeneratorFunction" -> lib.endsWith(".asyncgenerator")
+            "AsyncIterable", "AsyncIterableIterator" -> lib.contains(".asynciterable")
+            "BigInt", "BigInt64Array", "BigUint64Array" -> lib.endsWith(".bigint")
+            else -> false
+        }
+    }
+
     private fun isLibTypeUnavailableEs2015(name: String): Boolean {
         if (name !in FORWARD_DECLARABLE_LIB_TYPES_ES2015) return false
+        // B237: the Promise and Symbol TYPES live in lib.es5.d.ts (PromiseLike support /
+        // the Symbol wrapper), so a type-position reference is ALWAYS resolvable — only
+        // their VALUES are es2015+ (TS2585 via libProvidesSymbolValue/libProvidesPromiseValue).
+        if (name == "Promise" || name == "Symbol") return false
         if (options.noLib) return true
         if (options.lib.isEmpty()) return false
         return options.lib.none { lname ->
@@ -34514,6 +34656,13 @@ interface DataView {
             if (!libProvidesSymbolValue() && "Symbol" !in valueNames) {
                 typeOnlyNames.add("Symbol")
                 forwardLibTypeNames.add("Symbol")
+            }
+            // B237: same treatment for the `Promise` VALUE (`declare var Promise`,
+            // lib.es2015.promise) — the es5 lib has the Promise TYPE only, so
+            // `Promise.resolve(...)` under a restrictive @lib is TS2585.
+            if (!libProvidesPromiseValue() && "Promise" !in valueNames) {
+                typeOnlyNames.add("Promise")
+                forwardLibTypeNames.add("Promise")
             }
             currentForwardLibTypeNames = forwardLibTypeNames
             try {
