@@ -2775,8 +2775,11 @@ class Parser(
             // B68.4: Suppress TS1021 when the param type is an invalid keyword
             // (any/boolean/etc.) — the checker emits TS1268 instead, matching TypeScript
             // (TypeScript doesn't double-report TS1021 + TS1268 for the same sig).
-            val paramTypeIsInvalidKeyword = paramType is KeywordTypeNode &&
-                paramType.kind !in INDEX_SIG_ALLOWED_PARAM_KEYWORDS
+            // B292: a NAMED param type (`[p:Purple]` — a TypeReference) is equally
+            // TS1268's domain — suppress TS1021 for those too.
+            val paramTypeIsInvalidKeyword = (paramType is KeywordTypeNode &&
+                paramType.kind !in INDEX_SIG_ALLOWED_PARAM_KEYWORDS) ||
+                paramType is TypeReference
             if (accessModPos >= 0) {
                 // TS2369 + TS1018 for `[public x: T]`-style index sigs.
                 // Scan forward in source from paramName for `]` to compute span end.

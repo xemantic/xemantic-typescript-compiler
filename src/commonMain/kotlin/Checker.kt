@@ -77896,7 +77896,40 @@ interface DataView {
                     numVal !== strVal && numVal !== errorType && strVal !== errorType) {
                     resolveStructuredTypeMembers(numVal)
                     resolveStructuredTypeMembers(strVal)
-                    val missing = try { collectMissingProperties(numVal, strVal) } catch (_: StackOverflowError) { emptyList() }
+                    var missing = try { collectMissingProperties(numVal, strVal) } catch (_: StackOverflowError) { emptyList() }
+                    // B292: INDEX-VALUE incompatibility between PROP-LESS named
+                    // interfaces (`[n]: Orange` vs `[s]: Yellow` where Orange's index
+                    // values are primitives and Yellow's are non-empty user
+                    // interfaces) — name-presence can't see it; compare the index
+                    // VALUE annotations AST-wise (a primitive never satisfies a
+                    // non-empty user interface). Reuses the same emission below.
+                    if (missing.isEmpty()) {
+                        val nd = numVal.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration
+                        val sd = strVal.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration
+                        if (nd != null && sd != null && nd !in builtinLibDecls && sd !in builtinLibDecls &&
+                            nd.members.isNotEmpty() && nd.members.all { it is IndexSignature } &&
+                            sd.members.isNotEmpty() && sd.members.all { it is IndexSignature }) {
+                            fun sigVal(d: InterfaceDeclaration, num: Boolean): TypeNode? =
+                                d.members.filterIsInstance<IndexSignature>().firstOrNull {
+                                    (it.parameters.firstOrNull()?.type as? KeywordTypeNode)?.kind ==
+                                        (if (num) SyntaxKind.NumberKeyword else SyntaxKind.StringKeyword)
+                                }?.type
+                            fun isPrimNode(t: TypeNode?) = (t as? KeywordTypeNode)?.kind in setOf(
+                                SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword, SyntaxKind.BooleanKeyword)
+                            fun nonEmptyUserIface(t: TypeNode?): Boolean {
+                                val nm = ((t as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+                                val d = globals[nm]?.declarations?.singleOrNull() as? InterfaceDeclaration ?: return false
+                                return d !in builtinLibDecls && d.members.isNotEmpty()
+                            }
+                            val pairs = listOf(
+                                sigVal(nd, true) to sigVal(sd, true),
+                                sigVal(nd, false) to sigVal(sd, false),
+                            )
+                            if (pairs.any { (sv, tv) -> sv != null && tv != null && isPrimNode(sv) && nonEmptyUserIface(tv) }) {
+                                missing = listOf("<index-value>")
+                            }
+                        }
+                    }
                     if (missing.isNotEmpty()) {
                         val reportSig = ownNumberSig ?: ownStringSig
                         if (reportSig != null && stmt.members.contains(reportSig)) {
@@ -86933,6 +86966,14 @@ interface DataView {
                     }
                 }
             }
+        }
+        // B292: a non-numeric string-literal key on a STRING-typed receiver
+        // (`s["s"]` where s: string) is never TS2339 in tsc — element access on a
+        // primitive is TS7053 under noImplicitAny and SILENT otherwise (the
+        // property-existence TS2339 path is property-access only).
+        if (arg is StringLiteralNode && arg.text.toDoubleOrNull() == null) {
+            val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+            if (rt === stringType || rt is Type.StringLiteral) return
         }
         // Build the raw suggestion syntax for TS2576 from the source text:
         // - StringLiteral key keeps original quoting: a["\""] → `["\""]`
