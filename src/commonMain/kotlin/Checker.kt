@@ -595,6 +595,12 @@ class Checker(
     // Stack of `this` types for TS2774 (instance type when inside a class method).
     private val uncalledThisTypeStack: ArrayDeque<Type> = ArrayDeque()
 
+    // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
+    // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
+    // by the shorthand-with-initializer TS1312/TS18004 selection in
+    // checkUnresolvedInExprCore (B276). MUST be declared before init {} (init-order).
+    private val destructuringPatternPos = HashSet<Int>()
+
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
@@ -1345,6 +1351,8 @@ class Checker(
         checkInRhsPrimitiveTypeParams()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
+        // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
+        checkDestructuringDefaultTypeMismatches()
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
         checkEmptyDestructuringNullishSource()
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
@@ -18047,6 +18055,9 @@ class Checker(
                 var current: Expression = expr
                 while (current is BinaryExpression) {
                     checkNaNComparison(current, scope, source, fileName)
+                    if (current.operator == SyntaxKind.Equals) {
+                        markDestructuringTargets(current.left)
+                    }
                     checkUnresolvedInExpr(current.right, scope, source, fileName)
                     current = current.left
                 }
@@ -18150,7 +18161,28 @@ class Checker(
                             checkUnresolvedInExpr(prop.initializer, scope, source, fileName)
                         }
                         is ShorthandPropertyAssignment -> {
-                            checkShorthandPropertyResolved(prop, scope, source, fileName)
+                            val shInit = prop.objectAssignmentInitializer
+                            if (shInit != null && expr.pos !in destructuringPatternPos) {
+                                // B276/TS1312 (grammar): `{ s = 5 }` OUTSIDE a destructuring
+                                // pattern — error at the `=`; the NAME is never resolved
+                                // (tsc checks the initializer instead, so no TS18004).
+                                val eqPos = source.indexOf('=', prop.name.pos + prop.name.text.length)
+                                if (eqPos in 0 until shInit.pos) {
+                                    val (eqLine, eqChar) = getLineAndCharacterOfPosition(source, eqPos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Did you mean to use a ':'? An '=' can only follow a property name when the containing object literal is part of a destructuring pattern.",
+                                        category = DiagnosticCategory.Error,
+                                        code = 1312,
+                                        fileName = fileName,
+                                        line = eqLine,
+                                        character = eqChar,
+                                        start = eqPos,
+                                        length = 1,
+                                    ))
+                                }
+                            } else {
+                                checkShorthandPropertyResolved(prop, scope, source, fileName)
+                            }
                         }
                         is SpreadAssignment -> {
                             checkUnresolvedInExpr(prop.expression, scope, source, fileName)
@@ -100952,6 +100984,221 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = line, character = ch,
                         start = targetIdent.pos, length = targetIdent.text.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * Marks ObjectLiteralExpression nodes (by pos) reachable as destructuring-assignment
+     * TARGETS from [target] (the LHS of an `=`), descending through array/object nesting,
+     * parens, property defaults (`{ a: a = 1 }` and nested patterns), and spreads.
+     * Consumed by the shorthand-with-initializer TS1312/TS18004 selection (B276).
+     */
+    private fun markDestructuringTargets(target: Expression) {
+        when (target) {
+            is ParenthesizedExpression -> markDestructuringTargets(target.expression)
+            is ObjectLiteralExpression -> {
+                if (!destructuringPatternPos.add(target.pos)) return
+                for (p in target.properties) when (p) {
+                    is PropertyAssignment -> markDestructuringTargets(p.initializer)
+                    is SpreadAssignment -> markDestructuringTargets(p.expression)
+                    else -> {}
+                }
+            }
+            is ArrayLiteralExpression -> for (e in target.elements) markDestructuringTargets(e)
+            is BinaryExpression -> if (target.operator == SyntaxKind.Equals) markDestructuringTargets(target.left)
+            is SpreadElement -> markDestructuringTargets(target.expression)
+            else -> {}
+        }
+    }
+
+    /**
+     * B276 (round 139): TS2322 for typed-target DEFAULT mismatches in destructuring
+     * ASSIGNMENTS (shorthandPropertyAssignmentsInDestructuring family):
+     * `({ s3 = 5 } = …)` / `({ s3: s3 = 5 } = …)` / `for ({ s3 = 5 } of …)` where the
+     * target var's annotation is a primitive keyword and the default is a literal of a
+     * DIFFERENT primitive → TS2322 at the target identifier (tsc checks the default as a
+     * plain `name = default` assignment, see checkDestructuringAssignment). A
+     * TypeLiteral-annotated target with an object-literal default reports per-property
+     * at the offending literal VALUE + related TS6500 at the annotation member (tsc's
+     * fresh-literal property check). Scope model: function-local var/let/const
+     * annotations collected per body; params shadow (removed); literal-only default
+     * typing — anything unrecognized bails (FN, never FP: tsc always errors the
+     * matched shape, so a passing test with it already carries the diagnostic).
+     */
+    private fun checkDestructuringDefaultTypeMismatches() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            dddStmts(result.sourceFile.statements, HashMap(), source, fileName)
+        }
+    }
+
+    private fun dddPrimName(kind: SyntaxKind): String? = when (kind) {
+        SyntaxKind.NumberKeyword -> "number"
+        SyntaxKind.StringKeyword -> "string"
+        SyntaxKind.BooleanKeyword -> "boolean"
+        SyntaxKind.BigIntKeyword -> "bigint"
+        else -> null
+    }
+
+    private fun dddLiteralPrim(e: Expression): String? = when (e) {
+        is NumericLiteralNode -> "number"
+        is StringLiteralNode -> "string"
+        is NoSubstitutionTemplateLiteralNode -> "string"
+        is PrefixUnaryExpression -> (e.operand as? NumericLiteralNode)?.let { "number" }
+        is Identifier -> if (e.text == "true" || e.text == "false") "boolean" else null
+        else -> null
+    }
+
+    private fun dddStmts(stmts: List<Statement>, scope: MutableMap<String, TypeNode>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { dddExpr(it, scope, source, fileName) }
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        val t = d.type
+                        if (t != null) scope[n] = t else scope.remove(n)
+                    }
+                }
+                is ExpressionStatement -> dddExpr(stmt.expression, scope, source, fileName)
+                is ReturnStatement -> stmt.expression?.let { dddExpr(it, scope, source, fileName) }
+                is Block -> dddStmts(stmt.statements, HashMap(scope), source, fileName)
+                is ForOfStatement -> {
+                    (stmt.initializer as? Expression)?.let { init ->
+                        var e: Expression = init
+                        while (e is ParenthesizedExpression) e = e.expression
+                        (e as? ObjectLiteralExpression)?.let { dddPattern(it, scope, source, fileName) }
+                    }
+                    dddExpr(stmt.expression, scope, source, fileName)
+                    dddStmts(listOf(stmt.statement), HashMap(scope), source, fileName)
+                }
+                is FunctionDeclaration -> {
+                    val child = HashMap(scope)
+                    val pn = mutableSetOf<String>()
+                    for (p in stmt.parameters) collectBindingNames(p.name, pn)
+                    pn.forEach { child.remove(it) }
+                    stmt.body?.let { dddStmts(it.statements, child, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Expression walker for B276 — iterative BinaryExpression spine (deep-chain safe). */
+    private fun dddExpr(expr: Expression, scope: MutableMap<String, TypeNode>, source: String, fileName: String) {
+        val work = ArrayDeque<Expression>()
+        work.add(expr)
+        while (work.isNotEmpty()) {
+            when (val e = work.removeLast()) {
+                is ParenthesizedExpression -> work.add(e.expression)
+                is BinaryExpression -> {
+                    if (e.operator == SyntaxKind.Equals) {
+                        var l: Expression = e.left
+                        while (l is ParenthesizedExpression) l = l.expression
+                        if (l is ObjectLiteralExpression) {
+                            dddPattern(l, scope, source, fileName)
+                        } else {
+                            work.add(e.left)
+                        }
+                    } else {
+                        work.add(e.left)
+                    }
+                    work.add(e.right)
+                }
+                is CallExpression -> {
+                    work.add(e.expression)
+                    e.arguments.forEach { work.add(it) }
+                }
+                is FunctionExpression -> {
+                    val child = HashMap(scope)
+                    val pn = mutableSetOf<String>()
+                    for (p in e.parameters) collectBindingNames(p.name, pn)
+                    pn.forEach { child.remove(it) }
+                    e.body?.let { dddStmts(it.statements, child, source, fileName) }
+                }
+                is ArrowFunction -> {
+                    val child = HashMap(scope)
+                    val pn = mutableSetOf<String>()
+                    for (p in e.parameters) collectBindingNames(p.name, pn)
+                    pn.forEach { child.remove(it) }
+                    when (val b = e.body) {
+                        is Block -> dddStmts(b.statements, child, source, fileName)
+                        is Expression -> dddExpr(b, child, source, fileName)
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun dddPattern(pattern: ObjectLiteralExpression, scope: MutableMap<String, TypeNode>, source: String, fileName: String) {
+        for (prop in pattern.properties) {
+            val (target, def) = when (prop) {
+                is ShorthandPropertyAssignment -> {
+                    val d = prop.objectAssignmentInitializer ?: continue
+                    prop.name to d
+                }
+                is PropertyAssignment -> {
+                    val inner = prop.initializer
+                    if (inner is ObjectLiteralExpression) {
+                        // nested destructuring pattern `{ a: { b = 1 } }`
+                        dddPattern(inner, scope, source, fileName)
+                        continue
+                    }
+                    val b = inner as? BinaryExpression ?: continue
+                    if (b.operator != SyntaxKind.Equals) continue
+                    val t = b.left as? Identifier ?: continue
+                    t to b.right
+                }
+                else -> continue
+            }
+            val ann = scope[target.text] ?: continue
+            if (ann is KeywordTypeNode) {
+                val annPrim = dddPrimName(ann.kind) ?: continue
+                val defPrim = dddLiteralPrim(def) ?: continue
+                if (defPrim == annPrim) continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$defPrim' is not assignable to type '$annPrim'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = target.pos, length = target.text.length,
+                ))
+            } else if (ann is TypeLiteral && def is ObjectLiteralExpression) {
+                val display = formatTypeForDisplay(ann) ?: continue
+                for (dp in def.properties) {
+                    val pa = dp as? PropertyAssignment ?: continue
+                    val valPrim = dddLiteralPrim(pa.initializer) ?: continue
+                    val pn = (pa.name as? Identifier)?.text ?: continue
+                    val member = ann.members.firstOrNull { m ->
+                        m is PropertyDeclaration && (m.name as? Identifier)?.text == pn
+                    } as? PropertyDeclaration ?: continue
+                    val mPrim = (member.type as? KeywordTypeNode)?.let { dddPrimName(it.kind) } ?: continue
+                    if (valPrim == mPrim) continue
+                    // tsc reports at the offending property NAME in the default literal
+                    val paName = pa.name as? Identifier ?: continue
+                    val valStart = paName.pos
+                    val valLen = paName.text.length
+                    val (line, ch) = getLineAndCharacterOfPosition(source, valStart)
+                    val memberNameNode = member.name as? Identifier ?: continue
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, memberNameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$valPrim' is not assignable to type '$mPrim'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = valStart, length = valLen,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "The expected type comes from property '${memberNameNode.text}' which is declared here on type '$display'",
+                            category = DiagnosticCategory.Message, code = 6500,
+                            fileName = fileName, line = rl, character = rc,
+                            start = memberNameNode.pos, length = memberNameNode.text.length,
+                        )),
                     ))
                 }
             }
