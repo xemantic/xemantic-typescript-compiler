@@ -40558,10 +40558,13 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    populateParameterLocalTypes(stmt.parameters)
-                    checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
-                    currentLocalTypes = savedLocalTypes
-                    currentParamBindingNames = savedParamBindings
+                    try {
+                        populateParameterLocalTypes(stmt.parameters)
+                        checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
+                    }
                 }
             }
             is ClassDeclaration -> {
@@ -40569,29 +40572,32 @@ interface DataView {
                 // can resolve `this` to the class instance type in the readonly check
                 // (getTypeOfExpression(this) does not yield the class type — B101).
                 val savedClassForThis = currentClassForThis
-                for (member in stmt.members) {
-                    val memberStatic = when (member) {
-                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
-                        is GetAccessor -> ModifierFlag.Static in member.modifiers
-                        is SetAccessor -> ModifierFlag.Static in member.modifiers
-                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
-                        else -> false
+                try {
+                    for (member in stmt.members) {
+                        val memberStatic = when (member) {
+                            is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                            is GetAccessor -> ModifierFlag.Static in member.modifiers
+                            is SetAccessor -> ModifierFlag.Static in member.modifiers
+                            is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                            else -> false
+                        }
+                        currentClassForThis = if (memberStatic) null else stmt
+                        val body = when (member) {
+                            is MethodDeclaration -> member.body
+                            is Constructor -> member.body
+                            is GetAccessor -> member.body
+                            is SetAccessor -> member.body
+                            else -> null
+                        }
+                        // Pass outer constNames so class/enum assignments in methods are caught
+                        body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
+                        if (member is PropertyDeclaration) {
+                            member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
+                        }
                     }
-                    currentClassForThis = if (memberStatic) null else stmt
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    // Pass outer constNames so class/enum assignments in methods are caught
-                    body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
-                    if (member is PropertyDeclaration) {
-                        member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-                    }
+                } finally {
+                    currentClassForThis = savedClassForThis
                 }
-                currentClassForThis = savedClassForThis
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
@@ -60557,8 +60563,11 @@ interface DataView {
                                         } catch (_: StackOverflowError) {}
                                     }
                                 }
-                                checkTypeAssignabilityInStatements(body.statements, source, fileName, ctorTypes, returnType = null, classTypeParams)
-                                currentLocalTypes = savedLocalTypes
+                                try {
+                                    checkTypeAssignabilityInStatements(body.statements, source, fileName, ctorTypes, returnType = null, classTypeParams)
+                                } finally {
+                                    currentLocalTypes = savedLocalTypes
+                                }
                             }
                             is GetAccessor -> {
                                 // B63.5: When a getter has no return-type annotation, but the
@@ -60629,8 +60638,11 @@ interface DataView {
                                             } catch (_: StackOverflowError) {}
                                         }
                                     }
-                                    checkTypeAssignabilityInStatements(body.statements, source, fileName, setterTypes, returnType = null, classTypeParams)
-                                    currentLocalTypes = savedLocalTypes
+                                    try {
+                                        checkTypeAssignabilityInStatements(body.statements, source, fileName, setterTypes, returnType = null, classTypeParams)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                    }
                                 }
                             }
                             is PropertyDeclaration -> {
@@ -61642,8 +61654,11 @@ interface DataView {
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     val (varName, narrowedType) = narrowed
                     currentLocalTypes[varName] = narrowedType
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
-                    currentLocalTypes = savedLocalTypes
+                    try {
+                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                    }
                 } else {
                     checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
                 }
@@ -67337,21 +67352,26 @@ interface DataView {
                             }
                             currentTypeParamScope = scope
                         }
-                        // Resolve constraints/defaults AFTER scope is set
-                        typeParams?.forEachIndexed { i, tp ->
-                            md.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
-                            md.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
-                        }
-                        val returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                        val paramSymbols = getParameterSymbols(md.parameters)
-                        for ((pi, param) in paramSymbols.withIndex()) {
-                            if (pi < md.parameters.size) {
-                                md.parameters[pi].type?.let { typeNode ->
-                                    symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                        val returnType: Type
+                        val paramSymbols: List<Symbol>
+                        try {
+                            // Resolve constraints/defaults AFTER scope is set
+                            typeParams?.forEachIndexed { i, tp ->
+                                md.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                                md.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                            }
+                            returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            paramSymbols = getParameterSymbols(md.parameters)
+                            for ((pi, param) in paramSymbols.withIndex()) {
+                                if (pi < md.parameters.size) {
+                                    md.parameters[pi].type?.let { typeNode ->
+                                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                                    }
                                 }
                             }
+                        } finally {
+                            currentTypeParamScope = savedScope
                         }
-                        currentTypeParamScope = savedScope
                         Signature(
                             declaration = md,
                             typeParameters = typeParams,
@@ -67434,16 +67454,6 @@ interface DataView {
                 }
                 currentTypeParamScope = scope
             }
-            // Resolve constraints AFTER scope is set (constraints may reference other type params)
-            // Guard against clobbering already-set constraint/default from another interning site.
-            typeParams?.forEachIndexed { i, tp ->
-                if (tp.constraint == null) {
-                    decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
-                }
-                if (tp.default == null) {
-                    decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
-                }
-            }
             // 17.25: When the function has a body and contains no return statement at all,
             // infer return type as `void`. Mirrors TypeScript's `function f() {}` → `() => void`.
             // Conservative: only when there are zero return statements. Functions with mixed
@@ -67452,20 +67462,35 @@ interface DataView {
             // (number from arithmetic, string from string literal, etc.), use that inferred
             // type. Lets `function f() { return x * 2 }` infer `() => number` so a caller's
             // `f().length` fires TS2339 against the primitive `number`.
-            val returnType = decl.type?.let { getTypeFromTypeNode(it) }
-                ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
-                ?: decl.body?.let { inferReturnTypeFromBody(it) }
-                ?: anyType
-            // Resolve parameter types eagerly within the type param scope
-            val paramSymbols = getParameterSymbols(decl.parameters)
-            for ((pi, param) in paramSymbols.withIndex()) {
-                if (pi < decl.parameters.size) {
-                    decl.parameters[pi].type?.let { typeNode ->
-                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+            val returnType: Type
+            val paramSymbols: List<Symbol>
+            try {
+                // Resolve constraints AFTER scope is set (constraints may reference other type params)
+                // Guard against clobbering already-set constraint/default from another interning site.
+                typeParams?.forEachIndexed { i, tp ->
+                    if (tp.constraint == null) {
+                        decl.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                    }
+                    if (tp.default == null) {
+                        decl.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
                     }
                 }
+                returnType = decl.type?.let { getTypeFromTypeNode(it) }
+                    ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
+                    ?: decl.body?.let { inferReturnTypeFromBody(it) }
+                    ?: anyType
+                // Resolve parameter types eagerly within the type param scope
+                paramSymbols = getParameterSymbols(decl.parameters)
+                for ((pi, param) in paramSymbols.withIndex()) {
+                    if (pi < decl.parameters.size) {
+                        decl.parameters[pi].type?.let { typeNode ->
+                            symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                        }
+                    }
+                }
+            } finally {
+                currentTypeParamScope = savedScope
             }
-            currentTypeParamScope = savedScope
             Signature(
                 declaration = decl,
                 typeParameters = typeParams,
@@ -67665,21 +67690,26 @@ interface DataView {
                                 }
                                 currentTypeParamScope = scope
                             }
-                            // Resolve sig-own TP constraints/defaults under combined scope
-                            sigOwnTps?.forEachIndexed { i, tp ->
-                                member.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
-                                member.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
-                            }
-                            val returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                            val paramSymbols = getParameterSymbols(member.parameters)
-                            for ((pi, param) in paramSymbols.withIndex()) {
-                                if (pi < member.parameters.size) {
-                                    member.parameters[pi].type?.let { typeNode ->
-                                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                            val returnType: Type
+                            val paramSymbols: List<Symbol>
+                            try {
+                                // Resolve sig-own TP constraints/defaults under combined scope
+                                sigOwnTps?.forEachIndexed { i, tp ->
+                                    member.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
+                                    member.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
+                                }
+                                returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                                paramSymbols = getParameterSymbols(member.parameters)
+                                for ((pi, param) in paramSymbols.withIndex()) {
+                                    if (pi < member.parameters.size) {
+                                        member.parameters[pi].type?.let { typeNode ->
+                                            symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                                        }
                                     }
                                 }
+                            } finally {
+                                currentTypeParamScope = savedSigScope
                             }
-                            currentTypeParamScope = savedSigScope
                             val newSig = Signature(
                                 declaration = member,
                                 typeParameters = sigOwnTps,
@@ -80858,11 +80888,14 @@ interface DataView {
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
-                    populateParameterLocalTypes(stmt.parameters)
-                    checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
-                    currentLocalTypes = savedLocalTypes
-                    currentParamBindingNames = savedParamBindings
-                    currentEnumConstrainedParams = savedEnumParams
+                    try {
+                        populateParameterLocalTypes(stmt.parameters)
+                        checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
+                        currentEnumConstrainedParams = savedEnumParams
+                    }
                 }
             }
             is VariableStatement -> {
@@ -81103,10 +81136,13 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    populateParameterLocalTypes(member.parameters)
-                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
-                    currentLocalTypes = savedLocalTypes
-                    currentParamBindingNames = savedParamBindings
+                    try {
+                        populateParameterLocalTypes(member.parameters)
+                        checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
+                    }
                 }
             }
             is Constructor -> {
@@ -81115,10 +81151,13 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    populateParameterLocalTypes(member.parameters)
-                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
-                    currentLocalTypes = savedLocalTypes
-                    currentParamBindingNames = savedParamBindings
+                    try {
+                        populateParameterLocalTypes(member.parameters)
+                        checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
+                    }
                 }
             }
             is GetAccessor -> {
@@ -81132,10 +81171,13 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    populateParameterLocalTypes(member.parameters)
-                    checkPropertyAccessInStatements(body.statements, source, fileName, classType)
-                    currentLocalTypes = savedLocalTypes
-                    currentParamBindingNames = savedParamBindings
+                    try {
+                        populateParameterLocalTypes(member.parameters)
+                        checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
+                    }
                 }
             }
             is PropertyDeclaration -> {
@@ -85288,9 +85330,12 @@ interface DataView {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = currentLocalTypes.toMutableMap()
-                    populateParameterLocalTypes(stmt.parameters)
-                    checkCallTypesInStatements(body.statements, source, fileName)
-                    currentLocalTypes = savedLocalTypes
+                    try {
+                        populateParameterLocalTypes(stmt.parameters)
+                        checkCallTypesInStatements(body.statements, source, fileName)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                    }
                 }
             }
             is ClassDeclaration -> {
@@ -89963,13 +90008,22 @@ interface DataView {
         relationDepth++
         val savedCycleBreak = relationUsedCycleBreak
         relationUsedCycleBreak = false
-        val result = structuredTypeRelatedTo(source, target, relation)
-        val usedCycle = relationUsedCycleBreak
-        relationUsedCycleBreak = savedCycleBreak || usedCycle
-        relationDepth--
-        if (tgtRef != null) state.relationTargetTargets.removeAt(state.relationTargetTargets.lastIndex)
-        if (srcRef != null) state.relationSourceTargets.removeAt(state.relationSourceTargets.lastIndex)
-        state.relationComparisonStack.remove(pairKey)
+        // B202.3 (finally-hygiene): unwind the relation stacks even when a
+        // StackOverflowError propagates out of structuredTypeRelatedTo — without
+        // this, an outer catch swallows the SOE but the stacks stay corrupted
+        // (stale pair keys suppress every later comparison of the same pair).
+        var result = false
+        var usedCycle = false
+        try {
+            result = structuredTypeRelatedTo(source, target, relation)
+            usedCycle = relationUsedCycleBreak
+        } finally {
+            relationUsedCycleBreak = savedCycleBreak || relationUsedCycleBreak
+            relationDepth--
+            if (tgtRef != null) state.relationTargetTargets.removeAt(state.relationTargetTargets.lastIndex)
+            if (srcRef != null) state.relationSourceTargets.removeAt(state.relationSourceTargets.lastIndex)
+            state.relationComparisonStack.remove(pairKey)
+        }
         // Only cache "true" results that were NOT influenced by cycle assumptions.
         // A "true" result from cycle detection is speculative — it may be wrong
         // once the full comparison completes (typeComparisonCaching test verifies this).
@@ -98787,7 +98841,7 @@ interface DataView {
             try {
                 checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) { }
-            currentLocalTypes = savedLocalTypes
+            finally { currentLocalTypes = savedLocalTypes }
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -98898,21 +98952,27 @@ interface DataView {
                         is MethodDeclaration -> member.body?.let { body ->
                             val savedLocalTypes = currentLocalTypes
                             currentLocalTypes = currentLocalTypes.toMutableMap()
-                            val savedScope = pushFunctionTypeParamsScope(member.typeParameters)
                             try {
-                                populateParameterLocalTypes(member.parameters)
+                                val savedScope = pushFunctionTypeParamsScope(member.typeParameters)
+                                try {
+                                    populateParameterLocalTypes(member.parameters)
+                                } finally {
+                                    currentTypeParamScope = savedScope
+                                }
+                                checkArithmeticInStatements(body.statements, source, fileName)
                             } finally {
-                                currentTypeParamScope = savedScope
+                                currentLocalTypes = savedLocalTypes
                             }
-                            checkArithmeticInStatements(body.statements, source, fileName)
-                            currentLocalTypes = savedLocalTypes
                         }
                         is Constructor -> member.body?.let { body ->
                             val savedLocalTypes = currentLocalTypes
                             currentLocalTypes = currentLocalTypes.toMutableMap()
-                            populateParameterLocalTypes(member.parameters)
-                            checkArithmeticInStatements(body.statements, source, fileName)
-                            currentLocalTypes = savedLocalTypes
+                            try {
+                                populateParameterLocalTypes(member.parameters)
+                                checkArithmeticInStatements(body.statements, source, fileName)
+                            } finally {
+                                currentLocalTypes = savedLocalTypes
+                            }
                         }
                         is GetAccessor -> member.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
                         is SetAccessor -> member.body?.let { checkArithmeticInStatements(it.statements, source, fileName) }
