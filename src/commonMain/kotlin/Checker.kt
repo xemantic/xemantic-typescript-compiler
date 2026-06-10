@@ -605,6 +605,13 @@ class Checker(
     // string-named module anywhere). MUST be declared before init {} (init-order).
     private val fileAmbientModuleInfoCache = HashMap<String, Triple<Set<String>, Boolean, Set<String>>>()
 
+    // B283: identifier names guarded by a `typeof x === "..."` condition in an
+    // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
+    // operands named here are exempt from the maybe-bigint TS2365 mixing rule
+    // (tsc narrows them to a single arithmetic-valid constituent inside the
+    // branch). MUST be declared before init {} (init-order).
+    private var arithTypeofNarrowedNames: Set<String> = emptySet()
+
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
@@ -69320,14 +69327,16 @@ interface DataView {
                     when (val operand = expr.operand) {
                         is NumericLiteralNode -> Type.NumberLiteral(-(operand.text.toDoubleOrNull() ?: 0.0))
                         is BigIntLiteralNode -> Type.BigIntLiteral("-${operand.text.removeSuffix("n")}")
-                        else -> numberType
+                        else -> if (isBigIntLikeType(getTypeOfExpression(operand))) bigintType else numberType
                     }
                 }
-                SyntaxKind.Plus, SyntaxKind.Tilde -> numberType
-                SyntaxKind.PlusPlus, SyntaxKind.MinusMinus -> numberType
+                SyntaxKind.Plus -> numberType // unary + always coerces to number (TS2736 errors on bigint)
+                SyntaxKind.Tilde, SyntaxKind.PlusPlus, SyntaxKind.MinusMinus ->
+                    if (isBigIntLikeType(getTypeOfExpression(expr.operand))) bigintType else numberType
                 else -> anyType
             }
-            is PostfixUnaryExpression -> numberType // x++, x--
+            is PostfixUnaryExpression -> // x++, x-- (bigint operand keeps bigint)
+                if (isBigIntLikeType(getTypeOfExpression(expr.operand))) bigintType else numberType
             is TypeOfExpression -> stringType
             is VoidExpression -> undefinedType
             is DeleteExpression -> booleanType
@@ -73157,7 +73166,11 @@ interface DataView {
             SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
             SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
             SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
-            SyntaxKind.GreaterThanGreaterThanGreaterThan -> numberType
+            SyntaxKind.GreaterThanGreaterThanGreaterThan ->
+                // B283: both-bigint arithmetic yields bigint (tsc bothAreBigIntLike branch);
+                // anything else (incl. mixed/unions) keeps the historical number result.
+                if (isBigIntLikeType(getTypeOfExpression(expr.left)) &&
+                    isBigIntLikeType(getTypeOfExpression(expr.right))) bigintType else numberType
 
             // Comparison → boolean
             SyntaxKind.LessThan, SyntaxKind.GreaterThan,
@@ -92885,6 +92898,26 @@ interface DataView {
             if (leftType === unknownType || rightType === unknownType) return
             if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
             if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            // B283: bigint and number have no overlap (tsc isTypeEqualityComparableTo
+            // fails both directions). Strict kinds only — unions mixing the two, any,
+            // and TypeParam operands bail. Displays are the widened bases.
+            if (leftType !is Type.TypeParam && rightType !is Type.TypeParam &&
+                ((typeAssignableToBigIntKind(leftType) && typeAssignableToNumberKind(rightType)) ||
+                    (typeAssignableToNumberKind(leftType) && typeAssignableToBigIntKind(rightType)))) {
+                val start = expr.pos
+                val length = expressionTrueEnd(expr.right) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This comparison appears to be unintentional because the types " +
+                            "'${arithWidenedDisplay(leftType)}' and '${arithWidenedDisplay(rightType)}' have no overlap.",
+                        category = DiagnosticCategory.Error, code = 2367,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                }
+                return
+            }
             // 17.73: TypeParam-with-literal-union-constraint vs literal — when one
             // side is a TypeParam whose apparent type is a union of all literals
             // (e.g. `T extends "a" | "b"`) and the other side is a literal, use
@@ -103603,8 +103636,16 @@ interface DataView {
             is Block -> checkArithmeticInStatements(stmt.statements, source, fileName)
             is IfStatement -> {
                 checkArithmeticInExpr(stmt.expression, source, fileName)
-                checkArithmeticInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkArithmeticInStatement(it, source, fileName) }
+                // B283: a `typeof x === "..."` guard narrows `x` in both branches —
+                // this walker has no flow narrowing, so union-typed operands named
+                // here are exempt from the maybe-bigint TS2365/TS2736 mixing rules.
+                val guarded = collectTypeofGuardNames(stmt.expression)
+                val savedGuards = arithTypeofNarrowedNames
+                if (guarded.isNotEmpty()) arithTypeofNarrowedNames = savedGuards + guarded
+                try {
+                    checkArithmeticInStatement(stmt.thenStatement, source, fileName)
+                    stmt.elseStatement?.let { checkArithmeticInStatement(it, source, fileName) }
+                } finally { arithTypeofNarrowedNames = savedGuards }
             }
             is ForStatement -> {
                 when (val init = stmt.initializer) {
@@ -103748,7 +103789,10 @@ interface DataView {
                 expr.arguments?.forEach { checkArithmeticInExpr(it, source, fileName) }
             }
             is PropertyAccessExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkArithmeticInExpr(expr.operand, source, fileName)
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.Plus) checkUnaryPlusBigIntOperand(expr, source, fileName)
+                checkArithmeticInExpr(expr.operand, source, fileName)
+            }
             is PostfixUnaryExpression -> checkArithmeticInExpr(expr.operand, source, fileName)
             is ArrayLiteralExpression -> expr.elements.forEach { checkArithmeticInExpr(it, source, fileName) }
             is NewExpression -> {
@@ -103976,13 +104020,26 @@ interface DataView {
         // but if types are incompatible (number + bigint, string + Number), emit TS2365
         if (isPlus || isPlusEquals) {
             if (leftOk && rightOk) {
-                // Check for number + bigint mixing
-                val leftIsNumber = isNumberLikeType(leftType)
-                val rightIsNumber = isNumberLikeType(rightType)
-                val leftIsBigInt = isBigIntLikeType(leftType)
-                val rightIsBigInt = isBigIntLikeType(rightType)
-                if ((leftIsNumber && rightIsBigInt) || (leftIsBigInt && rightIsNumber)) {
-                    emitTs2365(expr, op, leftType, rightType, source, fileName)
+                // B283 (tsc `+` rule): valid iff both number-like, both bigint-like, or
+                // either string-like — strict kinds with TypeParam constraints resolved.
+                val bothNum = typeAssignableToNumberKind(leftType) && typeAssignableToNumberKind(rightType)
+                val bothBig = typeAssignableToBigIntKind(leftType) && typeAssignableToBigIntKind(rightType)
+                val eitherStr = isStringLikeType(leftType) || isStringLikeType(rightType) ||
+                    typeAssignableToStringKind(leftType) || typeAssignableToStringKind(rightType)
+                if (!bothNum && !bothBig && !eitherStr && !arithTypeofSuppressed(expr) &&
+                    !arithOperandUncertain(leftType) && !arithOperandUncertain(rightType)) {
+                    // Display rule (tsc getBaseTypesIfUnrelated + closeEnoughKind): keep
+                    // literal operand displays when even the widened bases are "close
+                    // enough" (`1 + 2n` keeps '1'/'2n'); a union/TypeParam operand is
+                    // not, so both sides widen ('number | bigint', 'S').
+                    val closeL = plusCloseEnoughKind(getWidenedLiteralType(leftType))
+                    val closeR = plusCloseEnoughKind(getWidenedLiteralType(rightType))
+                    if (closeL && closeR) {
+                        emitTs2365(expr, op, leftType, rightType, source, fileName)
+                    } else {
+                        emitTs2365(expr, op, leftType, rightType, source, fileName,
+                            arithWidenedDisplay(leftType), arithWidenedDisplay(rightType))
+                    }
                 }
                 return
             }
@@ -104020,28 +104077,28 @@ interface DataView {
                     return
                 }
             }
-            // For strict arithmetic: both sides must be number/bigint/any/enum
-            if (!leftOk && !rightOk) {
-                // Both bad — emit TS2362 + TS2363
-                emitTs2362(expr.left, source, fileName)
-                emitTs2363(expr.right, source, fileName)
-                return
-            }
-            if (!leftOk) {
-                emitTs2362(expr.left, source, fileName)
-                return
-            }
-            if (!rightOk) {
-                emitTs2363(expr.right, source, fileName)
-                return
-            }
-            // Both OK — check number/bigint mixing
-            val leftIsNumber = isNumberLikeType(leftType)
-            val rightIsNumber = isNumberLikeType(rightType)
-            val leftIsBigInt = isBigIntLikeType(leftType)
-            val rightIsBigInt = isBigIntLikeType(rightType)
-            if ((leftIsNumber && rightIsBigInt) || (leftIsBigInt && rightIsNumber)) {
-                emitTs2365(expr, op, leftType, rightType, source, fileName)
+            // For strict arithmetic: both sides must be number/bigint/any/enum.
+            // B283 (tsc checkBinaryLikeExpression): the per-operand TS2362/TS2363 and
+            // the bigint-mixing TS2365 are INDEPENDENT — an invalid operand still
+            // participates in the maybe-bigint mixing check (`"3" & 5n` gets both).
+            if (!leftOk) emitTs2362(expr.left, source, fileName)
+            if (!rightOk) emitTs2363(expr.right, source, fileName)
+            val bothBig = typeAssignableToBigIntKind(leftType) && typeAssignableToBigIntKind(rightType)
+            val maybeBig = typeMaybeBigIntLike(leftType) || typeMaybeBigIntLike(rightType)
+            if (bothBig) {
+                // `>>>`/`>>>=` is never valid for bigints; display keeps the literal
+                // operand forms (tsc reportOperatorError with no isRelated callback).
+                if (op == SyntaxKind.GreaterThanGreaterThanGreaterThan ||
+                    op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals) {
+                    emitTs2365(expr, op, leftType, rightType, source, fileName)
+                }
+            } else if (maybeBig && !arithTypeofSuppressed(expr) &&
+                !arithOperandUncertain(leftType) && !arithOperandUncertain(rightType)) {
+                // Mixed maybe-bigint pair: TS2365 with literal bases WIDENED (tsc
+                // getBaseTypesIfUnrelated with bothAreBigIntLike — a mixed pair is
+                // never both-bigint after widening, so widened displays always apply).
+                emitTs2365(expr, op, leftType, rightType, source, fileName,
+                    arithWidenedDisplay(leftType), arithWidenedDisplay(rightType))
             }
             return
         }
@@ -104113,6 +104170,148 @@ interface DataView {
         if (type.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral)) return true
         if (type is Type.Union) return type.types.all { isBigIntLikeType(it) }
         return false
+    }
+
+    /** B283: tsc `isTypeAssignableToKind(t, NumberLike, strict=true)` — number-ish
+     *  through unions (all members) and TypeParam constraints. */
+    private fun typeAssignableToNumberKind(t: Type): Boolean = when {
+        t.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral) -> true
+        t is Type.Intrinsic && t.flags.hasAny(TypeFlags.Enum) -> true
+        t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToNumberKind(it) }
+        t is Type.TypeParam -> t.constraint?.let { typeAssignableToNumberKind(it) } == true
+        else -> false
+    }
+
+    /** B283: tsc `isTypeAssignableToKind(t, BigIntLike, strict=true)`. */
+    private fun typeAssignableToBigIntKind(t: Type): Boolean = when {
+        t.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral) -> true
+        t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToBigIntKind(it) }
+        t is Type.TypeParam -> t.constraint?.let { typeAssignableToBigIntKind(it) } == true
+        else -> false
+    }
+
+    /** B283: tsc `isTypeAssignableToKind(t, StringLike, strict=true)`. */
+    private fun typeAssignableToStringKind(t: Type): Boolean = when {
+        t.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral) -> true
+        t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToStringKind(it) }
+        t is Type.TypeParam -> t.constraint?.let { typeAssignableToStringKind(it) } == true
+        else -> false
+    }
+
+    /** B283: tsc `maybeTypeOfKind(t, BigIntLike)` — ANY union constituent counts;
+     *  deliberately does NOT look through TypeParam constraints (tsc's resultType
+     *  branch uses the plain variant, so `S extends number | bigint` is excluded). */
+    private fun typeMaybeBigIntLike(t: Type): Boolean = when {
+        t.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral) -> true
+        t is Type.Union -> t.types.any { typeMaybeBigIntLike(it) }
+        else -> false
+    }
+
+    /** B283: tsc `maybeTypeOfKindConsideringBaseConstraint(t, BigIntLike)` — the
+     *  TS2736 unary-plus rule DOES look through TypeParam constraints. */
+    private fun typeMaybeBigIntConsideringConstraint(t: Type): Boolean =
+        typeMaybeBigIntLike(t) ||
+            (t is Type.TypeParam && t.constraint?.let { typeMaybeBigIntConsideringConstraint(it) } == true)
+
+    /** B283: an operand whose kind we cannot trust for the new bigint-mixing
+     *  emissions — TypeParam with an unresolvable/any-ish constraint, or a union
+     *  carrying any/unknown/error members. Suppresses emission (FN over FP). */
+    private fun arithOperandUncertain(t: Type): Boolean = when (t) {
+        is Type.TypeParam -> {
+            val c = t.constraint
+            c == null || c === anyType || c === unknownType || c === errorType || arithOperandUncertain(c)
+        }
+        is Type.Union -> t.types.any { it === anyType || it === unknownType || it === errorType }
+        else -> false
+    }
+
+    /** B283: the `+` "close enough" display callback (tsc closeEnoughKind =
+     *  NumberLike | BigIntLike | StringLike | AnyOrUnknown), applied to a widened base. */
+    private fun plusCloseEnoughKind(t: Type): Boolean =
+        t === anyType || t === unknownType || typeAssignableToNumberKind(t) ||
+            typeAssignableToBigIntKind(t) || typeAssignableToStringKind(t)
+
+    /** B283: widened-base display for the bigint-mixing TS2365/TS2736 messages —
+     *  literals widen to their base; unions widen member-wise and render in tsc's
+     *  type-id order (string < number < bigint); TypeParams keep their NAME. */
+    private fun arithWidenedDisplay(t: Type): String {
+        if (t is Type.TypeParam) return typeToString(t)
+        if (t is Type.Union) {
+            val widened = mutableListOf<Type>()
+            for (m in t.types) {
+                val w = getWidenedLiteralType(m)
+                if (widened.none { it === w }) widened.add(w)
+            }
+            val rank = { x: Type ->
+                when {
+                    x.flags.hasAny(TypeFlags.String) -> 0
+                    x.flags.hasAny(TypeFlags.Number) -> 1
+                    x.flags.hasAny(TypeFlags.BigInt) -> 3
+                    else -> 2
+                }
+            }
+            return widened.sortedBy(rank).joinToString(" | ") { typeToString(it) }
+        }
+        return typeToString(getWidenedLiteralType(t))
+    }
+
+    /** B283: is either operand a bare identifier guarded by an enclosing
+     *  `typeof x === "..."` condition? (Union-typed guarded names are narrowed by
+     *  tsc to a single arithmetic-valid constituent — suppress the mixing rule.) */
+    private fun arithTypeofSuppressed(expr: BinaryExpression): Boolean {
+        if (arithTypeofNarrowedNames.isEmpty()) return false
+        fun guarded(e: Expression): Boolean {
+            var c: Expression = e
+            while (c is ParenthesizedExpression) c = c.expression
+            return c is Identifier && c.text in arithTypeofNarrowedNames
+        }
+        return guarded(expr.left) || guarded(expr.right)
+    }
+
+    /** B283: names compared via `typeof x ==/===/!=/!== <anything>` anywhere in an
+     *  if-condition (conservative — both branches of the if get the suppression). */
+    private fun collectTypeofGuardNames(cond: Expression): Set<String> {
+        val out = mutableSetOf<String>()
+        fun walk(e: Expression) {
+            when (e) {
+                is ParenthesizedExpression -> walk(e.expression)
+                is PrefixUnaryExpression -> walk(e.operand)
+                is BinaryExpression -> when (e.operator) {
+                    SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals,
+                    SyntaxKind.ExclamationEqualsEquals, SyntaxKind.ExclamationEquals -> {
+                        ((e.left as? TypeOfExpression)?.expression as? Identifier)?.let { out.add(it.text) }
+                        ((e.right as? TypeOfExpression)?.expression as? Identifier)?.let { out.add(it.text) }
+                    }
+                    SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar -> { walk(e.left); walk(e.right) }
+                    else -> {}
+                }
+                else -> {}
+            }
+        }
+        walk(cond)
+        return out
+    }
+
+    /** B283 TS2736: unary `+` coerces to number, which is invalid for a
+     *  (maybe-)bigint operand — incl. unions with a bigint constituent and
+     *  TypeParams whose constraint has one. Span = the operand only. */
+    private fun checkUnaryPlusBigIntOperand(expr: PrefixUnaryExpression, source: String, fileName: String) {
+        val operand = expr.operand
+        val t = getTypeOfExpression(operand)
+        if (t === anyType || t === errorType || t === unknownType) return
+        if (!typeMaybeBigIntConsideringConstraint(t)) return
+        var inner: Expression = operand
+        while (inner is ParenthesizedExpression) inner = inner.expression
+        if (inner is Identifier && inner.text in arithTypeofNarrowedNames && t is Type.Union) return
+        val start = operand.pos
+        val length = (expressionTrueEnd(operand) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Operator '+' cannot be applied to type '${arithWidenedDisplay(t)}'.",
+            category = DiagnosticCategory.Error, code = 2736,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
     }
 
     /** Check if type is string or string literal. */
