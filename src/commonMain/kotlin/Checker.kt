@@ -1379,6 +1379,7 @@ class Checker(
         checkImportAttributeValues()
         // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
         checkJsDocNongenericInstantiation()
+        checkJsDocBareGenericTags()
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
         checkDecoratorUseBeforeDeclaration()
         // 72a4j (B261): TS2345 for optional destructured-param bindings as call args (+ null-default TS2322)
@@ -63308,6 +63309,42 @@ interface DataView {
         }
         if (name !is Identifier) return
 
+        // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
+        // — tsc elaborates INTO the literal and reports the property-level leaf at the
+        // property NAME with no outer chain and no TS6500 (`{valueOf: 1}` →
+        // "Type 'number' is not assignable to type '() => Object'." at `valueOf`).
+        run {
+            val init = decl.initializer
+            val ann = decl.type
+            if (decl.typeFromJSDoc && init is ObjectLiteralExpression && ann is TypeReference &&
+                (ann.typeName as? Identifier)?.text == "Object" && ann.typeArguments.isNullOrEmpty()) {
+                val objType = getTypeFromTypeNode(ann)
+                if (objType is Type.Interface) {
+                    resolveStructuredTypeMembers(objType)
+                    var emitted = false
+                    for (p in init.properties) {
+                        if (p !is PropertyAssignment) continue
+                        val pn = p.name as? Identifier ?: continue
+                        val member = objType.members?.get(pn.text) ?: continue
+                        val memberType = try { getTypeOfSymbol(member) } catch (_: StackOverflowError) { continue }
+                        if (memberType === anyType || memberType === errorType) continue
+                        val valType = getTypeOfExpression(p.initializer)
+                        if (valType === anyType || valType === errorType) continue
+                        if (checkTypeRelatedTo(valType, memberType, assignableRelation)) continue
+                        val (pl, pc) = getLineAndCharacterOfPosition(source, pn.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(getWidenedLiteralType(valType))}' is not assignable to type '${typeToString(memberType)}'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = pl, character = pc,
+                            start = pn.pos, length = pn.text.length,
+                        ))
+                        emitted = true
+                    }
+                    if (emitted) return
+                }
+            }
+        }
+
         // B101: narrow FP-safe TS2322 for `var x: <primitive> = this.voidMethod()`.
         // A `this`-method call whose method is declared in the enclosing class with no
         // return annotation and a return-free body resolves to `void`, which is never
@@ -101038,6 +101075,37 @@ interface DataView {
      * same-file top-level FunctionDeclaration and T resolves to nothing → TS2304 at
      * the type-arg. Gated to checkJs-checked .js files.
      */
+    /** B286: under noImplicitAny, a BARE `Array`/`Promise` in a JSDoc `@type`/
+     *  `@return(s)` tag is TS2314 ("Generic type 'Array<T>' requires 1 type
+     *  argument(s).") at the name's position inside the comment. `@param` is
+     *  excluded — the B5.2 param bridge already routes those through the normal
+     *  TS2314 walker. Raw-source scan (the JSDoc tags are not parsed/bound). */
+    private fun checkJsDocBareGenericTags() {
+        if (!options.checkJs) return
+        if (!(options.noImplicitAny || options.strict)) return
+        val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
+        val tag = Regex("""@(?:type|returns?)\s*\{\s*(Array|Promise)\s*\}""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (block in jsdocBlock.findAll(source)) {
+                for (m in tag.findAll(block.value)) {
+                    val name = m.groupValues[1]
+                    val nameRel = m.value.indexOf(name)
+                    val start = block.range.first + m.range.first + nameRel
+                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Generic type '$name<T>' requires 1 type argument(s).",
+                        category = DiagnosticCategory.Error, code = 2314,
+                        fileName = fileName, line = line, character = ch,
+                        start = start, length = name.length,
+                    ))
+                }
+            }
+        }
+    }
+
     private fun checkJsDocNongenericInstantiation() {
         if (!options.checkJs) return
         val nonGenericWrappers = setOf("Boolean", "Void", "Undefined", "Function", "String", "Number", "Object")

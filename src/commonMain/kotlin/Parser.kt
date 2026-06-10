@@ -766,7 +766,17 @@ class Parser(
             val decl = declList.declarations[0]
             if (decl.type == null && decl.name is Identifier) {
                 val jsdocType = parsePropertyTypeFromJSDoc(comments)
-                if (jsdocType != null) {
+                // B286: bare `Array`/`Promise` and closure-style `Object<K,V>` JSDoc
+                // types mean any[]/Promise<any>/string-indexed-any in JS — bridging
+                // them as annotations produces unresolved-T TS2322 / TS2315 FPs (the
+                // sub-parser positions are also substring-relative). The noImplicitAny
+                // TS2314 for the bare forms is raw-scanned by checkJsDocBareGenericTags.
+                val skipBridge = jsdocType is TypeReference &&
+                    (jsdocType.typeName as? Identifier)?.text?.let { n ->
+                        ((n == "Array" || n == "Promise") && jsdocType.typeArguments.isNullOrEmpty()) ||
+                            (n == "Object" && !jsdocType.typeArguments.isNullOrEmpty())
+                    } == true
+                if (jsdocType != null && !skipBridge) {
                     val newDecl = decl.copy(type = jsdocType, typeFromJSDoc = true)
                     declList = declList.copy(declarations = listOf(newDecl))
                 }
