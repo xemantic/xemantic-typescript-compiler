@@ -15490,6 +15490,18 @@ Net effect: `find_candidates.py --fresh` now considers 24 fewer skipped tokens (
 - ~~`assignmentCompatability37_ts` / `38_ts` / `39_ts` / `40_ts` / `41_ts` / `42_ts`~~ → flipped by the 17.14b series (generic argument inference from `new` expressions + class-instance comparison via `canUseTypeEngine` widening + parameter-property type substitution). 17.15b session note confirms the entire ~~`assignmentCompatabilityNN_ts`~~ numbered family (11–43) is fully healed.
 - `optionalParamTypeComparison_ts` → SWAP-ish (4-line diff). Function-type display issue + chain elaboration depth. PARTIALLY fixed in 17.13 (formatTypeForDisplay now honors `?:`/`...` for FunctionType/ConstructorType/TypeLiteral params — outer source/target displays correct), but chain elaboration in `getFunctionMismatchElaboration` still emits 2 lines instead of 3. Expected has widened-pair line (`number | undefined → boolean | undefined`) followed by an asymmetric "deeper" line that doesn't generalize cleanly: line 4 deeper is `number → boolean | undefined` (target widened), line 5 deeper is `boolean → number` (target un-widened). The asymmetry direction depends on which assignment direction (`f = g` vs `g = f`); attempted union-source elaboration matching the line 4 form regresses 2 other tests (~~`functionSignatureAssignmentCompat1_ts`~~, line 5 of itself) because their expected baselines use un-widened source-side targets. Needs precise reverse-engineering of TypeScript's `relateVariances` elaboration rules — beyond surgical scope.
 
+- `regularExpressionScanning_ts` — full tsc regex validator needed (TS1501/1502/1509/1533/1534/1536/1537/1487 + \p matrix); ~800 lines of scanner.ts; round-141.
+- `decoratorsOnComputedProperties_ts` — decorators on computed-named class fields misparse (TS2300 ':' FP cascade); needs member-parse support + TS1166 family; round-141.
+- `builtinIterator_ts` — TS5.6 builtin abstract Iterator class lib modeling (Iterator.from, TS2511/2515/2416 chains); round-141.
+- `overloadresolutionWithConstraintCheckingDeferred_ts` — contextual arrow params through overloads + generic-ctor constraint-failure inference → Blocker #2; round-141.
+- `reverseMappedTypeIntersectionConstraint_ts` — nested reverse-mapped inference tail (4 lines); B218 covers flat sites; round-141.
+- `exportAssignmentExpressionIsExpressionNode_ts` — nodenext CJS export= namespace typing + 7-level chain; round-141.
+- `extractInferenceImprovement_ts` — Extract<> materialization + unique-symbol nominal args; round-141.
+- `excessPropertyCheckIntersectionWithRecursiveType_ts` — recursive generic intersection EPC displays; round-141.
+- `invariantGenericErrorElaboration_ts` — invariant-generic constraint elaboration chains; round-141.
+- `longObjectInstantiationChain2_ts` — recursive generic alias display (aliasDisplayMap outer-type gap); round-141.
+- `parseAssertEntriesError_ts` — import-attribute parse recovery in type positions; round-141.
+- `parseImportAttributesError_ts` — same family as parseAssertEntriesError; round-141.
 ### End of skip log
 
 _Terminator heading for the `find_candidates.py` skip-token region — new skip entries go ABOVE this heading; new archive sections go BELOW it._
