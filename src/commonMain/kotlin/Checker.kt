@@ -1321,6 +1321,8 @@ class Checker(
         checkGenericIndexWrite()
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
         checkMappedIntersectionIndexWrite()
+        // 72a4b (B251): TS2551/TS2339 + TS2862 for writes on a `Record<keyof TP | "lit", V>`-cast local
+        checkGenericRecordCastAccess()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -98473,6 +98475,171 @@ interface DataView {
                 if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
                     val tps = stmt.typeParameters!!.filter { it.constraint == null }.map { it.name.text }.toSet()
                     if (tps.isNotEmpty()) stmt.body?.let { scanBody(it.statements, tps, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B251: TS2551/TS2339 + TS2862 for WRITES on a local cast to
+     * `Record<keyof TP | "literal", V>` inside a generic function
+     * (mappedTypeGenericWithKnownKeys). The key union mixes `keyof Shape` (generic —
+     * keys unknowable, so the Record stays generic and is writable only via the known
+     * literal keys) with literal keys: a dot-write to an unknown literal key is
+     * TS2551 (with spelling suggestion from the literal-key set) / TS2339; an
+     * element-write whose index is an explicitly always-`string` shape is TS2862
+     * "generic and can only be indexed for reading." Default-suppress polarity:
+     * only the recognized shapes fire (unknown index shapes are FN, never FP) —
+     * `obj[key]` with `key: keyof Shape` correctly does not fire.
+     */
+    private fun checkGenericRecordCastAccess() {
+        // user `Record` shadow -> lib utility semantics don't apply (B184 gate)
+        if (globals["Record"]?.declarations?.any {
+                it is TypeAliasDeclaration || it is InterfaceDeclaration || it is ClassDeclaration
+            } == true) return
+
+        fun keyofTpName(t: TypeNode, tps: Map<String, TypeParameter>): String? {
+            if (t !is TypeOperator || t.operator != SyntaxKind.KeyOfKeyword) return null
+            val ref = t.type as? TypeReference ?: return null
+            if (ref.typeArguments != null) return null
+            val name = (ref.typeName as? Identifier)?.text ?: return null
+            return if (name in tps) name else null
+        }
+        // constraint contributes NO literal keys: absent, `object`, or `Record<string, *>`
+        fun constraintIsKeyOpaque(c: TypeNode?): Boolean {
+            if (c == null) return true
+            if (c is KeywordTypeNode && c.kind == SyntaxKind.ObjectKeyword) return true
+            if (c is TypeReference && (c.typeName as? Identifier)?.text == "Record") {
+                val args = c.typeArguments
+                return args?.size == 2 &&
+                    (args[0] as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword
+            }
+            return false
+        }
+
+        fun scanBody(
+            stmts: List<Statement>, tps: Map<String, TypeParameter>,
+            paramStringNames: Set<String>, source: String, fileName: String,
+        ) {
+            // tracked local -> (Record display, literal key set)
+            val tracked = mutableMapOf<String, Pair<String, Set<String>>>()
+            for (s in stmts) {
+                if (s is VariableStatement) {
+                    for (d in s.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        if (d.type != null) continue
+                        var init = d.initializer ?: continue
+                        while (init is ParenthesizedExpression) init = init.expression
+                        val asExpr = init as? AsExpression ?: continue
+                        val t = asExpr.type as? TypeReference ?: continue
+                        if ((t.typeName as? Identifier)?.text != "Record") continue
+                        val args = t.typeArguments ?: continue
+                        if (args.size != 2) continue
+                        val keyUnion = args[0] as? UnionType ?: continue
+                        val literalKeys = mutableSetOf<String>()
+                        var keyofCount = 0
+                        var ok = true
+                        val memberDisplays = mutableListOf<String>()
+                        for (m in keyUnion.types) {
+                            val lit = (m as? LiteralType)?.literal as? StringLiteralNode
+                            if (lit != null) {
+                                literalKeys.add(lit.text)
+                                memberDisplays.add("\"${lit.text}\"")
+                                continue
+                            }
+                            val tpName = keyofTpName(m, tps)
+                            if (tpName != null && constraintIsKeyOpaque(tps[tpName]?.constraint)) {
+                                keyofCount++
+                                memberDisplays.add("keyof $tpName")
+                                continue
+                            }
+                            ok = false
+                            break
+                        }
+                        if (!ok || keyofCount == 0 || literalKeys.isEmpty()) continue
+                        val valDisplay = formatTypeForDisplay(args[1]) ?: continue
+                        tracked[n] = "Record<${memberDisplays.joinToString(" | ")}, $valDisplay>" to literalKeys
+                    }
+                }
+                if (s is ExpressionStatement) {
+                    val e = s.expression
+                    if (e is BinaryExpression && e.operator == SyntaxKind.Equals) {
+                        val lhs = e.left
+                        if (lhs is PropertyAccessExpression && lhs.expression is Identifier && !lhs.questionDotToken) {
+                            val info = tracked[(lhs.expression as Identifier).text]
+                            val propName = lhs.name.text
+                            if (info != null && propName !in info.second &&
+                                propName !in OBJECT_PROTOTYPE_PROPERTIES &&
+                                propName !in RUNTIME_PROPERTIES
+                            ) {
+                                val suggestion = getSpellingSuggestionFromNames(propName, info.second)
+                                val start = lhs.name.pos
+                                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                val (msg, code) = if (suggestion != null)
+                                    "Property '$propName' does not exist on type '${info.first}'. Did you mean '$suggestion'?" to 2551
+                                else
+                                    "Property '$propName' does not exist on type '${info.first}'." to 2339
+                                diagnostics.add(Diagnostic(
+                                    message = msg,
+                                    category = DiagnosticCategory.Error, code = code,
+                                    fileName = fileName, line = line, character = ch,
+                                    start = start, length = propName.length,
+                                ))
+                            }
+                        }
+                        if (lhs is ElementAccessExpression && lhs.expression is Identifier && !lhs.questionDotToken) {
+                            val info = tracked[(lhs.expression as Identifier).text]
+                            if (info != null) {
+                                val idx = lhs.argumentExpression
+                                val isAlwaysString = (idx is AsExpression &&
+                                    (idx.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) ||
+                                    (idx is Identifier && idx.text in paramStringNames)
+                                if (isAlwaysString) {
+                                    // span: receiver start .. the matching `]` inclusive
+                                    // (expressionTrueEnd overshoots for AsExpression indices)
+                                    val start = lhs.pos
+                                    var endPos = -1
+                                    val bracket = source.indexOf('[', (lhs.expression as Identifier).pos)
+                                    if (bracket >= 0) {
+                                        var depth = 0
+                                        var i = bracket
+                                        while (i < source.length) {
+                                            when (source[i]) {
+                                                '[' -> depth++
+                                                ']' -> { depth--; if (depth == 0) { endPos = i + 1; break } }
+                                            }
+                                            i++
+                                        }
+                                    }
+                                    if (endPos > start) {
+                                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Type '${info.first}' is generic and can only be indexed for reading.",
+                                            category = DiagnosticCategory.Error, code = 2862,
+                                            fileName = fileName, line = line, character = ch,
+                                            start = start, length = endPos - start,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
+                    val tps = stmt.typeParameters!!.associateBy { it.name.text }
+                    val paramStringNames = stmt.parameters.mapNotNull { p ->
+                        val pn = (p.name as? Identifier)?.text
+                        if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
+                    }.toSet()
+                    stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
                 }
             }
         }
