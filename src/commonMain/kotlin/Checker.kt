@@ -1332,6 +1332,8 @@ class Checker(
         checkGenericMappedFnAliasAssignments()
         // 72a4d (B255): TS2322 for `in`-RHS operands whose every instantiation is primitive
         checkInRhsPrimitiveTypeParams()
+        // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
+        checkDestructuringAssignmentUndefinedDefaults()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99069,6 +99071,101 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B256: TS2322 for an `undefined` DEFAULT in a destructuring ASSIGNMENT against an
+     * annotated target variable (destructuringAssignmentWithDefault2):
+     * `({ x = undefined } = a)` / `({ x: x = undefined } = a)` where `x: number` and
+     * `a`'s prop is optional. The shorthand form double-emits (tsc): first
+     * `'<prop> | undefined' is not assignable` + undefined chain line (the value WITH
+     * the useless default still includes undefined), then the bare
+     * `'undefined' is not assignable` for the default expression itself; the longhand
+     * form emits only the latter, at the TARGET identifier. Gates: top-level
+     * paren-wrapped object-destructuring assignment, RHS Identifier resolving to a
+     * Type.Object, default literally `undefined`, target var annotated with a
+     * primitive keyword, strictNullChecks. Anything else silent.
+     */
+    private fun checkDestructuringAssignmentUndefinedDefaults() {
+        if (!strictNullChecks) return
+        val primKeywords = mapOf(
+            SyntaxKind.NumberKeyword to "number", SyntaxKind.StringKeyword to "string",
+            SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
+            SyntaxKind.SymbolKeyword to "symbol",
+        )
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // annotated `let/var/const <name>: <prim keyword>` targets
+            val varAnn = mutableMapOf<String, String>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val kw = (d.type as? KeywordTypeNode)?.kind ?: continue
+                    primKeywords[kw]?.let { varAnn[n] = it }
+                }
+            }
+            if (varAnn.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                var e = (stmt as? ExpressionStatement)?.expression ?: continue
+                while (e is ParenthesizedExpression) e = e.expression
+                val b = e as? BinaryExpression ?: continue
+                if (b.operator != SyntaxKind.Equals) continue
+                val pattern = b.left as? ObjectLiteralExpression ?: continue
+                val rhs = b.right as? Identifier ?: continue
+                val rhsType = (try { getTypeOfExpression(rhs) } catch (_: StackOverflowError) { null })
+                    as? Type.Object ?: continue
+                if (rhsType is Type.Reference) continue
+                resolveStructuredTypeMembers(rhsType)
+                for (prop in pattern.properties) {
+                    // (propName-in-source, targetName, targetNode, isShorthand)
+                    val (propName, targetIdent, isShorthand) = when (prop) {
+                        is ShorthandPropertyAssignment -> {
+                            val def = prop.objectAssignmentInitializer
+                            if (def !is Identifier || def.text != "undefined") continue
+                            Triple(prop.name.text, prop.name, true)
+                        }
+                        is PropertyAssignment -> {
+                            val inner = prop.initializer as? BinaryExpression ?: continue
+                            if (inner.operator != SyntaxKind.Equals) continue
+                            val target = inner.left as? Identifier ?: continue
+                            val def = inner.right as? Identifier ?: continue
+                            if (def.text != "undefined") continue
+                            val pn = (prop.name as? Identifier)?.text ?: continue
+                            Triple(pn, target, false)
+                        }
+                        else -> continue
+                    }
+                    val targetTypeName = varAnn[targetIdent.text] ?: continue
+                    val propSym = rhsType.members?.get(propName) ?: continue
+                    val propType = getTypeOfSymbol(propSym)
+                    val propDisplay = (propType as? Type.Intrinsic)?.intrinsicName ?: continue
+                    // same-primitive prop/target only — a cross-primitive mismatch would
+                    // need different/additional diagnostics (bail, FN-safe)
+                    if (propDisplay != targetTypeName) continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, targetIdent.pos)
+                    if (isShorthand && isOptionalProperty(propSym)) {
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$propDisplay | undefined' is not assignable to type '$targetTypeName'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = line, character = ch,
+                            start = targetIdent.pos, length = targetIdent.text.length,
+                            messageChain = listOf(
+                                "  Type 'undefined' is not assignable to type '$targetTypeName'.",
+                            ),
+                        ))
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'undefined' is not assignable to type '$targetTypeName'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = targetIdent.pos, length = targetIdent.text.length,
+                    ))
                 }
             }
         }
