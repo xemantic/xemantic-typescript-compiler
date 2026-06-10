@@ -31161,6 +31161,10 @@ class Checker(
             "Symbol.description" to ScriptTarget.ES2019,
             "SymbolConstructor.matchAll" to ScriptTarget.ES2020,
             "Date.toTemporalInstant" to ScriptTarget.ESNext,
+            // B241: Intl members (lib.es2017.intl / es2018.intl).
+            "DateTimeFormat.formatToParts" to ScriptTarget.ES2017,
+            "NumberFormat.formatToParts" to ScriptTarget.ES2018,
+            "Intl.PluralRules" to ScriptTarget.ES2018,
             // B239: es2015-level members (modularizeLibrary_ErrorFromUsingES6Features…).
             "ArrayConstructor.from" to ScriptTarget.ES2015,
             "ArrayConstructor.of" to ScriptTarget.ES2015,
@@ -31170,6 +31174,20 @@ class Checker(
             "String.startsWith" to ScriptTarget.ES2015,
             "String.endsWith" to ScriptTarget.ES2015,
             "String.repeat" to ScriptTarget.ES2015,
+        )
+
+        /** B241: SOFT later-lib members — kept in the interface member set (the
+         *  "and N more" missing-property counts are tuned with them PRESENT:
+         *  genericArrayExtenstions / assigningFromObjectToAnythingElse), but a
+         *  property ACCESS still errors TS2550 when the lib excludes the
+         *  introducing level. Consulted only by access-site checks, never by
+         *  the resolveInterfaceMembers filter. */
+        private val LIB_MIN_TARGET_SOFT: Map<String, ScriptTarget> = mapOf(
+            "Array.flat" to ScriptTarget.ES2019,
+            "Array.flatMap" to ScriptTarget.ES2019,
+            "ReadonlyArray.flat" to ScriptTarget.ES2019,
+            "ReadonlyArray.flatMap" to ScriptTarget.ES2019,
+            "RegExp.dotAll" to ScriptTarget.ES2018,
         )
 
         /** B238: builtin error constructors whose lib arity is target-dependent —
@@ -31426,7 +31444,7 @@ interface URIErrorConstructor extends ErrorConstructor {
 }
 declare var URIError: URIErrorConstructor;
 interface RegExp {
-    exec(string: string): any;
+    exec(string: string): RegExpExecArray | null;
     test(string: string): boolean;
     source: string;
     global: boolean;
@@ -31578,6 +31596,14 @@ interface Console {
     warn(...data: any[]): void;
 }
 declare var console: Console;
+declare namespace Intl {
+    interface Collator { compare(x: string, y: string): number; resolvedOptions(): any; }
+    var Collator: { new (locales?: any, options?: any): Collator; (locales?: any, options?: any): Collator; supportedLocalesOf(locales: any, options?: any): string[]; };
+    interface NumberFormat { format(value: any): string; resolvedOptions(): any; }
+    var NumberFormat: { new (locales?: any, options?: any): NumberFormat; (locales?: any, options?: any): NumberFormat; supportedLocalesOf(locales: any, options?: any): string[]; };
+    interface DateTimeFormat { format(date?: any): string; resolvedOptions(): any; }
+    var DateTimeFormat: { new (locales?: any, options?: any): DateTimeFormat; (locales?: any, options?: any): DateTimeFormat; supportedLocalesOf(locales: any, options?: any): string[]; };
+}
 interface Performance {
     readonly timeOrigin: number;
     clearMarks(markName?: string): void;
@@ -67786,7 +67812,14 @@ interface DataView {
             is StringLiteralNode -> stringType
             is NoSubstitutionTemplateLiteralNode -> stringType
             is TemplateExpression -> stringType
-            is RegularExpressionLiteralNode -> anyType // TODO: RegExp type
+            // B241: regex literals resolve to the lib RegExp interface (so
+            // `/re/.exec(s)` gets the RegExpExecArray | null call result).
+            is RegularExpressionLiteralNode -> {
+                val sym = globals["RegExp"]
+                if (sym != null) {
+                    try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { anyType }
+                } else anyType
+            }
             is BigIntLiteralNode -> bigintType
 
             // Identifiers
@@ -82836,6 +82869,18 @@ interface DataView {
                 if (!hasProp) {
                     val display = "\"" + (objectExpr.text) + "\""
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    // B241: a later-lib String member (LIB_MIN_TARGET-filtered or absent,
+                    // e.g. padStart/trimLeft) gets TS2550 with the lib hint, not TS2339.
+                    val minTarget = LIB_MIN_TARGET["String.$propName"]
+                    if (minTarget != null && !libFeatureAvailable(minTarget)) {
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                            category = DiagnosticCategory.Error, code = 2550,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '$display'.",
                         category = DiagnosticCategory.Error, code = 2339,
@@ -82845,6 +82890,27 @@ interface DataView {
                 }
             }
             return
+        }
+
+        // B241: regex-literal receiver (`/foo/g.dotAll`) — resolve via the RegExp
+        // interface; TS2550-only for LIB_MIN_TARGET(_SOFT) members (no TS2339
+        // fall-through — keeps the prior silent behavior for other names).
+        if (objectExpr is RegularExpressionLiteralNode && propName !in RUNTIME_PROPERTIES) {
+            val minTarget = LIB_MIN_TARGET["RegExp.$propName"] ?: LIB_MIN_TARGET_SOFT["RegExp.$propName"]
+            if (minTarget != null && !libFeatureAvailable(minTarget)) {
+                val regexpSym = globals["RegExp"]
+                val userAugmented = regexpSym?.declarations?.any { it !in builtinLibDecls } == true
+                if (!userAugmented) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'RegExp'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                        category = DiagnosticCategory.Error, code = 2550,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
         }
 
         // 17.115: Empty `{}` literal element/property access — emit TS2339 with display
@@ -82922,6 +82988,49 @@ interface DataView {
                     }
                 }
             }
+            // B241: lib-constructor receiver — `new Promise(...).finally` /
+            // `new Date().toTemporalInstant`: the ctor is a lib `declare var X:
+            // XConstructor` (Variable, not Class). Resolve the instance type via
+            // the construct signature and run the LIB_MIN_TARGET lookup.
+            run {
+                if (propName in RUNTIME_PROPERTIES) return@run
+                val ctorExpr2 = objectExpr.expression
+                val (ifaceName, instType) = when {
+                    ctorExpr2 is Identifier -> {
+                        val ctorSym2 = globals[ctorExpr2.text] ?: return@run
+                        if (!ctorSym2.flags.hasAny(SymbolFlags.Variable) || ctorSym2.flags.hasAny(SymbolFlags.Class)) return@run
+                        if (!ctorSym2.declarations.all { it in builtinLibDecls }) return@run
+                        val t = try { getReturnTypeOfNewExpression(objectExpr) } catch (_: StackOverflowError) { return@run }
+                        val n = when (t) {
+                            is Type.Reference -> t.target.symbol?.name
+                            is Type.Interface -> t.symbol?.name
+                            else -> null
+                        } ?: return@run
+                        n to (t as Type)
+                    }
+                    // B241: `new Intl.X(...)` — the lib Intl namespace's constructor
+                    // vars return same-named interfaces; resolve by NAME convention.
+                    ctorExpr2 is PropertyAccessExpression &&
+                        (ctorExpr2.expression as? Identifier)?.text == "Intl" &&
+                        globals["Intl"]?.declarations?.all { it in builtinLibDecls } == true -> {
+                        ctorExpr2.name.text to (null as Type?)
+                    }
+                    else -> return@run
+                }
+                val minTarget = LIB_MIN_TARGET["$ifaceName.$propName"] ?: return@run
+                if (libFeatureAvailable(minTarget)) return@run
+                // TypeScript displays an un-inferable constructor type arg as `unknown`
+                // (`new Promise(() => {})` → 'Promise<unknown>'); our un-inferred
+                // construct-sig resolution yields `any`.
+                val display = instType?.let { typeToString(it).replace("<any>", "<unknown>") } ?: ifaceName
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                    category = DiagnosticCategory.Error, code = 2550,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+            }
             return
         }
 
@@ -82971,6 +83080,47 @@ interface DataView {
                         start = diagStart, length = diagLength,
                     ))
                     return
+                }
+            }
+            // B241: `Symbol("foo").description` — a `symbol`-typed call result whose
+            // property is a LIB_MIN_TARGET later-lib Symbol member. TS2550-only
+            // (no TS2339 fall-through — keeps the prior silent behavior otherwise).
+            if (callType is Type.Intrinsic && callType.intrinsicName == "symbol") {
+                val minTarget = LIB_MIN_TARGET["Symbol.$propName"]
+                if (minTarget != null && !libFeatureAvailable(minTarget)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'symbol'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                        category = DiagnosticCategory.Error, code = 2550,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
+            // B241: nullable-union call result (`"...".match(...).groups`) — strip
+            // null/undefined; a single remaining named interface/reference runs the
+            // LIB_MIN_TARGET lookup. TS2550-only.
+            if (callType is Type.Union) {
+                val nonNullish = callType.types.filter { it !== nullType && it !== undefinedType }
+                val only = nonNullish.singleOrNull()
+                val ifaceName = when (only) {
+                    is Type.Reference -> only.target.symbol?.name
+                    is Type.Interface -> only.symbol?.name
+                    else -> null
+                }
+                if (ifaceName != null) {
+                    val minTarget = LIB_MIN_TARGET["$ifaceName.$propName"]
+                    if (minTarget != null && !libFeatureAvailable(minTarget)) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${typeToString(only!!)}'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                            category = DiagnosticCategory.Error, code = 2550,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
                 }
             }
             return
@@ -83523,6 +83673,19 @@ interface DataView {
                         if (propName in RUNTIME_PROPERTIES) return
                         val typeName = "typeof $identName"
                         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        // B241: a later-lib namespace member (`Intl.PluralRules`) gets
+                        // TS2550 with the lib hint instead of plain TS2339.
+                        val nsMinTarget = LIB_MIN_TARGET["$identName.$propName"]
+                        if (nsMinTarget != null && !libFeatureAvailable(nsMinTarget) &&
+                            identSymbol.declarations.all { it in builtinLibDecls }) {
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$typeName'. Do you need to change your target library? Try changing the 'lib' compiler option to '${nsMinTarget.name.lowercase()}' or later.",
+                                category = DiagnosticCategory.Error, code = 2550,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                            return
+                        }
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$typeName'.",
                             category = DiagnosticCategory.Error, code = 2339,
@@ -83866,6 +84029,30 @@ interface DataView {
         if (propName in RUNTIME_PROPERTIES && !thisInstanceFunctionPropReportable) {
             if (displayTypeOverride == null) return
             if (getPropertyOfType(objectType, propName) != null) return
+        }
+        // B241: SOFT later-lib members (see LIB_MIN_TARGET_SOFT) — the member IS in
+        // the interface, but access errors TS2550 under a lib excluding its level.
+        // A user augmentation declaring the member keeps the access valid.
+        run {
+            val featureIface = when (objectType) {
+                is Type.Reference -> objectType.target.symbol?.name
+                is Type.Interface -> objectType.symbol?.name
+                else -> null
+            } ?: return@run
+            val minTarget = LIB_MIN_TARGET_SOFT["$featureIface.$propName"] ?: return@run
+            if (libFeatureAvailable(minTarget)) return@run
+            val prop0 = getPropertyOfType(objectType, propName)
+            if (prop0 != null && !prop0.declarations.all { it in builtinLibMemberDecls }) return@run
+            val display = if (objectExpr is ArrayLiteralExpression && objectExpr.elements.isEmpty()) "undefined[]"
+                else typeToString(displayTypeOverride ?: objectType)
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
+                category = DiagnosticCategory.Error, code = 2550,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return
         }
         // Check if property exists in type members
         val prop = getPropertyOfType(objectType, propName)
@@ -86003,6 +86190,14 @@ interface DataView {
         fileName: String,
     ) {
         val callee = expr.expression as? PropertyAccessExpression ?: return
+        // B241: a SOFT later-lib member (Array.flat/flatMap under a pre-es2019 lib)
+        // errors TS2550 at the property access instead — suppress the arity check.
+        run {
+            val memberDecl = sig.declaration ?: return@run
+            if (memberDecl !in builtinLibMemberDecls) return@run
+            val mName = callee.name.text
+            if (LIB_MIN_TARGET_SOFT.any { (k, v) -> k.endsWith(".$mName") && !libFeatureAvailable(v) }) return
+        }
         val params = sig.parameters
         val hasRest = (params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
         val argCount = expr.arguments.size
