@@ -84664,6 +84664,40 @@ interface DataView {
         // evaluation with the key TPs fixed to this call's string-literal args.
         if (calleeExpr is PropertyAccessExpression &&
             try { tryEmitDependentIndexedConstraintTs2345(expr, source, fileName) } catch (_: StackOverflowError) { false }) return
+        // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
+        // param `object | null`; our embedded lib has `any`, so the standard arg check
+        // never fires. tsc display quirk: a non-nullish failing primitive reports
+        // against 'object' (the union member it relates to), `undefined` against the
+        // full 'object | null' (and only under strictNullChecks — nullish args are
+        // legal with SNC off). `Object.create(null/objExpr)` and shadowed `Object`
+        // never enter.
+        run {
+            if (calleeExpr !is PropertyAccessExpression || calleeExpr.name.text != "create") return@run
+            if ((calleeExpr.expression as? Identifier)?.text != "Object") return@run
+            if (currentFileLocals?.get("Object") != null) return@run
+            // Explicit type args already error TS2558 ("Expected 0 type arguments") and
+            // tsc then SKIPS the argument checks (assigningFromObjectToAnythingElse).
+            if (!expr.typeArguments.isNullOrEmpty()) return@run
+            if (expr.arguments.isEmpty() || expr.arguments.size > 2) return@run
+            val arg = expr.arguments[0]
+            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return@run }
+            val display: String? = when {
+                argType is Type.Intrinsic && argType.intrinsicName in
+                    setOf("number", "string", "boolean", "bigint", "symbol") -> "object"
+                strictNullChecks && argType.flags.hasAny(TypeFlags.Undefined) -> "object | null"
+                else -> null
+            }
+            if (display != null) {
+                val start = arg.pos
+                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = line, character = character, start = start, length = length,
+                ))
+            }
+        }
         // B154: calling the `default` of a CJS `export default` module from an ESM file
         // under nodenext is TS2349 — that default IS the CJS namespace `typeof import("mod")`
         // (no call signatures), not the inner value. Covers default/named-default imports
