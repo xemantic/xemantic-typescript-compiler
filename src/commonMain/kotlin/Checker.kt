@@ -41336,6 +41336,7 @@ interface DataView {
                 emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
                 emitTS1503And1532ForNamedGroups(expr, source, fileName)
                 emitTS1499ForRegexFlags(expr, source, fileName)
+                emitTS1517ForCharClassRanges(expr, source, fileName)
             }
             else -> {}
         }
@@ -41416,6 +41417,131 @@ interface DataView {
                 start = absPos,
                 length = m.value.length,
             ))
+        }
+    }
+
+    /**
+     * TS1517: "Range out of order in character class." — a `A-B` range inside `[...]`
+     * where A's value exceeds B's. Without the u/v flag, plain characters compare as
+     * UTF-16 UNITS (a surrogate-pair lookalike like 𝘈 splits — `[𝘈-𝘡]` is out of order
+     * because the range is `\uDE08-\uD835`); WITH u/v, code points (raw pairs AND
+     * consecutive `\uD8xx\uDCxx` escapes combine). A braced `\u{...}` escape compares
+     * by its full value regardless of flags (TS1538 is emitted separately for the
+     * missing-flag part). FP-safe: an out-of-order range is a hard regex error in TS.
+     */
+    private fun emitTS1517ForCharClassRanges(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+        val flags = text.substring(lastSlash + 1)
+        val unicodeMode = flags.contains('u') || flags.contains('v')
+        var i = 1
+        while (i < lastSlash) {
+            val c = text[i]
+            if (c == '\\') { i += 2; continue }
+            if (c != '[') { i++; continue }
+            var j = i + 1
+            if (j < lastSlash && text[j] == '^') j++
+            val bodyStart = j
+            var k = bodyStart
+            var end = -1
+            var vNested = false
+            while (k < lastSlash) {
+                val ch = text[k]
+                if (ch == '\\') { k += 2; continue }
+                if (ch == ']') { end = k; break }
+                if (ch == '[' && flags.contains('v')) { vNested = true; break }
+                k++
+            }
+            if (vNested) { i = k + 1; continue }
+            if (end < 0) return
+            val body = text.substring(bodyStart, end)
+            if (flags.contains('v') && (body.contains("&&") || body.contains("--"))) { i = end + 1; continue }
+            checkRegexClassRanges(text, bodyStart, end, unicodeMode, node, source, fileName)
+            i = end + 1
+        }
+    }
+
+    /** Parse one character-class atom at [p]; returns (value-or-null, next index). */
+    private fun regexClassAtom(text: String, p: Int, end: Int, unicodeMode: Boolean): Pair<Int?, Int> {
+        val c = text[p]
+        if (c == '\\') {
+            if (p + 1 >= end) return null to p + 1
+            return when (val e = text[p + 1]) {
+                'u' -> {
+                    if (p + 2 < end && text[p + 2] == '{') {
+                        val close = text.indexOf('}', p + 3)
+                        if (close in (p + 3) until end) text.substring(p + 3, close).toIntOrNull(16) to close + 1
+                        else null to p + 2
+                    } else if (p + 6 <= end) {
+                        val v = text.substring(p + 2, p + 6).toIntOrNull(16)
+                        when {
+                            v == null -> null to p + 2
+                            unicodeMode && v in 0xD800..0xDBFF && p + 12 <= end &&
+                                text[p + 6] == '\\' && text[p + 7] == 'u' && text[p + 8] != '{' -> {
+                                val v2 = text.substring(p + 8, p + 12).toIntOrNull(16)
+                                if (v2 != null && v2 in 0xDC00..0xDFFF) {
+                                    (0x10000 + ((v - 0xD800) shl 10) + (v2 - 0xDC00)) to p + 12
+                                } else v to p + 6
+                            }
+                            else -> v to p + 6
+                        }
+                    } else null to p + 2
+                }
+                'x' -> (if (p + 4 <= end) text.substring(p + 2, p + 4).toIntOrNull(16) else null) to (p + 4).coerceAtMost(end)
+                'd', 'D', 'w', 'W', 's', 'S', 'p', 'P' ->
+                    if ((e == 'p' || e == 'P') && p + 2 < end && text[p + 2] == '{') {
+                        val close = text.indexOf('}', p + 3)
+                        null to (if (close in 0 until end) close + 1 else p + 2)
+                    } else null to p + 2
+                't' -> 0x9 to p + 2
+                'n' -> 0xA to p + 2
+                'r' -> 0xD to p + 2
+                'v' -> 0xB to p + 2
+                'f' -> 0xC to p + 2
+                'b' -> 0x8 to p + 2 // backspace inside a character class
+                '0' -> 0 to p + 2
+                'c' -> (if (p + 2 < end) text[p + 2].code % 32 else null) to (p + 3).coerceAtMost(end)
+                else -> e.code to p + 2
+            }
+        }
+        if (unicodeMode && c.isHighSurrogate() && p + 1 < end && text[p + 1].isLowSurrogate()) {
+            return (0x10000 + ((c.code - 0xD800) shl 10) + (text[p + 1].code - 0xDC00)) to p + 2
+        }
+        return c.code to p + 1
+    }
+
+    private fun checkRegexClassRanges(
+        text: String, bodyStart: Int, end: Int, unicodeMode: Boolean,
+        node: RegularExpressionLiteralNode, source: String, fileName: String,
+    ) {
+        var p = bodyStart
+        var prevValue: Int? = null
+        var prevStart = -1
+        while (p < end) {
+            if (text[p] == '-' && prevStart >= 0 && p + 1 < end) {
+                val (rv, np) = regexClassAtom(text, p + 1, end, unicodeMode)
+                val lv = prevValue
+                if (lv != null && rv != null && lv > rv) {
+                    val absStart = node.pos + prevStart
+                    val (line, character) = getLineAndCharacterOfPosition(source, absStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Range out of order in character class.",
+                        category = DiagnosticCategory.Error, code = 1517,
+                        fileName = fileName, line = line, character = character,
+                        start = absStart, length = np - prevStart,
+                    ))
+                }
+                prevValue = null
+                prevStart = -1
+                p = np
+                continue
+            }
+            val (v, np) = regexClassAtom(text, p, end, unicodeMode)
+            prevValue = v
+            prevStart = p
+            p = np
         }
     }
 
