@@ -1210,6 +1210,7 @@ class Checker(
         // (no annotation, no initializer). Walks every ArrowFunction /
         // FunctionExpression in the AST.
         checkBindingPatternComputedIndexSig()
+        checkDestructuredLateBoundNames()
         // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
         if (options.erasableSyntaxOnly) {
             checkErasableSyntaxOnly()
@@ -48413,6 +48414,89 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             walkB94InStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B226: object-destructuring with a COMPUTED (late-bound) key against a NON-empty
+     * fresh object literal: `const k = "prop2"; let { [k]: x } = { prop: "b" }` →
+     * TS2339 (late-bound property absent from the literal's type) + TS2353 (fresh
+     * literal excess-property vs the pattern's implied type `{ prop2: any; }`).
+     * Disjoint from the B98.r40 empty-literal TS2537 path (properties.isNotEmpty()).
+     */
+    private fun checkDestructuredLateBoundNames() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Pre-scan: top-level un-annotated string-literal consts, skipping duplicates
+            val constLits = mutableMapOf<String, String>()
+            val seen = mutableSetOf<String>()
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                if (stmt.declarationList.flags != SyntaxKind.ConstKeyword) continue
+                for (d in stmt.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    if (!seen.add(n.text)) { constLits.remove(n.text); continue }
+                    if (d.type != null) continue
+                    val lit = d.initializer as? StringLiteralNode ?: continue
+                    constLits[n.text] = lit.text
+                }
+            }
+            if (constLits.isEmpty()) continue
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val pat = d.name as? ObjectBindingPattern ?: continue
+                    if (d.type != null) continue
+                    val elt = pat.elements.singleOrNull() ?: continue
+                    if (elt.dotDotDotToken || elt.initializer != null) continue
+                    val computed = elt.propertyName as? ComputedPropertyName ?: continue
+                    val keyIdent = computed.expression as? Identifier ?: continue
+                    if (elt.name !is Identifier) continue
+                    val init = d.initializer as? ObjectLiteralExpression ?: continue
+                    if (init.properties.isEmpty()) continue
+                    // All props must be simple-named PropertyAssignment / Shorthand
+                    val propEntries = mutableListOf<Pair<Identifier, Type>>()
+                    var analyzable = true
+                    for (p in init.properties) {
+                        when (p) {
+                            is PropertyAssignment -> {
+                                val pn = p.name as? Identifier ?: run { analyzable = false; null } ?: break
+                                val t = try { widenType(getTypeOfExpression(p.initializer)) } catch (_: StackOverflowError) { anyType }
+                                propEntries.add(pn to t)
+                            }
+                            is ShorthandPropertyAssignment -> {
+                                val t = try { widenType(getTypeOfExpression(p.name)) } catch (_: StackOverflowError) { anyType }
+                                propEntries.add(p.name to t)
+                            }
+                            else -> { analyzable = false; break }
+                        }
+                    }
+                    if (!analyzable) continue
+                    val key = constLits[keyIdent.text] ?: continue
+                    if (propEntries.any { it.first.text == key }) continue
+                    val litDisplay = "{ " + propEntries.joinToString(" ") { (pn, t) ->
+                        "${pn.text}: ${typeToString(t)};"
+                    } + " }"
+                    val (l1, c1) = getLineAndCharacterOfPosition(source, keyIdent.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$key' does not exist on type '$litDisplay'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = l1, character = c1,
+                        start = keyIdent.pos, length = keyIdent.text.length,
+                    ))
+                    val firstName = propEntries.first().first
+                    val (l2, c2) = getLineAndCharacterOfPosition(source, firstName.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Object literal may only specify known properties, and '${firstName.text}' does not exist in type '{ $key: any; }'.",
+                        category = DiagnosticCategory.Error, code = 2353,
+                        fileName = fileName, line = l2, character = c2,
+                        start = firstName.pos, length = firstName.text.length,
+                    ))
+                }
+            }
         }
     }
 
