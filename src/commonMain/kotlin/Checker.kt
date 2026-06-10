@@ -1356,6 +1356,8 @@ class Checker(
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
         checkDestructuringDefaultTypeMismatches()
+        // 72a4e3 (B279): TS18048 for optional number params used in straight-line arithmetic
+        checkOptionalParamNullishArithmetic()
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
         checkEmptyDestructuringNullishSource()
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
@@ -36989,7 +36991,7 @@ interface DataView {
             // Build function/class declaration maps for this file
             val funcParams = mutableMapOf<String, FuncParamInfo>()
             val classCtorParams = mutableMapOf<String, FuncParamInfo>()
-            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile)
+            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile, source)
 
             // B95c (round 82): a class with an `extends` base but NO own constructor inherits
             // the base's constructor arity. collectFuncDecls records NOTHING for these (a
@@ -37095,6 +37097,7 @@ interface DataView {
         funcParams: MutableMap<String, FuncParamInfo>,
         classCtorParams: MutableMap<String, FuncParamInfo>,
         isJsFile: Boolean = false,
+        source: String = "",
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -37171,15 +37174,15 @@ interface DataView {
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body as? ModuleBlock ?: continue
-                    collectFuncDecls(body.statements, funcParams, classCtorParams, isJsFile)
+                    collectFuncDecls(body.statements, funcParams, classCtorParams, isJsFile, source)
                 }
                 is VariableStatement -> {
                     // B64.2: const variables initialized with an arrow function or function
                     // expression with NO type annotation (otherwise the annotation's signature
-                    // governs the call arity, not the initializer's). Restricted to `const`
-                    // because `let`/`var` can be reassigned to a function with different arity.
+                    // governs the call arity, not the initializer's). B279 extends to
+                    // `var`/`let` that are provably never reassigned (conservative source
+                    // scan — any other assignment-like occurrence of the name bails, FN-safe).
                     val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                    if (!isConst) continue
                     for (decl in stmt.declarationList.declarations) {
                         val nameNode = decl.name as? Identifier ?: continue
                         val varName = nameNode.text
@@ -37191,6 +37194,7 @@ interface DataView {
                             else -> null
                         }
                         if (params == null) continue
+                        if (!isConst && countAssignmentLikeOccurrences(source, varName) > 1) continue
                         // Don't overwrite an existing entry (e.g. same name as a FunctionDeclaration).
                         if (funcParams.containsKey(varName)) continue
                         funcParams[varName] = paramInfo(params, isJsFile)
@@ -37743,6 +37747,52 @@ interface DataView {
      */
     private fun formatExpectedArgs(minParams: Int, maxParams: Int): String =
         if (minParams != maxParams) "$minParams-$maxParams" else "$maxParams"
+
+    /**
+     * B279: counts assignment-LIKE occurrences of [name] in [source] — `name =` (incl.
+     * compound ops, excluding `==`/`=>`) and `name++`/`--name` forms. The DECLARATION's
+     * own initializer `=` counts once, so a never-reassigned `var f = function(){}` yields
+     * exactly 1. String/comment matches over-count → conservative suppression (FN-safe).
+     */
+    private fun countAssignmentLikeOccurrences(source: String, name: String): Int {
+        if (name.isEmpty()) return 2
+        var count = 0
+        var idx = source.indexOf(name)
+        fun isWordChar(c: Char?) = c != null && (c.isLetterOrDigit() || c == '_' || c == '$')
+        while (idx >= 0) {
+            val before = source.getOrNull(idx - 1)
+            val after = source.getOrNull(idx + name.length)
+            if (!isWordChar(before) && before != '.' && !isWordChar(after)) {
+                // prefix ++/--
+                var b = idx - 1
+                while (b >= 0 && (source[b] == ' ' || source[b] == '\t')) b--
+                if (b >= 1 && ((source[b] == '+' && source[b - 1] == '+') || (source[b] == '-' && source[b - 1] == '-'))) count++
+                // suffix: skip whitespace then look for assignment op or ++/--
+                var p = idx + name.length
+                while (p < source.length && (source[p] == ' ' || source[p] == '\t')) p++
+                if (p < source.length) {
+                    val c0 = source[p]
+                    val c1 = source.getOrNull(p + 1)
+                    val c2 = source.getOrNull(p + 2)
+                    val c3 = source.getOrNull(p + 3)
+                    val assigned = when {
+                        (c0 == '+' && c1 == '+') || (c0 == '-' && c1 == '-') -> true
+                        c0 == '=' && c1 != '=' && c1 != '>' -> true
+                        c0 in "+-*/%^" && c1 == '=' -> true
+                        (c0 == '&' || c0 == '|') && c1 == '=' -> true
+                        (c0 == '&' && c1 == '&' || c0 == '|' && c1 == '|' || c0 == '?' && c1 == '?') && c2 == '=' -> true
+                        c0 == '*' && c1 == '*' && c2 == '=' -> true
+                        c0 == '<' && c1 == '<' && c2 == '=' -> true
+                        c0 == '>' && c1 == '>' && (c2 == '=' || (c2 == '>' && c3 == '=')) -> true
+                        else -> false
+                    }
+                    if (assigned) count++
+                }
+            }
+            idx = source.indexOf(name, idx + 1)
+        }
+        return count
+    }
 
     private fun emitTS2554TooMany(
         minParams: Int,
@@ -87886,7 +87936,16 @@ interface DataView {
         val minParams = sig.minArgumentCount
         val maxParams = params.size
         if (argCount >= minParams && (hasRest || argCount <= maxParams)) return
-        if (argCount >= minParams) return // too-many: squiggle differs (covers excess args) — defer to a future extension
+        if (argCount >= minParams) {
+            // B279: too-many args for a method call — same squiggle convention as the
+            // Identifier-callee path (covers the excess arguments). NOT for embedded-lib
+            // members: the embedded lib simplifies many optional params away
+            // (toLocaleString(locales?, options?), forEach(cb, thisArg?)) → FP surface.
+            val sigDecl = sig.declaration
+            if (sigDecl != null && sigDecl in builtinLibMemberDecls) return
+            emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, maxParams, source, fileName)
+            return
+        }
         val nameNode = callee.name
         val start = nameNode.pos
         val length = nameNode.text.length
@@ -101003,6 +101062,122 @@ interface DataView {
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * B279: TS18048 "'X' is possibly 'undefined'." for an OPTIONAL `?: number` parameter
+     * used as a direct operand of an arithmetic `+ - * / % **`/shift/bitwise binary op in
+     * the LEADING straight-line statements of its own function body (optionalParamArgsTest).
+     * Conservative per the B142 model: the scan STOPS at the first control-flow statement
+     * (anything that may narrow) and at any reassignment of the param; `&& || ??`,
+     * comparisons, conditionals, and call arguments are never descended (FN, never FP —
+     * tsc always errors a nullable arithmetic operand under strictNullChecks).
+     */
+    private fun checkOptionalParamNullishArithmetic() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            opnStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun opnStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let {
+                    opnCheckFn(stmt.parameters, it, source, fileName)
+                    opnStmts(it.statements, source, fileName)
+                }
+                is ClassDeclaration -> for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let {
+                        opnCheckFn(m.parameters, it, source, fileName)
+                        opnStmts(it.statements, source, fileName)
+                    }
+                    is Constructor -> m.body?.let {
+                        opnCheckFn(m.parameters, it, source, fileName)
+                        opnStmts(it.statements, source, fileName)
+                    }
+                    else -> {}
+                }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    when (val init = d.initializer) {
+                        is FunctionExpression -> init.body?.let {
+                            opnCheckFn(init.parameters, it, source, fileName)
+                            opnStmts(it.statements, source, fileName)
+                        }
+                        is ArrowFunction -> (init.body as? Block)?.let {
+                            opnCheckFn(init.parameters, it, source, fileName)
+                            opnStmts(it.statements, source, fileName)
+                        }
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { opnStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun opnCheckFn(params: List<Parameter>, body: Block, source: String, fileName: String) {
+        val optional = params.filter { p ->
+            p.questionToken && p.initializer == null && !p.dotDotDotToken &&
+                (p.type as? KeywordTypeNode)?.kind == SyntaxKind.NumberKeyword
+        }.mapNotNull { (it.name as? Identifier)?.text }.toMutableSet()
+        if (optional.isEmpty()) return
+        for (stmt in body.statements) {
+            when (stmt) {
+                is ReturnStatement -> stmt.expression?.let { opnExpr(it, optional, source, fileName) }
+                is ExpressionStatement -> opnExpr(stmt.expression, optional, source, fileName)
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    d.initializer?.let { opnExpr(it, optional, source, fileName) }
+                }
+                else -> return // control flow / anything unmodeled may narrow — stop
+            }
+            if (optional.isEmpty()) return
+        }
+    }
+
+    private fun opnExpr(expr: Expression, optional: MutableSet<String>, source: String, fileName: String) {
+        val arithOps = setOf(
+            SyntaxKind.Plus, SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+            SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
+        )
+        var e = expr
+        while (e is ParenthesizedExpression) e = e.expression
+        when (e) {
+            is BinaryExpression -> {
+                if (e.operator == SyntaxKind.Equals) {
+                    // assignment narrows the param for the rest of the scan
+                    (e.left as? Identifier)?.let { optional.remove(it.text) }
+                    opnExpr(e.right, optional, source, fileName)
+                    return
+                }
+                if (e.operator !in arithOps) return // narrowing/comparison/logical — don't descend
+                fun checkOperand(op: Expression) {
+                    var o = op
+                    while (o is ParenthesizedExpression) o = o.expression
+                    if (o is Identifier && o.text in optional) {
+                        val (line, ch) = getLineAndCharacterOfPosition(source, o.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'${o.text}' is possibly 'undefined'.",
+                            category = DiagnosticCategory.Error, code = 18048,
+                            fileName = fileName, line = line, character = ch,
+                            start = o.pos, length = o.text.length,
+                        ))
+                    }
+                }
+                // iterative left spine over the contiguous arithmetic chain
+                var cur: Expression = e
+                while (cur is BinaryExpression && cur.operator in arithOps) {
+                    checkOperand(cur.right)
+                    cur = cur.left
+                }
+                checkOperand(cur)
+            }
+            else -> {}
         }
     }
 
