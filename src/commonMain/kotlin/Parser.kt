@@ -2457,6 +2457,10 @@ class Parser(
             }
             val member = parseTypeMember()
             if (member != null) members.add(member)
+            // parseTypeMember can signal a member-list ABORT (malformed-type-param
+            // recovery): the offending token belongs to an outer parsing context —
+            // stop without consuming it; the caller skips the CloseBrace consume.
+            if (interfaceMembersBailedOnKeyword) break
             parseOptional(SyntaxKind.Semicolon) || parseOptional(SyntaxKind.Comma)
         }
         return members
@@ -2514,24 +2518,14 @@ class Parser(
                         "Type parameter declaration expected.",
                         code = 1139, overrideStart = tpPos, overrideLength = 1,
                     )
-                    // Consume the offending tokens up to but not including the
-                    // member terminator (`}` / `;` / `,` / EOF). This prevents
-                    // the failed-call-signature payload (e.g. `<-`) from leaking
-                    // into the outer statement parser as expression statements.
-                    while (token != SyntaxKind.CloseBrace && token != SyntaxKind.Semicolon
-                        && token != SyntaxKind.Comma && token != SyntaxKind.EndOfFile
-                    ) {
-                        nextToken()
-                    }
-                    // Emit TS1109 at the close-brace position to match TypeScript's
-                    // baseline (the failed call-signature triggers an Expression-
-                    // expected diagnostic at the position where the parser bails).
-                    if (token == SyntaxKind.CloseBrace) {
-                        reportError(
-                            "Expression expected.",
-                            code = 1109, overrideStart = scanner.getTokenPos(), overrideLength = 1,
-                        )
-                    }
+                    // tsc aborts the type-param list AND the enclosing member list here:
+                    // the offending token is owned by an outer parsing context (e.g. `-`
+                    // starts an expression statement), so it stays UNCONSUMED and
+                    // re-parses at the statement level — `var f: { x: number; <- };`
+                    // yields tsc's `-;` + `;` emit with TS1109 at the missing unary
+                    // operand. The '}'-expected / ';'-expected attempts at the same
+                    // position are same-start-deduped, mirroring tsc.
+                    interfaceMembersBailedOnKeyword = true
                     return null
                 }
             }
