@@ -1171,6 +1171,7 @@ class Checker(
         //       only ever READ (never concretized via push/assign/element-write/etc.)
         //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
         checkEvolvingEmptyArrayImplicitAny()
+        checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
         checkForIncrementorReachingAssignments()
@@ -44128,6 +44129,149 @@ interface DataView {
     }
 
     private var evSource: String = ""
+
+    /**
+     * B225: TS7018 — object-literal property implicitly 'any' from null-widening under
+     * noImplicitAny with effective strictNullChecks OFF. `const bar = { p: null, ...sp }`
+     * where every spread after the property provably has a union constituent LACKING the
+     * property leaves the null-widened `any` visible → TS7018. Default-suppress on any
+     * unanalyzable spread shape (FN, never FP).
+     */
+    private fun checkObjectLiteralNullPropImplicitAny() {
+        if (!options.noImplicitAny || options.noImplicitAnyExplicitlyFalse) return
+        if (strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                olnpProcessStatements(result.sourceFile.statements, result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun olnpProcessStatements(
+        stmts: List<Statement>,
+        topLevel: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    if (ModifierFlag.Declare in stmt.modifiers) continue
+                    for (d in stmt.declarationList.declarations) {
+                        if (d.name !is Identifier) continue
+                        if (d.type != null) continue
+                        val init = d.initializer as? ObjectLiteralExpression ?: continue
+                        olnpCheckObjectLiteral(init, topLevel, source, fileName)
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let {
+                    olnpProcessStatements(it.statements, topLevel, source, fileName)
+                }
+                is Block -> olnpProcessStatements(stmt.statements, topLevel, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun olnpCheckObjectLiteral(
+        lit: ObjectLiteralExpression,
+        topLevel: List<Statement>,
+        source: String,
+        fileName: String,
+    ) {
+        val props = lit.properties
+        for ((idx, prop) in props.withIndex()) {
+            if (prop !is PropertyAssignment) continue
+            val nameNode = prop.name as? Identifier ?: continue
+            val propName = nameNode.text
+            val initId = prop.initializer as? Identifier ?: continue
+            if (initId.text != "null") continue
+            // Overwritten by a LATER same-name property → not implicitly any
+            if (props.drop(idx + 1).any { it is PropertyAssignment && (it.name as? Identifier)?.text == propName }) continue
+            // Every spread AFTER the property must be PROVABLY uncovering: a call to a
+            // local annotation-free function whose returns are all object literals with
+            // at least one lacking the property. Anything unanalyzable → suppress.
+            var ok = true
+            for (later in props.drop(idx + 1)) {
+                if (later !is SpreadAssignment) continue
+                if (!olnpSpreadProvablyUncovers(later.expression, propName, topLevel)) { ok = false; break }
+            }
+            if (!ok) continue
+            val start = nameNode.pos
+            val length = expressionTrueEnd(prop.initializer) - start
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Object literal's property '$propName' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7018,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /** True when [spreadExpr] is a call to a single local annotation-free FunctionDeclaration
+     *  whose return statements are ALL spread-free object literals, at least one of which
+     *  LACKS [propName] — the union constituent that leaves the null-widened prop visible. */
+    private fun olnpSpreadProvablyUncovers(
+        spreadExpr: Expression,
+        propName: String,
+        topLevel: List<Statement>,
+    ): Boolean {
+        val call = spreadExpr as? CallExpression ?: return false
+        val calleeName = (call.expression as? Identifier)?.text ?: return false
+        val fds = topLevel.filterIsInstance<FunctionDeclaration>().filter { it.name?.text == calleeName }
+        val fd = fds.singleOrNull() ?: return false
+        if (fd.type != null) return false
+        if (fd.asteriskToken || ModifierFlag.Async in fd.modifiers) return false
+        val body = fd.body ?: return false
+        val returns = mutableListOf<Expression>()
+        fun collect(stmts: List<Statement>) {
+            for (s in stmts) {
+                when (s) {
+                    is ReturnStatement -> s.expression?.let { returns.add(it) }
+                    is Block -> collect(s.statements)
+                    is IfStatement -> {
+                        collect(listOf(s.thenStatement))
+                        s.elseStatement?.let { collect(listOf(it)) }
+                    }
+                    is SwitchStatement -> for (c in s.caseBlock) when (c) {
+                        is CaseClause -> collect(c.statements)
+                        is DefaultClause -> collect(c.statements)
+                        else -> {}
+                    }
+                    is TryStatement -> {
+                        collect(s.tryBlock.statements)
+                        s.catchClause?.let { collect(it.block.statements) }
+                        s.finallyBlock?.let { collect(it.statements) }
+                    }
+                    else -> {}
+                }
+            }
+        }
+        collect(body.statements)
+        if (returns.isEmpty()) return false
+        var someLacks = false
+        for (r in returns) {
+            val obj = r as? ObjectLiteralExpression ?: return false
+            val names = mutableSetOf<String>()
+            for (p in obj.properties) {
+                when (p) {
+                    is PropertyAssignment -> names.add((p.name as? Identifier)?.text ?: return false)
+                    is ShorthandPropertyAssignment -> names.add(p.name.text)
+                    else -> return false  // inner spread / accessor / method → unanalyzable
+                }
+            }
+            if (propName !in names) someLacks = true
+        }
+        return someLacks
+    }
 
     private fun checkEvolvingEmptyArrayImplicitAny() {
         if (!(options.noImplicitAny || options.strict) || options.noImplicitAnyExplicitlyFalse) return
