@@ -1487,6 +1487,9 @@ class Checker(
         // shadowing a GLOBAL VALUE that the file actually uses (B287). Runs after 68b
         // so same-position TS1295/TS1484 sort first (stable sort, insertion order).
         checkIsolatedModulesGlobalValueShadow()
+        // 68b3. TS2341/TS2445 for accessor-PAIR members with per-direction visibility
+        // (B289 — setter governs assignment targets, getter governs reads).
+        checkDivergentAccessorVisibility()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
         // 69b. Check bare `import("./m")` used as a type where m has no `export =` (TS1340)
@@ -108274,6 +108277,197 @@ interface DataView {
      * (`export type X = ...`, `export interface X {}`). Walks the target file's top-level
      * statements and inspects each export form.
      */
+    /** B289: accessor-PAIR member visibility (TS2341/TS2445) — tsc's divergent-
+     *  accessor rule: an assignment TARGET access (incl. compound and `++`/`--`) is
+     *  governed by the SETTER's modifier, a read by the GETTER's; one error per
+     *  access at the property NAME. Covers `this.X` (enclosing-class context) and
+     *  identifier receivers with a direct class-type annotation / `new C()` init.
+     *  Scoped to accessor PAIRS only (both get and set declared) — single accessors
+     *  and data members keep their existing paths. */
+    private fun checkDivergentAccessorVisibility() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // class name -> (extends base name, member -> (getVis, setVis)); vis 0=public 1=protected 2=private
+            val classes = HashMap<String, Pair<String?, HashMap<String, Pair<Int?, Int?>>>>()
+            fun vis(mods: Set<ModifierFlag>): Int = when {
+                ModifierFlag.Private in mods -> 2
+                ModifierFlag.Protected in mods -> 1
+                else -> 0
+            }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ClassDeclaration) continue
+                val cname = stmt.name?.text ?: continue
+                val baseName = stmt.heritageClauses
+                    ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.types?.firstOrNull()?.expression?.let { (it as? Identifier)?.text }
+                val members = HashMap<String, Pair<Int?, Int?>>()
+                for (m in stmt.members) {
+                    when (m) {
+                        is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) {
+                            val n = (m.name as? Identifier)?.text ?: continue
+                            members[n] = vis(m.modifiers) to members[n]?.second
+                        }
+                        is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) {
+                            val n = (m.name as? Identifier)?.text ?: continue
+                            members[n] = members[n]?.first to vis(m.modifiers)
+                        }
+                        else -> {}
+                    }
+                }
+                classes[cname] = baseName to members
+            }
+            if (classes.values.none { (_, ms) -> ms.values.any { it.first != null && it.second != null } }) continue
+
+            fun lookup(cls: String?, prop: String): Triple<Int, Int, String>? {
+                var c = cls; var depth = 0
+                while (c != null && depth++ < 16) {
+                    val (base, members) = classes[c] ?: return null
+                    val v = members[prop]
+                    if (v != null) {
+                        val (g, s) = v
+                        return if (g != null && s != null) Triple(g, s, c) else null
+                    }
+                    c = base
+                }
+                return null
+            }
+            fun isSubclassOf(cls: String, anc: String): Boolean {
+                var c: String? = cls; var depth = 0
+                while (c != null && depth++ < 16) {
+                    if (c == anc) return true
+                    c = classes[c]?.first
+                }
+                return false
+            }
+            val varClass = HashMap<String, String>()
+            fun emit(nameNode: Identifier, v: Int, declaring: String) {
+                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                val msg = if (v == 2)
+                    "Property '${nameNode.text}' is private and only accessible within class '$declaring'."
+                else
+                    "Property '${nameNode.text}' is protected and only accessible within class '$declaring' and its subclasses."
+                diagnostics.add(Diagnostic(
+                    message = msg, category = DiagnosticCategory.Error,
+                    code = if (v == 2) 2341 else 2445,
+                    fileName = fileName, line = line, character = character,
+                    start = nameNode.pos, length = nameNode.text.length,
+                ))
+            }
+            fun checkAccess(expr: PropertyAccessExpression, write: Boolean, enclosing: String?) {
+                val recv = expr.expression
+                val cls = when {
+                    recv is Identifier && recv.text == "this" -> enclosing
+                    recv is Identifier -> varClass[recv.text]
+                    else -> null
+                } ?: return
+                val name = expr.name
+                val (g, s, declaring) = lookup(cls, name.text) ?: return
+                // Uniform-PRIVATE pairs are owned by the pre-existing TS2341 paths —
+                // emitting here would duplicate. Uniform-protected and all divergent
+                // combinations have no other emitter.
+                if (g == 2 && s == 2) return
+                val v = if (write) s else g
+                if (v == 0) return
+                val accessible = when (v) {
+                    2 -> enclosing == declaring
+                    else -> enclosing != null && isSubclassOf(enclosing, declaring)
+                }
+                if (!accessible) emit(name, v, declaring)
+            }
+            var walkStmts: (List<Statement>, String?) -> Unit = { _, _ -> }
+            fun walkExpr(e: Expression?, enclosing: String?, write: Boolean = false) {
+                when (e) {
+                    null -> {}
+                    is PropertyAccessExpression -> {
+                        checkAccess(e, write, enclosing)
+                        walkExpr(e.expression, enclosing)
+                    }
+                    is BinaryExpression -> {
+                        val op = e.operator
+                        val isAssign = isAssignmentOperator(op) ||
+                            op == SyntaxKind.AsteriskAsteriskEquals ||
+                            op == SyntaxKind.LessThanLessThanEquals ||
+                            op == SyntaxKind.GreaterThanGreaterThanEquals ||
+                            op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+                        walkExpr(e.left, enclosing, write = isAssign)
+                        walkExpr(e.right, enclosing)
+                    }
+                    is PrefixUnaryExpression ->
+                        walkExpr(e.operand, enclosing,
+                            write = e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus)
+                    is PostfixUnaryExpression -> walkExpr(e.operand, enclosing, write = true)
+                    is ParenthesizedExpression -> walkExpr(e.expression, enclosing, write)
+                    is VoidExpression -> walkExpr(e.expression, enclosing)
+                    is CallExpression -> { walkExpr(e.expression, enclosing); e.arguments.forEach { walkExpr(it, enclosing) } }
+                    is NewExpression -> { walkExpr(e.expression, enclosing); e.arguments?.forEach { walkExpr(it, enclosing) } }
+                    is ElementAccessExpression -> { walkExpr(e.expression, enclosing); walkExpr(e.argumentExpression, enclosing) }
+                    is ConditionalExpression -> { walkExpr(e.condition, enclosing); walkExpr(e.whenTrue, enclosing); walkExpr(e.whenFalse, enclosing) }
+                    is AwaitExpression -> walkExpr(e.expression, enclosing)
+                    is AsExpression -> walkExpr(e.expression, enclosing)
+                    is NonNullExpression -> walkExpr(e.expression, enclosing)
+                    is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it, enclosing) }
+                    is ObjectLiteralExpression -> e.properties.forEach { p ->
+                        when (p) {
+                            is PropertyAssignment -> walkExpr(p.initializer, enclosing)
+                            is SpreadAssignment -> walkExpr(p.expression, enclosing)
+                            else -> {}
+                        }
+                    }
+                    is ArrowFunction -> when (val b = e.body) {
+                        is Block -> walkStmts(b.statements, enclosing)
+                        is Expression -> walkExpr(b, enclosing)
+                        else -> {}
+                    }
+                    is FunctionExpression -> walkStmts(e.body.statements, enclosing)
+                    else -> {}
+                }
+            }
+            fun walkStmt(s: Statement, enclosing: String?) {
+                when (s) {
+                    is ExpressionStatement -> walkExpr(s.expression, enclosing)
+                    is VariableStatement -> for (d in s.declarationList.declarations) {
+                        val vn = (d.name as? Identifier)?.text
+                        if (vn != null) {
+                            val annName = ((d.type as? TypeReference)?.typeName as? Identifier)?.text
+                            val initName = ((d.initializer as? NewExpression)?.expression as? Identifier)?.text
+                            val cn = annName ?: initName
+                            if (cn != null && cn in classes) varClass[vn] = cn
+                        }
+                        walkExpr(d.initializer, enclosing)
+                    }
+                    is ReturnStatement -> walkExpr(s.expression, enclosing)
+                    is IfStatement -> { walkExpr(s.expression, enclosing); walkStmt(s.thenStatement, enclosing); s.elseStatement?.let { walkStmt(it, enclosing) } }
+                    is Block -> walkStmts(s.statements, enclosing)
+                    is WhileStatement -> { walkExpr(s.expression, enclosing); walkStmt(s.statement, enclosing) }
+                    is DoStatement -> { walkStmt(s.statement, enclosing); walkExpr(s.expression, enclosing) }
+                    is ForStatement -> { (s.initializer as? Expression)?.let { walkExpr(it, enclosing) }; s.condition?.let { walkExpr(it, enclosing) }; s.incrementor?.let { walkExpr(it, enclosing) }; walkStmt(s.statement, enclosing) }
+                    is ForOfStatement -> { walkExpr(s.expression, enclosing); walkStmt(s.statement, enclosing) }
+                    is ForInStatement -> { walkExpr(s.expression, enclosing); walkStmt(s.statement, enclosing) }
+                    is ThrowStatement -> walkExpr(s.expression, enclosing)
+                    is FunctionDeclaration -> s.body?.let { walkStmts(it.statements, enclosing) }
+                    is ClassDeclaration -> {
+                        val cn = s.name?.text
+                        for (m in s.members) {
+                            when (m) {
+                                is MethodDeclaration -> m.body?.let { walkStmts(it.statements, cn) }
+                                is Constructor -> m.body?.let { walkStmts(it.statements, cn) }
+                                is GetAccessor -> m.body?.let { walkStmts(it.statements, cn) }
+                                is SetAccessor -> m.body?.let { walkStmts(it.statements, cn) }
+                                is PropertyDeclaration -> walkExpr(m.initializer, cn)
+                                else -> {}
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            walkStmts = { list, enc -> list.forEach { walkStmt(it, enc) } }
+            result.sourceFile.statements.forEach { walkStmt(it, null) }
+        }
+    }
+
     /** B287 TS2866: under isolatedModules, a NON-type-only named import whose target
      *  export is type-only, where the importing file USES a same-named GLOBAL VALUE
      *  (`import { Date } from './types'` + `new Date(...)`) — a single-file transpiler
