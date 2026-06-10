@@ -1091,6 +1091,9 @@ class Checker(
         checkUncalledFunctionsInConditions()
         // 20b. Check comma operator left side unused (TS2695)
         checkCommaOperatorUnused()
+        // B277: TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness.
+        // Must run AFTER checkCommaOperatorUnused so same-position TS2695 sorts first.
+        checkNullishPredicates()
         // 21. Check null/undefined used in invalid positions (TS18050)
         checkNullUndefinedUsage()
         // 22. Check for implicit this (TS2683)
@@ -33260,7 +33263,7 @@ interface DataView {
     private fun checkAlwaysTruthyInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
-                if (expr.operator == SyntaxKind.BarBar) {
+                if (expr.operator == SyntaxKind.BarBar || expr.operator == SyntaxKind.AmpersandAmpersand) {
                     if (isAlwaysTruthyForOrExpr(expr.left)) {
                         emitTS2872(expr.left, source, fileName)
                     } else if (isAlwaysFalsyExpr(expr.left)) {
@@ -33268,8 +33271,10 @@ interface DataView {
                     }
                     // B69.11: numeric-literal LHS — emit TS2872 only when NOT
                     // inside an arrow expression body (TypeScript suppresses there;
-                    // the literal serves as a default-value pattern).
-                    if (!inArrowExprBody && expr.left is NumericLiteralNode) {
+                    // the literal serves as a default-value pattern). ||-only: the
+                    // && path (B277) keeps numerics out (no 0/1 exemption here).
+                    if (expr.operator == SyntaxKind.BarBar &&
+                        !inArrowExprBody && expr.left is NumericLiteralNode) {
                         val v = (expr.left as NumericLiteralNode).text.toDoubleOrNull()
                         if (v != null && v != 0.0 && !v.isNaN()) {
                             emitTS2872(expr.left, source, fileName)
@@ -33279,13 +33284,15 @@ interface DataView {
                 // Iterative left spine to avoid StackOverflow
                 var current: Expression = expr
                 while (current is BinaryExpression) {
-                    if (current.operator == SyntaxKind.BarBar && current !== expr) {
+                    if ((current.operator == SyntaxKind.BarBar ||
+                         current.operator == SyntaxKind.AmpersandAmpersand) && current !== expr) {
                         if (isAlwaysTruthyForOrExpr(current.left)) {
                             emitTS2872(current.left, source, fileName)
                         } else if (isAlwaysFalsyExpr(current.left)) {
                             emitTS2873(current.left, source, fileName)
                         }
-                        if (!inArrowExprBody && current.left is NumericLiteralNode) {
+                        if (current.operator == SyntaxKind.BarBar &&
+                            !inArrowExprBody && current.left is NumericLiteralNode) {
                             val v = (current.left as NumericLiteralNode).text.toDoubleOrNull()
                             if (v != null && v != 0.0 && !v.isNaN()) {
                                 emitTS2872(current.left, source, fileName)
@@ -33584,11 +33591,15 @@ interface DataView {
     private fun emitTS2872(expr: Expression, source: String, fileName: String) {
         val start = expr.pos
         // Use text length for literals to get accurate squiggle
-        val length = when (expr) {
+        var length = when (expr) {
             is StringLiteralNode -> (expr.rawText?.length ?: expr.text.length) + 2 // +2 for quotes
             is NumericLiteralNode -> expr.text.length
             else -> expressionTrueEnd(expr) - start
         }
+        // B277: a correct span never ends mid-whitespace (tsc spans are skipTrivia-tight);
+        // trim trailing whitespace from node.end-overshoot fallbacks (e.g. a paren-wrapped
+        // ClassExpression whose inner end includes the next token's leading space).
+        while (length > 1 && start + length - 1 < source.length && source[start + length - 1].isWhitespace()) length--
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "This kind of expression is always truthy.",
@@ -84903,7 +84914,11 @@ interface DataView {
                     // aliased conditions for narrowing) reach this elaboration with a
                     // partial-coverage Union.
                     if (narrowed is Type.Union && propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
-                        val members = narrowed.types
+                        // B277: nullish constituents never participate in the TS2339 union
+                        // elaboration — tsc reports nullable receivers via TS18048/TS2532
+                        // (and `x?.y` checks NonNullable(x)), never a TS2339 chain naming
+                        // 'undefined'/'null'. Filtering them prevents the `x?.y` FP.
+                        val members = narrowed.types.filterNot { isNullishConstituent(it) }
                         fun memberHasIt(m: Type): Boolean {
                             if (m === anyType || m === errorType || m === unknownType) return true
                             return try { typeHasOwnProperty(getApparentType(m), propName) } catch (_: StackOverflowError) { true }
@@ -101202,6 +101217,324 @@ interface DataView {
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * B277 (round 139): TS2871/TS2869 nullish-predicate checks for `??` left operands +
+     * TS2872/TS2873 truthiness checks for while/do conditions (predicateSemantics,
+     * neverNullishThroughParentheses). Faithful mirror of tsc's
+     * getSyntacticNullishnessSemantics / getSyntacticTruthySemantics — PURELY syntactic
+     * (no type engine): Identifier (except null/undefined) is always "Sometimes", so any
+     * value-flow uncertainty suppresses (FP-safe; tsc errors exactly the matched shapes).
+     * Runs AFTER checkCommaOperatorUnused so same-position TS2695 sorts first (stable
+     * sort); within a `??` spine, INNER nodes emit before OUTER (tsc post-order).
+     */
+    private fun checkNullishPredicates() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            npStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /** Skips parens / as / satisfies / type-assertions / non-null (tsc skipOuterExpressions All). */
+    private fun npSkipOuter(e: Expression): Expression {
+        var n = e
+        while (true) {
+            n = when (n) {
+                is ParenthesizedExpression -> n.expression
+                is AsExpression -> n.expression
+                is SatisfiesExpression -> n.expression
+                is TypeAssertionExpression -> n.expression
+                is NonNullExpression -> n.expression
+                else -> return n
+            }
+        }
+    }
+
+    /** Mirror of tsc getSyntacticNullishnessSemantics: 1=Always, 2=Never, 3=Sometimes. */
+    private fun nullishSemanticsOf(node: Expression): Int {
+        val n = npSkipOuter(node)
+        return when (n) {
+            is AwaitExpression, is CallExpression, is TaggedTemplateExpression,
+            is ElementAccessExpression, is MetaProperty, is NewExpression,
+            is PropertyAccessExpression, is YieldExpression -> 3
+            is BinaryExpression -> when (n.operator) {
+                SyntaxKind.BarBar, SyntaxKind.BarBarEquals,
+                SyntaxKind.AmpersandAmpersand, SyntaxKind.AmpersandAmpersandEquals -> 3
+                SyntaxKind.Comma, SyntaxKind.Equals,
+                SyntaxKind.QuestionQuestion, SyntaxKind.QuestionQuestionEquals ->
+                    nullishSemanticsOf(n.right)
+                else -> 2
+            }
+            is ConditionalExpression -> nullishSemanticsOf(n.whenTrue) or nullishSemanticsOf(n.whenFalse)
+            is Identifier -> when (n.text) {
+                // `this`/`super` are Identifiers in our AST — tsc ThisKeyword → Sometimes
+                "null", "undefined" -> 1
+                else -> 3
+            }
+            else -> 2
+        }
+    }
+
+    /** Mirror of tsc getSyntacticTruthySemantics: 1=Always, 2=Never, 3=Sometimes. */
+    private fun truthySemanticsOf(node: Expression): Int {
+        val n = npSkipOuter(node)
+        return when (n) {
+            is NumericLiteralNode -> if (n.text == "0" || n.text == "1") 3 else 1
+            is ArrayLiteralExpression, is ArrowFunction, is BigIntLiteralNode, is ClassExpression,
+            is FunctionExpression, is ObjectLiteralExpression, is RegularExpressionLiteralNode -> 1
+            is VoidExpression -> 2
+            is StringLiteralNode -> if (n.text.isNotEmpty()) 1 else 2
+            is NoSubstitutionTemplateLiteralNode -> if (n.text.isNotEmpty()) 1 else 2
+            is ConditionalExpression -> truthySemanticsOf(n.whenTrue) or truthySemanticsOf(n.whenFalse)
+            is Identifier -> when (n.text) {
+                "null", "undefined" -> 2
+                else -> 3
+            }
+            else -> 3
+        }
+    }
+
+    /** True end for np emission spans — adds Conditional/Template handling over expressionTrueEnd. */
+    private fun npTrueEnd(e: Expression, source: String): Int = when (e) {
+        is ConditionalExpression -> npTrueEnd(e.whenFalse, source)
+        is BinaryExpression -> npTrueEnd(e.right, source)
+        is ParenthesizedExpression -> npTrueEnd(e.expression, source) + 1
+        is TemplateExpression -> {
+            // scan from the opening backtick to its matching closing backtick
+            var p = e.pos + 1
+            while (p < source.length && source[p] != '`') {
+                if (source[p] == '\\') p++
+                p++
+            }
+            p + 1
+        }
+        else -> expressionTrueEnd(e)
+    }
+
+    private fun npEmitNullish(target: Expression, always: Boolean, source: String, fileName: String) {
+        val start = target.pos
+        val length = (npTrueEnd(target, source) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = if (always) "This expression is always nullish."
+                else "Right operand of ?? is unreachable because the left operand is never nullish.",
+            category = DiagnosticCategory.Error,
+            code = if (always) 2871 else 2869,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** TS2872/TS2873 at a while/do CONDITION (the original node, not outer-skipped) —
+     *  satisfies-expression spans collapse to the `satisfies` keyword (tsc
+     *  getErrorSpanForNode special case). */
+    private fun npEmitTruthiness(cond: Expression, always: Boolean, source: String, fileName: String) {
+        var start = cond.pos
+        val length: Int
+        if (cond is SatisfiesExpression) {
+            var p = expressionTrueEnd(cond.expression)
+            while (p < source.length && source[p].isWhitespace()) p++
+            start = p
+            length = "satisfies".length
+        } else if (cond is AsExpression) {
+            length = (if (cond.tightEnd > 0) cond.tightEnd else cond.type.end) - start
+        } else {
+            length = (npTrueEnd(cond, source) - start).coerceAtLeast(1)
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = if (always) "This kind of expression is always truthy."
+                else "This kind of expression is always falsy.",
+            category = DiagnosticCategory.Error,
+            code = if (always) 2872 else 2873,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    private fun npStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) npStmt(stmt, source, fileName)
+    }
+
+    private fun npStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> npExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { npExpr(it, source, fileName) }
+            }
+            is ReturnStatement -> stmt.expression?.let { npExpr(it, source, fileName) }
+            is IfStatement -> {
+                npExpr(stmt.expression, source, fileName)
+                npStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { npStmt(it, source, fileName) }
+            }
+            is Block -> npStmts(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { npStmts(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { npExpr(it, source, fileName) }
+                    is GetAccessor -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    is SetAccessor -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ForStatement -> {
+                stmt.initializer?.let { init ->
+                    when (init) {
+                        is VariableDeclarationList -> for (d in init.declarations) {
+                            d.initializer?.let { npExpr(it, source, fileName) }
+                        }
+                        is Expression -> npExpr(init, source, fileName)
+                        else -> {}
+                    }
+                }
+                stmt.condition?.let { npExpr(it, source, fileName) }
+                stmt.incrementor?.let { npExpr(it, source, fileName) }
+                npStmt(stmt.statement, source, fileName)
+            }
+            is ForInStatement -> {
+                npExpr(stmt.expression, source, fileName)
+                npStmt(stmt.statement, source, fileName)
+            }
+            is ForOfStatement -> {
+                npExpr(stmt.expression, source, fileName)
+                npStmt(stmt.statement, source, fileName)
+            }
+            is WhileStatement -> {
+                npExpr(stmt.expression, source, fileName)
+                when (truthySemanticsOf(stmt.expression)) {
+                    1 -> npEmitTruthiness(stmt.expression, always = true, source, fileName)
+                    2 -> npEmitTruthiness(stmt.expression, always = false, source, fileName)
+                }
+                npStmt(stmt.statement, source, fileName)
+            }
+            is DoStatement -> {
+                npStmt(stmt.statement, source, fileName)
+                npExpr(stmt.expression, source, fileName)
+                when (truthySemanticsOf(stmt.expression)) {
+                    1 -> npEmitTruthiness(stmt.expression, always = true, source, fileName)
+                    2 -> npEmitTruthiness(stmt.expression, always = false, source, fileName)
+                }
+            }
+            is SwitchStatement -> {
+                npExpr(stmt.expression, source, fileName)
+                for (c in stmt.caseBlock) {
+                    when (c) {
+                        is CaseClause -> {
+                            npExpr(c.expression, source, fileName)
+                            npStmts(c.statements, source, fileName)
+                        }
+                        is DefaultClause -> npStmts(c.statements, source, fileName)
+                        else -> {}
+                    }
+                }
+            }
+            is TryStatement -> {
+                npStmts(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { npStmts(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { npStmts(it.statements, source, fileName) }
+            }
+            is ThrowStatement -> stmt.expression?.let { npExpr(it, source, fileName) }
+            is LabeledStatement -> npStmt(stmt.statement, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { npStmts(it.statements, source, fileName) }
+            is EnumDeclaration -> for (m in stmt.members) {
+                m.initializer?.let { npExpr(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun npExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is BinaryExpression -> {
+                // iterative left spine; emit post-order (leftmost leaf, then per spine
+                // node ascending: right subtree, then the node's own ?? check) — matches
+                // tsc's inner-before-outer ordering for same-position duplicates.
+                val spine = ArrayList<BinaryExpression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    spine.add(cur)
+                    cur = cur.left
+                }
+                npExpr(cur, source, fileName)
+                for (i in spine.indices.reversed()) {
+                    val node = spine[i]
+                    npExpr(node.right, source, fileName)
+                    if (node.operator == SyntaxKind.QuestionQuestion) {
+                        val leftTarget = npSkipOuter(node.left)
+                        when (nullishSemanticsOf(leftTarget)) {
+                            1 -> npEmitNullish(leftTarget, always = true, source, fileName)
+                            2 -> npEmitNullish(leftTarget, always = false, source, fileName)
+                        }
+                    }
+                }
+            }
+            is ParenthesizedExpression -> npExpr(expr.expression, source, fileName)
+            is PrefixUnaryExpression -> npExpr(expr.operand, source, fileName)
+            is PostfixUnaryExpression -> npExpr(expr.operand, source, fileName)
+            is ConditionalExpression -> {
+                npExpr(expr.condition, source, fileName)
+                npExpr(expr.whenTrue, source, fileName)
+                npExpr(expr.whenFalse, source, fileName)
+            }
+            is CallExpression -> {
+                npExpr(expr.expression, source, fileName)
+                expr.arguments.forEach { npExpr(it, source, fileName) }
+            }
+            is NewExpression -> {
+                npExpr(expr.expression, source, fileName)
+                expr.arguments?.forEach { npExpr(it, source, fileName) }
+            }
+            is PropertyAccessExpression -> npExpr(expr.expression, source, fileName)
+            is ElementAccessExpression -> {
+                npExpr(expr.expression, source, fileName)
+                npExpr(expr.argumentExpression, source, fileName)
+            }
+            is AsExpression -> npExpr(expr.expression, source, fileName)
+            is SatisfiesExpression -> npExpr(expr.expression, source, fileName)
+            is TypeAssertionExpression -> npExpr(expr.expression, source, fileName)
+            is NonNullExpression -> npExpr(expr.expression, source, fileName)
+            is AwaitExpression -> npExpr(expr.expression, source, fileName)
+            is VoidExpression -> npExpr(expr.expression, source, fileName)
+            is SpreadElement -> npExpr(expr.expression, source, fileName)
+            is ArrayLiteralExpression -> expr.elements.forEach { npExpr(it, source, fileName) }
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> npExpr(p.initializer, source, fileName)
+                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { npExpr(it, source, fileName) }
+                    is SpreadAssignment -> npExpr(p.expression, source, fileName)
+                    is MethodDeclaration -> p.body?.let { npStmts(it.statements, source, fileName) }
+                    else -> {}
+                }
+            }
+            is ArrowFunction -> when (val b = expr.body) {
+                is Block -> npStmts(b.statements, source, fileName)
+                is Expression -> npExpr(b, source, fileName)
+                else -> {}
+            }
+            is FunctionExpression -> expr.body?.let { npStmts(it.statements, source, fileName) }
+            is ClassExpression -> for (m in expr.members) {
+                when (m) {
+                    is MethodDeclaration -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    is Constructor -> m.body?.let { npStmts(it.statements, source, fileName) }
+                    is PropertyDeclaration -> m.initializer?.let { npExpr(it, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TemplateExpression -> expr.templateSpans.forEach { npExpr(it.expression, source, fileName) }
+            else -> {}
         }
     }
 
