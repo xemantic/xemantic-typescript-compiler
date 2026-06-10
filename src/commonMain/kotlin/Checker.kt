@@ -62819,6 +62819,16 @@ interface DataView {
                 checkObjectTypeAgainstIndexSignatures(
                     sourceType, targetType, name.pos, name.text.length, source, fileName)
             }
+            // B252: object-literal property whose fn-literal's inferred return is an array
+            // of an anonymous object violating the contextual return's index-sig-only
+            // element interface (3 levels deep — no other walker reaches it).
+            if (isAssignable && init is ObjectLiteralExpression &&
+                sourceType is Type.Object && targetType is Type.Object &&
+                checkObjectLiteralFnPropReturnIndexSig(
+                    init, sourceType, targetType, typeAnnotation, source, fileName)
+            ) {
+                return
+            }
             // Suppress the outer "Type 'X[]' is not assignable to type 'Y[]'." TS2322
             // when the source is an array literal and the target is an array type.
             // Per-element TS2322/TS2353 from `checkArrayLiteralElementExcessProps` (or
@@ -93070,6 +93080,110 @@ interface DataView {
             emitted = true
         }
         return emitted
+    }
+
+    /**
+     * B252: third sibling of the B138 index-signature pre-check family — a FRESH
+     * object-literal initializer property whose value is a FUNCTION LITERAL whose
+     * inferred RETURN type is an array of an anonymous object that violates the
+     * contextual return's index-sig-ONLY element interface
+     * (`{ f: (w) => [{'k': bad}] }` vs `{ f?: (w) => NamedTransform[] }` where
+     * `NamedTransform` has only `[name: string]: Transform3D`). The relation engine
+     * passes (index-sig value-types are deliberately unchecked there — B138 gotcha),
+     * so this PRE-check fires the TS2322 + 4-level chain + TS6500 related info at the
+     * property NAME (contextualTypeArrayReturnType). First failing property only.
+     */
+    private fun checkObjectLiteralFnPropReturnIndexSig(
+        init: ObjectLiteralExpression,
+        sourceType: Type.Object,
+        targetType: Type.Object,
+        typeAnnotation: TypeNode?,
+        source: String, fileName: String,
+    ): Boolean {
+        resolveStructuredTypeMembers(targetType)
+        for (propNode in init.properties) {
+            if (propNode !is PropertyAssignment) continue
+            if (propNode.initializer !is ArrowFunction && propNode.initializer !is FunctionExpression) continue
+            val nameNode = propNode.name
+            val (propName, keyPos, keyLen) = when (nameNode) {
+                is Identifier -> Triple(nameNode.text, nameNode.pos, nameNode.text.length)
+                is NumericLiteralNode -> Triple(nameNode.text, nameNode.pos, nameNode.text.length)
+                is StringLiteralNode -> Triple(
+                    nameNode.text, nameNode.pos,
+                    (nameNode.rawText?.length ?: nameNode.text.length) + 2,
+                )
+                else -> continue
+            }
+            val targetProp = targetType.members?.get(propName) ?: continue
+            val tgtPropType = getTypeOfSymbol(targetProp) as? Type.Object ?: continue
+            val tgtSig = tgtPropType.callSignatures?.singleOrNull() ?: continue
+            if (!tgtPropType.constructSignatures.isNullOrEmpty()) continue
+            if (!tgtPropType.properties.isNullOrEmpty()) continue
+            val tgtRet = tgtSig.resolvedReturnType as? Type.Reference ?: continue
+            if (tgtRet.target.symbol?.name != "Array") continue
+            val tgtElem = tgtRet.resolvedTypeArguments?.singleOrNull() as? Type.Object ?: continue
+            resolveStructuredTypeMembers(tgtElem)
+            val idxValType = tgtElem.stringIndexInfo?.type ?: continue
+            if (idxValType === anyType || idxValType === errorType || idxValType === unknownType) continue
+            if (!tgtElem.members.isNullOrEmpty()) continue
+            val sourceProp = sourceType.members?.get(propName) ?: continue
+            val srcPropType = getTypeOfSymbol(sourceProp) as? Type.Object ?: continue
+            val srcSig = srcPropType.callSignatures?.singleOrNull() ?: continue
+            val srcRet = srcSig.resolvedReturnType as? Type.Reference ?: continue
+            if (srcRet.target.symbol?.name != "Array") continue
+            val srcElem = srcRet.resolvedTypeArguments?.singleOrNull() as? Type.Object ?: continue
+            if (srcElem is Type.Reference || srcElem.symbol != null) continue
+            if (srcElem.stringIndexInfo != null || srcElem.numberIndexInfo != null) continue
+            val srcProps = srcElem.properties ?: continue
+            if (srcProps.isEmpty()) continue
+            for (p in srcProps) {
+                val pType = getTypeOfSymbol(p)
+                if (pType === anyType || pType === errorType) continue
+                // relation-reliability gate (mirrors B138): at least one side primitive
+                if (!isSimpleCheckableType(pType) && !isSimpleCheckableType(idxValType)) continue
+                if (checkTypeRelatedTo(pType, idxValType, assignableRelation)) continue
+                // quoted display: a string-literal-keyed source property keeps its
+                // source quote char UNCONDITIONALLY (baseline shows ''ry'' even though
+                // 'ry' is identifier-valid — do NOT use formatPropertyDisplayName)
+                val pDeclName = (p.declarations.firstOrNull() as? PropertyAssignment)?.name
+                val quotedName = if (pDeclName is StringLiteralNode) {
+                    val q = if (pDeclName.singleQuote) "'" else "\""
+                    "$q${p.name}$q"
+                } else p.name
+                val tgtPropDisplay =
+                    (targetProp.declarations.firstOrNull() as? PropertyDeclaration)?.type
+                        ?.let { formatTypeForDisplay(it) }
+                        ?: typeToString(tgtPropType)
+                val related = mutableListOf<Diagnostic>()
+                val tpDecl = targetProp.declarations.firstOrNull()
+                if (tpDecl is PropertyDeclaration) {
+                    val (dline, dchar) = getLineAndCharacterOfPosition(source, tpDecl.name.pos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from property '$propName' which is declared here on type " +
+                            "'${typeAnnotation?.let { formatTypeForDisplay(it) } ?: typeToString(targetType)}'",
+                        category = DiagnosticCategory.Message, code = 6500,
+                        fileName = fileName, line = dline, character = dchar,
+                        start = tpDecl.name.pos, length = propName.length,
+                    ))
+                }
+                val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(srcPropType)}' is not assignable to type '$tgtPropDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = kline, character = kchar,
+                    start = keyPos, length = keyLen,
+                    messageChain = listOf(
+                        "  Type '${typeToString(srcRet)}' is not assignable to type '${typeToString(tgtRet)}'.",
+                        "    Type '${typeToString(srcElem)}' is not assignable to type '${typeToString(tgtElem)}'.",
+                        "      Property '$quotedName' is incompatible with index signature.",
+                        "        Type '${typeToString(getWidenedLiteralType(pType))}' is not assignable to type '${typeToString(idxValType)}'.",
+                    ),
+                    relatedInformation = related,
+                ))
+                return true
+            }
+        }
+        return false
     }
 
     private fun getPropertyElaborationChain(
