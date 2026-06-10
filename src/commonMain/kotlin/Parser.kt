@@ -1067,7 +1067,22 @@ class Parser(
                 overrideStart = scanner.getTokenPos(),
                 overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
         }
-        parseSemicolon()
+        // B291: tsc parseErrorForMissingSemicolonAfter — a bare-Identifier expression
+        // statement followed on the same line by a DOT-LEADING numeric/bigint literal
+        // (`g.2n` scans as `g` + `.2n`) reports TS1434 "Unexpected keyword or
+        // identifier." at the IDENTIFIER, replacing the TS1005 — which also stops the
+        // same-start dedup from swallowing the literal's own scanner diagnostic
+        // (TS1353 at the literal). Narrow dot-gate: other `ident <numeric>` shapes
+        // keep the TS1005 path.
+        val missingSemiAsUnexpectedIdent = expr is Identifier && !scanner.hasPrecedingLineBreak() &&
+            (token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) &&
+            scanner.getTokenText().startsWith(".")
+        if (missingSemiAsUnexpectedIdent) {
+            reportError("Unexpected keyword or identifier.", code = 1434,
+                overrideStart = (expr as Identifier).pos, overrideLength = expr.text.length.coerceAtLeast(1))
+        } else {
+            parseSemicolon()
+        }
         val trailing = trailingComments()
         return ExpressionStatement(
             expression = expr,
@@ -6940,7 +6955,7 @@ class Parser(
             OpenParen -> parseFunctionOrParenthesizedType()
             OpenBracket -> parseTupleType()
             OpenBrace -> parseTypeLiteralOrMappedType()
-            StringLiteral, NumericLiteral, TrueKeyword,
+            StringLiteral, NumericLiteral, BigIntLiteral, TrueKeyword,
             FalseKeyword -> {
                 val literal = parsePrimaryExpression()
                 LiteralType(literal = literal, pos = pos, end = getEnd())

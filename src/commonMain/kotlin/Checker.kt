@@ -1504,6 +1504,8 @@ class Checker(
         if (options.target < ScriptTarget.ES2020) {
             checkBigIntLiterals()
         }
+        // 71c. B291: bigint property names (TS1539/TS2464/TS2538/mapped-key TS2322)
+        checkBigintPropertyNames()
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
         // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
@@ -64155,7 +64157,9 @@ interface DataView {
                         ))
                     } else {
                         // TS2741: Property 'X' is missing in type 'Y' but required in type 'Z'.
-                        val missingProp = allMissing[0]
+                        // B291: a non-identifier string-literal-named property displays
+                        // QUOTED with its source quote char ('"3n"').
+                        val missingProp = missingPropSym?.let { formatPropertyDisplayName(it) } ?: allMissing[0]
                         val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
                         val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'."
                         val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
@@ -86640,6 +86644,22 @@ interface DataView {
                 return
             }
         }
+        // B291: TS2538 'bigint' — a bigint literal is never a valid index
+        // (`g[2n]`). Gated to receivers resolving to a concrete object shape
+        // (interface/class instance/anonymous object/reference) — `any`/error
+        // receivers bail like tsc's isErrorType objectType bail.
+        if (arg is BigIntLiteralNode) {
+            val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+            if (rt is Type.Object && rt !== errorType) {
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'bigint' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                    line = line, character = character, start = arg.pos, length = arg.text.length,
+                ))
+            }
+            return
+        }
         // 17.178: TS2538 — array-typed index. `arr2[arr1[0]]` where `arr1` is
         // `(string | string[])[]` makes the indexer `string | string[]`, and
         // the `string[]` constituent is invalid as an index. TypeScript reports
@@ -91683,6 +91703,17 @@ interface DataView {
                         !pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Void)
                 }
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // B291: a MIXED bigint/number literal-union argument is the
+                // typeof-discrimination idiom (`0 | 1n` narrowed by
+                // `typeof x === "bigint"` before the call) — the call-arg path has no
+                // flow narrowing, so suppress rather than FP. Before bigint literal
+                // TYPES parsed (B291's parser fix) these annotations never resolved,
+                // so this restores the prior no-emission behavior for the shape.
+                if (argType is Type.Union &&
+                    argType.types.any { it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) } &&
+                    argType.types.any { !it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) }) {
+                    continue
+                }
                 // Emit TS2345
                 // B98.r126: widen a fresh literal ARG for display UNLESS the PARAM is
                 // itself a literal type. TypeScript shows `boolean`/`string`/`number`
@@ -94106,7 +94137,25 @@ interface DataView {
             // against the corresponding Object signature (e.g. `toString(): string`)
             // via the standard property-type check and emits TS2322 there instead.
             if (name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            // B291: a bigint-literal-named property is dropped from the literal type
+            // by tsc (TS1539 owns the error there) — never excess.
+            val srcPropDecl = sourceProp.valueDeclaration ?: sourceProp.declarations.firstOrNull()
+            if ((srcPropDecl as? PropertyAssignment)?.name is BigIntLiteralNode) continue
             if (name !in targetPropNames) {
+                // B291: the target DECLARES a bigint-literal-named member with this
+                // cooked text (`interface G { 2n: string }` + `{ "2n": ... }`) —
+                // tsc drops bigint-named members from the member table (TS1539 owns
+                // the error at the declaration), and the then-empty target is exempt
+                // from excess checking (isKnownProperty's empty-object rule).
+                val targetDeclaresBigintNamed = (targetType as? Type.Object)?.symbol?.declarations?.any { d ->
+                    val mems = when (d) {
+                        is InterfaceDeclaration -> d.members
+                        is ClassDeclaration -> d.members
+                        else -> null
+                    }
+                    mems?.any { m -> ((m as? PropertyDeclaration)?.name as? BigIntLiteralNode)?.text == name } == true
+                } == true
+                if (targetDeclaresBigintNamed) continue
                 // Find the position of this property in the object literal
                 val propNode = objLiteral.properties.firstOrNull { prop ->
                     when (prop) {
@@ -98299,21 +98348,27 @@ interface DataView {
     private fun createPropertyDeclaredHereRelatedInfo(propSymbol: Symbol): Diagnostic? {
         val decl = propSymbol.declarations.firstOrNull() ?: return null
         val declPos = when (decl) {
-            is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
-            is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+            is PropertyDeclaration -> (decl.name as? Identifier)?.pos ?: (decl.name as? StringLiteralNode)?.pos ?: decl.pos
+            is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: (decl.name as? StringLiteralNode)?.pos ?: decl.pos
             else -> decl.pos
         }
         if (declPos < 0) return null
         // B217: position-only attribution mis-fires in multi-file tests when the
         // pos fits inside several files' text — prefer the file whose text actually
         // carries the property NAME at declPos, then fall back to position-fit.
+        // B291: a string-literal-NAMED declaration carries the QUOTED form at
+        // declPos — match those too, or quoted names fall to the position-fit
+        // guess (which picks the first file).
         var declFile: String? = null
         var declSource: String? = null
-        for (result in binderResults) {
+        val nameForms = arrayOf(propSymbol.name, "\"${propSymbol.name}\"", "'${propSymbol.name}'")
+        outer@ for (result in binderResults) {
             val sf = result.sourceFile
-            if (declPos + propSymbol.name.length <= sf.text.length &&
-                sf.text.regionMatches(declPos, propSymbol.name, 0, propSymbol.name.length)) {
-                declFile = sf.fileName; declSource = sf.text; break
+            for (form in nameForms) {
+                if (declPos + form.length <= sf.text.length &&
+                    sf.text.regionMatches(declPos, form, 0, form.length)) {
+                    declFile = sf.fileName; declSource = sf.text; break@outer
+                }
             }
         }
         if (declFile == null || declSource == null) {
@@ -98334,7 +98389,7 @@ interface DataView {
             declChar = p.second
         }
         return Diagnostic(
-            message = "'${propSymbol.name}' is declared here.",
+            message = "'${formatPropertyDisplayName(propSymbol)}' is declared here.",
             category = DiagnosticCategory.Message,
             code = 2728,
             fileName = declFile,
@@ -106067,6 +106122,210 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS2737: BigInt literals not available below ES2020
     // -----------------------------------------------------------------------
+
+    /**
+     * B291: the bigint property-name family (bigintPropertyName).
+     *  - TS1539 "A 'bigint' literal cannot be used as a property name." for
+     *    BigIntLiteralNode names in object literals, interface members, and class
+     *    members (tsc checkPropertyDeclaration + the object-literal grammar walk).
+     *  - TS2464 for object-literal COMPUTED names of bigint type (`[1n]` literal /
+     *    an identifier annotated `: bigint`); span covers the whole `[...]`.
+     *  - TS2538 "Type 'bigint' cannot be used as an index type." for a bigint
+     *    binding-pattern property name (`const { 0n: f } = arr`).
+     *  - TS2322 (doubled line, tsc style) for a mapped-type constraint resolving to
+     *    an all-bigint-literal union (`type T = { [t in Q]: string }`, Q = 6n | 7n) —
+     *    a mapped key must be assignable to `string | number | symbol`.
+     */
+    private fun checkBigintPropertyNames() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            fun emit(code: Int, msg: String, start: Int, length: Int, chain: List<String> = emptyList()) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length.coerceAtLeast(1), messageChain = chain,
+                ))
+            }
+            fun emit1539(nm: BigIntLiteralNode) =
+                emit(1539, "A 'bigint' literal cannot be used as a property name.", nm.pos, nm.text.length)
+
+            fun identAnnotatedBigint(id: Identifier): Boolean {
+                val s = result.locals[id.text] ?: globals[id.text] ?: return false
+                val vd = s.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return false
+                return (vd.type as? KeywordTypeNode)?.kind == SyntaxKind.BigIntKeyword
+            }
+
+            // Mutually recursive expression/statement visitors as an anonymous object
+            // (local funs can't forward-reference). BinaryExpression iterates the LEFT
+            // spine (parse trees of `a+b+c+…` are left-deep — the standard new-walker rule).
+            val w = object {
+                fun expr(e0: Expression?) {
+                    var cur: Expression = e0 ?: return
+                    while (true) {
+                        when (cur) {
+                            is BinaryExpression -> { expr(cur.right); cur = cur.left; continue }
+                            is ParenthesizedExpression -> { cur = cur.expression; continue }
+                            is AsExpression -> { cur = cur.expression; continue }
+                            is NonNullExpression -> { cur = cur.expression; continue }
+                            is PrefixUnaryExpression -> { cur = cur.operand; continue }
+                            is PostfixUnaryExpression -> { cur = cur.operand; continue }
+                            is ObjectLiteralExpression -> objLit(cur)
+                            is ArrayLiteralExpression -> cur.elements.forEach { expr(it) }
+                            is CallExpression -> { expr(cur.expression); cur.arguments.forEach { expr(it) } }
+                            is NewExpression -> { expr(cur.expression); cur.arguments?.forEach { expr(it) } }
+                            is PropertyAccessExpression -> { cur = cur.expression; continue }
+                            is ElementAccessExpression -> { expr(cur.expression); expr(cur.argumentExpression) }
+                            is ConditionalExpression -> { expr(cur.condition); expr(cur.whenTrue); expr(cur.whenFalse) }
+                            is TemplateExpression -> cur.templateSpans.forEach { expr(it.expression) }
+                            is SpreadElement -> { cur = cur.expression; continue }
+                            is ArrowFunction -> when (val b = cur.body) {
+                                is Block -> stmts(b.statements)
+                                is Expression -> expr(b)
+                                else -> {}
+                            }
+                            is FunctionExpression -> cur.body?.let { stmts(it.statements) }
+                            else -> {}
+                        }
+                        break
+                    }
+                }
+
+                fun objLit(obj: ObjectLiteralExpression) {
+                    for (p in obj.properties) {
+                        val nm = when (p) {
+                            is PropertyAssignment -> p.name
+                            is MethodDeclaration -> p.name
+                            else -> null
+                        }
+                        if (nm is BigIntLiteralNode) emit1539(nm)
+                        if (nm is ComputedPropertyName) {
+                            val inner = nm.expression
+                            val isBigintKey = inner is BigIntLiteralNode ||
+                                (inner is Identifier && identAnnotatedBigint(inner))
+                            if (isBigintKey) {
+                                var rb = expressionTrueEnd(inner)
+                                while (rb < source.length && source[rb] != ']') rb++
+                                val end = if (rb < source.length) rb + 1 else expressionTrueEnd(inner)
+                                emit(2464, "A computed property name must be of type 'string', 'number', 'symbol', or 'any'.",
+                                    nm.pos, end - nm.pos)
+                            }
+                        }
+                        when (p) {
+                            is PropertyAssignment -> expr(p.initializer)
+                            is SpreadAssignment -> expr(p.expression)
+                            is MethodDeclaration -> p.body?.let { stmts(it.statements) }
+                            else -> {}
+                        }
+                    }
+                }
+
+                fun bindingName(n: Expression) {
+                    when (n) {
+                        is ObjectBindingPattern -> for (el in n.elements) {
+                            (el.propertyName as? BigIntLiteralNode)?.let {
+                                emit(2538, "Type 'bigint' cannot be used as an index type.", it.pos, it.text.length)
+                            }
+                            bindingName(el.name)
+                            expr(el.initializer)
+                        }
+                        is ArrayBindingPattern -> for (el in n.elements) if (el is BindingElement) {
+                            bindingName(el.name); expr(el.initializer)
+                        }
+                        else -> {}
+                    }
+                }
+
+                fun classMembers(members: List<ClassElement>) {
+                    for (m in members) {
+                        val nm = when (m) {
+                            is PropertyDeclaration -> m.name
+                            is MethodDeclaration -> m.name
+                            else -> null
+                        }
+                        if (nm is BigIntLiteralNode) emit1539(nm)
+                        when (m) {
+                            is PropertyDeclaration -> expr(m.initializer)
+                            is MethodDeclaration -> m.body?.let { stmts(it.statements) }
+                            is Constructor -> m.body?.let { stmts(it.statements) }
+                            else -> {}
+                        }
+                    }
+                }
+
+                fun mappedAliasConstraint(alias: TypeAliasDeclaration) {
+                    val mt = alias.type as? MappedType ?: return
+                    val ct = mt.typeParameter.constraint ?: return
+                    fun allBigintUnion(t: TypeNode?): Boolean = when (t) {
+                        is UnionType -> t.types.isNotEmpty() &&
+                            t.types.all { (it as? LiteralType)?.literal is BigIntLiteralNode }
+                        is LiteralType -> t.literal is BigIntLiteralNode
+                        else -> false
+                    }
+                    val refName = ((ct as? TypeReference)?.typeName as? Identifier)?.text
+                    val resolvesAllBigint = when {
+                        allBigintUnion(ct) -> true
+                        refName != null -> {
+                            val s = result.locals[refName] ?: globals[refName]
+                            val ad = s?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                            ad != null && allBigintUnion(ad.type)
+                        }
+                        else -> false
+                    }
+                    if (!resolvesAllBigint) return
+                    val msg = "Type 'bigint' is not assignable to type 'string | number | symbol'."
+                    val len = refName?.length ?: (expressionTrueEnd(mt.typeParameter.name) - ct.pos).coerceAtLeast(1)
+                    emit(2322, msg, ct.pos, len, chain = listOf("  $msg"))
+                }
+
+                fun stmts(list: List<Statement>) { list.forEach { stmt(it) } }
+
+                fun stmt(s: Node?) {
+                    when (s) {
+                        is ExpressionStatement -> expr(s.expression)
+                        is VariableStatement -> for (d in s.declarationList.declarations) {
+                            bindingName(d.name); expr(d.initializer)
+                        }
+                        is Block -> stmts(s.statements)
+                        is IfStatement -> { expr(s.expression); stmt(s.thenStatement); stmt(s.elseStatement) }
+                        is WhileStatement -> { expr(s.expression); stmt(s.statement) }
+                        is DoStatement -> { stmt(s.statement); expr(s.expression) }
+                        is ForStatement -> stmt(s.statement)
+                        is ForInStatement -> stmt(s.statement)
+                        is ForOfStatement -> stmt(s.statement)
+                        is ReturnStatement -> expr(s.expression)
+                        is ThrowStatement -> expr(s.expression)
+                        is SwitchStatement -> { expr(s.expression); s.caseBlock.forEach { c ->
+                            when (c) {
+                                is CaseClause -> { expr(c.expression); stmts(c.statements) }
+                                is DefaultClause -> stmts(c.statements)
+                                else -> {}
+                            }
+                        } }
+                        is TryStatement -> { stmts(s.tryBlock.statements); s.catchClause?.let { stmts(it.block.statements) }; s.finallyBlock?.let { stmts(it.statements) } }
+                        is FunctionDeclaration -> s.body?.let { stmts(it.statements) }
+                        is InterfaceDeclaration -> for (m in s.members) {
+                            val nm = when (m) {
+                                is PropertyDeclaration -> m.name
+                                is MethodDeclaration -> m.name
+                                else -> null
+                            }
+                            if (nm is BigIntLiteralNode) emit1539(nm)
+                        }
+                        is ClassDeclaration -> classMembers(s.members)
+                        is TypeAliasDeclaration -> mappedAliasConstraint(s)
+                        is ModuleDeclaration -> (s.body as? ModuleBlock)?.statements?.let { stmts(it) }
+                        is LabeledStatement -> stmt(s.statement)
+                        else -> {}
+                    }
+                }
+            }
+            w.stmts(sf.statements)
+        }
+    }
 
     private fun checkBigIntLiterals() {
         for (result in binderResults) {
