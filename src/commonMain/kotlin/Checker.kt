@@ -1338,6 +1338,8 @@ class Checker(
         checkEmptyDestructuringNullishSource()
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
         checkImportAttributeValues()
+        // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
+        checkJsDocNongenericInstantiation()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99075,6 +99077,100 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B259: TS2315 "Type 'X' is not generic." / TS2304 "Cannot find name 'T'." for
+     * JSDoc `@param {...}` type texts in checked JS files
+     * (jsdocTypeNongenericInstantiationAttempt). The JSDoc type plumbing is
+     * primitive-only (17.62), so these never reach the checker — this is a RAW
+     * comment-text scanner over JSDoc blocks: (a) `Name<Arg>` occurrences inside a
+     * `@param {...}` brace where Name is one of the non-generic JSDoc wrapper types
+     * (Boolean/Void/Undefined/Function/String/Number/Object) and the arg list is a
+     * SINGLE identifier (a 2-arg `Object<K,V>` is legal closure-JSDoc) → TS2315 at
+     * the occurrence; (b) a brace content that is EXACTLY `fn<T>` where fn is a
+     * same-file top-level FunctionDeclaration and T resolves to nothing → TS2304 at
+     * the type-arg. Gated to checkJs-checked .js files.
+     */
+    private fun checkJsDocNongenericInstantiation() {
+        if (!options.checkJs) return
+        val nonGenericWrappers = setOf("Boolean", "Void", "Undefined", "Function", "String", "Number", "Object")
+        // [\s\S] instead of DOT_MATCHES_ALL — that RegexOption is JVM-only (commonMain)
+        val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
+        val paramTag = Regex("""@param\s*\{""")
+        val instantiation = Regex("""([A-Za-z_$][A-Za-z0-9_$]*)<\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*>""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val topLevelFns = result.sourceFile.statements
+                .filterIsInstance<FunctionDeclaration>()
+                .filter { it.typeParameters.isNullOrEmpty() }
+                .mapNotNull { it.name?.text }.toSet()
+            val topLevelTypeNames = result.sourceFile.statements.mapNotNull {
+                when (it) {
+                    is ClassDeclaration -> it.name?.text
+                    is InterfaceDeclaration -> it.name.text
+                    is TypeAliasDeclaration -> it.name.text
+                    is EnumDeclaration -> it.name.text
+                    else -> null
+                }
+            }.toSet()
+            for (block in jsdocBlock.findAll(source)) {
+                for (tag in paramTag.findAll(block.value)) {
+                    // balanced-brace content
+                    val openRel = tag.range.last
+                    var depth = 0
+                    var closeRel = -1
+                    var i = openRel
+                    while (i < block.value.length) {
+                        when (block.value[i]) {
+                            '{' -> depth++
+                            '}' -> { depth--; if (depth == 0) { closeRel = i; break } }
+                        }
+                        i++
+                    }
+                    if (closeRel < 0) continue
+                    val content = block.value.substring(openRel + 1, closeRel)
+                    val contentAbs = block.range.first + openRel + 1
+                    var emitted = false
+                    for (m in instantiation.findAll(content)) {
+                        val name = m.groupValues[1]
+                        if (name !in nonGenericWrappers) continue
+                        val start = contentAbs + m.range.first
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$name' is not generic.",
+                            category = DiagnosticCategory.Error, code = 2315,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = m.value.length,
+                        ))
+                        emitted = true
+                    }
+                    if (emitted) continue
+                    // (b) whole-content `fn<T>` with fn a local non-generic function
+                    val whole = Regex("""^\s*([A-Za-z_$][A-Za-z0-9_$]*)<\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*>\s*$""")
+                        .find(content) ?: continue
+                    val fnName = whole.groupValues[1]
+                    val argName = whole.groupValues[2]
+                    if (fnName !in topLevelFns) continue
+                    if (argName in topLevelTypeNames || argName in KNOWN_GLOBALS) continue
+                    val argRel = content.indexOf('<', whole.range.first).let { lt ->
+                        var j = lt + 1
+                        while (j < content.length && content[j].isWhitespace()) j++
+                        j
+                    }
+                    val start = contentAbs + argRel
+                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find name '$argName'.",
+                        category = DiagnosticCategory.Error, code = 2304,
+                        fileName = fileName, line = line, character = ch,
+                        start = start, length = argName.length,
+                    ))
                 }
             }
         }
