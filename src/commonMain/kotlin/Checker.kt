@@ -1342,6 +1342,8 @@ class Checker(
         checkJsDocNongenericInstantiation()
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
         checkDecoratorUseBeforeDeclaration()
+        // 72a4j (B261): TS2345 for optional destructured-param bindings as call args (+ null-default TS2322)
+        checkOptionalDestructuredParamCallArgs()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99079,6 +99081,151 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B261: TS2345 'K | undefined' → 'K' for a destructured-param binding of an
+     * OPTIONAL property used as a call argument, + TS2322 for a `null` binding
+     * default against a primitive member type
+     * (optionalParameterInDestructuringWithInitializer). A binding `b` from
+     * `{a, b}: {a: number, b?: number}` (no BINDING-level default — a PATTERN-level
+     * `= {...}` default does NOT remove the undefined) has type `number | undefined`;
+     * passing it where a collected top-level function expects bare `number` errors
+     * with the "Type 'undefined' is not assignable" chain. Member lists come from
+     * TypeLiteral annotations or bare heritage-free interface refs; nested patterns
+     * recurse through TypeLiteral member types. FP firewall: only bare-Identifier
+     * args, same-primitive binding/param, and only STRAIGHT-LINE leading body
+     * statements (stop at any control-flow statement — it may narrow; a reassignment
+     * of the binding drops it). strictNullChecks only.
+     */
+    private fun checkOptionalDestructuredParamCallArgs() {
+        if (!strictNullChecks) return
+        val primKinds = setOf(
+            SyntaxKind.NumberKeyword, SyntaxKind.StringKeyword, SyntaxKind.BooleanKeyword,
+            SyntaxKind.BigIntKeyword, SyntaxKind.SymbolKeyword,
+        )
+        fun primName(t: TypeNode?): String? = when ((t as? KeywordTypeNode)?.kind) {
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            else -> null
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // callee -> per-param spec: prim name (bare K), "" (union incl. undefined — accepts), null (unknown)
+            val calleeParams = mutableMapOf<String, List<String?>>()
+            for (stmt in result.sourceFile.statements) {
+                val fn = stmt as? FunctionDeclaration ?: continue
+                val n = fn.name?.text ?: continue
+                calleeParams[n] = fn.parameters.map { p ->
+                    val t = p.type
+                    when {
+                        t is KeywordTypeNode && t.kind in primKinds -> primName(t)
+                        t is UnionType && t.types.any {
+                            (it as? KeywordTypeNode)?.kind == SyntaxKind.UndefinedKeyword
+                        } -> ""
+                        else -> null
+                    }
+                }
+            }
+            // resolve a member list from a TypeLiteral or a bare heritage-free interface ref
+            fun membersOf(t: TypeNode?): List<PropertyDeclaration>? = when (t) {
+                is TypeLiteral -> t.members.filterIsInstance<PropertyDeclaration>()
+                    .takeIf { it.size == t.members.size }
+                is TypeReference -> {
+                    val name = (t.typeName as? Identifier)?.text
+                    if (name == null || t.typeArguments != null) null
+                    else (globals[name]?.declarations
+                        ?.filterIsInstance<InterfaceDeclaration>()
+                        ?.singleOrNull()
+                        ?.takeIf { it.heritageClauses.isNullOrEmpty() })
+                        ?.members?.filterIsInstance<PropertyDeclaration>()
+                }
+                else -> null
+            }
+            for (stmt in result.sourceFile.statements) {
+                val fn = stmt as? FunctionDeclaration ?: continue
+                val body = fn.body ?: continue
+                // optional-primitive bindings: name -> prim K
+                val bindings = mutableMapOf<String, String>()
+                fun collect(pattern: ObjectBindingPattern, members: List<PropertyDeclaration>) {
+                    for (el in pattern.elements) {
+                        if (el.dotDotDotToken) continue
+                        val propName = (el.propertyName as? Identifier)?.text
+                            ?: (el.name as? Identifier)?.text ?: continue
+                        val member = members.firstOrNull {
+                            (it.name as? Identifier)?.text == propName
+                        } ?: continue
+                        when (val elName = el.name) {
+                            is Identifier -> {
+                                // `= null` default vs a primitive member type → TS2322
+                                val init = el.initializer
+                                val k = primName(member.type)
+                                if (k != null && init is Identifier && init.text == "null") {
+                                    // tsc squiggles the BINDING NAME, not the null initializer
+                                    val (line, ch) = getLineAndCharacterOfPosition(source, elName.pos)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Type 'null' is not assignable to type '$k'.",
+                                        category = DiagnosticCategory.Error, code = 2322,
+                                        fileName = fileName, line = line, character = ch,
+                                        start = elName.pos, length = elName.text.length,
+                                    ))
+                                }
+                                if (init == null && member.questionToken && k != null) {
+                                    bindings[elName.text] = k
+                                }
+                            }
+                            is ObjectBindingPattern -> {
+                                membersOf(member.type)?.let { collect(elName, it) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                for (p in fn.parameters) {
+                    val pattern = p.name as? ObjectBindingPattern ?: continue
+                    val members = membersOf(p.type) ?: continue
+                    collect(pattern, members)
+                }
+                if (bindings.isEmpty()) continue
+                // straight-line leading statements only
+                for (s in body.statements) {
+                    val e = when (s) {
+                        is ExpressionStatement -> s.expression
+                        is ReturnStatement -> s.expression ?: break
+                        else -> break
+                    }
+                    // reassignment of a binding drops it
+                    if (e is BinaryExpression && e.operator == SyntaxKind.Equals) {
+                        (e.left as? Identifier)?.let { bindings.remove(it.text) }
+                        continue
+                    }
+                    val call = e as? CallExpression ?: continue
+                    val calleeName = (call.expression as? Identifier)?.text ?: continue
+                    val specs = calleeParams[calleeName] ?: continue
+                    for ((i, arg) in call.arguments.withIndex()) {
+                        val argId = arg as? Identifier ?: continue
+                        val bk = bindings[argId.text] ?: continue
+                        val spec = specs.getOrNull(i) ?: continue
+                        if (spec != bk) continue  // "" (accepts undefined) or mismatched prim → skip
+                        val (line, ch) = getLineAndCharacterOfPosition(source, argId.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$bk | undefined' is not assignable to parameter of type '$bk'.",
+                            category = DiagnosticCategory.Error, code = 2345,
+                            fileName = fileName, line = line, character = ch,
+                            start = argId.pos, length = argId.text.length,
+                            messageChain = listOf(
+                                "  Type 'undefined' is not assignable to type '$bk'.",
+                            ),
+                        ))
+                    }
                 }
             }
         }
