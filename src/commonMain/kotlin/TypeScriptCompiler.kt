@@ -893,6 +893,11 @@ class TypeScriptCompiler {
             val binderResult = binder.bind(sourceFile)
             val checker = Checker(options, listOf(binderResult))
             diagnostics.addAll(checker.getDiagnostics())
+            // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
+            // like TS2737 are suppressed in a file that already has parse diagnostics.
+            if (parser.getDiagnostics().isNotEmpty()) {
+                diagnostics.removeAll { it.code == 2737 }
+            }
 
             if (options.isolatedDeclarations) {
                 diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
@@ -991,6 +996,9 @@ class TypeScriptCompiler {
             val tsFileNames = mutableListOf<String>()
             // Parsed source files for two-phase bind+transform
             val parsedSourceFiles = mutableMapOf<String, SourceFile>()
+            // B284: files whose parser produced diagnostics — tsc suppresses grammar
+            // diagnostics (TS2737) in such files (grammarErrorOnNode/hasParseDiagnostics).
+            val filesWithParseDiagnostics = mutableSetOf<String>()
             // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
             // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
             // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
@@ -1212,6 +1220,7 @@ class TypeScriptCompiler {
                 val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti, noImplicitAny = options.noImplicitAny || options.strict)
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
+                if (parser.getDiagnostics().isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
 
                 // Collect parser diagnostics from .d.ts files too (e.g. TS1540 for `module X {}`).
                 // Skip node_modules files — they are third-party and never reported on.
@@ -1337,6 +1346,10 @@ class TypeScriptCompiler {
                     .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
                     .associate { it.fileName to it.content })
             diagnostics.addAll(checker.getDiagnostics())
+            // B284: tsc grammarErrorOnNode — TS2737 suppressed in parse-errored files.
+            if (filesWithParseDiagnostics.isNotEmpty()) {
+                diagnostics.removeAll { it.code == 2737 && it.fileName in filesWithParseDiagnostics }
+            }
             // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
             // resolves through an `exports` field that exposes no types entry.
             diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))

@@ -203,10 +203,12 @@ class Parser(
         }
         // ASI: implicit at }, EOF, or after line break. In a few well-defined cases
         // the current token unambiguously cannot continue a statement — TypeScript
-        // emits TS1005 "';' expected." at that position. Restrict to `:` for now to
-        // avoid noisy regressions in broader error-recovery paths. Covers patterns
-        // like `this.foo: any;` (mis-typed class-field declaration inside a body).
-        if (token == SyntaxKind.Colon && !scanner.hasPrecedingLineBreak()) {
+        // emits TS1005 "';' expected." at that position. Restricted to `:` plus
+        // numeric/bigint literals (e.g. `2n2` scans as `2n` `2`) to avoid noisy
+        // regressions in broader error-recovery paths. Covers patterns like
+        // `this.foo: any;` (mis-typed class-field declaration inside a body).
+        if ((token == SyntaxKind.Colon || token == SyntaxKind.NumericLiteral ||
+                token == SyntaxKind.BigIntLiteral) && !scanner.hasPrecedingLineBreak()) {
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = 1)
         }
@@ -5018,8 +5020,18 @@ class Parser(
                 val emptyKind = scanner.getEmptyDigitLiteralKind()
                 val trailingSeps = scanner.getNumericTrailingSeparatorPositions()
                 val doubleSeps = scanner.getNumericDoubleSeparatorPositions()
+                val missingExpDigitsPos = scanner.getNumericMissingExponentDigitsPos()
+                val identFollow = scanner.getNumericIdentifierFollow()
                 val litLen = text.length
                 nextToken()
+                if (missingExpDigitsPos >= 0) {
+                    reportError("Digit expected.", code = 1124,
+                        overrideStart = missingExpDigitsPos, overrideLength = 0)
+                }
+                if (identFollow != null && identFollow.first != missingExpDigitsPos) {
+                    reportError("An identifier or keyword cannot immediately follow a numeric literal.",
+                        code = 1351, overrideStart = identFollow.first, overrideLength = identFollow.second)
+                }
                 when {
                     emptyKind == "binary" -> reportError("Binary digit expected.", code = 1177,
                         overrideStart = pos + litLen - 1, overrideLength = 0)
@@ -7377,10 +7389,24 @@ class Parser(
         val isLeadingZeroDecimal = scanner.isLeadingZeroDecimalLiteralToken()
         val trailingSeps = scanner.getNumericTrailingSeparatorPositions()
         val doubleSeps = scanner.getNumericDoubleSeparatorPositions()
+        val missingExpDigitsPos = scanner.getNumericMissingExponentDigitsPos()
+        val identFollow = scanner.getNumericIdentifierFollow()
         val hasPrecedingMinus = prevToken == SyntaxKind.Minus
         // Capture the end of the previous token (right after '-' if present) BEFORE advancing
         val prevEnd = scanner.getPrevTokenEnd()
         nextToken()
+        if (missingExpDigitsPos >= 0) {
+            reportError("Digit expected.", code = 1124,
+                overrideStart = missingExpDigitsPos, overrideLength = 0)
+        }
+        // TS1351 from the scanner's identifier-follow detection. tsc's
+        // parseErrorAtPosition suppresses a diagnostic at the SAME start as the last
+        // one — for `1ee` the TS1124 above and this TS1351 share a start, so the
+        // TS1351 is dropped (matching tsc's baseline).
+        if (identFollow != null && identFollow.first != missingExpDigitsPos) {
+            reportError("An identifier or keyword cannot immediately follow a numeric literal.",
+                code = 1351, overrideStart = identFollow.first, overrideLength = identFollow.second)
+        }
         for (sp in trailingSeps) {
             reportError("Numeric separators are not allowed here.", code = 6188,
                 overrideStart = sp, overrideLength = 1)
@@ -7413,21 +7439,8 @@ class Parser(
                 overrideLength = text.length
             )
         }
-        // B61.2: TS1351 — an identifier or keyword cannot immediately follow a
-        // numeric literal that ends with `.` (e.g., `1.toString`). The literal `1.`
-        // is scanned as NumericLiteral; the next token starts at pos+text.length with
-        // no whitespace. Squiggle spans the entire identifier.
-        if (text.endsWith(".") &&
-            token == SyntaxKind.Identifier &&
-            scanner.getTokenPos() == pos + text.length) {
-            val idText = scanner.getTokenText()
-            reportError(
-                "An identifier or keyword cannot immediately follow a numeric literal.",
-                code = 1351,
-                overrideStart = scanner.getTokenPos(),
-                overrideLength = idText.length
-            )
-        }
+        // (B61.2's trailing-dot TS1351 — `1.toString` — is subsumed by the scanner's
+        // identifier-follow detection flushed above.)
         // Capture trailing comments only when the next token is a dot (property access).
         // This preserves `0 /* comment */.toString()` but avoids stealing comments that
         // belong to the enclosing statement (e.g. `await 3 /*comment*/` → comment trails stmt).

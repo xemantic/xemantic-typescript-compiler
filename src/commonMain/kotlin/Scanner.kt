@@ -127,6 +127,17 @@ class Scanner(private val text: String) {
     private var numericDoubleSeparatorPositions: List<Int> = emptyList()
     fun getNumericDoubleSeparatorPositions(): List<Int> = numericDoubleSeparatorPositions
 
+    /** Position right after `e`/`E`[`+`/`-`] when the exponent of the last numeric
+     * literal had NO digits (TS1124 "Digit expected."), or -1. */
+    private var numericMissingExponentDigitsPos: Int = -1
+    fun getNumericMissingExponentDigitsPos(): Int = numericMissingExponentDigitsPos
+
+    /** (start, length) of an identifier immediately following the last numeric/BigInt
+     * literal (TS1351 "An identifier or keyword cannot immediately follow a numeric
+     * literal."), or null. The identifier is NOT consumed — it scans as the next token. */
+    private var numericIdentifierFollow: Pair<Int, Int>? = null
+    fun getNumericIdentifierFollow(): Pair<Int, Int>? = numericIdentifierFollow
+
     /** Whether the last scanned numeric literal was a legacy octal (e.g. 01, 0123). */
     private var isLegacyOctalToken: Boolean = false
 
@@ -292,6 +303,8 @@ class Scanner(private val text: String) {
         emptyDigitLiteralKind = null
         numericTrailingSeparatorPositions = emptyList()
         numericDoubleSeparatorPositions = emptyList()
+        numericMissingExponentDigitsPos = -1
+        numericIdentifierFollow = null
         isLegacyOctalToken = false
         isLeadingZeroDecimalToken = false
 
@@ -848,7 +861,11 @@ class Scanner(private val text: String) {
                 if (pos < end && (text[pos] == '+' || text[pos] == '-')) {
                     pos++
                 }
+                val expDigitsStart = pos
                 scanDecimalDigits()
+                // tsc scanNumber: an exponent with no digits is TS1124 "Digit expected."
+                // at the position where digits were expected (flushed by the parser).
+                if (pos == expDigitsStart) numericMissingExponentDigitsPos = pos
             }
         }
 
@@ -872,11 +889,26 @@ class Scanner(private val text: String) {
             bigIntHasExponent = hasExponent
             bigIntHasFraction = hasFraction
             tokenValue = text.substring(start, pos)
+            detectIdentifierAfterNumericLiteral()
             return SyntaxKind.BigIntLiteral
         }
 
         tokenValue = text.substring(start, pos)
+        detectIdentifierAfterNumericLiteral()
         return SyntaxKind.NumericLiteral
+    }
+
+    /** tsc checkForIdentifierStartAfterNumericLiteral: an identifier starting right
+     * after a numeric/BigInt literal is TS1351 at the identifier's span. The chars
+     * are NOT consumed — the identifier scans as the next token (which is what
+     * produces tsc's follow-up TS2304/TS1005 at the same recovery positions). The
+     * single-`n` bigint-suffix special case is already handled by the suffix branch
+     * above (the `n` is consumed and TS1352/TS1353 flags drive the message). */
+    private fun detectIdentifierAfterNumericLiteral() {
+        if (pos >= end || !isIdentifierStart(text[pos])) return
+        var i = pos
+        while (i < end && isIdentifierPart(text[i])) i++
+        numericIdentifierFollow = pos to (i - pos)
     }
 
     /**

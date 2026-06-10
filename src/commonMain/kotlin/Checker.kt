@@ -86231,6 +86231,14 @@ interface DataView {
         if (arg is Identifier && (arg.text == "null" || arg.text == "undefined")) {
             val argType = getTypeOfIdentifier(arg)
             if (argType === nullType || argType === undefinedType) {
+                // B284: tsc bails out of index checking entirely when the RECEIVER
+                // type is the error type — `a[null]` where `a` is unresolved already
+                // carries TS2304; no TS2538 is reported on the index. Unresolved
+                // receivers are detected via the already-emitted TS2304 at their span
+                // (the unresolved-names pass runs earlier in the pipeline).
+                val recv = expr.expression
+                if (recv is Identifier && (getTypeOfIdentifier(recv) === errorType ||
+                        diagnostics.any { it.code == 2304 && it.fileName == fileName && it.start == recv.pos })) return
                 val display = if (argType === nullType) "null" else "undefined"
                 val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
                 diagnostics.add(Diagnostic(
