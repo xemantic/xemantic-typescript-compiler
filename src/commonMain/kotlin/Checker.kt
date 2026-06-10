@@ -19879,14 +19879,7 @@ class Checker(
             if (currentFileLocals?.get(name) != null) return@run
             if (scope.hasLocalShadow(name)) return@run
             if (globals[name]?.declarations?.any { it !in builtinLibDecls } == true) return@run
-            val suggestion: String = when {
-                isLibTypeUnavailableEs2015(name) -> "es2015"
-                else -> {
-                    val intro = LIB_GLOBAL_INTRODUCING[name] ?: return@run
-                    if (libProvidesGlobalAt(name, intro)) return@run
-                    intro.name.lowercase()
-                }
-            }
+            val suggestion: String = libUnavailableGlobalSuggestion(name) ?: return@run
             val start = node.pos
             val length = name.length
             val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -31134,6 +31127,41 @@ class Checker(
             "Promise.finally" to ScriptTarget.ES2018,
             // B238: Error.cause is es2022 (lib.es2022.error.d.ts).
             "Error.cause" to ScriptTarget.ES2022,
+            // B239: corpus-verified later-lib members (doYouNeedToChangeYourTargetLibrary
+            // family). NOTE: Array.flat/flatMap are deliberately ABSENT — filtering them
+            // would shift the Blocker-#4 "and N more" member counts (genericArrayExtenstions).
+            "String.padStart" to ScriptTarget.ES2017,
+            "String.padEnd" to ScriptTarget.ES2017,
+            "String.trimStart" to ScriptTarget.ES2019,
+            "String.trimEnd" to ScriptTarget.ES2019,
+            "String.trimLeft" to ScriptTarget.ES2019,
+            "String.trimRight" to ScriptTarget.ES2019,
+            "String.matchAll" to ScriptTarget.ES2020,
+            "String.replaceAll" to ScriptTarget.ES2021,
+            "String.at" to ScriptTarget.ES2022,
+            "ObjectConstructor.values" to ScriptTarget.ES2017,
+            "ObjectConstructor.entries" to ScriptTarget.ES2017,
+            "ObjectConstructor.getOwnPropertyDescriptors" to ScriptTarget.ES2017,
+            "ObjectConstructor.fromEntries" to ScriptTarget.ES2019,
+            "PromiseConstructor.allSettled" to ScriptTarget.ES2020,
+            "PromiseConstructor.any" to ScriptTarget.ES2021,
+            "RegExpMatchArray.groups" to ScriptTarget.ES2018,
+            "RegExpExecArray.groups" to ScriptTarget.ES2018,
+            // NOTE: RegExp.dotAll (es2018) is deliberately ABSENT — filtering it shifts
+            // the "and N more" missing-property count for RegExp targets at es2015
+            // (assigningFromObjectToAnythingElse expects "and 11 more" with our member set).
+            "Symbol.description" to ScriptTarget.ES2019,
+            "SymbolConstructor.matchAll" to ScriptTarget.ES2020,
+            "Date.toTemporalInstant" to ScriptTarget.ESNext,
+            // B239: es2015-level members (modularizeLibrary_ErrorFromUsingES6Features…).
+            "ArrayConstructor.from" to ScriptTarget.ES2015,
+            "ArrayConstructor.of" to ScriptTarget.ES2015,
+            "Math.sign" to ScriptTarget.ES2015,
+            "RegExp.flags" to ScriptTarget.ES2015,
+            "String.includes" to ScriptTarget.ES2015,
+            "String.startsWith" to ScriptTarget.ES2015,
+            "String.endsWith" to ScriptTarget.ES2015,
+            "String.repeat" to ScriptTarget.ES2015,
         )
 
         /** B238: builtin error constructors whose lib arity is target-dependent —
@@ -32113,6 +32141,16 @@ interface DataView {
         }
     }
 
+    /** B239: TS2583 lib-migration suggestion ("es2015".."esnext") for a global [name]
+     *  the active lib config does not provide, or null when the name is available.
+     *  Callers must apply their own user-declaration shadow gates. */
+    private fun libUnavailableGlobalSuggestion(name: String): String? {
+        if (isLibTypeUnavailableEs2015(name)) return "es2015"
+        val intro = LIB_GLOBAL_INTRODUCING[name] ?: return null
+        if (libProvidesGlobalAt(name, intro)) return null
+        return intro.name.lowercase()
+    }
+
     /** B238: is a lib FEATURE introduced at [intro] available under the active config?
      *  Empty @lib → the default lib derives from the target (`options.target >= intro`).
      *  Explicit @lib → any entry whose BASE es-version (dotted entries count their
@@ -32264,6 +32302,12 @@ interface DataView {
                 if (!scope.has(name)) return
                 // Type parameters cannot trigger TS2314 — they are not generic type constructors
                 if (scope.isTypeParam(name)) return
+                // B239: a lib-unavailable global (TS2583 "change your target library"
+                // fires at the same position) is treated as unresolved by TypeScript —
+                // no arity check on top (e.g. `AsyncGenerator<any>` under @lib: es2015).
+                if (libUnavailableGlobalSuggestion(name) != null &&
+                    currentFileLocals?.get(name) == null &&
+                    globals[name]?.declarations?.any { it !in builtinLibDecls } != true) return
             }
             is QualifiedName -> {
                 name = (typeName.right as? Identifier)?.text ?: return
