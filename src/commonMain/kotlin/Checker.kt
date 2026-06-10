@@ -62309,7 +62309,11 @@ interface DataView {
         }
 
         // Maintain old varTypes tracking for checkAssignmentExpression/checkReturnAssignability
+        // B250: intersections of bare names encode as "&A & B" — consumed ONLY by the
+        // intersection-vs-bare-TP assignment pre-check; permissive-neutral elsewhere
+        // (isAssignableTo's top gate treats any "&"-string as unknown → assignable).
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
+            ?: intersectionTypeNameForVarTypes(typeAnnotation)
         if (declaredTypeStr != null) varTypes[name.text] = declaredTypeStr
 
         // Populate local type map for Type engine identifier resolution.
@@ -65091,6 +65095,48 @@ interface DataView {
                     val isParameterizedRefTarget = declaredType.startsWith("@") && declaredType.contains('<')
                     val rhsAsIdent = expr.right as? Identifier
                     val rhsVarType = rhsAsIdent?.let { varTypes[it.text] }
+                    // B250: intersection-annotated RHS (`let s: A & B`) assigned to a
+                    // bare in-scope TP target (`t = s` where `t: T`) — an intersection
+                    // is assignable to T only when T is one of its OWN constituents.
+                    // Chain flavor: target's (transitively resolved) constraint named in
+                    // the constituents → "assignable to the constraint ... different
+                    // subtype of constraint 'A'."; else → "could be instantiated with
+                    // an arbitrary type which could be unrelated to ...".
+                    run {
+                        val tgtTp = if (declaredType.startsWith("@") && !declaredType.contains('<'))
+                            declaredType.removePrefix("@") else return@run
+                        if (tgtTp !in typeParams) return@run
+                        val rv = rhsVarType ?: return@run
+                        if (!rv.startsWith("&")) return@run
+                        val members = rv.removePrefix("&").split(" & ")
+                        if (tgtTp in members) return@run  // `t = t_and_b` (T & B → T) is legal
+                        val displaySource = members.joinToString(" & ")
+                        var consName: String? = (currentTypeParamDecls[tgtTp]?.constraint as? TypeReference)
+                            ?.let { getTypeReferenceLastName(it.typeName) }
+                        val seenTps = mutableSetOf<String>()
+                        while (consName != null && consName in typeParams && consName !in members && seenTps.add(consName)) {
+                            consName = (currentTypeParamDecls[consName]?.constraint as? TypeReference)
+                                ?.let { getTypeReferenceLastName(it.typeName) }
+                        }
+                        val chainLine = if (consName != null && consName in members) {
+                            "  '$displaySource' is assignable to the constraint of type '$tgtTp', but '$tgtTp' could be instantiated with a different subtype of constraint '$consName'."
+                        } else {
+                            "  '$tgtTp' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'."
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$displaySource' is not assignable to type '$tgtTp'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = target.pos,
+                            length = target.text.length,
+                            messageChain = listOf(chainLine),
+                        ))
+                        return
+                    }
                     val isSameBaseRhs = rhsVarType != null &&
                         rhsVarType.startsWith("@") && rhsVarType.contains('<') &&
                         rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
@@ -95218,6 +95264,20 @@ interface DataView {
         }
     }
 
+    /** B250: encode an `A & B` annotation (bare type-reference names only) as
+     *  "&A & B" for the intersection-vs-bare-TP assignment pre-check. Any member
+     *  that isn't a bare unparameterized name → null (no entry). */
+    private fun intersectionTypeNameForVarTypes(t: TypeNode): String? {
+        val inter = t as? IntersectionType ?: return null
+        val names = inter.types.map { m ->
+            val ref = m as? TypeReference ?: return null
+            if (!ref.typeArguments.isNullOrEmpty()) return null
+            (ref.typeName as? Identifier)?.text ?: return null
+        }
+        if (names.size < 2) return null
+        return "&" + names.joinToString(" & ")
+    }
+
     /** Get the last identifier name from a TypeReference typeName (Identifier or QualifiedName). */
     private fun getTypeReferenceLastName(node: Node): String? {
         return when (node) {
@@ -95661,6 +95721,10 @@ interface DataView {
 
     private fun isAssignableTo(sourceType: String, targetType: String, typeParams: Set<String> = emptySet()): Boolean {
         if (sourceType == targetType) return true
+        // B250: "&"-prefixed intersection encodings participate only in the dedicated
+        // bare-TP pre-check in checkAssignmentExpression; everywhere else treat them
+        // as unknown → permissive (identical to the entry being absent).
+        if (sourceType.startsWith("&") || targetType.startsWith("&")) return true
         if (targetType == "any" || targetType == "unknown") return true
         if (sourceType == "any") return true
         // undefined is assignable to void
