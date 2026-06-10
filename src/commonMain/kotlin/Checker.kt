@@ -1508,6 +1508,13 @@ class Checker(
         checkBigintPropertyNames()
         // 71d. B297: string-literal args vs template-literal-type params (TS2345)
         checkTemplateLiteralParamArgs()
+        // 71e. B299: binding-pattern arrow args vs (x: T) => prim params — T falls
+        // back to unknown (a binding pattern is not an inference source), TS2345.
+        checkBindingPatternInferenceFallbackArgs()
+        // 71f. B300: class-EXPRESSION property overrides (TS2416 with index-sig
+        // value chains) — class expressions are never bound, so the class-decl
+        // override walker can't see them.
+        checkClassExpressionOverrides()
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
         // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
@@ -87249,6 +87256,25 @@ interface DataView {
                 }
             }
         }
+        // B300: TS2538 'typeof <ClassExprName>' — an identifier bound to a CLASS
+        // EXPRESSION used as an index (`obj[x]` where `const x = class Derived …`).
+        // Class expressions are never bound, so the type-based B127 branch below
+        // can't see them; detect the initializer shape directly.
+        if (arg is Identifier) {
+            val sym = currentFileLocals?.get(arg.text) ?: globals[arg.text]
+            val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+            val ce = vd?.initializer as? ClassExpression
+            if (ce != null && vd.type == null) {
+                val display = ce.name?.text ?: arg.text
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'typeof $display' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                    line = line, character = character, start = arg.pos, length = arg.text.length,
+                ))
+                return
+            }
+        }
         // B127: TS2538 — a user-defined OBJECT/INTERFACE/CLASS-INSTANCE-typed value used
         // directly as a computed index (`obj[x]` where `x: SomeInterface`). An object type
         // is never a valid index (index must be string/number/symbol/literal/enum), so this
@@ -106918,6 +106944,206 @@ interface DataView {
                 }
             }
             w.stmts(sf.statements)
+        }
+    }
+
+    /**
+     * B300: TS2416 for CLASS-EXPRESSION property overrides (the binder never binds
+     * ClassExpression — the class-decl override walker can't reach them). Narrow
+     * AST shape: `const x = class D extends Base { foo!: DerivedIface }` where both
+     * the derived and base `foo` annotations are single-decl index-sig-ONLY
+     * interfaces whose string-index VALUES are interfaces differing by member
+     * presence — the tsc chain is 'X not assignable to Y' / ''string' index
+     * signatures are incompatible.' / missing-prop leaf.
+     */
+    private fun checkClassExpressionOverrides() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            fun ifaceOf(t: TypeNode?): InterfaceDeclaration? {
+                val nm = ((t as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+                if ((t as TypeReference).typeArguments != null) return null
+                val d = (result.locals[nm] ?: globals[nm])?.declarations?.singleOrNull() as? InterfaceDeclaration
+                return if (d != null && d !in builtinLibDecls) d else null
+            }
+            for (stmt in sf.statements) {
+                val vs = stmt as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val ce = d.initializer as? ClassExpression ?: continue
+                    val ceName = ce.name?.text ?: continue
+                    val baseIdent = ce.heritageClauses
+                        ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.types?.singleOrNull()?.expression as? Identifier ?: continue
+                    val baseCls = (result.locals[baseIdent.text] ?: globals[baseIdent.text])
+                        ?.declarations?.singleOrNull() as? ClassDeclaration ?: continue
+                    for (m in ce.members) {
+                        val pd = m as? PropertyDeclaration ?: continue
+                        val pn = (pd.name as? Identifier)?.text ?: continue
+                        val basePd = baseCls.members.filterIsInstance<PropertyDeclaration>()
+                            .singleOrNull { (it.name as? Identifier)?.text == pn } ?: continue
+                        val dIface = ifaceOf(pd.type) ?: continue
+                        val bIface = ifaceOf(basePd.type) ?: continue
+                        if (dIface === bIface) continue
+                        // index-sig-ONLY interfaces with string index values that are interfaces
+                        fun strIndexValue(i: InterfaceDeclaration): TypeNode? {
+                            if (!i.members.all { it is IndexSignature }) return null
+                            return i.members.filterIsInstance<IndexSignature>().singleOrNull {
+                                (it.parameters.firstOrNull()?.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword
+                            }?.type
+                        }
+                        val dVal = ifaceOf(strIndexValue(dIface) ?: continue) ?: continue
+                        val bVal = ifaceOf(strIndexValue(bIface) ?: continue) ?: continue
+                        fun memberNames(i: InterfaceDeclaration): Set<String> =
+                            i.members.mapNotNull { ((it as? PropertyDeclaration)?.name as? Identifier)?.text }.toSet()
+                        val missing = memberNames(bVal).filter { it !in memberNames(dVal) }
+                        if (missing.isEmpty()) continue
+                        val missingDecl = bVal.members.filterIsInstance<PropertyDeclaration>()
+                            .firstOrNull { (it.name as? Identifier)?.text == missing.first() }
+                        val related = missingDecl?.let {
+                            val (rl, rc) = getLineAndCharacterOfPosition(source, it.name.pos)
+                            Diagnostic(
+                                message = "'${missing.first()}' is declared here.",
+                                category = DiagnosticCategory.Message, code = 2728,
+                                fileName = fileName, line = rl, character = rc,
+                                start = it.name.pos, length = missing.first().length,
+                            )
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, pd.name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$pn' in type '$ceName' is not assignable to the same property in base type '${baseCls.name?.text}'.",
+                            category = DiagnosticCategory.Error, code = 2416,
+                            fileName = fileName, line = line, character = character,
+                            start = pd.name.pos, length = pn.length,
+                            messageChain = listOf(
+                                "  Type '${dIface.name.text}' is not assignable to type '${bIface.name.text}'.",
+                                "    'string' index signatures are incompatible.",
+                                "      Property '${missing.first()}' is missing in type '${dVal.name.text}' but required in type '${bVal.name.text}'.",
+                            ),
+                            relatedInformation = listOfNotNull(related),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * B299: `trans<T>(f: (x: T) => string)` called with an arrow whose first param
+     * is a BINDING PATTERN — a binding pattern is NOT an inference source (tsc), so
+     * T falls back to `unknown` and the arrow's pattern param can't accept it.
+     * TS2345 at the whole arrow with the implied-pattern-type displays
+     * (`({ a }: { a: any; }) => any`; defaults render optional `b?: number |
+     * undefined` and are DROPPED from the pattern text) + the parameters chain.
+     * Gated to single-TP single-param functions whose param is `(x: TP) => <prim>`
+     * — any other inference source must bail.
+     */
+    private fun checkBindingPatternInferenceFallbackArgs() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            fun widenedLit(e: Expression?): String? = when (e) {
+                is NumericLiteralNode -> "number"
+                is StringLiteralNode -> "string"
+                is Identifier -> if (e.text == "true" || e.text == "false") "boolean" else null
+                else -> null
+            }
+            fun patRender(n: Expression): String? = when (n) {
+                is Identifier -> n.text
+                is ObjectBindingPattern -> {
+                    val parts = n.elements.map { el ->
+                        if (el.dotDotDotToken) return null
+                        val pn = (el.propertyName as? Identifier)?.text
+                        val inner = patRender(el.name) ?: return null
+                        (pn?.let { "$it: " } ?: "") + inner
+                    }
+                    "{ ${parts.joinToString(", ")} }"
+                }
+                is ArrayBindingPattern -> {
+                    val parts = n.elements.map { el ->
+                        patRender((el as? BindingElement)?.name ?: return null) ?: return null
+                    }
+                    "[${parts.joinToString(", ")}]"
+                }
+                else -> null
+            }
+            fun impliedType(n: Expression): String? = when (n) {
+                is Identifier -> "any"
+                is ObjectBindingPattern -> {
+                    val parts = n.elements.map { el ->
+                        if (el.dotDotDotToken) return null
+                        val key = (el.propertyName as? Identifier)?.text
+                            ?: (el.name as? Identifier)?.text ?: return null
+                        if (el.initializer != null) {
+                            val t = widenedLit(el.initializer) ?: return null
+                            "$key?: $t | undefined;"
+                        } else {
+                            "$key: ${impliedType(el.name) ?: return null};"
+                        }
+                    }
+                    "{ ${parts.joinToString(" ")} }"
+                }
+                is ArrayBindingPattern -> {
+                    val parts = n.elements.map { el ->
+                        impliedType((el as? BindingElement)?.name ?: return null) ?: return null
+                    }
+                    "[${parts.joinToString(", ")}]"
+                }
+                else -> null
+            }
+            for (stmt in sf.statements) {
+                val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if (call.typeArguments != null) continue
+                val callee = call.expression as? Identifier ?: continue
+                val sym = result.locals[callee.text] ?: globals[callee.text] ?: continue
+                val fd = sym.declarations.singleOrNull() as? FunctionDeclaration ?: continue
+                if (fd in builtinLibDecls) continue
+                val tp = fd.typeParameters?.singleOrNull() ?: continue
+                if (tp.constraint != null || tp.default != null) continue
+                val fnParam = fd.parameters.singleOrNull() ?: continue
+                val fnType = fnParam.type as? FunctionType ?: continue
+                val fnTypeParam = fnType.parameters.singleOrNull() ?: continue
+                val fnTypeParamName = (fnTypeParam.name as? Identifier)?.text ?: continue
+                if (((fnTypeParam.type as? TypeReference)?.typeName as? Identifier)?.text != tp.name.text) continue
+                val retKw = (fnType.type as? KeywordTypeNode) ?: continue
+                val retRender = when (retKw.kind) {
+                    SyntaxKind.StringKeyword -> "string"
+                    SyntaxKind.NumberKeyword -> "number"
+                    SyntaxKind.BooleanKeyword -> "boolean"
+                    else -> continue
+                }
+                val arg = call.arguments.singleOrNull() as? ArrowFunction ?: continue
+                val argParam = arg.parameters.singleOrNull() ?: continue
+                if (argParam.type != null) continue
+                val pat = argParam.name
+                if (pat !is ObjectBindingPattern && pat !is ArrayBindingPattern) continue
+                val patText = patRender(pat) ?: continue
+                val patType = impliedType(pat) ?: continue
+                val bodyRender = when (arg.body) {
+                    is Identifier -> "any"
+                    is StringLiteralNode -> "string"
+                    is NumericLiteralNode -> "number"
+                    else -> continue
+                }
+                val srcDisplay = "($patText: $patType) => $bodyRender"
+                val targetDisplay = "($fnTypeParamName: unknown) => $retRender"
+                val start = arg.pos
+                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$srcDisplay' is not assignable to parameter of type '$targetDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2345,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                    messageChain = listOf(
+                        "  Types of parameters '__0' and '$fnTypeParamName' are incompatible.",
+                        "    Type 'unknown' is not assignable to type '$patType'.",
+                    ),
+                ))
+            }
         }
     }
 
