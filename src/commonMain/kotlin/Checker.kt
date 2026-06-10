@@ -917,6 +917,9 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         checkJSDocTypedefTags()
+        // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
+        // with a malformed `@`-prefixed argument. JS-like files only.
+        checkJSDocClosureFnTypeMalformedArgs()
         // 7b''''' bis. TS7012: a JSDoc `@overload` block lacking a `@returns`/`@return`
         // tag → the overload implicitly returns `any`. JS-like files under noImplicitAny.
         checkJSDocOverloadTags()
@@ -14706,6 +14709,59 @@ class Checker(
      * construct). Squiggle lands on the typedef NAME. FP-safe by construction: only
      * the no-type-AND-no-property shape (always an error) is flagged.
      */
+    /** B229: JS-only string-scan for a JSDoc closure-style function type with a malformed
+     *  `@`-prefixed argument: `(at)type {function((at)foo)}`. tsc parses the JSDoc function
+     *  type and reports TS7014 (closure fn type lacks a return-type annotation → implicit
+     *  `any` return) at the whole `function(...)` span, TS1110 "Type expected." at the `@`,
+     *  and TS2304 for the recovered type-name after it. Narrow FP gate: the arg list must
+     *  contain `@` (a well-formed closure type never enters), and the `)` must be directly
+     *  followed by `}` (no return annotation). */
+    private fun checkJSDocClosureFnTypeMalformedArgs() {
+        val re = Regex("""@type\s*\{\s*function\(([^)\n{}]*)\)\s*\}""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (m in re.findAll(source)) {
+                val args = m.groupValues[1]
+                if ('@' !in args) continue
+                val funcStart = source.indexOf("function(", m.range.first)
+                if (funcStart < 0) continue
+                val closeParen = source.indexOf(')', funcStart)
+                if (closeParen < 0) continue
+                val (l1, c1) = getLineAndCharacterOfPosition(source, funcStart)
+                diagnostics.add(Diagnostic(
+                    message = "Function type, which lacks return-type annotation, implicitly has an 'any' return type.",
+                    category = DiagnosticCategory.Error, code = 7014, fileName = fileName,
+                    line = l1, character = c1, start = funcStart, length = closeParen + 1 - funcStart,
+                ))
+                var i = args.indexOf('@')
+                while (i >= 0) {
+                    val atPos = funcStart + "function(".length + i
+                    val (l2, c2) = getLineAndCharacterOfPosition(source, atPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type expected.",
+                        category = DiagnosticCategory.Error, code = 1110, fileName = fileName,
+                        line = l2, character = c2, start = atPos, length = 1,
+                    ))
+                    var j = i + 1
+                    while (j < args.length && (args[j].isLetterOrDigit() || args[j] == '_' || args[j] == '$')) j++
+                    val name = args.substring(i + 1, j)
+                    if (name.isNotEmpty() && globals[name] == null && name !in KNOWN_GLOBALS) {
+                        val nmPos = atPos + 1
+                        val (l3, c3) = getLineAndCharacterOfPosition(source, nmPos)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot find name '$name'.",
+                            category = DiagnosticCategory.Error, code = 2304, fileName = fileName,
+                            line = l3, character = c3, start = nmPos, length = name.length,
+                        ))
+                    }
+                    i = args.indexOf('@', j)
+                }
+            }
+        }
+    }
+
     private fun checkJSDocTypedefTags() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
