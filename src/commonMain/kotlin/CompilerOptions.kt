@@ -128,6 +128,8 @@ data class CompilerOptions(
     val rootDir: String? = null,
     val rootDirs: List<String>? = null,
     val typeRoots: List<String>? = null,
+    /** The `types` option — auto-included type-library entry points (B263). */
+    val types: List<String>? = null,
     val baseUrl: String? = null,
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
@@ -525,6 +527,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "outdir" -> options.copy(outDir = value.trim())
         "rootdir" -> options.copy(rootDir = value.trim())
         "typeroots" -> options.copy(typeRoots = value.split(',').map { it.trim() }.filter { it.isNotEmpty() })
+        "types" -> options.copy(types = value.split(',').map { it.trim() }.filter { it.isNotEmpty() })
         "baseurl" -> options.copy(baseUrl = value.trim())
         "moduleresolution" -> options.copy(moduleResolution = value.trim())
         "esmoduleinterop" -> options.copy(

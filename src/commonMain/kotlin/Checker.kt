@@ -329,6 +329,12 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /** B263: names declared ONLY in typeRoot package files that did NOT resolve from the
+     *  `types` compiler option — stripped from the unresolved-name scope so uses of them
+     *  correctly fire TS2304/TS2552. Populated by [checkTypeLibraryEntryPoints]
+     *  (declared before init — populated and read during the check pipeline). */
+    private var unresolvedTypeLibNames: Set<String> = emptySet()
+
     /** B185: Type ids of NON-WIDENING literal types — a `const x: XY = 'x'` (XY a union of
      *  string literals) narrows reads of `x` to the literal `"x"`, and that literal must NOT
      *  widen when propagated into an unannotated `let x2 = x` (TypeScript 3.1 widening-
@@ -944,6 +950,9 @@ class Checker(
         if (!options.strictExplicitlyFalse) {
             checkImplicitAnyVariables()
         }
+        // 7d (B263). TS2688 for unresolvable `types` compiler-option entries + populate
+        // the unresolved-type-lib name strip BEFORE the unresolved-name walk.
+        checkTypeLibraryEntryPoints()
         // 8. Check for unresolved names (TS2304)
         checkUnresolvedNames()
         checkDtsImportEqualsAliasResolved()
@@ -16517,6 +16526,13 @@ class Checker(
             if (isDomLibReplaced()) {
                 fileScope.names.removeAll(DOM_GLOBAL_NAMES)
                 fileScope.names.removeAll(HOST_ONLY_GLOBALS)
+            }
+
+            // B263: names declared only in typeRoot packages that did NOT resolve from
+            // the `types` option are not part of the program — strip them so their uses
+            // fire TS2304/TS2552.
+            if (unresolvedTypeLibNames.isNotEmpty()) {
+                fileScope.names.removeAll(unresolvedTypeLibNames)
             }
 
             checkUnresolvedInStatements(
@@ -99086,6 +99102,73 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /**
+     * B263: TS2688 "Cannot find type definition file for 'X'." (file-less, with the
+     * "Entry point of type library ... specified in compilerOptions" chain) for each
+     * `types` compiler-option entry that resolves under NO typeRoot
+     * (typeReferenceDirectiveScopedPackageCustomTypeRoot). Resolution rule: under a
+     * typeRoot ending in `@types`, a SCOPED entry `@scope/name` looks up its MANGLED
+     * dir `scope__name`; under any other root it looks up the literal dir; non-scoped
+     * entries are literal everywhere; the dir resolves iff `<dir>/index.d.ts` is a
+     * program file. Side effect: populates [unresolvedTypeLibNames] — top-level names
+     * declared ONLY in typeRoot package dirs that did NOT resolve (they are not part
+     * of the program; the unresolved-name walk strips them from scope).
+     */
+    private fun checkTypeLibraryEntryPoints() {
+        val types = options.types ?: return
+        val typeRoots = options.typeRoots ?: return
+        if (types.isEmpty() || typeRoots.isEmpty()) return
+        val fileNames = binderResults.map { it.sourceFile.fileName }.toSet()
+        fun resolveDir(root: String, entry: String): String? {
+            val r = root.trimEnd('/')
+            val dirName = if (entry.startsWith("@") && r.endsWith("@types")) {
+                entry.removePrefix("@").replace("/", "__")
+            } else entry
+            val dir = "$r/$dirName"
+            return if ("$dir/index.d.ts" in fileNames) dir else null
+        }
+        val resolvedDirs = mutableSetOf<String>()
+        val unresolved = mutableListOf<String>()
+        for (e in types) {
+            val dir = typeRoots.firstNotNullOfOrNull { resolveDir(it, e) }
+            if (dir != null) resolvedDirs.add(dir) else unresolved.add(e)
+        }
+        for (e in unresolved.sorted()) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find type definition file for '$e'.",
+                category = DiagnosticCategory.Error, code = 2688,
+                fileName = null, line = null, character = null, start = -1, length = 0,
+                messageChain = listOf(
+                    "  The file is in the program because:",
+                    "    Entry point of type library '$e' specified in compilerOptions",
+                ),
+            ))
+        }
+        // names declared only in unresolved typeRoot packages
+        val candidates = mutableSetOf<String>()
+        val declaredElsewhere = mutableSetOf<String>()
+        for (result in binderResults) {
+            val fn = result.sourceFile.fileName
+            // longest matching root (roots can nest: /node_modules vs /node_modules/@types)
+            val root = typeRoots
+                .map { it.trimEnd('/') }
+                .filter { fn.startsWith("$it/") }
+                .maxByOrNull { it.length }
+            if (root == null) {
+                declaredElsewhere.addAll(result.locals.keys)
+                continue
+            }
+            val segs = fn.removePrefix("$root/").split("/")
+            val pkg = if (segs[0].startsWith("@") && segs.size > 1) "${segs[0]}/${segs[1]}" else segs[0]
+            if ("$root/$pkg" in resolvedDirs) {
+                declaredElsewhere.addAll(result.locals.keys)
+            } else {
+                candidates.addAll(result.locals.keys)
+            }
+        }
+        unresolvedTypeLibNames = candidates - declaredElsewhere
     }
 
     /**
