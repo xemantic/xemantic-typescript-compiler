@@ -955,6 +955,11 @@ class Checker(
         if (options.jsx != null && (options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse) {
             checkJsxImplicitAny()
         }
+        // 9b (B253). JSX intrinsic-element attribute checking vs JSX.IntrinsicElements
+        // member types (TS2322). NOT implicit-any gated — only on a jsx mode being set.
+        if (options.jsx != null) {
+            checkJsxIntrinsicAttributeTypes()
+        }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
         // 40c. TS2395 export-consistency for merges inside string-named ambient
@@ -20737,6 +20742,312 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * B253: TS2322 for a JSX INTRINSIC element's attributes against the tag's
+     * `JSX.IntrinsicElements` member type (excessiveStackDepthFlatArray:
+     * `<li key={category}>` where li's props resolve through the alias
+     * `DetailedHTMLProps<E,T> = E` to `HTMLAttributes<HTMLLIElement>` whose only
+     * member is `children`). No JSX attribute checking existed before this.
+     * Conservative AST-shape resolver: the tag annotation must resolve — through
+     * ≤5 levels of bare-TP-body alias substitution — to an interface with NO
+     * heritage, NO index signatures, plain member names only; every attribute's
+     * type must resolve concretely; spread attributes bail. Any unrecognized
+     * shape bails the whole element (FN, never FP). Local typing for the walk
+     * comes from a private currentLocalTypes scope populated from unannotated
+     * initializers (array-literal element literal-unions widened:
+     * Array<"a"|"b"> → string[]) and from `recv.map/filter/forEach(arrow)`
+     * callback params bound to the receiver's array element type.
+     */
+    private fun checkJsxIntrinsicAttributeTypes() {
+        val jsxSym = globals["JSX"] ?: return
+        if (!jsxSym.flags.hasAny(SymbolFlags.Module)) return
+        val intrinsicSym = jsxSym.exports?.get("IntrinsicElements") ?: return
+        val intrinsicDecls = intrinsicSym.declarations.filterIsInstance<InterfaceDeclaration>()
+        if (intrinsicDecls.isEmpty()) return
+
+        fun tagAnnotation(tag: String): TypeNode? {
+            for (d in intrinsicDecls) for (m in d.members) {
+                if (m is PropertyDeclaration && (m.name as? Identifier)?.text == tag) return m.type
+            }
+            return null
+        }
+
+        // member-name set + display of the tag's resolved props type, or null (bail)
+        fun resolveShape(typeNode: TypeNode, depth: Int): Pair<Set<String>, String>? {
+            if (depth > 5) return null
+            val ref = typeNode as? TypeReference ?: return null
+            val sym = when (val tn = ref.typeName) {
+                is Identifier -> globals[tn.text]
+                is QualifiedName -> resolveQualifiedName(tn)
+                else -> null
+            } ?: return null
+            val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+            if (aliasDecl != null) {
+                // bare-TP body (`type Alias<E, T> = E`): positionally substitute the
+                // referring node's type-arg AST and recurse
+                val body = aliasDecl.type as? TypeReference ?: return null
+                if (body.typeArguments != null) return null
+                val bodyName = (body.typeName as? Identifier)?.text ?: return null
+                val tpIndex = aliasDecl.typeParameters?.indexOfFirst { it.name.text == bodyName } ?: -1
+                if (tpIndex < 0) return null
+                val argNode = ref.typeArguments?.getOrNull(tpIndex) ?: return null
+                return resolveShape(argNode, depth + 1)
+            }
+            val ifaceDecls = sym.declarations.filterIsInstance<InterfaceDeclaration>()
+            if (ifaceDecls.isEmpty()) return null
+            val names = mutableSetOf<String>()
+            for (d in ifaceDecls) {
+                if (!d.heritageClauses.isNullOrEmpty()) return null
+                for (m in d.members) {
+                    when (m) {
+                        is PropertyDeclaration -> names.add((m.name as? Identifier)?.text ?: return null)
+                        is MethodDeclaration -> names.add((m.name as? Identifier)?.text ?: return null)
+                        else -> return null
+                    }
+                }
+            }
+            val lastSeg = when (val tn = ref.typeName) {
+                is Identifier -> tn.text
+                is QualifiedName -> tn.right.text
+                else -> return null
+            }
+            val argDisplay = ref.typeArguments?.let { args ->
+                val parts = args.map { formatTypeForDisplay(it) ?: return null }
+                "<" + parts.joinToString(", ") + ">"
+            } ?: ""
+            return names to (lastSeg + argDisplay)
+        }
+
+        // Array<"a"|"b"> -> string[] for the local-var population
+        fun widenArrayElementLiteralUnion(t: Type): Type {
+            if (t !is Type.Reference) return t
+            if (t.target.symbol?.name != "Array") return t
+            val elem = t.resolvedTypeArguments?.singleOrNull() ?: return t
+            val widenedElem = when (elem) {
+                is Type.Union -> getUnionType(elem.types.map { getWidenedLiteralType(it) })
+                else -> getWidenedLiteralType(elem)
+            }
+            if (widenedElem === elem) return t
+            return getOrInternReference(t.target, listOf(widenedElem))
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!fileName.endsWith(".tsx") && !fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+
+            fun checkElement(tagName: Expression, attributes: List<Node>) {
+                val tag = (tagName as? Identifier)?.text ?: return
+                if (tag.firstOrNull()?.isLowerCase() != true) return
+                if (attributes.isEmpty()) return
+                if (attributes.any { it !is JsxAttribute }) return  // spread attr -> bail
+                val ann = tagAnnotation(tag) ?: return
+                val shape = resolveShape(ann, 0) ?: return
+                val attrTypes = mutableListOf<Pair<JsxAttribute, Type>>()
+                for (a in attributes) {
+                    val attr = a as JsxAttribute
+                    val t: Type = when (val v = attr.value) {
+                        null -> trueType
+                        is StringLiteralNode -> stringType
+                        is JsxExpressionContainer -> {
+                            val e = v.expression ?: return
+                            val et = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { return }
+                            if (et === anyType || et === errorType) return
+                            et
+                        }
+                        else -> return
+                    }
+                    attrTypes.add(attr to t)
+                }
+                val offending = attrTypes.firstOrNull { it.first.name !in shape.first } ?: return
+                val srcDisplay = "{ " + attrTypes.joinToString(" ") {
+                    "${it.first.name}: ${typeToString(getWidenedLiteralType(it.second))};"
+                } + " }"
+                val (line, ch) = getLineAndCharacterOfPosition(source, offending.first.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$srcDisplay' is not assignable to type '${shape.second}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = offending.first.pos, length = offending.first.name.length,
+                    messageChain = listOf(
+                        "  Property '${offending.first.name}' does not exist on type '${shape.second}'.",
+                    ),
+                ))
+            }
+
+            val walker = object {
+                fun stmts(list: List<Statement>) { for (s in list) stmt(s) }
+                fun stmt(s: Statement) {
+                    when (s) {
+                        is VariableStatement -> {
+                            for (d in s.declarationList.declarations) {
+                                val init = d.initializer ?: continue
+                                expr(init)
+                                val n = (d.name as? Identifier)?.text ?: continue
+                                if (d.type != null) continue
+                                val t = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { null }
+                                    ?: continue
+                                if (t === anyType || t === errorType) continue
+                                currentLocalTypes[n] = widenArrayElementLiteralUnion(widenType(t))
+                            }
+                        }
+                        is ExpressionStatement -> expr(s.expression)
+                        is ReturnStatement -> s.expression?.let { expr(it) }
+                        is FunctionDeclaration -> s.body?.let { stmts(it.statements) }
+                        is ClassDeclaration -> for (m in s.members) when (m) {
+                            is MethodDeclaration -> m.body?.let { stmts(it.statements) }
+                            is Constructor -> m.body?.let { stmts(it.statements) }
+                            is PropertyDeclaration -> m.initializer?.let { expr(it) }
+                            is GetAccessor -> m.body?.let { stmts(it.statements) }
+                            is SetAccessor -> m.body?.let { stmts(it.statements) }
+                            else -> {}
+                        }
+                        is Block -> stmts(s.statements)
+                        is IfStatement -> {
+                            expr(s.expression)
+                            stmt(s.thenStatement)
+                            s.elseStatement?.let { stmt(it) }
+                        }
+                        is ForStatement -> { s.condition?.let { expr(it) }; stmt(s.statement) }
+                        is ForInStatement -> stmt(s.statement)
+                        is ForOfStatement -> stmt(s.statement)
+                        is WhileStatement -> { expr(s.expression); stmt(s.statement) }
+                        is DoStatement -> { stmt(s.statement); expr(s.expression) }
+                        is SwitchStatement -> {
+                            expr(s.expression)
+                            for (clause in s.caseBlock) when (clause) {
+                                is CaseClause -> { expr(clause.expression); stmts(clause.statements) }
+                                is DefaultClause -> stmts(clause.statements)
+                                else -> {}
+                            }
+                        }
+                        is TryStatement -> {
+                            stmts(s.tryBlock.statements)
+                            s.catchClause?.let { stmts(it.block.statements) }
+                            s.finallyBlock?.let { stmts(it.statements) }
+                        }
+                        is LabeledStatement -> stmt(s.statement)
+                        is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { stmts(it.statements) }
+                        is ExportAssignment -> expr(s.expression)
+                        else -> {}
+                    }
+                }
+                fun expr(e: Expression) {
+                    when (e) {
+                        is JsxElement -> {
+                            checkElement(e.openingElement.tagName, e.openingElement.attributes)
+                            for (a in e.openingElement.attributes) {
+                                ((a as? JsxAttribute)?.value as? JsxExpressionContainer)
+                                    ?.expression?.let { expr(it) }
+                            }
+                            for (child in e.children) when (child) {
+                                is Expression -> expr(child)
+                                is JsxExpressionContainer -> child.expression?.let { expr(it) }
+                                else -> {}
+                            }
+                        }
+                        is JsxSelfClosingElement -> {
+                            checkElement(e.tagName, e.attributes)
+                            for (a in e.attributes) {
+                                ((a as? JsxAttribute)?.value as? JsxExpressionContainer)
+                                    ?.expression?.let { expr(it) }
+                            }
+                        }
+                        is JsxFragment -> for (child in e.children) when (child) {
+                            is Expression -> expr(child)
+                            is JsxExpressionContainer -> child.expression?.let { expr(it) }
+                            else -> {}
+                        }
+                        is ParenthesizedExpression -> expr(e.expression)
+                        is ConditionalExpression -> {
+                            expr(e.condition); expr(e.whenTrue); expr(e.whenFalse)
+                        }
+                        is BinaryExpression -> {
+                            // iterative right-spine (deep-chain StackOverflow gotcha)
+                            var cur: Expression = e
+                            while (cur is BinaryExpression) { expr(cur.right); cur = cur.left }
+                            expr(cur)
+                        }
+                        is CallExpression -> {
+                            // `recv.map/filter/forEach(arrow)`: bind the un-annotated first
+                            // callback param to the receiver's array element type for the
+                            // body walk so `<li key={category}>` resolves category: string
+                            val callee = e.expression
+                            val arrowArg = e.arguments.singleOrNull() as? ArrowFunction
+                            var boundName: String? = null
+                            var savedBound: Type? = null
+                            if (callee is PropertyAccessExpression && arrowArg != null &&
+                                callee.name.text in setOf("map", "filter", "forEach")
+                            ) {
+                                val firstParam = arrowArg.parameters.firstOrNull()
+                                val pname = (firstParam?.name as? Identifier)?.text
+                                if (pname != null && firstParam.type == null) {
+                                    val recvType = try { getTypeOfExpression(callee.expression) }
+                                        catch (_: StackOverflowError) { null }
+                                    if (recvType is Type.Reference &&
+                                        recvType.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }
+                                    ) {
+                                        val elem = recvType.resolvedTypeArguments?.singleOrNull()
+                                        if (elem != null && elem !== anyType && elem !== errorType) {
+                                            boundName = pname
+                                            savedBound = currentLocalTypes[pname]
+                                            currentLocalTypes[pname] = elem
+                                        }
+                                    }
+                                }
+                            }
+                            try {
+                                expr(callee)
+                                for (arg in e.arguments) expr(arg)
+                            } finally {
+                                if (boundName != null) {
+                                    if (savedBound != null) currentLocalTypes[boundName] = savedBound
+                                    else currentLocalTypes.remove(boundName)
+                                }
+                            }
+                        }
+                        is ArrowFunction -> when (val b = e.body) {
+                            is Block -> stmts(b.statements)
+                            is Expression -> expr(b)
+                            else -> {}
+                        }
+                        is FunctionExpression -> e.body?.let { stmts(it.statements) }
+                        is ArrayLiteralExpression -> e.elements.forEach { expr(it) }
+                        is ObjectLiteralExpression -> for (p in e.properties) when (p) {
+                            is PropertyAssignment -> expr(p.initializer)
+                            is SpreadAssignment -> expr(p.expression)
+                            else -> {}
+                        }
+                        is AsExpression -> expr(e.expression)
+                        is NonNullExpression -> expr(e.expression)
+                        is SatisfiesExpression -> expr(e.expression)
+                        is TypeAssertionExpression -> expr(e.expression)
+                        is NewExpression -> {
+                            expr(e.expression)
+                            e.arguments?.forEach { expr(it) }
+                        }
+                        is PropertyAccessExpression -> expr(e.expression)
+                        is ElementAccessExpression -> { expr(e.expression); expr(e.argumentExpression) }
+                        is PrefixUnaryExpression -> expr(e.operand)
+                        is PostfixUnaryExpression -> expr(e.operand)
+                        is SpreadElement -> expr(e.expression)
+                        is AwaitExpression -> e.expression?.let { expr(it) }
+                        is YieldExpression -> e.expression?.let { expr(it) }
+                        else -> {}
+                    }
+                }
+            }
+
+            val savedLocals = currentLocalTypes
+            currentLocalTypes = mutableMapOf()
+            try {
+                walker.stmts(result.sourceFile.statements)
+            } finally {
+                currentLocalTypes = savedLocals
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
