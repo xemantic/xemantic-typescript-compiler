@@ -15856,7 +15856,7 @@ class Checker(
             }
             if (ifaceName != null) {
                 val minTarget = LIB_MIN_TARGET["$ifaceName.$memberName"]
-                if (minTarget != null && options.target < minTarget) return false
+                if (minTarget != null && !libFeatureAvailable(minTarget)) return false
             }
             return true
         }
@@ -31132,6 +31132,16 @@ class Checker(
             // Promise.finally is es2018; at es2015 target the Promise instance shape
             // is { then, catch, [Symbol.toStringTag] } (matches TypeScript's lib subsetting).
             "Promise.finally" to ScriptTarget.ES2018,
+            // B238: Error.cause is es2022 (lib.es2022.error.d.ts).
+            "Error.cause" to ScriptTarget.ES2022,
+        )
+
+        /** B238: builtin error constructors whose lib arity is target-dependent —
+         *  `(message?)` pre-es2022, `(message?, options?)` from es2022 (lib.es2022.error);
+         *  AggregateError (es2021) is `(errors, message?)` → `(errors, message?, options?)`. */
+        private val BUILTIN_ERROR_CTOR_NAMES: Set<String> = setOf(
+            "Error", "EvalError", "RangeError", "ReferenceError",
+            "SyntaxError", "TypeError", "URIError", "AggregateError",
         )
 
         /**
@@ -31329,6 +31339,7 @@ interface Error {
     name: string;
     message: string;
     stack?: string;
+    cause?: unknown;
 }
 interface ErrorConstructor {
     new(message?: string): Error;
@@ -32099,6 +32110,28 @@ interface DataView {
                 else -> 0
             }
             full >= introNum || dottedLibProvidesGlobal(l, name)
+        }
+    }
+
+    /** B238: is a lib FEATURE introduced at [intro] available under the active config?
+     *  Empty @lib → the default lib derives from the target (`options.target >= intro`).
+     *  Explicit @lib → any entry whose BASE es-version (dotted entries count their
+     *  prefix level — conservative towards suppression) is >= intro provides it. */
+    private fun libFeatureAvailable(intro: ScriptTarget): Boolean {
+        if (options.noLib) return false
+        if (options.lib.isEmpty()) return options.target >= intro
+        val introNum = if (intro == ScriptTarget.ESNext) 9999
+            else intro.name.removePrefix("ES").toIntOrNull() ?: return true
+        return options.lib.any { l0 ->
+            val l = l0.lowercase()
+            val base = when {
+                l == "es6" -> 2015
+                l == "es7" -> 2016
+                l == "esnext" -> 9999
+                l.startsWith("es2") -> l.substringBefore('.').removePrefix("es").toIntOrNull() ?: 0
+                else -> 0
+            }
+            base >= introNum
         }
     }
 
@@ -36741,6 +36774,23 @@ interface DataView {
                     else -> null
                 }
                 if (className != null) {
+                    // B238: builtin Error-family constructors have a target-dependent lib
+                    // arity — `(message?)` pre-es2022, `(message?, options?)` from es2022
+                    // (AggregateError: `(errors, message?[, options?])`). Fires only when
+                    // neither the class name nor ErrorConstructor has any user declaration.
+                    if (className in BUILTIN_ERROR_CTOR_NAMES && classCtorParams[className] == null &&
+                        funcParams[className] == null &&
+                        globals[className]?.declarations?.any { it !in builtinLibDecls } != true &&
+                        globals["${className}Constructor"]?.declarations?.any { it !in builtinLibDecls } != true) {
+                        val argCount = expr.arguments?.size ?: 0
+                        val isAggregate = className == "AggregateError"
+                        val maxArgs = (if (isAggregate) 2 else 1) +
+                            (if (libFeatureAvailable(ScriptTarget.ES2022)) 1 else 0)
+                        val minArgs = if (isAggregate) 1 else 0
+                        if (argCount > maxArgs) {
+                            emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
+                        }
+                    }
                     val info = classCtorParams[className]
                     if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments?.size ?: 0
@@ -67250,7 +67300,7 @@ interface DataView {
                     }
                     if (memberName != null) {
                         val minTarget = LIB_MIN_TARGET["$ifaceName.$memberName"]
-                        if (minTarget != null && options.target < minTarget) continue
+                        if (minTarget != null && !libFeatureAvailable(minTarget)) continue
                     }
                 }
                 when (member) {
@@ -83745,7 +83795,7 @@ interface DataView {
                 else -> null
             } ?: return@run
             val minTarget = LIB_MIN_TARGET["$featureIface.$propName"] ?: return@run
-            if (options.target >= minTarget) return@run
+            if (libFeatureAvailable(minTarget)) return@run
             val libName = minTarget.name.lowercase()
             val display = typeToString(displayTypeOverride ?: objectType)
             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
