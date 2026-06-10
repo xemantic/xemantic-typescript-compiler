@@ -521,6 +521,18 @@ class TypeScriptCompiler {
             }
         }
 
+        // B236: TS5052 — exactOptionalPropertyTypes requires strictNullChecks. Real-tsc
+        // semantics here (NOT the harness !explicitlyFalse convention): SNC is on only
+        // when `strict` or `strictNullChecks` is explicitly true; every corpus eOPT test
+        // sets one of them except the parameterized `@strict: false` variants.
+        if (options.exactOptionalPropertyTypes && !options.strict && !options.strictNullChecks) {
+            diagnostics.add(Diagnostic(
+                message = "Option 'exactOptionalPropertyTypes' cannot be specified without specifying option 'strictNullChecks'.",
+                category = DiagnosticCategory.Error,
+                code = 5052,
+            ))
+        }
+
         // TS5052: checkJs with allowJs explicitly set to false
         if (options.checkJs && options.allowJsExplicitlyFalse) {
             diagnostics.add(Diagnostic(

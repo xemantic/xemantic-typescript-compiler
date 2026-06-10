@@ -31055,6 +31055,11 @@ interface RegExpMatchArray extends Array<string> {
     index?: number;
     input?: string;
 }
+interface RegExpExecArray extends Array<string> {
+    0: string;
+    index: number;
+    input: string;
+}
 interface String {
     toString(): string;
     charAt(pos: number): string;
@@ -63906,6 +63911,49 @@ interface DataView {
                         }
                     }
                 } catch (_: StackOverflowError) { /* circular */ }
+                // B236: optional-vs-required presence rule for an EMBEDDED-LIB interface
+                // pair under SNC-OFF — `execResult = matchResult` (RegExpMatchArray →
+                // RegExpExecArray). With SNC off, an optional `index?: number` is plain
+                // `number`, so every relation path passes; tsc's rule is presence-based
+                // and errors regardless of strictNullChecks with the dedicated chain.
+                // varTypes-name-driven (params aren't in globals/currentLocalTypes).
+                // SNC-on keeps the pre-existing coarse-TS2322 path (gate below). Lib-only
+                // pair keeps the member-resolution FP surface at zero (mirror of B103).
+                run {
+                    if (strictNullChecks) return@run
+                    val rhsId = expr.right as? Identifier ?: return@run
+                    // varTypes stores a bare named annotation as "@Name" (B54.7's
+                    // parameterized-ref marker without type args) — strip it; a
+                    // genuinely-parameterized "@Name<...>" bails.
+                    fun bareName(v: String?): String? = when {
+                        v == null -> null
+                        v.startsWith("@") -> if (v.contains('<')) null else v.removePrefix("@")
+                        else -> v
+                    }
+                    val tgtName = bareName(varTypes[target.text]) ?: return@run
+                    val srcName = bareName(varTypes[rhsId.text]) ?: return@run
+                    if (tgtName == srcName) return@run
+                    val tgtSym = globals[tgtName]?.takeIf { s ->
+                        s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
+                    val srcSym = globals[srcName]?.takeIf { s ->
+                        s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
+                    val tgtType = try { getDeclaredTypeOfSymbol(tgtSym) } catch (_: StackOverflowError) { return@run } as? Type.Object ?: return@run
+                    val srcType = try { getDeclaredTypeOfSymbol(srcSym) } catch (_: StackOverflowError) { return@run } as? Type.Object ?: return@run
+                    try { resolveStructuredTypeMembers(tgtType); resolveStructuredTypeMembers(srcType) }
+                    catch (_: StackOverflowError) { return@run }
+                    val mismatch = try { findOptionalVsRequiredMismatch(srcType, tgtType) }
+                        catch (_: StackOverflowError) { null } ?: return@run
+                    val pname = formatPropertyDisplayName(mismatch)
+                    val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$srcName' is not assignable to type '$tgtName'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = target.pos, length = target.text.length,
+                        messageChain = listOf("  Property '$pname' is optional in type '$srcName' but required in type '$tgtName'."),
+                    ))
+                    return
+                }
                 // Try new Type-based engine for file-level and local variables
                 try {
                     var targetType: Type? = null
@@ -92360,10 +92408,14 @@ interface DataView {
         resolveStructuredTypeMembers(source)
         resolveStructuredTypeMembers(target)
         val targetProps = target.properties ?: return null
-        // A source string/number index signature could provide the property — skip to stay safe.
-        if (source.stringIndexInfo != null || source.numberIndexInfo != null) return null
+        // A source STRING index signature could provide any property — skip to stay safe.
+        // A NUMBER index signature (e.g. inherited from an Array base, B236) can only
+        // provide NUMERIC names — non-numeric properties are still checked.
+        if (source.stringIndexInfo != null) return null
+        val hasNumIdx = source.numberIndexInfo != null
         for (tProp in targetProps) {
             if (tProp.name.isEmpty() || tProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (hasNumIdx && tProp.name.all { it.isDigit() }) continue
             if (isOptionalProperty(tProp)) continue
             val sProp = getPropertyOfType(source, tProp.name) ?: continue
             if (isOptionalProperty(sProp)) return tProp
