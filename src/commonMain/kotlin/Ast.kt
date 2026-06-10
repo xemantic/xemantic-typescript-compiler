@@ -806,6 +806,8 @@ data class ParenthesizedExpression(
     /** 17.140b: when non-null, this paren is a JSDoc type cast `/** @type {T} */ (expr)`.
      *  The checker uses this to override the inner expression's type. JS-like files only. */
     val jsdocCastType: TypeNode? = null,
+    /** True when the closing `)` was MISSING (parse recovery) — true-end math must not +1. */
+    val closeParenMissing: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

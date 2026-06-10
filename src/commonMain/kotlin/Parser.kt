@@ -1130,6 +1130,12 @@ class Parser(
         if (missingSemiAsUnexpectedIdent) {
             reportError("Unexpected keyword or identifier.", code = 1434,
                 overrideStart = (expr as Identifier).pos, overrideLength = expr.text.length.coerceAtLeast(1))
+        } else if (token == SyntaxKind.CloseParen && !scanner.hasPrecedingLineBreak()) {
+            // tsc parseErrorForMissingSemicolonAfter (generic fallback): a same-line `)`
+            // after an expression statement cannot ASI — ';' expected at the `)`. The
+            // statement-level recovery that follows is same-start-deduped against this.
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(), overrideLength = 1)
         } else {
             parseSemicolon()
         }
@@ -3924,6 +3930,14 @@ class Parser(
                 nextToken() // skip the invalid assignment operator
                 return parseAssignmentExpression()
             }
+            // tsc parseAssignmentExpressionOrHigher: the assignment operator binds only
+            // when the parsed LHS is a LeftHandSideExpression KIND. A Binary/Conditional
+            // LHS never continues as an assignment — e.g. in `( y = z === = 'function')`
+            // the `= 'function'` must NOT bind to `z === <missing>`; the paren closes
+            // (')' expected, same-start-deduped) and the OUTER paren-LHS assignment binds.
+            if (expr is BinaryExpression || expr is ConditionalExpression) {
+                return expr
+            }
             val op = token
             nextToken()
             val right = parseAssignmentExpression()
@@ -5374,7 +5388,7 @@ class Parser(
         val innerTrailing = scanner.getTrailingComments()
         // Capture comments on new lines before ')' (e.g. `//close`, `/*3*/` in multi-line paren).
         val beforeCloseParen = leadingComments()
-        parseExpected(SyntaxKind.CloseParen)
+        val closeParenFound = parseExpected(SyntaxKind.CloseParen)
         // Capture same-line trailing comments after ')' (e.g. `/*4*/` in `(expr)/*4*/`).
         val afterCloseParen = scanner.consumeTrailingComments()?.ifEmpty { null }
         val exprWithComments = if (!innerTrailing.isNullOrEmpty()) expr.withTrailingComments(innerTrailing) else expr
@@ -5382,6 +5396,7 @@ class Parser(
             expression = exprWithComments,
             beforeCloseParenComments = beforeCloseParen,
             afterCloseParenComments = afterCloseParen,
+            closeParenMissing = !closeParenFound,
             pos = pos,
             end = getEnd(),
         )

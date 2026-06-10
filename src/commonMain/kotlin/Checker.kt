@@ -49067,6 +49067,8 @@ interface DataView {
             // Synthetic paren from instantiation expression (`obj.fn<T>`): use the
             // recorded type-args end so the squiggle covers `obj.fn<T>` (not just `obj.fn`).
             if (expr.instantiationEnd != null) expr.instantiationEnd!!
+            // Parse recovery: no closing `)` exists — the true end is the inner expression's.
+            else if (expr.closeParenMissing) expressionTrueEnd(expr.expression)
             else expressionTrueEnd(expr.expression) + 1 // +1 for closing )
         }
         is PropertyAccessExpression -> expr.name.pos + expr.name.text.length
