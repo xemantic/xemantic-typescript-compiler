@@ -71464,6 +71464,43 @@ interface DataView {
                                 constraint.callSignatures.isNullOrEmpty() &&
                                 constraint.constructSignatures.isNullOrEmpty()))) {
                         val arg = args[first.argIdx]
+                        // B273: an ARROW/FN-EXPRESSION arg anchored the TP via its RETURN
+                        // (the cb param's declared return is the bare TP) — TypeScript reports
+                        // TS2322 at the RETURN EXPRESSION + related TS6502 at the callback
+                        // signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
+                        if (arg is ArrowFunction || arg is FunctionExpression) {
+                            val retExpr: Expression? = when (arg) {
+                                is ArrowFunction -> when (val b = arg.body) {
+                                    is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                                    is Expression -> b
+                                    else -> null
+                                }
+                                is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                                else -> null
+                            }
+                            if (retExpr != null) {
+                                val rStart = retExpr.pos
+                                val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                                val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                                val related = ((params.getOrNull(first.argIdx)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
+                                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                                    listOf(Diagnostic(
+                                        message = "The expected type comes from the return type of this signature.",
+                                        category = DiagnosticCategory.Message, code = 6502,
+                                        fileName = fileName, line = relLine, character = relChar,
+                                        start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                                    ))
+                                } ?: emptyList()
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '${typeToString(firstWidened)}' is not assignable to type '${typeToString(constraint)}'.",
+                                    category = DiagnosticCategory.Error, code = 2322,
+                                    fileName = fileName, line = rLine, character = rChar,
+                                    start = rStart, length = rLength,
+                                    relatedInformation = related,
+                                ))
+                                return null
+                            }
+                        }
                         if (arg !is SpreadElement) {
                             val start = arg.pos
                             val length = expressionTrueEnd(arg) - start
@@ -90265,6 +90302,43 @@ interface DataView {
                 ) {
                     val argTypeStr = typeToString(argType)
                     val paramTypeStr = typeToString(constraint)
+                    // B273: when the ARG is an arrow/function-expression, argType here is its
+                    // contextually-RE-TYPED return (a genuine fn-object would fail the
+                    // isSimpleCheckableType gate above) — the declared cb param returns a bare
+                    // TP whose constraint the lambda's return violates. TypeScript reports a
+                    // fine-grained TS2322 AT THE RETURN EXPRESSION + related TS6502 at the
+                    // callback signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
+                    val retExpr: Expression? = when (arg) {
+                        is ArrowFunction -> when (val b = arg.body) {
+                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                            is Expression -> b
+                            else -> null
+                        }
+                        is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        else -> null
+                    }
+                    if (retExpr != null) {
+                        val rStart = retExpr.pos
+                        val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                        val related = ((params.getOrNull(i)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                            listOf(Diagnostic(
+                                message = "The expected type comes from the return type of this signature.",
+                                category = DiagnosticCategory.Message, code = 6502,
+                                fileName = fileName, line = relLine, character = relChar,
+                                start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                            ))
+                        } ?: emptyList()
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$argTypeStr' is not assignable to type '$paramTypeStr'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = rLine, character = rChar,
+                            start = rStart, length = rLength,
+                            relatedInformation = related,
+                        ))
+                        continue
+                    }
                     val start = arg.pos
                     val length = expressionTrueEnd(arg) - start
                     if (length > 0) {
