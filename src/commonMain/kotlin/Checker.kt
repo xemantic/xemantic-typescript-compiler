@@ -85361,7 +85361,24 @@ interface DataView {
                     // obj.kind === 'foo'; if (isFoo) obj.foo` — TypeScript doesn't track
                     // aliased conditions for narrowing) reach this elaboration with a
                     // partial-coverage Union.
-                    if (narrowed is Type.Union && propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES) {
+                    // B293: a union whose every member is WELL-RESOLVED (a string/number
+                    // literal, or a single-decl heritage-free user interface) supports the
+                    // full tsc behavior: all-missing emission (not just partial coverage),
+                    // tsc type-id member ordering (display + first-missing chain pick),
+                    // alias-name receiver displays ('AB'), the 'length' prototype-gate
+                    // bypass (interfaces genuinely lack it), and TS2551 spelling
+                    // suggestions from the union's COMMON properties.
+                    val wellResolvedUnionMember = { m: Type ->
+                        m is Type.StringLiteral || m is Type.NumberLiteral ||
+                            (m is Type.Interface && m !is Type.Reference &&
+                                (m.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration)
+                                    ?.let { it.heritageClauses.isNullOrEmpty() && it !in builtinLibDecls } == true)
+                    }
+                    val allWellResolved = narrowed is Type.Union &&
+                        narrowed.types.filterNot { isNullishConstituent(it) }
+                            .let { it.isNotEmpty() && it.all(wellResolvedUnionMember) }
+                    if (narrowed is Type.Union && propName.isNotEmpty() &&
+                        (propName !in RUNTIME_PROPERTIES || (allWellResolved && propName == "length"))) {
                         // B277: nullish constituents never participate in the TS2339 union
                         // elaboration — tsc reports nullable receivers via TS18048/TS2532
                         // (and `x?.y` checks NonNullable(x)), never a TS2339 chain naming
@@ -85373,14 +85390,42 @@ interface DataView {
                         }
                         val missingMembers = members.filter { !memberHasIt(it) }
                         val anyHasIt = members.any { memberHasIt(it) }
-                        if (missingMembers.isNotEmpty() && anyHasIt) {
-                            val missingMember = missingMembers.first()
-                            val unionDisplay = typeToString(narrowed)
+                        if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved)) {
+                            val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
+                            val missingMember = orderedMissing.first()
+                            // Receiver annotated with a bare alias-of-union reference displays
+                            // the ALIAS name (tsc shows 'AB', not 'A | B').
+                            val aliasName: String? = run {
+                                val recvId = objectExpr as? Identifier ?: return@run null
+                                val rsym = currentFileLocals?.get(recvId.text) ?: globals[recvId.text] ?: return@run null
+                                val vd = rsym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+                                val ann = vd?.type as? TypeReference ?: return@run null
+                                if (ann.typeArguments != null) return@run null
+                                val annName = (ann.typeName as? Identifier)?.text ?: return@run null
+                                val asym = currentFileLocals?.get(annName) ?: globals[annName] ?: return@run null
+                                val alias = asym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                                if (alias?.type is UnionType) annName else null
+                            }
+                            val unionDisplay = aliasName ?: typeToString(
+                                if (allWellResolved) Type.Union(members.sortedBy { it.id }) else narrowed)
                             val memberDisplay = typeToString(missingMember)
+                            // TS2551 for an all-interface well-resolved union when the union's
+                            // COMMON property set carries a close spelling match.
+                            var suggestion: String? = null
+                            if (allWellResolved && members.all { it is Type.Interface }) {
+                                val commonProps = members.map { m ->
+                                    try { resolveStructuredTypeMembers(m as Type.Interface) } catch (_: StackOverflowError) {}
+                                    (m as Type.Interface).properties?.mapTo(mutableSetOf()) { it.name } ?: mutableSetOf()
+                                }.reduceOrNull { a, b -> a.apply { retainAll(b) } } ?: mutableSetOf()
+                                suggestion = getSpellingSuggestionFromNames(propName, commonProps)
+                            }
                             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                             diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '$unionDisplay'.",
-                                category = DiagnosticCategory.Error, code = 2339,
+                                message = if (suggestion != null)
+                                    "Property '$propName' does not exist on type '$unionDisplay'. Did you mean '$suggestion'?"
+                                else
+                                    "Property '$propName' does not exist on type '$unionDisplay'.",
+                                category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
                                 fileName = fileName, line = line, character = character,
                                 start = diagStart, length = diagLength,
                                 messageChain = listOf("  Property '$propName' does not exist on type '$memberDisplay'."),
