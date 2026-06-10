@@ -131,7 +131,7 @@ class Parser(
         return token
     }
 
-    private fun parseExpected(kind: SyntaxKind): Boolean {
+    private fun parseExpected(kind: SyntaxKind, eofRelated: Boolean = true): Boolean {
         if (token == kind) {
             // Track opening tokens for related-info on missing close
             if (kind == SyntaxKind.OpenBrace || kind == SyntaxKind.OpenBracket || kind == SyntaxKind.OpenParen) {
@@ -142,8 +142,15 @@ class Parser(
             nextToken(); return true
         }
         // When missing a close token at EOF, add related info pointing to the opening token
+        // (eofRelated=false suppresses the TS1007 related info — TypeScript only emits it
+        // from parseExpectedMatchingBrackets call sites, which exclude parameter lists).
         if ((kind == SyntaxKind.CloseBrace || kind == SyntaxKind.CloseBracket || kind == SyntaxKind.CloseParen)
             && openTokenStack.isNotEmpty() && token == SyntaxKind.EndOfFile) {
+            if (!eofRelated) {
+                openTokenStack.removeAt(openTokenStack.lastIndex)
+                reportError("'${tokenToString(kind)}' expected.", code = 1005)
+                return false
+            }
             val openPos = openTokenStack.removeAt(openTokenStack.lastIndex)
             val openToken = when (kind) {
                 SyntaxKind.CloseBrace -> "{"
@@ -913,7 +920,7 @@ class Parser(
         val elements = mutableListOf<BindingElement>()
         var hasTrailingComma = false
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
-            var element = parseBindingElement()
+            var element = parseBindingElement(inObjectPattern = true)
             if (parseOptional(SyntaxKind.Comma)) {
                 // After consuming the comma, the scanner has advanced to the next token.
                 // Trailing comments on the same line as the comma belong to the preceding element.
@@ -925,6 +932,36 @@ class Parser(
             } else {
                 hasTrailingComma = false
                 elements.add(element)
+                // tsc parseDelimitedList recovery: when the element ended with a MISSING
+                // binding name (property-name + missing ':' recovery shape), keep scanning —
+                // a token that can start another element re-enters the list (the ',' expected
+                // error is same-start-suppressed when it collides with the ':' expected one);
+                // anything else is skipped one token at a time (TS1180, also usually deduped).
+                // pos == end distinguishes the property-name recovery's synthesized
+                // zero-width missing name from parseIdentifier's TS1003 empty-name
+                // fallback (width >= 1) — the latter must NOT trigger list recovery
+                // (it changes how far speculative lookAhead parses advance, e.g.
+                // `type A = ({x:(...) => T}["x"])`).
+                val nameMissing = element.propertyName != null &&
+                    (element.name as? Identifier)?.let { it.text.isEmpty() && it.pos == it.end } == true
+                if (nameMissing && token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+                    val canStartElement = token == SyntaxKind.DotDotDot ||
+                        token == SyntaxKind.OpenBracket ||
+                        token == SyntaxKind.StringLiteral ||
+                        token == SyntaxKind.NumericLiteral ||
+                        token == SyntaxKind.BigIntLiteral ||
+                        isIdentifier() || isKeyword()
+                    if (canStartElement) {
+                        reportError("',' expected.", code = 1005)
+                        continue
+                    }
+                    // A token an OUTER parsing context owns aborts the list (tsc
+                    // abortParsingListOrMoveToNextToken) instead of being consumed.
+                    if (token == SyntaxKind.CloseParen || token == SyntaxKind.CloseBracket) break
+                    reportError("Property destructuring pattern expected.", code = 1180)
+                    nextToken()
+                    continue
+                }
                 break
             }
             elements.add(element)
@@ -955,7 +992,7 @@ class Parser(
         return ArrayBindingPattern(elements = elements, hasTrailingComma = trailingComma, pos = pos, end = getEnd())
     }
 
-    private fun parseBindingElement(): BindingElement {
+    private fun parseBindingElement(inObjectPattern: Boolean = false): BindingElement {
         val pos = getPos()
         // Capture leading comments before `...` or the element name (e.g. `// Omit` before `foo`)
         val elemComments = if (!dotDotDotToken()) leadingComments() else null
@@ -977,17 +1014,44 @@ class Parser(
             SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral -> lookAhead { nextToken(); token == SyntaxKind.Colon }
             else -> false
         }
+        // A strict reserved word (e.g. `return`) cannot be a binding NAME — in tsc it is
+        // always a property name awaiting `: bindingName` (parseObjectBindingElement's
+        // tokenIsIdentifier=false path). Track it for the no-colon recovery below.
+        val reservedWordStart = inObjectPattern && isKeyword() && !isIdentifier()
         var nameOrProp: Expression = when {
             nameOrPropIsPropertyKey && token == SyntaxKind.OpenBracket -> parseComputedPropertyName()
-            nameOrPropIsPropertyKey && token == SyntaxKind.StringLiteral -> parseStringLiteral()
-            nameOrPropIsPropertyKey && token == SyntaxKind.NumericLiteral -> parseNumericLiteral()
-            nameOrPropIsPropertyKey && token == SyntaxKind.BigIntLiteral -> {
+            (nameOrPropIsPropertyKey || inObjectPattern) && token == SyntaxKind.StringLiteral -> parseStringLiteral()
+            (nameOrPropIsPropertyKey || inObjectPattern) && token == SyntaxKind.NumericLiteral -> parseNumericLiteral()
+            (nameOrPropIsPropertyKey || inObjectPattern) && token == SyntaxKind.BigIntLiteral -> {
                 val bPos = getPos(); val text = scanner.getTokenValue(); nextToken()
                 BigIntLiteralNode(text = text, pos = bPos, end = getEnd())
             }
             else -> parseBindingNameOrPattern()
         }
         if (postDotComments != null) nameOrProp = nameOrProp.withLeadingComments(postDotComments)
+        // Recovery (tsc parseObjectBindingElement): the element started with a token that can
+        // only be a property NAME (reserved word / string / numeric literal) but no ':' follows.
+        // Emit TS1005 ':' expected at the current token and synthesize a MISSING binding name
+        // (zero-width Identifier at the previous token's end) — the checker renders it '(Missing)'.
+        if (token != SyntaxKind.Colon &&
+            (reservedWordStart || nameOrProp is StringLiteralNode || nameOrProp is NumericLiteralNode
+                || nameOrProp is BigIntLiteralNode)) {
+            parseExpected(SyntaxKind.Colon)
+            val missingPos = scanner.getPrevTokenEnd()
+            val name: Expression = if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket)
+                parseBindingNameOrPattern()
+            else Identifier(text = "", pos = missingPos, end = missingPos)
+            val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
+            return BindingElement(
+                propertyName = nameOrProp,
+                name = name,
+                initializer = init,
+                dotDotDotToken = dotDotDot,
+                pos = pos,
+                end = getEnd(),
+                leadingComments = elemComments,
+            )
+        }
         return if (token == SyntaxKind.Colon &&
             (nameOrProp is Identifier || nameOrProp is ComputedPropertyName
                 || nameOrProp is StringLiteralNode || nameOrProp is NumericLiteralNode
@@ -6041,7 +6105,7 @@ class Parser(
                 pendingLeadingComments = (pendingLeadingComments ?: emptyList()) + postCommaComments
             }
         }
-        parseExpected(SyntaxKind.CloseParen)
+        parseExpected(SyntaxKind.CloseParen, eofRelated = false)
         // 17.200: TS1016 — required parameter cannot follow `?`-optional.
         // (`= initializer` does NOT trigger this — TypeScript's quirk: an
         // initializer with a following required param implicitly makes the

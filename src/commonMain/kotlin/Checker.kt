@@ -19966,8 +19966,11 @@ class Checker(
         val relatedInfo = if (param.type == null) {
             buildTs2843RelatedInfo(displayName, param, source, fileName)
         } else null
+        // A MISSING binding name (parse-recovery, e.g. `function f({ return "s" }`)
+        // displays as '(Missing)' (tsc declarationNameToString).
+        val localDisplay = if (localName.text.isEmpty()) "(Missing)" else localName.text
         diagnostics.add(Diagnostic(
-            message = "'${localName.text}' is an unused renaming of '$displayName'. Did you intend to use it as a type annotation?",
+            message = "'$localDisplay' is an unused renaming of '$displayName'. Did you intend to use it as a type annotation?",
             category = DiagnosticCategory.Error,
             code = 2842,
             fileName = fileName,
@@ -19987,7 +19990,11 @@ class Checker(
     private fun formatBindingPropertyName(propName: NameNode, source: String): String {
         return when (propName) {
             is Identifier -> propName.text
-            is StringLiteralNode -> "\"${propName.text}\""
+            is StringLiteralNode -> {
+                // tsc declarationNameToString renders the SOURCE text — preserve the quote char.
+                val q = if (propName.singleQuote) "'" else "\""
+                q + (propName.rawText ?: propName.text) + q
+            }
             is NumericLiteralNode -> propName.text
             is ComputedPropertyName -> {
                 val expr = propName.expression
@@ -20035,6 +20042,24 @@ class Checker(
                 )
             }
             pos--
+        }
+        // No `)` in range — the parameter list's close paren is itself MISSING (parse
+        // recovery, e.g. `function f({ return "s" }` at EOF). tsc anchors the hint at
+        // wrappingDeclaration.end: use the binding pattern's end (zero-width).
+        val fallback = ((param.name as? ObjectBindingPattern)?.end ?: param.end)
+            .coerceAtMost(source.length)
+        if (fallback > param.pos) {
+            val (line, character) = getLineAndCharacterOfPosition(source, fallback)
+            return Diagnostic(
+                message = "We can only write a type for '$displayName' by adding a type for the entire parameter here.",
+                category = DiagnosticCategory.Error,
+                code = 2843,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = fallback,
+                length = 0,
+            )
         }
         return null
     }
@@ -25944,8 +25969,11 @@ class Checker(
     ) {
         val start = node.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // A MISSING identifier (parse-recovery, empty text) displays as '(Missing)' (tsc
+        // declarationNameToString) — e.g. `function f({ return "s" }` binds two empty names.
+        val displayName = if (name.isEmpty()) "(Missing)" else name
         diagnostics.add(Diagnostic(
-            message = "Duplicate identifier '$name'.",
+            message = "Duplicate identifier '$displayName'.",
             category = DiagnosticCategory.Error,
             code = 2300,
             fileName = fileName,
