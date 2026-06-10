@@ -109505,10 +109505,38 @@ interface DataView {
                         ))
                     }
                 }
-                // Check type parameters (TS8004) — skip JSDoc-derived ones (B5.3)
+                // Check type parameters (TS8004) — skip JSDoc-derived ones (B5.3).
+                // Span = the whole `<...>` list contents (tsc createDiagnosticForNodeArray),
+                // so `class B<T: BaseA>` squiggles `T: BaseA`, not just `T`.
                 val firstClassTsTp = stmt.typeParameters?.firstOrNull { !it.fromJSDoc }
                 if (firstClassTsTp != null) {
-                    emitTs8xxx(firstClassTsTp.name, "Type parameter declarations can only be used in TypeScript files.", 8004, source, fileName)
+                    val tpStart = firstClassTsTp.name.pos
+                    val tpLen = angleListSpanLength(source, tpStart, firstClassTsTp.name.text.length)
+                    val (tpLine, tpChar) = getLineAndCharacterOfPosition(source, tpStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter declarations can only be used in TypeScript files.",
+                        category = DiagnosticCategory.Error, code = 8004,
+                        fileName = fileName, line = tpLine, character = tpChar,
+                        start = tpStart, length = tpLen,
+                    ))
+                }
+                // TS8011: type arguments on a heritage base (`class C extends Base<Arg>`)
+                // in a JS file. Span = the type-args list contents.
+                for (clause in stmt.heritageClauses.orEmpty()) {
+                    for (h in clause.types) {
+                        val args = h.typeArguments
+                        if (!args.isNullOrEmpty()) {
+                            val aStart = args.first().pos
+                            val aLen = angleListSpanLength(source, aStart, 1)
+                            val (aLine, aChar) = getLineAndCharacterOfPosition(source, aStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Type arguments can only be used in TypeScript files.",
+                                category = DiagnosticCategory.Error, code = 8011,
+                                fileName = fileName, line = aLine, character = aChar,
+                                start = aStart, length = aLen,
+                            ))
+                        }
+                    }
                 }
                 // Check implements clause (TS8005)
                 val hasImplements = stmt.heritageClauses?.any { it.token == SyntaxKind.ImplementsKeyword } == true
@@ -109855,6 +109883,25 @@ interface DataView {
                 return
             }
         }
+    }
+
+    /** Span length of a `<...>`-delimited list from the first element's pos to the
+     *  matching `>` (exclusive) — tsc's createDiagnosticForNodeArray span for
+     *  TS8004/TS8011. Falls back to [fallbackLen] when the brackets can't be matched. */
+    private fun angleListSpanLength(source: String, firstPos: Int, fallbackLen: Int): Int {
+        var lt = firstPos - 1
+        while (lt >= 0 && source[lt].isWhitespace()) lt--
+        if (lt < 0 || source[lt] != '<') return fallbackLen
+        var depth = 0
+        var j = lt
+        while (j < source.length) {
+            when (source[j]) {
+                '<' -> depth++
+                '>' -> { depth--; if (depth == 0) return (j - firstPos).coerceAtLeast(1) }
+            }
+            j++
+        }
+        return fallbackLen
     }
 
     private fun emitTs8xxx(nameNode: Node, message: String, code: Int, source: String, fileName: String) {

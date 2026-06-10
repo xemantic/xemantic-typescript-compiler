@@ -6138,7 +6138,17 @@ class Parser(
         }
         if (!isIdentifier()) return null
         val name = parseIdentifier()
-        val constraint = if (parseOptional(SyntaxKind.ExtendsKeyword)) parseType() else null
+        var constraint = if (parseOptional(SyntaxKind.ExtendsKeyword)) parseType() else null
+        // Flow-style constraint `<T: Base>` (typically JS sources): tsc reports
+        // TS1005 "',' expected." at the `:` and keeps consuming — the TS8004
+        // nodes-array span then covers `T: Base`. Absorb the type as the
+        // constraint so the list parse succeeds and downstream `T` refs resolve.
+        if (constraint == null && token == SyntaxKind.Colon) {
+            reportError("',' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(), overrideLength = 1)
+            nextToken()
+            constraint = parseType()
+        }
         val default = if (parseOptional(SyntaxKind.Equals)) parseType() else null
         return TypeParameter(
             name = name,
