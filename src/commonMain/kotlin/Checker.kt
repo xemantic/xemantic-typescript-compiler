@@ -920,6 +920,9 @@ class Checker(
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
+        // 7b''''' a3. B230: TS2345 for `<localFn>.apply(x, arguments)` under strict in
+        // JS files — IArguments vs the inferred parameter tuple. JS-like files only.
+        checkJsApplyArgumentsTuple()
         // 7b''''' bis. TS7012: a JSDoc `@overload` block lacking a `@returns`/`@return`
         // tag → the overload implicitly returns `any`. JS-like files under noImplicitAny.
         checkJSDocOverloadTags()
@@ -14759,6 +14762,123 @@ class Checker(
                     i = args.indexOf('@', j)
                 }
             }
+        }
+    }
+
+    /** B230: TS2345 for `<localFn>.apply(<recv>, arguments)` in a JS file under strict —
+     *  strictBindCallApply types apply's 2nd param as the target's parameter tuple, and
+     *  `IArguments` is not assignable to a tuple. An un-annotated JS function that itself
+     *  references `arguments` gets the inferred signature `[p1?: any, ..., ...any[]]`
+     *  (params optional + implicit any-rest), which is what the display renders. Gates:
+     *  receiver is a bare Identifier resolving to a top-level FunctionDeclaration or a
+     *  const/var function-expression with >=1 plain Identifier parameter (no rest, no
+     *  initializer), whose body references `arguments` (else the inferred tuple has no
+     *  rest and the display differs — FN-skip); 2nd arg is the bare `arguments`. Lib /
+     *  parameter / imported receivers never match (locals only). */
+    private fun checkJsApplyArgumentsTuple() {
+        if (!options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val fnParams = mutableMapOf<String, List<Parameter>>()
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is FunctionDeclaration -> {
+                        val body = stmt.body ?: continue
+                        if (stmt.name != null && bodyMentionsArguments(source, body)) {
+                            fnParams[stmt.name.text] = stmt.parameters
+                        }
+                    }
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        val init = d.initializer as? FunctionExpression ?: continue
+                        val body = init.body ?: continue
+                        if (bodyMentionsArguments(source, body)) fnParams[n] = init.parameters
+                    }
+                    else -> {}
+                }
+            }
+            if (fnParams.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) jsApplyArgsStmt(stmt, fnParams, source, fileName)
+        }
+    }
+
+    private fun bodyMentionsArguments(source: String, body: Block): Boolean {
+        val end = if (body.closeBracePos > body.pos) body.closeBracePos else body.end
+        if (body.pos < 0 || end > source.length || body.pos >= end) return false
+        return source.substring(body.pos, end).contains("arguments")
+    }
+
+    private fun jsApplyArgsStmt(stmt: Statement, fnParams: Map<String, List<Parameter>>, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> jsApplyArgsExpr(stmt.expression, fnParams, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { jsApplyArgsExpr(it, fnParams, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { jsApplyArgsExpr(it, fnParams, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { jsApplyArgsStmt(it, fnParams, source, fileName) }
+            is Block -> stmt.statements.forEach { jsApplyArgsStmt(it, fnParams, source, fileName) }
+            is IfStatement -> {
+                jsApplyArgsExpr(stmt.expression, fnParams, source, fileName)
+                jsApplyArgsStmt(stmt.thenStatement, fnParams, source, fileName)
+                stmt.elseStatement?.let { jsApplyArgsStmt(it, fnParams, source, fileName) }
+            }
+            is WhileStatement -> jsApplyArgsStmt(stmt.statement, fnParams, source, fileName)
+            is ForStatement -> jsApplyArgsStmt(stmt.statement, fnParams, source, fileName)
+            is ForInStatement -> jsApplyArgsStmt(stmt.statement, fnParams, source, fileName)
+            is ForOfStatement -> jsApplyArgsStmt(stmt.statement, fnParams, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun jsApplyArgsExpr(expr: Expression, fnParams: Map<String, List<Parameter>>, source: String, fileName: String) {
+        var e: Expression = expr
+        // Right-spine iteration for binary chains (deep a+b+c StackOverflow gotcha).
+        while (true) {
+            when (e) {
+                is BinaryExpression -> {
+                    jsApplyArgsExpr(e.left, fnParams, source, fileName)
+                    e = e.right
+                }
+                is ParenthesizedExpression -> e = e.expression
+                else -> break
+            }
+        }
+        when (e) {
+            is CallExpression -> {
+                val callee = e.expression
+                run {
+                    if (callee !is PropertyAccessExpression || callee.name.text != "apply") return@run
+                    val recv = callee.expression as? Identifier ?: return@run
+                    val params = fnParams[recv.text] ?: return@run
+                    if (params.isEmpty()) return@run
+                    if (params.any { it.dotDotDotToken || it.initializer != null || it.name !is Identifier }) return@run
+                    val arg = e.arguments.getOrNull(1) as? Identifier ?: return@run
+                    if (arg.text != "arguments" || e.arguments.size != 2) return@run
+                    val tuple = "[" + params.joinToString(", ") { "${(it.name as Identifier).text}?: any" } + ", ...any[]]"
+                    val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'IArguments' is not assignable to parameter of type '$tuple'.",
+                        category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                        line = line, character = character, start = arg.pos, length = "arguments".length,
+                    ))
+                }
+                jsApplyArgsExpr(e.expression, fnParams, source, fileName)
+                e.arguments.forEach { jsApplyArgsExpr(it, fnParams, source, fileName) }
+            }
+            is FunctionExpression -> e.body?.statements?.forEach { jsApplyArgsStmt(it, fnParams, source, fileName) }
+            is ArrowFunction -> {
+                val b = e.body
+                if (b is Block) b.statements.forEach { jsApplyArgsStmt(it, fnParams, source, fileName) }
+                else if (b is Expression) jsApplyArgsExpr(b, fnParams, source, fileName)
+            }
+            is PropertyAccessExpression -> jsApplyArgsExpr(e.expression, fnParams, source, fileName)
+            is PrefixUnaryExpression -> jsApplyArgsExpr(e.operand, fnParams, source, fileName)
+            is ConditionalExpression -> {
+                jsApplyArgsExpr(e.condition, fnParams, source, fileName)
+                jsApplyArgsExpr(e.whenTrue, fnParams, source, fileName)
+                jsApplyArgsExpr(e.whenFalse, fnParams, source, fileName)
+            }
+            else -> {}
         }
     }
 
