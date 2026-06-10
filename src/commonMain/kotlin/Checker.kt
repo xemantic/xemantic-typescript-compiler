@@ -21993,7 +21993,14 @@ class Checker(
         for (i in 1 until decls.size) {
             val decl = decls[i]
             if (isVarDeclExported(decl) != firstExported) continue
-            val declDisplay = enumRedeclDisplay(decl) ?: continue
+            // B248: `var x = E; var x: { ... }` — a TYPE-LITERAL annotation is never
+            // IDENTICAL to `typeof E` (identity is declaration-based, not structural),
+            // so the redeclaration is always TS2403. The display renders the literal
+            // with index signatures FIRST then named members (tsc's resolved-type
+            // ordering), deduping repeated index signatures.
+            val declDisplay = enumRedeclDisplay(decl)
+                ?: (decl.type as? TypeLiteral)?.let { renderTypeLiteralForEnumRedecl(it) }
+                ?: continue
             handled = true
             if (declDisplay == firstDisplay) continue
             val nameNode = decl.name as? Identifier ?: continue
@@ -22015,6 +22022,39 @@ class Checker(
             ))
         }
         return handled
+    }
+
+    /** B248: render a TypeLiteral annotation for the enum-redeclaration TS2403 display —
+     *  index signatures first (deduped), then property members in declaration order,
+     *  preserving `readonly`/`?`. Returns null for any member shape beyond plain
+     *  properties/index signatures (methods, accessors, computed names → bail, no emit). */
+    private fun renderTypeLiteralForEnumRedecl(lit: TypeLiteral): String? {
+        val indexParts = mutableListOf<String>()
+        val propParts = mutableListOf<String>()
+        for (m in lit.members) {
+            when (m) {
+                is IndexSignature -> {
+                    val p = m.parameters.singleOrNull() ?: return null
+                    val pName = (p.name as? Identifier)?.text ?: return null
+                    val keyText = p.type?.let { formatTypeForDisplay(it) } ?: return null
+                    val valText = m.type?.let { formatTypeForDisplay(it) } ?: return null
+                    val ro = if (ModifierFlag.Readonly in m.modifiers) "readonly " else ""
+                    val part = "$ro[$pName: $keyText]: $valText;"
+                    if (part !in indexParts) indexParts.add(part)
+                }
+                is PropertyDeclaration -> {
+                    val pName = (m.name as? Identifier)?.text ?: return null
+                    val typText = m.type?.let { formatTypeForDisplay(it) } ?: return null
+                    val ro = if (ModifierFlag.Readonly in m.modifiers) "readonly " else ""
+                    val opt = if (m.questionToken) "?" else ""
+                    propParts.add("$ro$pName$opt: $typText;")
+                }
+                else -> return null
+            }
+        }
+        val all = indexParts + propParts
+        if (all.isEmpty()) return "{}"
+        return "{ " + all.joinToString(" ") + " }"
     }
 
     /** Classify an un-annotated var declaration's enum initializer: a bare enum identifier
@@ -76206,40 +76246,17 @@ interface DataView {
         return "$cleanMantissa$expStr"
     }
 
-    private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
-        // 17.159: Handle TypeAliasDeclaration whose body is a TypeLiteral — surface
-        // index-sig diagnostics for `type X<T> = { [k: T]: ... }` patterns. The
-        // outer typeParameter names propagate so we can distinguish TS1337
-        // (generic type-parameter param type) from TS1268 (other invalid kinds).
-        if (stmt is TypeAliasDeclaration) {
-            val typeParamNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
-            val literal = stmt.type as? TypeLiteral ?: return
-            checkIndexSigsInMembers(literal.members, typeParamNames, source, fileName)
-            return
-        }
-        // B68.4: VariableStatement with TypeLiteral annotation — surface index-sig
-        // diagnostics for `var x: { [k: any]: T }` patterns. Each decl's annotation
-        // is checked independently.
-        if (stmt is VariableStatement) {
-            for (decl in stmt.declarationList.declarations) {
-                val literal = decl.type as? TypeLiteral ?: continue
-                checkIndexSigsInMembers(literal.members, emptySet(), source, fileName)
-            }
-            return
-        }
-        val members: List<ClassElement> = when (stmt) {
-            is ClassDeclaration -> stmt.members
-            is InterfaceDeclaration -> stmt.members.filterIsInstance<ClassElement>()
-            is ModuleDeclaration -> {
-                (stmt.body as? ModuleBlock)?.statements?.forEach { checkIndexSigInStatement(it, source, fileName) }
-                return
-            }
-            else -> return
-        }
-        checkIndexSigsInMembers(members, emptySet(), source, fileName)
-
-        // TS2374: Duplicate index signatures by key type (string/number/symbol).
-        // Emit once per each duplicate (including the first) — matches TypeScript.
+    /**
+     * TS2374: Duplicate index signatures by key type (string/number/symbol).
+     * Emit once per each duplicate (including the first) — matches TypeScript.
+     * [tightEndFallback]: when no trailing `;` is found, end the span at the first
+     * `}` / newline trimmed of trailing spaces (TYPE-LITERAL annotations, whose last
+     * sig has no `;` before the closing brace) instead of the overshooting `sig.end`
+     * (kept for the pre-existing class/interface call site).
+     */
+    private fun emitTs2374DuplicateIndexSigs(
+        members: List<ClassElement>, source: String, fileName: String, tightEndFallback: Boolean
+    ) {
         val indexSigs = members.filterIsInstance<IndexSignature>()
         if (indexSigs.size > 1) {
             val byKey = mutableMapOf<String, MutableList<IndexSignature>>()
@@ -76267,7 +76284,15 @@ interface DataView {
                     // Search from sig.pos (not sig.end) because node.end overshoots by one token
                     // and may skip past this signature's `;` into the next sig's text.
                     val semiIdx = source.indexOf(';', start)
-                    val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else sig.end
+                    val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1
+                    else if (tightEndFallback) {
+                        val stops = listOf(source.indexOf('}', start), source.indexOf('\n', start))
+                            .filter { it >= 0 }
+                        val stop = stops.minOrNull() ?: sig.end
+                        var e = stop
+                        while (e > start && source[e - 1].isWhitespace()) e--
+                        e
+                    } else sig.end
                     val length = (end - start).coerceAtLeast(1)
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
@@ -76283,6 +76308,43 @@ interface DataView {
                 }
             }
         }
+    }
+
+    private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
+        // 17.159: Handle TypeAliasDeclaration whose body is a TypeLiteral — surface
+        // index-sig diagnostics for `type X<T> = { [k: T]: ... }` patterns. The
+        // outer typeParameter names propagate so we can distinguish TS1337
+        // (generic type-parameter param type) from TS1268 (other invalid kinds).
+        if (stmt is TypeAliasDeclaration) {
+            val typeParamNames = stmt.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+            val literal = stmt.type as? TypeLiteral ?: return
+            checkIndexSigsInMembers(literal.members, typeParamNames, source, fileName)
+            emitTs2374DuplicateIndexSigs(literal.members, source, fileName, tightEndFallback = true)
+            return
+        }
+        // B68.4: VariableStatement with TypeLiteral annotation — surface index-sig
+        // diagnostics for `var x: { [k: any]: T }` patterns. Each decl's annotation
+        // is checked independently.
+        if (stmt is VariableStatement) {
+            for (decl in stmt.declarationList.declarations) {
+                val literal = decl.type as? TypeLiteral ?: continue
+                checkIndexSigsInMembers(literal.members, emptySet(), source, fileName)
+                emitTs2374DuplicateIndexSigs(literal.members, source, fileName, tightEndFallback = true)
+            }
+            return
+        }
+        val members: List<ClassElement> = when (stmt) {
+            is ClassDeclaration -> stmt.members
+            is InterfaceDeclaration -> stmt.members.filterIsInstance<ClassElement>()
+            is ModuleDeclaration -> {
+                (stmt.body as? ModuleBlock)?.statements?.forEach { checkIndexSigInStatement(it, source, fileName) }
+                return
+            }
+            else -> return
+        }
+        checkIndexSigsInMembers(members, emptySet(), source, fileName)
+
+        emitTs2374DuplicateIndexSigs(members, source, fileName, tightEndFallback = false)
 
         // 17.191: TS2411 for numeric-name properties incompatible with a
         // number index signature. `class C { 0: number; [x:number]: RegExp; }`
