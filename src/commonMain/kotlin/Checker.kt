@@ -19926,8 +19926,16 @@ class Checker(
                 return
             }
         }
+        // B240: `Proxy` is es2015+ but ABSENT from TypeScript's lib-suggestion feature
+        // map — an unresolved use under a lib excluding es2015 gets plain TS2304, not
+        // TS2583. Bypass the scope.has bail (Proxy is seeded via KNOWN_GLOBALS) so the
+        // name falls through to the standard unresolved tail.
+        val proxyLibStripped = name == "Proxy" &&
+            currentFileLocals?.get(name) == null && !scope.hasLocalShadow(name) &&
+            globals[name]?.declarations?.any { it !in builtinLibDecls } != true &&
+            !libProvidesGlobalAt(name, ScriptTarget.ES2015)
         // Skip well-known globals that don't need declaration
-        if (scope.has(name)) {
+        if (scope.has(name) && !proxyLibStripped) {
             // 16.4ct: TS2749 — name is in scope but is value-only (var/function/etc.)
             // and being used in a type position. E.g. `var X: X` self-reference.
             if (inTypePosition && isValueOnlyTypeRef(name, scope)) {
@@ -35110,6 +35118,41 @@ interface DataView {
                 }
             }
             is ArrayLiteralExpression -> expr.elements.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            // B240: object literals — walk member COMPUTED NAMES (`[Symbol.hasInstance](v) {}`
+            // is a value-use of `Symbol`), property initializers, and method/accessor bodies.
+            is ObjectLiteralExpression -> for (prop in expr.properties) {
+                when (prop) {
+                    is PropertyAssignment -> {
+                        (prop.name as? ComputedPropertyName)?.let {
+                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        }
+                        checkTypeAsValueInExpr(prop.initializer, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                    }
+                    is SpreadAssignment -> checkTypeAsValueInExpr(prop.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                    is MethodDeclaration -> {
+                        (prop.name as? ComputedPropertyName)?.let {
+                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        }
+                        val innerTypeOnly = typeOnlyNames.toMutableSet()
+                        val innerValues = valueNames.toMutableSet()
+                        for (p in prop.parameters) {
+                            addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                        }
+                        prop.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
+                    }
+                    is GetAccessor -> {
+                        (prop.name as? ComputedPropertyName)?.let {
+                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        }
+                    }
+                    is SetAccessor -> {
+                        (prop.name as? ComputedPropertyName)?.let {
+                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                        }
+                    }
+                    else -> {}
+                }
+            }
             // Value-preserving wrappers — recurse through the inner expression
             is AsExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is TypeAssertionExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
@@ -71158,7 +71201,19 @@ interface DataView {
             }
         }
         val calleeType = when (callee) {
-            is Identifier -> getTypeOfIdentifier(callee)
+            is Identifier -> {
+                // B240: `new Map()` etc. where the lib doesn't provide the global —
+                // TS2583 already fired at the callee; the instance is error-typed in
+                // TypeScript, so suppress downstream property checks (anyType), don't
+                // hand back the CONSTRUCTOR interface (`m.clear()` FP'd TS2339 on
+                // 'MapConstructor').
+                if (libUnavailableGlobalSuggestion(callee.text) != null &&
+                    currentFileLocals?.get(callee.text) == null &&
+                    globals[callee.text]?.declarations?.any { it !in builtinLibDecls } != true) {
+                    return anyType
+                }
+                getTypeOfIdentifier(callee)
+            }
             // `new M.C()` / `new A.B.C()`: resolve the namespace-qualified CLASS to its
             // declared (instance) type. Gated strictly on SymbolFlags.Class so only a
             // genuine qualified class resolves — qualified functions/namespaces/vars fall
@@ -83277,6 +83332,29 @@ interface DataView {
             val identSymbol = enclosingNsShadow ?: globals[identName]
 
             if (identSymbol != null) {
+                // B240: `fn.name` where fn is a plain no-param function declaration and
+                // the lib excludes es2015 — Function.name lives in lib.es2015.core, so
+                // the access is TS2339 with the function-type display ('() => void').
+                // Ultra-narrow gate (single corpus consumer): annotation-less no-param
+                // FunctionDeclaration with no value-returning body → '() => void'.
+                if (propName == "name" && !libFeatureAvailable(ScriptTarget.ES2015) &&
+                    identSymbol.flags.hasAny(SymbolFlags.Function) &&
+                    !identSymbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable) &&
+                    identSymbol.declarations.size == 1 &&
+                    identSymbol.exports?.containsKey(propName) != true) {
+                    val fnDecl = identSymbol.declarations.firstOrNull() as? FunctionDeclaration
+                    if (fnDecl != null && fnDecl.parameters.isEmpty() && fnDecl.type == null &&
+                        fnDecl.body?.statements?.none { it is ReturnStatement } == true) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property 'name' does not exist on type '() => void'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                }
                 // 17.194: TS2339 for `A.foo()` where A is a top-level class and
                 // `foo` is an instance method (not static). Display uses `typeof
                 // ClassName`. Conservative gate: identifier resolves to a Class
@@ -83845,6 +83923,31 @@ interface DataView {
             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
             diagnostics.add(Diagnostic(
                 message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '$libName' or later.",
+                category = DiagnosticCategory.Error, code = 2550,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return
+        }
+        // B240: STATIC-side fallback for a bare lib-constructor identifier receiver
+        // (`Array.from`): the legacy identifier resolution lands on the INSTANCE
+        // interface (see the Array.isArray numberIndexInfo note below), so the B182
+        // key "<Name>.<prop>" misses static members keyed "<Name>Constructor.<prop>".
+        // Gated to receivers that are PURELY the embedded-lib symbol.
+        run {
+            if (objectExpr !is Identifier) return@run
+            val recvSym = globals[objectExpr.text] ?: return@run
+            if (!recvSym.declarations.all { it in builtinLibDecls }) return@run
+            val ctorIface = "${objectExpr.text}Constructor"
+            // The LIB_MIN_TARGET key set is itself the allowlist of real constructor
+            // interfaces — no globals[ctorIface] presence check (the embedded lib
+            // deliberately has no ArrayConstructor / `declare var Array`).
+            val minTarget = LIB_MIN_TARGET["$ctorIface.$propName"] ?: return@run
+            if (libFeatureAvailable(minTarget)) return@run
+            val libName = minTarget.name.lowercase()
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$ctorIface'. Do you need to change your target library? Try changing the 'lib' compiler option to '$libName' or later.",
                 category = DiagnosticCategory.Error, code = 2550,
                 fileName = fileName, line = line, character = character,
                 start = diagStart, length = diagLength,
