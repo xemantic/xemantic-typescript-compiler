@@ -1367,6 +1367,8 @@ class Checker(
         checkEnumLiteralAssignments()
         // (B266) Namespace-qualified enum members vs union annotations (TS2322)
         checkNamespaceEnumUnionAssignments()
+        // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
+        checkIndexSigRecordAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -101251,6 +101253,154 @@ interface DataView {
             fileName = fileName, line = line, character = ch,
             start = nameNode.pos, length = nameNode.text.length,
         ))
+    }
+
+    /** B267: assignments between an index-signature TypeLiteral param `{[key: string]: T}`
+     *  and a `Record<K, V>` param inside a generic function. TS rules (indexSignatureAndMappedType):
+     *  - index-sig SOURCE → `Record<K, …>` TARGET with a GENERIC K: never assignable (the
+     *    mapped type's key set is unknowable) → 1-line TS2322. `Record<string, …>` is fine.
+     *  - `Record<K, U>` SOURCE → `{[key: string]: T}` TARGET: related iff U is related to T,
+     *    so two bare TPs whose constraint chain doesn't connect → TS2322 + "Type 'U' is not
+     *    assignable to type 'T'." + could-be-instantiated chain + related TS2208 at U's decl. */
+    private fun checkIndexSigRecordAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            // A user-declared `Record` shadows the built-in utility type — bail for the file.
+            if (result.locals.containsKey("Record")) continue
+            val source = result.sourceFile.text
+            try { idxRecScanStatements(result.sourceFile.statements, source, fileName, emptyMap()) } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun idxRecScanStatements(stmts: List<Statement>, source: String, fileName: String, outerTps: Map<String, TypeParameter>) {
+        for (stmt in stmts) when (stmt) {
+            is FunctionDeclaration -> {
+                val body = stmt.body ?: continue
+                val tps = outerTps + (stmt.typeParameters?.associateBy { it.name.text } ?: emptyMap())
+                if (tps.isNotEmpty()) {
+                    val shapes = mutableMapOf<String, IdxRecShape>()
+                    for (p in stmt.parameters) {
+                        val n = (p.name as? Identifier)?.text ?: continue
+                        idxRecClassify(p.type, tps)?.let { shapes[n] = it }
+                    }
+                    if (shapes.size >= 2) idxRecScanBody(body.statements, source, fileName, tps, shapes)
+                }
+                idxRecScanStatements(body.statements, source, fileName, tps)
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { idxRecScanStatements(it.statements, source, fileName, outerTps) }
+            is Block -> idxRecScanStatements(stmt.statements, source, fileName, outerTps)
+            else -> {}
+        }
+    }
+
+    private sealed class IdxRecShape {
+        class IdxSig(val keyName: String, val valueTp: String) : IdxRecShape()
+        /** [key] is "string" for `Record<string, V>`, else the generic TP name. */
+        class Rec(val key: String, val keyIsTp: Boolean, val valueTp: String) : IdxRecShape()
+    }
+
+    private fun idxRecClassify(t: TypeNode?, tps: Map<String, TypeParameter>): IdxRecShape? {
+        when (t) {
+            is TypeLiteral -> {
+                val sig = t.members.singleOrNull() as? IndexSignature ?: return null
+                val p = sig.parameters.singleOrNull() ?: return null
+                val keyName = (p.name as? Identifier)?.text ?: return null
+                val pk = p.type as? KeywordTypeNode ?: return null
+                if (pk.kind != SyntaxKind.StringKeyword) return null
+                val v = sig.type as? TypeReference ?: return null
+                if (!v.typeArguments.isNullOrEmpty()) return null
+                val vn = (v.typeName as? Identifier)?.text ?: return null
+                return if (vn in tps) IdxRecShape.IdxSig(keyName, vn) else null
+            }
+            is TypeReference -> {
+                if ((t.typeName as? Identifier)?.text != "Record") return null
+                val args = t.typeArguments ?: return null
+                if (args.size != 2) return null
+                val key = when (val k = args[0]) {
+                    is KeywordTypeNode -> if (k.kind == SyntaxKind.StringKeyword) "string" to false else return null
+                    is TypeReference -> {
+                        if (!k.typeArguments.isNullOrEmpty()) return null
+                        val kn = (k.typeName as? Identifier)?.text ?: return null
+                        if (kn in tps) kn to true else return null
+                    }
+                    else -> return null
+                }
+                val v = args[1] as? TypeReference ?: return null
+                if (!v.typeArguments.isNullOrEmpty()) return null
+                val vn = (v.typeName as? Identifier)?.text ?: return null
+                return if (vn in tps) IdxRecShape.Rec(key.first, key.second, vn) else null
+            }
+            else -> return null
+        }
+    }
+
+    private fun idxRecScanBody(stmts: List<Statement>, source: String, fileName: String, tps: Map<String, TypeParameter>, shapes: Map<String, IdxRecShape>) {
+        for (stmt in stmts) when (stmt) {
+            is ExpressionStatement -> {
+                val be = stmt.expression as? BinaryExpression ?: continue
+                if (be.operator != SyntaxKind.Equals) continue
+                val lhs = be.left as? Identifier ?: continue
+                val rhs = be.right as? Identifier ?: continue
+                val tgt = shapes[lhs.text] ?: continue
+                val src = shapes[rhs.text] ?: continue
+                idxRecCheckOne(tgt, src, lhs, source, fileName, tps)
+            }
+            is Block -> idxRecScanBody(stmt.statements, source, fileName, tps, shapes)
+            is IfStatement -> {
+                idxRecScanBody(listOf(stmt.thenStatement), source, fileName, tps, shapes)
+                stmt.elseStatement?.let { idxRecScanBody(listOf(it), source, fileName, tps, shapes) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun idxRecCheckOne(
+        tgt: IdxRecShape, src: IdxRecShape, lhs: Identifier,
+        source: String, fileName: String, tps: Map<String, TypeParameter>,
+    ) {
+        fun display(s: IdxRecShape): String = when (s) {
+            is IdxRecShape.IdxSig -> "{ [${s.keyName}: string]: ${s.valueTp}; }"
+            is IdxRecShape.Rec -> "Record<${s.key}, ${s.valueTp}>"
+        }
+        val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+        if (tgt is IdxRecShape.Rec && src is IdxRecShape.IdxSig) {
+            // index-sig source can never satisfy a generic-keyed mapped type
+            if (!tgt.keyIsTp) return
+            diagnostics.add(Diagnostic(
+                message = "Type '${display(src)}' is not assignable to type '${display(tgt)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = lhs.pos, length = lhs.text.length,
+            ))
+        } else if (tgt is IdxRecShape.IdxSig && src is IdxRecShape.Rec) {
+            if (!src.keyIsTp) return
+            val u = src.valueTp
+            val t = tgt.valueTp
+            if (u == t) return
+            if (tpConstraintChainReachesTp(u, t)) return
+            val related = mutableListOf<Diagnostic>()
+            tps[u]?.let { uDecl ->
+                val (rl, rc) = getLineAndCharacterOfPosition(source, uDecl.name.pos)
+                related.add(Diagnostic(
+                    message = "This type parameter might need an `extends $t` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = rl, character = rc,
+                    start = uDecl.name.pos, length = uDecl.name.text.length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '${display(src)}' is not assignable to type '${display(tgt)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = lhs.pos, length = lhs.text.length,
+                messageChain = listOf(
+                    "  Type '$u' is not assignable to type '$t'.",
+                    "    '$t' could be instantiated with an arbitrary type which could be unrelated to '$u'.",
+                ),
+                relatedInformation = related.toList(),
+            ))
+        }
     }
 
     /** TS isEnumTypeRelatedTo: same enum NAME + every source member present in target with an equal value. */
