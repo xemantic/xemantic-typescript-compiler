@@ -1217,6 +1217,7 @@ class Checker(
         // FunctionExpression in the AST.
         checkBindingPatternComputedIndexSig()
         checkDestructuredLateBoundNames()
+        checkLateBoundDestructuringKeys()
         // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
         if (options.erasableSyntaxOnly) {
             checkErasableSyntaxOnly()
@@ -48647,6 +48648,116 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             walkB94InStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B233: object-destructuring with a WIDENED computed key under noImplicitAny —
+     * `let named = "foo"; let {[named]: prop} = <recv>`: the key is `string` (let →
+     * widened), so the receiver needs a STRING index signature; a fresh object literal
+     * or a number-only-indexed receiver is TS2537 "Type '<recv>' has no matching index
+     * signature for type 'string'.". A SYMBOL-typed key is TS2538 ("unique symbol" for
+     * a const `Symbol()` init, "symbol" for let) regardless of the receiver's index
+     * signatures. Receivers: a non-empty fresh simple object literal, or an Identifier
+     * whose top-level declaration is annotated with an index-signature-ONLY TypeLiteral.
+     * Number keys and mixed-member receivers are deliberately skipped (FN, never FP).
+     */
+    private fun checkLateBoundDestructuringKeys() {
+        if (!options.noImplicitAny && !options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // keyKinds: name -> "string" | "symbol" | "unique symbol"
+            val keyKinds = mutableMapOf<String, String>()
+            // indexed receivers: name -> (hasStringIndex, display)
+            val indexedRecv = mutableMapOf<String, Pair<Boolean, String>>()
+            val seen = mutableSetOf<String>()
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                for (d in stmt.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    if (!seen.add(n.text)) { keyKinds.remove(n.text); indexedRecv.remove(n.text); continue }
+                    val ann = d.type
+                    if (ann == null) {
+                        val init = d.initializer ?: continue
+                        when {
+                            !isConst && init is StringLiteralNode -> keyKinds[n.text] = "string"
+                            init is CallExpression && (init.expression as? Identifier)?.text == "Symbol" &&
+                                currentFileLocals?.get("Symbol") == null ->
+                                keyKinds[n.text] = if (isConst) "unique symbol" else "symbol"
+                            else -> {}
+                        }
+                    } else if (ann is TypeLiteral && ann.members.isNotEmpty() &&
+                        ann.members.all { it is IndexSignature }) {
+                        val hasStringIdx = ann.members.any { m ->
+                            (m as IndexSignature).parameters.firstOrNull()?.type
+                                ?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
+                        }
+                        val disp = formatTypeForDisplay(ann) ?: continue
+                        indexedRecv[n.text] = hasStringIdx to disp
+                    }
+                }
+            }
+            if (keyKinds.isEmpty()) continue
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val pat = d.name as? ObjectBindingPattern ?: continue
+                    if (d.type != null) continue
+                    val elt = pat.elements.singleOrNull() ?: continue
+                    if (elt.dotDotDotToken || elt.initializer != null) continue
+                    val computed = elt.propertyName as? ComputedPropertyName ?: continue
+                    val keyIdent = computed.expression as? Identifier ?: continue
+                    val kind = keyKinds[keyIdent.text] ?: continue
+                    val init = d.initializer ?: continue
+                    // Resolve the receiver shape: fresh simple literal OR indexed-annotated var.
+                    var recvDisplay: String? = null
+                    var recvHasStringIndex = false
+                    if (init is ObjectLiteralExpression && init.properties.isNotEmpty()) {
+                        val entries = mutableListOf<Pair<String, Type>>()
+                        var analyzable = true
+                        for (p in init.properties) {
+                            when (p) {
+                                is PropertyAssignment -> {
+                                    val pn = (p.name as? Identifier)?.text
+                                    val pi = p.initializer
+                                    if (pn == null || pi == null) { analyzable = false; break }
+                                    val t = try { widenType(getTypeOfExpression(pi)) } catch (_: StackOverflowError) { anyType }
+                                    entries.add(pn to t)
+                                }
+                                is ShorthandPropertyAssignment -> {
+                                    val t = try { widenType(getTypeOfExpression(p.name)) } catch (_: StackOverflowError) { anyType }
+                                    entries.add(p.name.text to t)
+                                }
+                                else -> { analyzable = false; break }
+                            }
+                        }
+                        if (!analyzable) continue
+                        recvDisplay = "{ " + entries.joinToString(" ") { (pn, t) -> "$pn: ${typeToString(t)};" } + " }"
+                    } else if (init is Identifier) {
+                        val info = indexedRecv[init.text] ?: continue
+                        recvHasStringIndex = info.first
+                        recvDisplay = info.second
+                    }
+                    if (recvDisplay == null) continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, keyIdent.pos)
+                    when (kind) {
+                        "string" -> if (!recvHasStringIndex) diagnostics.add(Diagnostic(
+                            message = "Type '$recvDisplay' has no matching index signature for type 'string'.",
+                            category = DiagnosticCategory.Error, code = 2537, fileName = fileName,
+                            line = l, character = c, start = keyIdent.pos, length = keyIdent.text.length,
+                        ))
+                        else -> diagnostics.add(Diagnostic(
+                            message = "Type '$kind' cannot be used as an index type.",
+                            category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                            line = l, character = c, start = keyIdent.pos, length = keyIdent.text.length,
+                        ))
+                    }
+                }
+            }
         }
     }
 
