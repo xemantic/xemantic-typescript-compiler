@@ -1506,6 +1506,8 @@ class Checker(
         }
         // 71c. B291: bigint property names (TS1539/TS2464/TS2538/mapped-key TS2322)
         checkBigintPropertyNames()
+        // 71d. B297: string-literal args vs template-literal-type params (TS2345)
+        checkTemplateLiteralParamArgs()
         // 72. Check call/new expression type argument count (TS2558)
         checkCallTypeArgCount()
         // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
@@ -63502,6 +63504,131 @@ interface DataView {
         return true
     }
 
+    /**
+     * B296: function/class-expression initializer vs a UNION of interface refs —
+     * tsc relates against the KIND-matching constituent and elaborates through it
+     * (errorsWithInvokablesInUnions01). Union display = constituents ordered by
+     * their interface DECLARATION position (tsc type-id order). Bails (false) on
+     * any unmodeled shape.
+     */
+    private fun tryEmitInvokableUnionMismatch(
+        init: Expression, ann: UnionType, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        // Resolve each union member to (renderText, ifaceDecl, typeArgs).
+        class Member(val render: String, val decl: InterfaceDeclaration, val args: List<TypeNode>?)
+        fun renderTypeNode(t: TypeNode): String? = when {
+            t is KeywordTypeNode -> when (t.kind) {
+                SyntaxKind.NumberKeyword -> "number"
+                SyntaxKind.StringKeyword -> "string"
+                SyntaxKind.BooleanKeyword -> "boolean"
+                SyntaxKind.AnyKeyword -> "any"
+                else -> null
+            }
+            t is TypeReference && t.typeArguments == null -> (t.typeName as? Identifier)?.text
+            else -> null
+        }
+        val members = mutableListOf<Member>()
+        for (m in ann.types) {
+            val tr = m as? TypeReference ?: return false
+            val nm = (tr.typeName as? Identifier)?.text ?: return false
+            val sym = currentFileLocals?.get(nm) ?: globals[nm] ?: return false
+            val ifaceDecl = sym.declarations.singleOrNull() as? InterfaceDeclaration ?: return false
+            if (ifaceDecl in builtinLibDecls) return false
+            val argRenders = tr.typeArguments?.map { renderTypeNode(it) ?: return false }
+            val render = nm + (argRenders?.joinToString(", ", "<", ">") ?: "")
+            members.add(Member(render, ifaceDecl, tr.typeArguments))
+        }
+        if (members.isEmpty()) return false
+        val ordered = members.sortedBy { it.decl.pos }
+        val unionDisplay = ordered.joinToString(" | ") { it.render }
+
+        fun callSigOf(d: InterfaceDeclaration): MethodDeclaration? =
+            d.members.filterIsInstance<MethodDeclaration>().singleOrNull { (it.name as? Identifier)?.text == "" }
+        fun ctorSigOf(d: InterfaceDeclaration): MethodDeclaration? =
+            d.members.filterIsInstance<MethodDeclaration>().singleOrNull { (it.name as? Identifier)?.text == "new" }
+
+        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+        if (init is ArrowFunction || init is FunctionExpression) {
+            val target = ordered.firstOrNull { callSigOf(it.decl) != null } ?: return false
+            val sig = callSigOf(target.decl)!!
+            // Instantiate the sig's first param annotation through the reference's args.
+            val tps = target.decl.typeParameters?.map { it.name.text } ?: emptyList()
+            val sigParam = sig.parameters.firstOrNull() ?: return false
+            val sigParamName = (sigParam.name as? Identifier)?.text ?: return false
+            val sigParamType = sigParam.type ?: return false
+            val resolvedParamRender = when {
+                sigParamType is TypeReference && (sigParamType.typeName as? Identifier)?.text in tps -> {
+                    val idx = tps.indexOf((sigParamType.typeName as Identifier).text)
+                    target.args?.getOrNull(idx)?.let { renderTypeNode(it) } ?: return false
+                }
+                else -> renderTypeNode(sigParamType) ?: return false
+            }
+            val srcParams = when (init) {
+                is ArrowFunction -> init.parameters
+                is FunctionExpression -> init.parameters
+                else -> return false
+            }
+            val srcParam = srcParams.firstOrNull() ?: return false
+            val srcParamName = (srcParam.name as? Identifier)?.text ?: return false
+            val srcParamRender = srcParam.type?.let { renderTypeNode(it) } ?: return false
+            // Definite primitive mismatch only (FN-safe).
+            if (srcParamRender == resolvedParamRender) return false
+            if (srcParamRender !in setOf("string", "number", "boolean") ||
+                resolvedParamRender !in setOf("string", "number", "boolean")) return false
+            val srcDisplay = typeToString(try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return false })
+            if (!srcDisplay.startsWith("(")) return false
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcDisplay' is not assignable to type '$unionDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = name.pos, length = name.text.length,
+                messageChain = listOf(
+                    "  Type '$srcDisplay' is not assignable to type '${target.render}'.",
+                    "    Types of parameters '$srcParamName' and '$sigParamName' are incompatible.",
+                    "      Type '$resolvedParamRender' is not assignable to type '$srcParamRender'.",
+                ),
+            ))
+            return true
+        }
+        if (init is ClassExpression) {
+            val target = ordered.firstOrNull { ctorSigOf(it.decl) != null } ?: return false
+            val sig = ctorSigOf(target.decl)!!
+            val retLit = sig.type as? TypeLiteral ?: return false
+            val required = retLit.members.filterIsInstance<PropertyDeclaration>()
+                .filter { !it.questionToken }
+            val classProps = init.members.mapNotNull {
+                when (it) {
+                    is PropertyDeclaration -> (it.name as? Identifier)?.text
+                    is MethodDeclaration -> (it.name as? Identifier)?.text
+                    else -> null
+                }
+            }.toSet()
+            val missing = required.firstOrNull { (it.name as? Identifier)?.text !in classProps } ?: return false
+            val missingName = (missing.name as? Identifier)?.text ?: return false
+            val retDisplay = typeToString(try { getTypeFromTypeNode(retLit) } catch (_: StackOverflowError) { return false })
+            if (!retDisplay.startsWith("{")) return false
+            val (rl, rc) = getLineAndCharacterOfPosition(source, missing.name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type 'typeof ${name.text}' is not assignable to type '$unionDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = name.pos, length = name.text.length,
+                messageChain = listOf(
+                    "  Type 'typeof ${name.text}' is not assignable to type '${target.render}'.",
+                    "    Property '$missingName' is missing in type '${name.text}' but required in type '$retDisplay'.",
+                ),
+                relatedInformation = listOf(Diagnostic(
+                    message = "'$missingName' is declared here.",
+                    category = DiagnosticCategory.Message, code = 2728,
+                    fileName = fileName, line = rl, character = rc,
+                    start = missing.name.pos, length = missingName.length,
+                )),
+            ))
+            return true
+        }
+        return false
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -63565,6 +63692,17 @@ interface DataView {
             val ann = decl.type
             if (init is ObjectLiteralExpression && ann != null &&
                 tryEmitUnionDiscriminantExcess(init, ann, source, fileName)) return
+        }
+        // B296: a FUNCTION or CLASS-EXPRESSION initializer against a UNION of
+        // interface refs picks the KIND-matching constituent for elaboration (tsc
+        // getBestMatchingType): callable source → the call-signature constituent
+        // (fn-mismatch chain), constructable source → the construct-signature
+        // constituent (missing-prop chain vs the ctor's return shape).
+        run {
+            val init = decl.initializer
+            val ann = decl.type as? UnionType ?: return@run
+            if (init !is ArrowFunction && init !is FunctionExpression && init !is ClassExpression) return@run
+            if (tryEmitInvokableUnionMismatch(init, ann, name, source, fileName)) return
         }
 
         // B101: narrow FP-safe TS2322 for `var x: <primitive> = this.voidMethod()`.
@@ -106646,6 +106784,104 @@ interface DataView {
                 }
             }
             w.stmts(sf.statements)
+        }
+    }
+
+    /**
+     * B297: a STRING-LITERAL argument against a TEMPLATE-LITERAL-TYPE parameter
+     * (or an intersection of them) — TemplateLiteralType parsing is SHALLOW
+     * (templateSpans always empty; raw source in head.rawText — see the scanner
+     * gotcha), so matching is a raw-text regex: literal segments fixed, `${string}`
+     * placeholders → `.*`; a placeholder naming a BRANDED string alias
+     * (`string & { _brand }`) can never be produced by a plain literal → definite
+     * mismatch. Any other placeholder bails. Display = backticked raw text(s)
+     * joined ' & ' (tsc unfolds template-literal aliases in displays).
+     */
+    private fun checkTemplateLiteralParamArgs() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            fun aliasBodyOf(t: TypeNode): TypeNode? {
+                val tr = t as? TypeReference ?: return null
+                if (tr.typeArguments != null) return null
+                val nm = (tr.typeName as? Identifier)?.text ?: return null
+                val sym = result.locals[nm] ?: globals[nm] ?: return null
+                return (sym.declarations.singleOrNull() as? TypeAliasDeclaration)?.type
+            }
+            fun resolveAliases(t0: TypeNode): TypeNode {
+                var t = t0
+                repeat(3) { aliasBodyOf(t)?.let { b -> t = b } }
+                return t
+            }
+            // true = literal matches, false = definite mismatch, null = unknown
+            fun templateVerdict(raw: String, value: String): Boolean? {
+                val rx = StringBuilder("^")
+                var i = 0
+                while (i < raw.length) {
+                    val d = raw.indexOf("\${", i)
+                    if (d < 0) { rx.append(Regex.escape(raw.substring(i))); i = raw.length; break }
+                    rx.append(Regex.escape(raw.substring(i, d)))
+                    val e = raw.indexOf('}', d)
+                    if (e < 0) return null
+                    val ph = raw.substring(d + 2, e).trim()
+                    if (ph == "string") rx.append(".*") else {
+                        val sym = result.locals[ph] ?: globals[ph]
+                        val body = (sym?.declarations?.singleOrNull() as? TypeAliasDeclaration)?.type
+                        val branded = body is IntersectionType &&
+                            body.types.any { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } &&
+                            body.types.any { it is TypeLiteral }
+                        return if (branded) false else null
+                    }
+                    i = e + 1
+                }
+                return Regex(rx.append("$").toString()).matches(value)
+            }
+            for (stmt in sf.statements) {
+                val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = call.expression as? Identifier ?: continue
+                val sym = result.locals[callee.text] ?: globals[callee.text] ?: continue
+                val fd = sym.declarations.singleOrNull() as? FunctionDeclaration ?: continue
+                if (fd in builtinLibDecls) continue
+                args@ for ((i, arg) in call.arguments.withIndex()) {
+                    if (arg !is StringLiteralNode) continue
+                    val param = fd.parameters.getOrNull(i) ?: continue
+                    if (param.dotDotDotToken) continue
+                    val ann = resolveAliases(param.type ?: continue)
+                    fun innerRaw(t: TemplateLiteralType): String? =
+                        t.head.rawText?.removeSurrounding("`")
+                    val rawTemplates: List<String> = when (ann) {
+                        is TemplateLiteralType -> listOf(innerRaw(ann) ?: continue@args)
+                        is IntersectionType -> ann.types.map { t0 ->
+                            (resolveAliases(t0) as? TemplateLiteralType)?.let { innerRaw(it) } ?: continue@args
+                        }
+                        else -> continue@args
+                    }
+                    var firstFail: String? = null
+                    for (raw in rawTemplates) {
+                        when (templateVerdict(raw, arg.text)) {
+                            false -> if (firstFail == null) firstFail = raw
+                            null -> continue@args
+                            true -> {}
+                        }
+                    }
+                    if (firstFail == null) continue
+                    val display = rawTemplates.joinToString(" & ") { "`$it`" }
+                    // tsc adds a per-constituent sub-line for INTERSECTION params only.
+                    val chain = if (rawTemplates.size > 1)
+                        listOf("  Type '\"${arg.text}\"' is not assignable to type '`$firstFail`'.")
+                    else emptyList()
+                    val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '\"${arg.text}\"' is not assignable to parameter of type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2345,
+                        fileName = fileName, line = line, character = character,
+                        start = arg.pos, length = (arg.rawText?.length ?: arg.text.length) + 2,
+                        messageChain = chain,
+                    ))
+                }
+            }
         }
     }
 
