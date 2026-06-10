@@ -63305,6 +63305,192 @@ interface DataView {
         }
     }
 
+    /**
+     * B294: discriminant-filtered union excess-property check (tsc hasExcessProperties
+     * via discriminateTypeByDiscriminableItems). For `const x: U = { ...literal }`
+     * where U is a union annotation (inline or a bare alias ref):
+     *  - constituents are enumerated AST-side (TypeReference→interface/alias body,
+     *    TypeLiteral, IntersectionType, parens); primitive/literal constituents are
+     *    skipped (an object literal never matches them);
+     *  - a constituent is DROPPED when one of the literal's primitive-literal-valued
+     *    props definitively mismatches the constituent's declared prop annotation
+     *    (boolean literals compare by AST text — there is no boolean-literal Type);
+     *  - the FIRST source prop (source order) unknown to EVERY surviving constituent
+     *    is TS2353 at the prop name; display = surviving constituents joined ' | '
+     *    (alias/interface refs by name, inline intersections paren-wrapped,
+     *    TypeLiterals structurally).
+     * Unknown shapes bail (return false) — the pre-existing paths keep their domain.
+     */
+    private fun tryEmitUnionDiscriminantExcess(
+        init: ObjectLiteralExpression, ann: TypeNode, source: String, fileName: String,
+    ): Boolean {
+        fun aliasBody(t: TypeNode): TypeNode? {
+            val tr = t as? TypeReference ?: return null
+            if (tr.typeArguments != null) return null
+            val nm = (tr.typeName as? Identifier)?.text ?: return null
+            val sym = currentFileLocals?.get(nm) ?: globals[nm] ?: return null
+            return (sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)?.type
+        }
+        val unionNode = (ann as? UnionType) ?: (aliasBody(ann) as? UnionType) ?: return false
+
+        // Source props: simple assignments with identifier/string names only.
+        class SrcProp(val name: String, val nameNode: Node, val valueExpr: Expression)
+        val srcProps = mutableListOf<SrcProp>()
+        for (p in init.properties) {
+            val pa = p as? PropertyAssignment ?: return false
+            val n = (pa.name as? Identifier)?.text ?: (pa.name as? StringLiteralNode)?.text ?: return false
+            srcProps.add(SrcProp(n, pa.name, pa.initializer))
+        }
+        if (srcProps.isEmpty()) return false
+
+        // Collect a constituent's member names + per-name annotation nodes, walking
+        // alias bodies, type literals, intersections, and interface heritage.
+        fun collectProps(node: TypeNode, names: MutableSet<String>, anns: MutableMap<String, MutableList<TypeNode?>>, depth: Int): Boolean {
+            if (depth > 6) return false
+            var t = node
+            while (t is ParenthesizedType) t = t.type
+            when (t) {
+                is TypeLiteral -> for (m in t.members) {
+                    val nm = when (m) {
+                        is PropertyDeclaration -> (m.name as? Identifier)?.text ?: (m.name as? StringLiteralNode)?.text
+                        is MethodDeclaration -> (m.name as? Identifier)?.text
+                        else -> null
+                    } ?: return false
+                    if (m is IndexSignature) return false
+                    names.add(nm)
+                    anns.getOrPut(nm) { mutableListOf() }.add((m as? PropertyDeclaration)?.type)
+                }
+                is IntersectionType -> for (m in t.types) if (!collectProps(m, names, anns, depth + 1)) return false
+                is TypeReference -> {
+                    val nm = (t.typeName as? Identifier)?.text ?: return false
+                    val sym = currentFileLocals?.get(nm) ?: globals[nm] ?: return false
+                    val decl0 = sym.declarations.firstOrNull { it is TypeAliasDeclaration || it is InterfaceDeclaration }
+                    when (decl0) {
+                        is TypeAliasDeclaration -> if (!collectProps(decl0.type, names, anns, depth + 1)) return false
+                        is InterfaceDeclaration -> {
+                            for (m in decl0.members) {
+                                if (m is IndexSignature) return false
+                                val mn = when (m) {
+                                    is PropertyDeclaration -> (m.name as? Identifier)?.text ?: (m.name as? StringLiteralNode)?.text
+                                    is MethodDeclaration -> (m.name as? Identifier)?.text
+                                    else -> null
+                                } ?: return false
+                                names.add(mn)
+                                anns.getOrPut(mn) { mutableListOf() }.add((m as? PropertyDeclaration)?.type)
+                            }
+                            for (h in decl0.heritageClauses ?: emptyList()) {
+                                if (h.token != SyntaxKind.ExtendsKeyword) continue
+                                for (ht in h.types) {
+                                    val bn = (ht.expression as? Identifier)?.text ?: return false
+                                    val bref = TypeReference(typeName = Identifier(text = bn))
+                                    if (!collectProps(bref, names, anns, depth + 1)) return false
+                                }
+                            }
+                        }
+                        else -> return false
+                    }
+                }
+                else -> return false
+            }
+            return true
+        }
+
+        // Does the literal value DEFINITELY mismatch the declared annotation?
+        // true = match, false = definite mismatch, null = unknown (keep).
+        fun litMatchesNode(value: Expression, annNode: TypeNode?): Boolean? {
+            var a = annNode ?: return null
+            while (a is ParenthesizedType) a = a.type
+            return when (a) {
+                is LiteralType -> {
+                    val lit = a.literal
+                    when {
+                        value is StringLiteralNode && lit is StringLiteralNode -> value.text == lit.text
+                        value is NumericLiteralNode && lit is NumericLiteralNode ->
+                            value.text.toDoubleOrNull() == lit.text.toDoubleOrNull()
+                        value is Identifier && (value.text == "true" || value.text == "false") &&
+                            lit is Identifier -> value.text == lit.text
+                        else -> null
+                    }
+                }
+                is KeywordTypeNode -> when (a.kind) {
+                    SyntaxKind.StringKeyword -> if (value is StringLiteralNode) true else null
+                    SyntaxKind.NumberKeyword -> if (value is NumericLiteralNode) true else null
+                    SyntaxKind.BooleanKeyword ->
+                        if (value is Identifier && (value.text == "true" || value.text == "false")) true else null
+                    SyntaxKind.AnyKeyword, SyntaxKind.UnknownKeyword -> true
+                    else -> null
+                }
+                is UnionType -> {
+                    var sawUnknown = false
+                    for (mm in a.types) when (litMatchesNode(value, mm)) {
+                        true -> return true
+                        null -> sawUnknown = true
+                        false -> {}
+                    }
+                    if (sawUnknown) null else false
+                }
+                else -> null
+            }
+        }
+
+        class Constituent(val display: String, val names: Set<String>)
+        val kept = mutableListOf<Constituent>()
+        for (m0 in unionNode.types) {
+            var m = m0
+            while (m is ParenthesizedType) m = m.type
+            // primitive / literal constituents never match an object literal — skip.
+            if (m is KeywordTypeNode || m is LiteralType) continue
+            if (m !is TypeReference && m !is TypeLiteral && m !is IntersectionType) {
+                return false
+            }
+            val names = mutableSetOf<String>()
+            val anns = mutableMapOf<String, MutableList<TypeNode?>>()
+            if (!collectProps(m, names, anns, 0)) {
+                return false
+            }
+            var dropped = false
+            outer@ for (sp in srcProps) {
+                for (annNode in anns[sp.name] ?: continue@outer) {
+                    if (litMatchesNode(sp.valueExpr, annNode) == false) { dropped = true; break@outer }
+                }
+            }
+            if (dropped) continue
+            val display = when (m) {
+                is TypeReference -> (m.typeName as? Identifier)?.text ?: return false
+                is IntersectionType -> {
+                    val parts = m.types.map { ((it as? TypeReference)?.typeName as? Identifier)?.text ?: return false }
+                    "(" + parts.joinToString(" & ") + ")"
+                }
+                else -> { // TypeLiteral — structural display via the resolved type
+                    val rt = try { getTypeFromTypeNode(m) } catch (_: StackOverflowError) { return false }
+                    if (rt === errorType || rt === anyType) return false
+                    typeToString(rt)
+                }
+            }
+            kept.add(Constituent(display, names))
+        }
+        if (kept.isEmpty()) return false
+        val known = mutableSetOf<String>()
+        kept.forEach { known.addAll(it.names) }
+        val excess = srcProps.firstOrNull { it.name !in known && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
+            ?: return false
+        val display = kept.joinToString(" | ") { it.display }
+        val start = excess.nameNode.pos
+        val length = when (val nn = excess.nameNode) {
+            is Identifier -> nn.text.length
+            is StringLiteralNode -> (nn.rawText?.length ?: nn.text.length) + 2
+            else -> 1
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Object literal may only specify known properties, and '${excess.name}' does not exist in type '$display'.",
+            category = DiagnosticCategory.Error, code = 2353,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+        return true
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -63358,6 +63544,16 @@ interface DataView {
                     if (emitted) return
                 }
             }
+        }
+        // B294: discriminant-filtered UNION excess-property check (tsc
+        // hasExcessProperties + discriminateTypeByDiscriminableItems) — must run
+        // BEFORE the generic union-target TS2322 and the flat checkExcessProperties
+        // call (whose union prop-set model wrongly intersects constituents).
+        run {
+            val init = decl.initializer
+            val ann = decl.type
+            if (init is ObjectLiteralExpression && ann != null &&
+                tryEmitUnionDiscriminantExcess(init, ann, source, fileName)) return
         }
 
         // B101: narrow FP-safe TS2322 for `var x: <primitive> = this.voidMethod()`.
