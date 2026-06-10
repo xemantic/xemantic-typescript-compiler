@@ -1336,6 +1336,8 @@ class Checker(
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
         checkEmptyDestructuringNullishSource()
+        // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
+        checkImportAttributeValues()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99073,6 +99075,145 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B258: TS2858 "Import attribute values must be string literal expressions." +
+     * the per-clause TS2322 vs 'ImportAttributes' (importAssertionNonstring). The
+     * parser stores the `with {...}` clause as RAW TEXT (+ pos), so this is a
+     * raw-text mini-scanner: entries split at top-level commas, each `key: value`;
+     * any value that is not a complete string literal gets TS2858 at the value span.
+     * A SINGLE-entry clause whose value classifies to a definitely-non-string type
+     * (plain number / regex / array of same-primitive literals / object of
+     * primitive-literal props) additionally gets TS2322 at the whole clause span
+     * with the "Property 'k' is incompatible with index signature." chain
+     * (template literals and `0..toString()`-style calls are string-typed — TS2858
+     * only). Unparseable shapes bail (FN, never FP).
+     */
+    private fun checkImportAttributeValues() {
+        // (display-unwidened, display-widened) or null when not definitely-non-string
+        fun classifyNonString(v: String): Pair<String, String>? {
+            if (v.matches(Regex("^\\d+(\\.\\d+)?$"))) return v to "number"
+            if (v.startsWith("/") && v.length > 1) return "RegExp" to "RegExp"
+            if (v.startsWith("[") && v.endsWith("]")) {
+                val inner = v.substring(1, v.length - 1).trim()
+                if (inner.isEmpty()) return null
+                val elems = inner.split(",").map { it.trim() }
+                val allString = elems.all { it.length >= 2 && (it[0] == '"' || it[0] == '\'') }
+                val allNumber = elems.all { it.matches(Regex("^\\d+(\\.\\d+)?$")) }
+                return when {
+                    allString -> "string[]" to "string[]"
+                    allNumber -> "number[]" to "number[]"
+                    else -> null
+                }
+            }
+            if (v.startsWith("{") && v.endsWith("}")) {
+                val inner = v.substring(1, v.length - 1).trim()
+                if (inner.isEmpty()) return null
+                val props = mutableListOf<String>()
+                for (entry in inner.split(",")) {
+                    val ci = entry.indexOf(':')
+                    if (ci < 0) return null
+                    val k = entry.substring(0, ci).trim()
+                    val pv = entry.substring(ci + 1).trim()
+                    val pt = when {
+                        pv.matches(Regex("^\\d+(\\.\\d+)?$")) -> "number"
+                        pv.length >= 2 && (pv[0] == '"' || pv[0] == '\'') -> "string"
+                        else -> return null
+                    }
+                    if (!k.matches(Regex("^[A-Za-z_$][A-Za-z0-9_$]*$"))) return null
+                    props.add("$k: $pt;")
+                }
+                val display = "{ ${props.joinToString(" ")} }"
+                return display to display
+            }
+            return null
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val (clause, clausePos) = when (stmt) {
+                    is ImportDeclaration -> (stmt.assertClause ?: continue) to stmt.assertClausePos
+                    else -> continue
+                }
+                if (clausePos < 0 || !clause.startsWith("with")) continue
+                val braceRel = clause.indexOf('{')
+                if (braceRel < 0 || !clause.endsWith("}")) continue
+                val body = clause.substring(braceRel + 1, clause.length - 1)
+                // split entries at top-level commas (track quotes + nesting)
+                val entryOffsets = mutableListOf<Pair<Int, String>>()  // (rel offset of entry start, text)
+                run {
+                    var depth = 0
+                    var i = 0
+                    var start = 0
+                    var quote: Char? = null
+                    while (i < body.length) {
+                        val c = body[i]
+                        when {
+                            quote != null -> if (c == quote && body.getOrNull(i - 1) != '\\') quote = null
+                            c == '"' || c == '\'' || c == '`' -> quote = c
+                            c == '{' || c == '[' || c == '(' -> depth++
+                            c == '}' || c == ']' || c == ')' -> depth--
+                            c == ',' && depth == 0 -> {
+                                entryOffsets.add(start to body.substring(start, i))
+                                start = i + 1
+                            }
+                        }
+                        i++
+                    }
+                    if (quote != null) return@run
+                    entryOffsets.add(start to body.substring(start))
+                }
+                var singleEntryNonString: Triple<String, String, String>? = null  // key, raw display, widened
+                var parsedOk = true
+                val valueEmits = mutableListOf<Pair<Int, Int>>()  // (abs pos, len) for TS2858
+                for ((entryStart, entryText) in entryOffsets) {
+                    val ci = entryText.indexOf(':')
+                    if (ci < 0) { parsedOk = false; break }
+                    val key = entryText.substring(0, ci).trim()
+                    if (!key.matches(Regex("^[A-Za-z_$][A-Za-z0-9_$]*$"))) { parsedOk = false; break }
+                    val valueRaw = entryText.substring(ci + 1)
+                    val value = valueRaw.trim()
+                    if (value.isEmpty()) { parsedOk = false; break }
+                    val isStringLit = value.length >= 2 &&
+                        (value[0] == '"' || value[0] == '\'') && value.last() == value[0]
+                    if (isStringLit) continue
+                    val leadingWs = valueRaw.length - valueRaw.trimStart().length
+                    val absValuePos = clausePos + braceRel + 1 + entryStart + ci + 1 + leadingWs
+                    valueEmits.add(absValuePos to value.length)
+                    if (entryOffsets.size == 1) {
+                        classifyNonString(value)?.let { (raw, widened) ->
+                            singleEntryNonString = Triple(key, raw, widened)
+                        }
+                    }
+                }
+                if (!parsedOk) continue
+                singleEntryNonString?.let { (key, raw, widened) ->
+                    val (line, ch) = getLineAndCharacterOfPosition(source, clausePos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '{ $key: $raw; }' is not assignable to type 'ImportAttributes'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = clausePos, length = clause.length,
+                        messageChain = listOf(
+                            "  Property '$key' is incompatible with index signature.",
+                            "    Type '$widened' is not assignable to type 'string'.",
+                        ),
+                    ))
+                }
+                for ((pos, len) in valueEmits) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Import attribute values must be string literal expressions.",
+                        category = DiagnosticCategory.Error, code = 2858,
+                        fileName = fileName, line = line, character = ch,
+                        start = pos, length = len,
+                    ))
                 }
             }
         }
