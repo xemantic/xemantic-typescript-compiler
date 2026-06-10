@@ -49,6 +49,7 @@ XML_GLOB = os.path.join(
     "TEST-com.xemantic.typescript.compiler.TypeScriptCompilerTests_*.xml",
 )
 PLAN = os.path.join(REPO_ROOT, "PLAN-PHASE-4.md")
+PLAN_HISTORY = os.path.join(REPO_ROOT, "PLAN-PHASE-4-HISTORY.md")
 REF_DIR = os.path.join(REPO_ROOT, "typescript-repo", "tests", "baselines", "reference")
 
 ERR_LINE_RE = re.compile(r"(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$")
@@ -70,18 +71,16 @@ def _base_key(name: str) -> str:
     return m.group(1) if m else name
 
 
-def load_skipped_tests() -> set[str]:
-    """Extract test-basename tokens from the 'Explored-but-skipped' section
-    of PLAN-PHASE-4.md. Matches occurrences like ``testname_ts`` or
-    ``testname_ts__suffix__`` inside backticks, and stores the base
-    ``testname_ts`` form so parameterized variants match automatically.
-    Tokens inside ~~strikethrough~~ markers are excluded (resolved entries)."""
-    if not os.path.isfile(PLAN):
+def _skip_tokens_from(path: str) -> set[str]:
+    """Extract skip tokens from one file's 'Explored-but-skipped' section.
+    The ``\\Z`` alternative terminates the region at EOF when the section is
+    the last one in the file (the archived location in PLAN-PHASE-4-HISTORY.md)."""
+    if not os.path.isfile(path):
         return set()
-    with open(PLAN) as f:
+    with open(path) as f:
         text = f.read()
     m = re.search(
-        r"### Explored-but-skipped tests.*?(?=^### )",
+        r"### Explored-but-skipped tests.*?(?=^### |\Z)",
         text, re.DOTALL | re.MULTILINE,
     )
     if not m:
@@ -95,6 +94,18 @@ def load_skipped_tests() -> set[str]:
         if base:
             out.add(base.group(1))
     return out
+
+
+def load_skipped_tests() -> set[str]:
+    """Extract test-basename tokens from the 'Explored-but-skipped' section,
+    looked up in BOTH PLAN-PHASE-4.md and PLAN-PHASE-4-HISTORY.md (the live
+    skip log was archived to the history file 2026-06-10; per-file extraction
+    + union keeps behavior identical wherever the section lives). Matches
+    occurrences like ``testname_ts`` or ``testname_ts__suffix__`` inside
+    backticks, and stores the base ``testname_ts`` form so parameterized
+    variants match automatically. Tokens inside ~~strikethrough~~ markers are
+    excluded (resolved entries)."""
+    return _skip_tokens_from(PLAN) | _skip_tokens_from(PLAN_HISTORY)
 
 
 def parse_diff_lines(msg: str) -> tuple[list[str], list[str]]:
