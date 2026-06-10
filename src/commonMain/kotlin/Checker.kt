@@ -1334,6 +1334,8 @@ class Checker(
         checkInRhsPrimitiveTypeParams()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
+        // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
+        checkEmptyDestructuringNullishSource()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99071,6 +99073,113 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B257: TS2531/TS2532/TS2533 (+TS2488/TS2461 for array patterns) for destructuring
+     * a definitely-nullish source with an EMPTY pattern (strictNullEmptyDestructuring):
+     * `let { } = null` / `({} = undefined)` / `let { } = cond ? {} : null`. Source
+     * nullishness is classified purely from the AST: `null` / `undefined` identifiers,
+     * empty object literal (passes), or a ConditionalExpression whose branches
+     * classify recursively; ANY unknown shape bails. EMPTY patterns only (non-empty
+     * would need per-property errors). An empty ARRAY pattern first gets the
+     * not-iterable/not-array error — TS2488 at target>=ES2015, TS2461 below — then
+     * the nullish error at the same span.
+     */
+    private fun checkEmptyDestructuringNullishSource() {
+        if (!strictNullChecks) return
+        // bit 1 = null, bit 2 = undefined; 0 = non-nullish OK shape; -1 = unknown (bail)
+        fun classify(e: Expression): Int = when {
+            e is Identifier && e.text == "null" -> 1
+            e is Identifier && e.text == "undefined" -> 2
+            e is ObjectLiteralExpression && e.properties.isEmpty() -> 0
+            e is ParenthesizedExpression -> classify(e.expression)
+            e is ConditionalExpression -> {
+                val a = classify(e.whenTrue)
+                val b = classify(e.whenFalse)
+                if (a < 0 || b < 0) -1 else a or b
+            }
+            else -> -1
+        }
+        fun nullishMessage(bits: Int): Pair<String, Int>? = when (bits) {
+            1 -> "Object is possibly 'null'." to 2531
+            2 -> "Object is possibly 'undefined'." to 2532
+            3 -> "Object is possibly 'null' or 'undefined'." to 2533
+            else -> null
+        }
+        // span = pattern open bracket .. matching close bracket inclusive
+        fun bracketSpan(source: String, pos: Int, open: Char, close: Char): Pair<Int, Int>? {
+            val start = source.indexOf(open, pos)
+            if (start < 0) return null
+            var depth = 0
+            var i = start
+            while (i < source.length) {
+                when (source[i]) {
+                    open -> depth++
+                    close -> { depth--; if (depth == 0) return start to (i + 1 - start) }
+                }
+                i++
+            }
+            return null
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            fun emitAt(start: Int, length: Int, message: String, code: Int) {
+                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = message, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = line, character = ch,
+                    start = start, length = length,
+                ))
+            }
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        if (d.type != null) continue
+                        val init = d.initializer ?: continue
+                        val bits = classify(init)
+                        val msg = nullishMessage(bits) ?: continue
+                        when (val name = d.name) {
+                            is ObjectBindingPattern -> {
+                                if (name.elements.isNotEmpty()) continue
+                                val (start, len) = bracketSpan(source, name.pos, '{', '}') ?: continue
+                                emitAt(start, len, msg.first, msg.second)
+                            }
+                            is ArrayBindingPattern -> {
+                                if (name.elements.isNotEmpty()) continue
+                                val (start, len) = bracketSpan(source, name.pos, '[', ']') ?: continue
+                                // pure-null / pure-undefined sources only for the iterability error
+                                val display = when (bits) { 1 -> "null"; 2 -> "undefined"; else -> null }
+                                if (display != null) {
+                                    if (options.target >= ScriptTarget.ES2015) {
+                                        emitAt(start, len,
+                                            "Type '$display' must have a '[Symbol.iterator]()' method that returns an iterator.", 2488)
+                                    } else {
+                                        emitAt(start, len, "Type '$display' is not an array type.", 2461)
+                                    }
+                                }
+                                emitAt(start, len, msg.first, msg.second)
+                            }
+                            else -> {}
+                        }
+                    }
+                    is ExpressionStatement -> {
+                        var e = stmt.expression
+                        while (e is ParenthesizedExpression) e = e.expression
+                        val b = e as? BinaryExpression ?: continue
+                        if (b.operator != SyntaxKind.Equals) continue
+                        val lhs = b.left as? ObjectLiteralExpression ?: continue
+                        if (lhs.properties.isNotEmpty()) continue
+                        val msg = nullishMessage(classify(b.right)) ?: continue
+                        val (start, len) = bracketSpan(source, lhs.pos, '{', '}') ?: continue
+                        emitAt(start, len, msg.first, msg.second)
+                    }
+                    else -> {}
                 }
             }
         }
