@@ -1336,6 +1336,8 @@ class Checker(
         checkPropertyOverride()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
+        // B247b: object-literal accessor-pair implied getter return type
+        checkObjectLiteralAccessorImpliedReturn()
         // 64f2. Check interface extends interface (TS2430)
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
@@ -80118,6 +80120,93 @@ interface DataView {
     // TS2344: Type does not satisfy the constraint
     // -----------------------------------------------------------------------
 
+    /**
+     * B247b: a setter annotation implies the paired UN-annotated getter's return
+     * type in an OBJECT LITERAL — `{ get p1() { return 0; }, set p1(value: string) {} }`
+     * fires TS2322 'number' → 'string' at the getter's `return` KEYWORD (span 6).
+     * Class-body accessor pairs already get this via the B63.5 effectiveReturnType
+     * bridging. FP firewall: getter must have NO return annotation; the setter param
+     * type and the widened return-expression type must both resolve to PRIMITIVE-only
+     * shapes (object/generic targets bail).
+     */
+    private fun checkObjectLiteralAccessorImpliedReturn() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                olAccImpliedStmts(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun olAccImpliedStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                (d.initializer as? ObjectLiteralExpression)?.let { olAccImpliedCheck(it, source, fileName) }
+            }
+            is FunctionDeclaration -> s.body?.let { olAccImpliedStmts(it.statements, source, fileName) }
+            is Block -> olAccImpliedStmts(s.statements, source, fileName)
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { olAccImpliedStmts(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun olAccImpliedCheck(obj: ObjectLiteralExpression, source: String, fileName: String) {
+        for (p in obj.properties) {
+            if (p is PropertyAssignment) {
+                (p.initializer as? ObjectLiteralExpression)?.let { olAccImpliedCheck(it, source, fileName) }
+            }
+            val getter = p as? GetAccessor ?: continue
+            if (getter.type != null) continue
+            val gName = getMemberName(getter.name) ?: continue
+            val setter = obj.properties.firstOrNull {
+                it is SetAccessor && getMemberName(it.name) == gName
+            } as? SetAccessor ?: continue
+            val setAnn = setter.parameters.firstOrNull()?.type ?: continue
+            val target = try { getTypeFromTypeNode(setAnn) } catch (_: StackOverflowError) { continue }
+            if (target === anyType || target === errorType) continue
+            if (!isPrimitiveOnlyWriteType(target)) continue
+            val body = getter.body ?: continue
+            olAccImpliedReturns(body.statements, target, source, fileName)
+        }
+    }
+
+    private fun olAccImpliedReturns(stmts: List<Statement>, target: Type, source: String, fileName: String) {
+        for (s in stmts) when (s) {
+            is ReturnStatement -> {
+                val e = s.expression ?: continue
+                val raw = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { continue }
+                if (raw === anyType || raw === errorType) continue
+                val widened = getWidenedLiteralType(raw)
+                if (!isPrimitiveOnlyWriteType(widened)) continue
+                if (!checkTypeRelatedTo(widened, target, assignableRelation)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, s.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(widened)}' is not assignable to type '${typeToString(target)}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = s.pos,
+                        length = 6,
+                    ))
+                }
+            }
+            is Block -> olAccImpliedReturns(s.statements, target, source, fileName)
+            is IfStatement -> {
+                olAccImpliedReturns(listOf(s.thenStatement), target, source, fileName)
+                s.elseStatement?.let { olAccImpliedReturns(listOf(it), target, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
     private fun checkTypeArgumentConstraints() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -80142,6 +80231,10 @@ interface DataView {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         decl.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                        // B247: object-literal initializer accessor/method annotations
+                        // (`const o = { set x(value: Fail<string>) {} }`) carry type
+                        // references whose args must satisfy constraints too.
+                        decl.initializer?.let { checkConstraintsInObjectLiteral(it, source, fileName) }
                     }
                 }
                 is FunctionDeclaration -> {
@@ -80198,6 +80291,8 @@ interface DataView {
                                 member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
                                 member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                             }
+                            is GetAccessor -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                            is SetAccessor -> member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                             else -> {}
                         }
                     }
@@ -80213,6 +80308,8 @@ interface DataView {
                                 member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
                                 member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                             }
+                            is GetAccessor -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                            is SetAccessor -> member.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                             else -> {}
                         }
                     }
@@ -80285,6 +80382,23 @@ interface DataView {
                 is LabeledStatement -> checkConstraintsInStatements(listOf(stmt.statement), source, fileName)
                 else -> {}
             }
+        }
+    }
+
+    /** B247: walk an object-literal initializer's accessor/method type annotations
+     *  for constraint violations (TS2344). Recurses through nested object literals
+     *  via PropertyAssignment initializers. */
+    private fun checkConstraintsInObjectLiteral(expr: Expression, source: String, fileName: String) {
+        val obj = expr as? ObjectLiteralExpression ?: return
+        for (p in obj.properties) when (p) {
+            is GetAccessor -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+            is SetAccessor -> p.parameters.forEach { pr -> pr.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+            is MethodDeclaration -> {
+                p.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
+                p.parameters.forEach { pr -> pr.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
+            }
+            is PropertyAssignment -> checkConstraintsInObjectLiteral(p.initializer, source, fileName)
+            else -> {}
         }
     }
 
