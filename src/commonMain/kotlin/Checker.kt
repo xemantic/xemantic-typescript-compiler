@@ -15307,6 +15307,22 @@ class Checker(
                             // annotation when the initializer is an arrow/function.
                             val arrowInit = declInit is ArrowFunction || declInit is FunctionExpression
                             val ctxFn = arrowInit && decl.type != null
+                            // B224: a bare rest-free FunctionType annotation contextually
+                            // types only its OWN arity worth of params — `const f7: () =>
+                            // any = (x?) => 0` leaves `x` un-contextually-typed → TS7006.
+                            val annNode = decl.type
+                            if (arrowInit && annNode is FunctionType
+                                && annNode.parameters.none { it.dotDotDotToken }) {
+                                val ctxArity = annNode.parameters.count {
+                                    !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
+                                }
+                                val initParams = when (declInit) {
+                                    is ArrowFunction -> declInit.parameters
+                                    is FunctionExpression -> declInit.parameters
+                                    else -> emptyList()
+                                }
+                                emitTs7006BeyondCtxArity(initParams, ctxArity, source, fileName)
+                            }
                             declInit?.let {
                                 checkImplicitAnyInExpr(it, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType)
                             }
@@ -15670,7 +15686,21 @@ class Checker(
                 // callee actually resolves. A call to an unresolved identifier has
                 // no contextual signature, so callback params should still get TS7006.
                 val ctxProp = isCalleeResolvable(expr.expression)
-                for (arg in expr.arguments) {
+                for ((argIndex, arg) in expr.arguments.withIndex()) {
+                    // B224: an arrow/fn-expr arg whose contextual signature (from the
+                    // callee param's FunctionType or own-TP constraint) has FEWER params
+                    // leaves the excess params un-contextually-typed → TS7006.
+                    if (arg is ArrowFunction || arg is FunctionExpression) {
+                        val ctxArity = contextualFnArityForCallArg(expr.expression, argIndex)
+                        if (ctxArity != null) {
+                            val argParams = when (arg) {
+                                is ArrowFunction -> arg.parameters
+                                is FunctionExpression -> arg.parameters
+                                else -> emptyList()
+                            }
+                            emitTs7006BeyondCtxArity(argParams, ctxArity, source, fileName)
+                        }
+                    }
                     checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = ctxProp)
                 }
             }
@@ -15769,6 +15799,74 @@ class Checker(
             }
             is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name) }
             else -> null
+        }
+    }
+
+    /**
+     * B224: TS7006 for parameters BEYOND the contextual signature's arity.
+     * `const f7: () => any = (x?) => 0` / `g6((x?) => 0)` where g6's param is
+     * `T extends () => any` — the contextual FunctionType has no parameter at the
+     * index, so the param gets NO contextual type and is implicitly 'any'.
+     * Skips rest params (tsc types them `[]`, not TS7019), initialized params,
+     * binding patterns, `this`, and param-properties — FN-safe.
+     */
+    private fun emitTs7006BeyondCtxArity(
+        params: List<Parameter>,
+        ctxArity: Int,
+        source: String,
+        fileName: String,
+    ) {
+        if (ctxArity >= params.size) return
+        for (param in params.drop(ctxArity)) {
+            if (param.isCommentPlaceholder) continue
+            if (param.type != null) continue
+            if (param.initializer != null) continue
+            if (param.dotDotDotToken) continue
+            val name = param.name as? Identifier ?: continue
+            if (name.text.isEmpty() || name.text == "this") continue
+            if (param.modifiers.any { isParameterPropertyModifier(it) }) continue
+            val start = name.pos
+            val length = if (param.questionToken) name.text.length + 1 else name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7006,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /**
+     * B224: the contextual arity for an arrow/function-expression ARGUMENT of a call
+     * to a single-declaration FunctionDeclaration callee whose parameter at [argIndex]
+     * is a bare rest-free FunctionType (directly, or via the callee's OWN type-param
+     * constraint `T extends () => any`). Returns null (no emission) for any other shape.
+     */
+    private fun contextualFnArityForCallArg(callee: Expression, argIndex: Int): Int? {
+        if (callee !is Identifier) return null
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null
+        val fd = sym.declarations.singleOrNull() as? FunctionDeclaration ?: return null
+        if (argIndex >= fd.parameters.size) return null
+        // No rest param at or before argIndex (rest covers all subsequent indices)
+        for (i in 0..argIndex) if (fd.parameters[i].dotDotDotToken) return null
+        val paramType = fd.parameters[argIndex].type ?: return null
+        val fnType: FunctionType = when {
+            paramType is FunctionType -> paramType
+            paramType is TypeReference && paramType.typeArguments.isNullOrEmpty() -> {
+                val tpName = (paramType.typeName as? Identifier)?.text ?: return null
+                val tp = fd.typeParameters?.firstOrNull { it.name.text == tpName } ?: return null
+                tp.constraint as? FunctionType ?: return null
+            }
+            else -> return null
+        }
+        if (fnType.parameters.any { it.dotDotDotToken }) return null
+        return fnType.parameters.count {
+            !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
         }
     }
 
