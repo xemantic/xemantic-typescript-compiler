@@ -1365,6 +1365,8 @@ class Checker(
         checkIndexedAccessKeyofPrimitiveAssignment()
         // 72a7. B203: enum-literal assignability for numeric-literal RHS vs enum/enum-member annotations.
         checkEnumLiteralAssignments()
+        // (B266) Namespace-qualified enum members vs union annotations (TS2322)
+        checkNamespaceEnumUnionAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -101066,6 +101068,201 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /** B266: enum-member values flowing into UNION annotations of namespace-qualified enums
+     *  (`const e: X.Foo | boolean = Z.Foo.A`). TypeScript's isEnumTypeRelatedTo: two enums
+     *  relate iff the SAME enum name + every source member exists in the target with an
+     *  EQUAL computed value; an enum-member literal is assignable to another enum's member
+     *  literal iff the VALUES are equal AND the enums relate. The constant evaluator covers
+     *  shifts/bit-ops (`1 << 10`), so same-name enums with different bit values do NOT relate.
+     *  Conservative: only top-level `namespace NS { export enum Foo }` enums, only union
+     *  annotations made ENTIRELY of understood constituents (qualified enum/member refs to
+     *  collected enums + boolean/string keywords — number/any/unknown ALWAYS accept → bail,
+     *  anything else → bail), only `NS.Enum.Member` initializers; un-evaluable members
+     *  exclude the whole enum (FN, never FP). */
+    private fun checkNamespaceEnumUnionAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Collect `namespace NS { export enum Foo }` — single decl per (NS, Foo) only.
+            val nsEnums = mutableMapOf<String, NsEnumInfo>()
+            val dupKeys = mutableSetOf<String>()
+            for (st in stmts) {
+                if (st !is ModuleDeclaration) continue
+                val nsName = (st.name as? Identifier)?.text ?: continue
+                val body = st.body as? ModuleBlock ?: continue
+                for (inner in body.statements) {
+                    if (inner !is EnumDeclaration) continue
+                    val key = "$nsName.${inner.name.text}"
+                    if (key in nsEnums || key in dupKeys) { nsEnums.remove(key); dupKeys.add(key); continue }
+                    val values = evalAllEnumMemberValues(inner)
+                    nsEnums[key] = NsEnumInfo(inner, inner.name.text, values, inner.members.mapNotNull { (it.name as? Identifier)?.text })
+                }
+            }
+            if (nsEnums.isEmpty()) continue
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val nameNode = d.name as? Identifier ?: continue
+                    val union = d.type as? UnionType ?: continue
+                    val init = d.initializer ?: continue
+                    checkNsEnumUnionOne(union, init, nameNode, nsEnums, source, fileName)
+                }
+            }
+        }
+    }
+
+    private class NsEnumInfo(
+        val decl: EnumDeclaration,
+        val enumName: String,
+        /** member -> computed value; null when ANY member is un-evaluable (whole enum excluded). */
+        val values: Map<String, Double>?,
+        val memberOrder: List<String>,
+    )
+
+    private fun evalAllEnumMemberValues(decl: EnumDeclaration): Map<String, Double>? {
+        val values = mutableMapOf<String, Double>()
+        var auto: Double? = 0.0
+        for (m in decl.members) {
+            val n = (m.name as? Identifier)?.text ?: return null
+            val v = if (m.initializer != null) evalEnumConstExpr(m.initializer) else auto
+            if (v == null) return null
+            values[n] = v
+            auto = v + 1
+        }
+        return values
+    }
+
+    private fun evalEnumConstExpr(e: Expression): Double? = when (e) {
+        is NumericLiteralNode -> e.text.toDoubleOrNull()
+        is ParenthesizedExpression -> evalEnumConstExpr(e.expression)
+        is PrefixUnaryExpression -> evalEnumConstExpr(e.operand)?.let { v ->
+            when (e.operator) {
+                SyntaxKind.Minus -> -v
+                SyntaxKind.Plus -> v
+                SyntaxKind.Tilde -> v.toInt().inv().toDouble()
+                else -> null
+            }
+        }
+        is BinaryExpression -> {
+            val l = evalEnumConstExpr(e.left)
+            val r = evalEnumConstExpr(e.right)
+            if (l == null || r == null) null else when (e.operator) {
+                SyntaxKind.LessThanLessThan -> (l.toInt() shl r.toInt()).toDouble()
+                SyntaxKind.GreaterThanGreaterThan -> (l.toInt() shr r.toInt()).toDouble()
+                SyntaxKind.GreaterThanGreaterThanGreaterThan -> (l.toInt() ushr r.toInt()).toDouble()
+                SyntaxKind.Bar -> (l.toInt() or r.toInt()).toDouble()
+                SyntaxKind.Ampersand -> (l.toInt() and r.toInt()).toDouble()
+                SyntaxKind.Caret -> (l.toInt() xor r.toInt()).toDouble()
+                SyntaxKind.Plus -> l + r
+                SyntaxKind.Minus -> l - r
+                SyntaxKind.Asterisk -> l * r
+                else -> null
+            }
+        }
+        else -> null
+    }
+
+    /** A union-annotation constituent the B266 walker understands. */
+    private sealed class NsEnumConstituent {
+        class Keyword(val text: String) : NsEnumConstituent()
+        class WholeEnum(val info: NsEnumInfo) : NsEnumConstituent()
+        class Member(val info: NsEnumInfo, val member: String) : NsEnumConstituent()
+    }
+
+    private fun checkNsEnumUnionOne(
+        union: UnionType, init: Expression, nameNode: Identifier,
+        nsEnums: Map<String, NsEnumInfo>, source: String, fileName: String,
+    ) {
+        // Initializer must be `NS.Enum.Member` resolving to a collected enum.
+        val pa = init as? PropertyAccessExpression ?: return
+        val recv = pa.expression as? PropertyAccessExpression ?: return
+        val nsIdent = recv.expression as? Identifier ?: return
+        val srcInfo = nsEnums["${nsIdent.text}.${recv.name.text}"] ?: return
+        val srcValues = srcInfo.values ?: return
+        val srcMember = pa.name.text
+        val srcValue = srcValues[srcMember] ?: return
+        // Parse every constituent; bail on anything not understood.
+        val parts = mutableListOf<NsEnumConstituent>()
+        for (t in union.types) {
+            when (t) {
+                is KeywordTypeNode -> when (t.kind) {
+                    SyntaxKind.BooleanKeyword -> parts.add(NsEnumConstituent.Keyword("boolean"))
+                    SyntaxKind.StringKeyword -> parts.add(NsEnumConstituent.Keyword("string"))
+                    else -> return // number/any/unknown accept the literal; others unmodeled
+                }
+                is TypeReference -> {
+                    if (!t.typeArguments.isNullOrEmpty()) return
+                    val qn = t.typeName as? QualifiedName ?: return
+                    val left = qn.left
+                    if (left is Identifier) {
+                        // NS.Enum — whole-enum target
+                        parts.add(NsEnumConstituent.WholeEnum(nsEnums["${left.text}.${qn.right.text}"] ?: return))
+                    } else if (left is QualifiedName && left.left is Identifier) {
+                        // NS.Enum.Member — member target
+                        val info = nsEnums["${(left.left as Identifier).text}.${left.right.text}"] ?: return
+                        if (qn.right.text !in info.memberOrder) return
+                        parts.add(NsEnumConstituent.Member(info, qn.right.text))
+                    } else return
+                }
+                else -> return
+            }
+        }
+        // Does any constituent accept the source enum literal?
+        for (p in parts) when (p) {
+            is NsEnumConstituent.Keyword -> {} // boolean/string never accept a numeric enum literal
+            is NsEnumConstituent.WholeEnum -> {
+                if (p.info.decl === srcInfo.decl) return
+                if (nsEnumsRelated(srcInfo, p.info)) return
+            }
+            is NsEnumConstituent.Member -> {
+                val tgtValues = p.info.values ?: return
+                val tgtValue = tgtValues[p.member] ?: return
+                if (p.info.decl === srcInfo.decl && p.member == srcMember) return
+                if (srcValue == tgtValue && (p.info.decl === srcInfo.decl || nsEnumsRelated(srcInfo, p.info))) return
+            }
+        }
+        // Nothing accepts — TS2322 at the variable name. Display: keyword primitives first,
+        // then enum constituents (full-member-coverage collapses to the bare enum name).
+        val displayParts = mutableListOf<String>()
+        for (p in parts) if (p is NsEnumConstituent.Keyword && p.text !in displayParts) displayParts.add(p.text)
+        val memberCoverage = mutableMapOf<EnumDeclaration, MutableSet<String>>()
+        for (p in parts) if (p is NsEnumConstituent.Member) memberCoverage.getOrPut(p.info.decl) { mutableSetOf() }.add(p.member)
+        val enumDisplayed = mutableSetOf<EnumDeclaration>()
+        for (p in parts) when (p) {
+            is NsEnumConstituent.Keyword -> {}
+            is NsEnumConstituent.WholeEnum -> if (enumDisplayed.add(p.info.decl)) displayParts.add(p.info.enumName)
+            is NsEnumConstituent.Member -> {
+                val covered = memberCoverage[p.info.decl]!!
+                if (covered.size == p.info.memberOrder.size && covered.containsAll(p.info.memberOrder)) {
+                    if (enumDisplayed.add(p.info.decl)) displayParts.add(p.info.enumName)
+                } else {
+                    displayParts.add("${p.info.enumName}.${p.member}")
+                }
+            }
+        }
+        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '${srcInfo.enumName}.$srcMember' is not assignable to type '${displayParts.joinToString(" | ")}'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = ch,
+            start = nameNode.pos, length = nameNode.text.length,
+        ))
+    }
+
+    /** TS isEnumTypeRelatedTo: same enum NAME + every source member present in target with an equal value. */
+    private fun nsEnumsRelated(src: NsEnumInfo, tgt: NsEnumInfo): Boolean {
+        if (src.enumName != tgt.enumName) return false
+        val sv = src.values ?: return true // un-evaluable: conservatively related (never emit)
+        val tv = tgt.values ?: return true
+        for ((m, v) in sv) {
+            val t = tv[m] ?: return false
+            if (t != v) return false
+        }
+        return true
     }
 
     private fun checkGenericIndexWrite() {
