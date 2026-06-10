@@ -44718,9 +44718,32 @@ interface DataView {
                 line = line,
                 character = character,
                 start = start,
-                length = name.text.length,
+                length = sourceIdentifierLength(source, start),
             ))
         }
+    }
+
+    /** Length of the identifier AS WRITTEN at [pos] — counts `\uXXXX` / `\u{...}` escape
+     *  sequences at their raw source length (an Identifier node's `.text` is the COOKED
+     *  name, so `#x`.text is `#x` and its length under-spans the squiggle). */
+    private fun sourceIdentifierLength(source: String, pos: Int): Int {
+        var i = pos
+        if (i < source.length && source[i] == '#') i++
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '\\' && i + 1 < source.length && source[i + 1] == 'u') {
+                if (i + 2 < source.length && source[i + 2] == '{') {
+                    val close = source.indexOf('}', i + 3)
+                    if (close < 0) break
+                    i = close + 1
+                } else {
+                    i += 6
+                }
+            } else if (c == '_' || c == '$' || c.isLetterOrDigit()) {
+                i++
+            } else break
+        }
+        return (i - pos).coerceAtLeast(1)
     }
 
     // TS1250: Function declarations not allowed inside blocks in strict mode targeting ES5
