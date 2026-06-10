@@ -31104,6 +31104,17 @@ class Checker(
             "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
         )
 
+        /** B242: the 11 typed-array globals — `declare var X: XConstructor` in the
+         *  real lib; our embedded lib has interface-only declarations, so `new X()`
+         *  receivers resolve by NAME convention. Display appends the es2024 generic
+         *  default (`Int8Array<ArrayBuffer>`). Declared BEFORE LIB_MIN_TARGET
+         *  (companion init order — the map's builder references it). */
+        private val TYPED_ARRAY_NAMES: Set<String> = setOf(
+            "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+            "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+            "BigInt64Array", "BigUint64Array",
+        )
+
         /**
          * B85.2: minimum ScriptTarget at which a builtin-lib interface member becomes
          * visible. Members not in this map are always visible (assumed ES5/baseline).
@@ -31174,7 +31185,16 @@ class Checker(
             "String.startsWith" to ScriptTarget.ES2015,
             "String.endsWith" to ScriptTarget.ES2015,
             "String.repeat" to ScriptTarget.ES2015,
-        )
+        ) + TYPED_ARRAY_NAMES.flatMap { ta ->
+            // B242: per-typed-array later-lib members (indexAt / findLast family).
+            // The embedded typed-array interfaces don't declare these, so the
+            // entries are lookup-only (no member-count impact).
+            listOf(
+                "$ta.at" to ScriptTarget.ES2022,
+                "$ta.findLast" to ScriptTarget.ES2023,
+                "$ta.findLastIndex" to ScriptTarget.ES2023,
+            )
+        }.toMap()
 
         /** B241: SOFT later-lib members — kept in the interface member set (the
          *  "and N more" missing-property counts are tuned with them PRESENT:
@@ -82996,6 +83016,12 @@ interface DataView {
                 if (propName in RUNTIME_PROPERTIES) return@run
                 val ctorExpr2 = objectExpr.expression
                 val (ifaceName, instType) = when {
+                    // B242: typed-array `new Int8Array().at(...)` — interface-only lib
+                    // symbol; resolve by NAME convention with the es2024 generic display.
+                    ctorExpr2 is Identifier && ctorExpr2.text in TYPED_ARRAY_NAMES &&
+                        globals[ctorExpr2.text]?.declarations?.all { it in builtinLibDecls } != false -> {
+                        ctorExpr2.text to (null as Type?)
+                    }
                     ctorExpr2 is Identifier -> {
                         val ctorSym2 = globals[ctorExpr2.text] ?: return@run
                         if (!ctorSym2.flags.hasAny(SymbolFlags.Variable) || ctorSym2.flags.hasAny(SymbolFlags.Class)) return@run
@@ -83022,7 +83048,8 @@ interface DataView {
                 // TypeScript displays an un-inferable constructor type arg as `unknown`
                 // (`new Promise(() => {})` → 'Promise<unknown>'); our un-inferred
                 // construct-sig resolution yields `any`.
-                val display = instType?.let { typeToString(it).replace("<any>", "<unknown>") } ?: ifaceName
+                val display = instType?.let { typeToString(it).replace("<any>", "<unknown>") }
+                    ?: if (ifaceName in TYPED_ARRAY_NAMES) "$ifaceName<ArrayBuffer>" else ifaceName
                 val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                 diagnostics.add(Diagnostic(
                     message = "Property '$propName' does not exist on type '$display'. Do you need to change your target library? Try changing the 'lib' compiler option to '${minTarget.name.lowercase()}' or later.",
