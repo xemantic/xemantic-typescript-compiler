@@ -85198,7 +85198,17 @@ interface DataView {
             is ExpressionStatement -> checkCallTypesInExpr(stmt.expression, source, fileName)
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                    // B246: a FunctionType-annotated var with a fn-expr/arrow initializer
+                    // contextually types the initializer's UNANNOTATED params from the
+                    // annotation (and `?`-marked params get `| undefined` under strict),
+                    // so calls inside the body see the real param types.
+                    val declAnnFT = decl.type as? FunctionType
+                    val declInit = decl.initializer
+                    if (declAnnFT != null && (declInit is FunctionExpression || declInit is ArrowFunction)) {
+                        checkCallTypesInContextualFnExpr(declInit, declAnnFT, source, fileName)
+                    } else {
+                        decl.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+                    }
                     // B98.r126 (Blocker #2 substep): populate `currentLocalTypes` for an
                     // ANNOTATED function-local variable whose resolved type is CALLABLE
                     // (has call signatures). Without this, `var f: I1<string>; f(arg)`
@@ -85479,6 +85489,59 @@ interface DataView {
             else -> {}
         }
         } finally { callTypeCheckDepth-- }
+    }
+
+    /**
+     * B246: walk a FunctionType-contextually-typed function-expression/arrow initializer
+     * (`const f: (a: string, b: number) => void = function self(a, b?) { ... }`) with its
+     * parameters scoped into [currentLocalTypes]: annotated params resolve normally
+     * (via [populateParameterLocalTypes]); UNANNOTATED params take the annotation's
+     * same-index param type; a `?`-marked param (no default) additionally unions
+     * `undefined` under strictNullChecks — so `acceptNum(b)` inside the body fires
+     * TS2345 'number | undefined' → 'number' (contextuallyTypedParametersWithQuestionToken).
+     */
+    private fun checkCallTypesInContextualFnExpr(
+        fn: Expression, ann: FunctionType, source: String, fileName: String
+    ) {
+        val params: List<Parameter>
+        val body: Node?
+        when (fn) {
+            is FunctionExpression -> { params = fn.parameters; body = fn.body }
+            is ArrowFunction -> { params = fn.parameters; body = fn.body }
+            else -> return
+        }
+        for (param in params) {
+            param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
+        }
+        val savedLocalTypes = currentLocalTypes
+        currentLocalTypes = currentLocalTypes.toMutableMap()
+        try {
+            populateParameterLocalTypes(params)
+            for ((i, p) in params.withIndex()) {
+                val nm = (p.name as? Identifier)?.text ?: continue
+                if (p.dotDotDotToken) continue
+                val base: Type? = if (p.type != null) {
+                    currentLocalTypes[nm]
+                } else {
+                    val annParam = ann.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
+                    annParam?.type?.let {
+                        try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                    }
+                }
+                if (base == null || base === anyType || base === errorType) continue
+                val t = if (p.questionToken && strictNullChecks && p.initializer == null) {
+                    getUnionType(listOf(base, undefinedType))
+                } else base
+                currentLocalTypes[nm] = t
+            }
+            when (body) {
+                is Block -> checkCallTypesInStatements(body.statements, source, fileName)
+                is Expression -> checkCallTypesInExpr(body, source, fileName)
+                else -> {}
+            }
+        } finally {
+            currentLocalTypes = savedLocalTypes
+        }
     }
 
     private fun checkCallTypesInExpr(expr: Expression, source: String, fileName: String) {
