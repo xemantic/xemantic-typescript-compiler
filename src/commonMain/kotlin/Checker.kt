@@ -1014,6 +1014,8 @@ class Checker(
         checkDtsTopLevelDeclarations()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
+        // 8a-bis. B235: TS2339 for absent members of `await import('<esm-pkg>')` namespaces.
+        checkDynamicImportNamespaceMembers()
         // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
         // module-local namespace shadowing any file-level namespace of the same name.
         checkAmbientModuleLocalNamespaceMemberRefs()
@@ -27435,6 +27437,111 @@ class Checker(
         }
     }
 
+    /** B235: bare-specifier node_modules resolution tolerant of the leading-slash fixture
+     *  layout — [resolveBareViaNodeModules] builds UNPREFIXED `node_modules/…` candidates
+     *  when the context file sits at the root (`/index.ts` → dir `""`), which never match
+     *  `/node_modules/…` fileResults keys. */
+    private fun resolveBareNodeModulesAnyPrefix(spec: String, contextFile: String): String? {
+        resolveBareViaNodeModulesPkgJson(spec, contextFile)?.let { return it }
+        resolveBareViaNodeModules(spec, contextFile)?.let { return it }
+        if (contextFile.startsWith("/")) {
+            for (cand in listOf("/node_modules/$spec/index.d.ts", "/node_modules/$spec.d.ts",
+                    "/node_modules/$spec/index.ts", "/node_modules/$spec.ts")) {
+                if (cand in fileResults) return cand
+            }
+        }
+        return null
+    }
+
+    /** B235: the nearest enclosing package.json (inside node_modules) of [file] declares
+     *  `"type": "module"`. JSON files are unbound (B140) — content comes from
+     *  [jsonModuleContents]. */
+    private fun nodeModulesPackageTypeIsModule(file: String): Boolean {
+        if (!file.contains("node_modules/")) return false
+        var dir = file.substringBeforeLast('/', "")
+        while (dir.isNotEmpty()) {
+            val pkg = jsonModuleContents["$dir/package.json"]
+            if (pkg != null) return Regex("\"type\"\\s*:\\s*\"module\"").containsMatchIn(pkg)
+            if (dir.endsWith("node_modules")) break
+            dir = dir.substringBeforeLast('/', "")
+        }
+        return false
+    }
+
+    /** B235: `const ns = await import('<bare-pkg>')` against an ESM-format node_modules
+     *  package — top-level `ns.<member>` accesses of names the package does not export
+     *  are TS2339 with the `typeof import("<resolved-path-sans-ext>")` display. The ESM
+     *  target synthesizes NO `default`, so `ns.default` fires. Gates mirror the
+     *  checkDefaultImports B235 branch (bundler/node modes + type:module package); a
+     *  star re-export or unresolvable spec bails. */
+    private fun checkDynamicImportNamespaceMembers() {
+        if (!(options.effectiveModule.isNodeNext || options.moduleResolution?.lowercase() == "bundler")) return
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
+        if (!isMultiFile) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val nsVars = mutableMapOf<String, Pair<String, Set<String>>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    var init: Expression = d.initializer ?: continue
+                    if (init is AwaitExpression) init = init.expression
+                    val call = init as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "import") continue
+                    val spec = (call.arguments.firstOrNull() as? StringLiteralNode)?.text ?: continue
+                    if (spec.startsWith(".") || spec.startsWith("/")) continue
+                    val nm = resolveBareNodeModulesAnyPrefix(spec, fileName) ?: continue
+                    if (!nodeModulesPackageTypeIsModule(nm)) continue
+                    val target = fileResults[nm] ?: continue
+                    val names = mutableSetOf<String>()
+                    var enumerable = true
+                    for (ts in target.sourceFile.statements) {
+                        when (ts) {
+                            is FunctionDeclaration -> if (ModifierFlag.Export in ts.modifiers) ts.name?.let { names.add(it.text) }
+                            is ClassDeclaration -> if (ModifierFlag.Export in ts.modifiers) ts.name?.let { names.add(it.text) }
+                            is InterfaceDeclaration, is TypeAliasDeclaration -> {}
+                            is VariableStatement -> if (ModifierFlag.Export in ts.modifiers) {
+                                ts.declarationList.declarations.forEach { dd -> (dd.name as? Identifier)?.let { names.add(it.text) } }
+                            }
+                            is ExportAssignment -> if (!ts.isExportEquals) names.add("default") else enumerable = false
+                            is ExportDeclaration -> {
+                                if (ts.moduleSpecifier != null) { enumerable = false } else {
+                                    val clause = ts.exportClause
+                                    if (clause is NamedExports) clause.elements.forEach { names.add(it.name.text) }
+                                    else enumerable = false
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                    if (!enumerable) continue
+                    val display = nm.removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+                    nsVars[n] = display to names
+                }
+            }
+            if (nsVars.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                val e = (stmt as? ExpressionStatement)?.expression ?: continue
+                val pa = (e as? PropertyAccessExpression)
+                    ?: ((e as? CallExpression)?.expression as? PropertyAccessExpression) ?: continue
+                val recv = pa.expression as? Identifier ?: continue
+                val info = nsVars[recv.text] ?: continue
+                val member = pa.name.text
+                if (member in info.second) continue
+                if (member in RUNTIME_PROPERTIES) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$member' does not exist on type 'typeof import(\"${info.first}\")'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = character, start = pa.name.pos, length = member.length,
+                ))
+            }
+        }
+    }
+
     private fun checkDefaultImports() {
         // allowSyntheticDefaultImports suppresses TS1192 check.
         // Explicit false overrides all implicit true conditions.
@@ -27477,8 +27584,25 @@ class Checker(
                 val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
                 // Fall back to extension-mapping relative resolution so a runtime `.mjs`/`.cjs`
                 // specifier (nodenext) resolves to its `.mts`/`.d.mts`/`.cts` declaration sibling.
-                val resolvedFile = resolveModuleSpecifier(moduleName)
-                    ?: resolveRelativeIncludingIndex(moduleName, fileName) ?: continue
+                var resolvedFile = resolveModuleSpecifier(moduleName)
+                    ?: resolveRelativeIncludingIndex(moduleName, fileName)
+                // B235: a BARE specifier resolving into node_modules whose nearest
+                // package.json declares "type": "module" is an ESM-format target — no
+                // synthetic default is ever produced for it, so a default import against
+                // a no-`export default` package is TS1192 even under esModuleInterop
+                // (esmNoSynthesizedDefault). Gated to bundler/node modes AND the
+                // type:module package — a CJS-format node_modules target keeps the
+                // pre-existing skip (synthetic default legal → never resolved here).
+                var nmEsmTarget = false
+                if (resolvedFile == null && !moduleName.startsWith(".") && !moduleName.startsWith("/") &&
+                    (options.effectiveModule.isNodeNext || options.moduleResolution?.lowercase() == "bundler")) {
+                    val nm = resolveBareNodeModulesAnyPrefix(moduleName, fileName)
+                    if (nm != null && nodeModulesPackageTypeIsModule(nm)) {
+                        resolvedFile = nm
+                        nmEsmTarget = true
+                    }
+                }
+                if (resolvedFile == null) continue
                 val targetResult = fileResults[resolvedFile] ?: continue
                 val targetFile = targetResult.sourceFile
                 // Empty fixture files (admitted to fileResults so B11.2's resolver can find
@@ -27494,8 +27618,9 @@ class Checker(
                 // esModuleInterop / export=→TS1259) is bypassed and a default import against a
                 // no-`export default` module is plain TS1192. Restricted to node modes so amd/
                 // system/umd/es2015 behavior is unchanged.
-                val targetIsEsm = (resolvedFile.endsWith(".mts") || resolvedFile.endsWith(".mjs")) &&
-                    options.effectiveModule.isNodeNext
+                val targetIsEsm = nmEsmTarget ||
+                    ((resolvedFile.endsWith(".mts") || resolvedFile.endsWith(".mjs")) &&
+                        options.effectiveModule.isNodeNext)
                 // CJS-format target: synthetic defaults make the default import legal → skip.
                 if (effectiveSyntheticDefaults && !targetIsEsm) continue
 
