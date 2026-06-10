@@ -1364,6 +1364,8 @@ class Checker(
         checkOptionalParamNullishArithmetic()
         // 72a4e4 (B281): TS2435 nested ambient modules + TS2668 export on ambient modules
         checkNestedAmbientModules()
+        // 72a4e5 (B282): TS1272 type-only named imports in decorated signatures
+        checkDecoratorMetadataTypeOnlyImports()
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
         checkEmptyDestructuringNullishSource()
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
@@ -19352,9 +19354,19 @@ class Checker(
         // Use resolved symbol's qualified name, not source-level alias
         val namespacePath = symbolToQualifiedName(symbol!!, fileName)
         if (member == null) {
+            // B282: a namespace-import member re-exported via a LOCAL `export { X }` /
+            // `export type { X }` clause in the target module isn't in `exports` (the
+            // binder skips alias creation for already-declared locals) — recognize it
+            // via the target file's AST before emitting (emitDecoratorMetadata_isolatedModules:
+            // `t1.T1` where type1.ts has `interface T1 {}; export type { T1 }`).
+            if (namespaceImportMemberExportedViaClause(segments.firstOrNull(), rightId.text, fileName)) return
             // Member doesn't exist at all — try spelling suggestion (TS2724)
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName, exports = exports)
         } else if (!isMemberAccessible(member, symbol!!)) {
+            // B282: a local-declared-but-clause-exported member (`interface T1 {};
+            // export type { T1 }`) has no export MODIFIER, so isMemberAccessible says
+            // no — recognize the export clause via the target module's AST.
+            if (namespaceImportMemberExportedViaClause(segments.firstOrNull(), rightId.text, fileName)) return
             // Member exists but is not exported from a non-declare namespace
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
         } else {
@@ -19536,6 +19548,120 @@ class Checker(
         }
         parts.reverse()
         return parts.joinToString(".")
+    }
+
+    /**
+     * B282: TS1272 — a type referenced in a DECORATED member's signature that resolves
+     * through a regular (non-type-only) NAMED import to a TYPE-ONLY entity must use
+     * `import type` or a namespace import. Mirrors tsc's
+     * markEntityNameOrEntityExpressionAsReference gate: isolatedModules +
+     * emitDecoratorMetadata + ES-module kind (commonjs is exempt — the alias is
+     * preserved there). Related TS1376 "'X' was imported here." at the import specifier.
+     */
+    private fun checkDecoratorMetadataTypeOnlyImports() {
+        if (!options.isolatedModules || !options.emitDecoratorMetadata) return
+        if (options.module !in ES_MODULE_KINDS) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // named, non-type-only imports: localName -> (specifier name node, target file)
+            val imports = HashMap<String, Pair<Identifier, String>>()
+            for (stmt in result.sourceFile.statements) {
+                val imp = stmt as? ImportDeclaration ?: continue
+                val clause = imp.importClause ?: continue
+                if (clause.isTypeOnly) continue
+                val named = clause.namedBindings as? NamedImports ?: continue
+                val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val targetFile = resolveModuleSpecifier(spec, imp.moduleSpecifier) ?: continue
+                for (el in named.elements) {
+                    if (el.isTypeOnly) continue
+                    imports[el.name.text] = el.name to targetFile
+                }
+            }
+            if (imports.isEmpty()) continue
+            fun checkAnnotation(t: TypeNode?) {
+                val ref = t as? TypeReference ?: return
+                val root = ref.typeName as? Identifier ?: return  // qualified = namespace import, exempt
+                val (specNode, targetFile) = imports[root.text] ?: return
+                val target = fileResults[targetFile] ?: return
+                // the imported entity must be TYPE-ONLY (interface / type alias)
+                val isTypeOnlyEntity = target.sourceFile.statements.any { s ->
+                    (s is InterfaceDeclaration && s.name.text == root.text) ||
+                        (s is TypeAliasDeclaration && s.name.text == root.text)
+                } && target.sourceFile.statements.none { s ->
+                    (s is ClassDeclaration && s.name?.text == root.text) ||
+                        (s is FunctionDeclaration && s.name?.text == root.text) ||
+                        (s is EnumDeclaration && s.name.text == root.text) ||
+                        (s is VariableStatement && s.declarationList.declarations.any {
+                            (it.name as? Identifier)?.text == root.text
+                        })
+                }
+                if (!isTypeOnlyEntity) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, root.pos)
+                val (rl, rc) = getLineAndCharacterOfPosition(source, specNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.",
+                    category = DiagnosticCategory.Error, code = 1272,
+                    fileName = fileName, line = line, character = ch,
+                    start = root.pos, length = root.text.length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "'${root.text}' was imported here.",
+                        category = DiagnosticCategory.Message, code = 1376,
+                        fileName = fileName, line = rl, character = rc,
+                        start = specNode.pos, length = specNode.text.length,
+                    )),
+                ))
+            }
+            fun checkClass(cls: ClassDeclaration) {
+                for (m in cls.members) {
+                    when (m) {
+                        is MethodDeclaration -> if (!m.decorators.isNullOrEmpty()) {
+                            m.parameters.forEach { checkAnnotation(it.type) }
+                            checkAnnotation(m.type)
+                        }
+                        is PropertyDeclaration -> if (!m.decorators.isNullOrEmpty()) {
+                            checkAnnotation(m.type)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            fun walkStmts(stmts: List<Statement>) {
+                for (s in stmts) when (s) {
+                    is ClassDeclaration -> checkClass(s)
+                    is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walkStmts(it.statements) }
+                    else -> {}
+                }
+            }
+            walkStmts(result.sourceFile.statements)
+        }
+    }
+
+    /** B282: true when [rootName] is a namespace import (`import * as t1 from "m"`) in
+     *  [fileName] and the target module re-exports [memberName] via a local
+     *  `export { X }` / `export type { X }` clause (no `from`). */
+    private fun namespaceImportMemberExportedViaClause(rootName: String?, memberName: String, fileName: String): Boolean {
+        if (rootName == null) return false
+        val importer = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return false
+        for (stmt in importer.sourceFile.statements) {
+            val imp = stmt as? ImportDeclaration ?: continue
+            val ns = imp.importClause?.namedBindings as? NamespaceImport ?: continue
+            if (ns.name.text != rootName) continue
+            val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, imp.moduleSpecifier) ?: continue
+            val target = fileResults[targetFile] ?: return false
+            for (s in target.sourceFile.statements) {
+                val ed = s as? ExportDeclaration ?: continue
+                if (ed.moduleSpecifier != null) continue
+                val named = ed.exportClause as? NamedExports ?: continue
+                if (named.elements.any { (it.propertyName ?: it.name).text == memberName || it.name.text == memberName }) {
+                    return true
+                }
+            }
+            return false
+        }
+        return false
     }
 
     private fun emitTS2694(
@@ -69213,7 +69339,13 @@ interface DataView {
             is AsExpression -> getTypeFromTypeNode(expr.type)
             is TypeAssertionExpression -> getTypeFromTypeNode(expr.type)
             is SatisfiesExpression -> getTypeOfExpression(expr.expression)
-            is NonNullExpression -> getTypeOfExpression(expr.expression) // strips null/undefined
+            is NonNullExpression -> {
+                // `undefined!`/`null!` is NonNullable<nullish> = never (assignable to
+                // everything — `return undefined!` is legal, B282); other operands keep
+                // their type (full nullish-stripping is a broader change, deferred).
+                val t = getTypeOfExpression(expr.expression)
+                if (t !is Type.Union && t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) neverType else t
+            }
 
             // Parenthesized — honor JSDoc type cast `/** @type {T} */ (expr)` when present.
             is ParenthesizedExpression ->
@@ -97077,7 +97209,12 @@ interface DataView {
             }
             is PostfixUnaryExpression -> "number" // x++ / x-- always produce number
             is ParenthesizedExpression -> inferSimpleExprType(expr.expression, varTypes)
-            is NonNullExpression -> inferSimpleExprType(expr.expression, varTypes)
+            is NonNullExpression -> {
+                // B282: `undefined!`/`null!` is NonNullable<nullish> = never — assignable
+                // to everything (`return undefined!`). Returning null skips the check.
+                val inner = inferSimpleExprType(expr.expression, varTypes)
+                if (inner == "undefined" || inner == "null") null else inner
+            }
             is SatisfiesExpression -> inferSimpleExprType(expr.expression, varTypes)
             is AsExpression -> {
                 // Type assertion: return the asserted type, not the inner expression type
