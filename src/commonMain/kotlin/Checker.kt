@@ -54350,7 +54350,7 @@ interface DataView {
     // TS2528: A module cannot have multiple default exports
     // -----------------------------------------------------------------------
 
-    private enum class DefaultDeclKind { DECL, REEXPORT, REF_TYPE, EXPR }
+    private enum class DefaultDeclKind { DECL, REEXPORT, REF_TYPE, REF_VALUE, EXPR }
 
     private fun checkMultipleDefaultExports() {
         for (result in binderResults) {
@@ -54408,9 +54408,20 @@ interface DataView {
                         if (!stmt.isExportEquals) {
                             val expr = stmt.expression
                             if (expr is Identifier) {
-                                // `export default identifier` — classify by whether identifier is value or type-only
-                                // TS2528 reports at identifier, TS2323 reports at whole statement
-                                val kind = if (isTypeOnlyIdentifier(expr.text)) DefaultDeclKind.REF_TYPE else DefaultDeclKind.DECL
+                                // `export default identifier` — classify by what the identifier resolves to:
+                                // type-only → REF_TYPE; a CLASS/FUNCTION declaration (no variable) → REF_VALUE
+                                // (B274: an export-assignment aliasing a class/fn is a TS2528 participant, NOT a
+                                // TS2323 "redeclared exported variable" — only VARIABLE refs drive TS2323);
+                                // a variable → DECL. TS2528 reports at identifier, TS2323 at whole statement.
+                                val refSym = result.locals[expr.text]
+                                val kind = when {
+                                    isTypeOnlyIdentifier(expr.text) -> DefaultDeclKind.REF_TYPE
+                                    refSym != null && refSym.declarations.isNotEmpty() &&
+                                        refSym.declarations.none { it is VariableDeclaration } &&
+                                        refSym.declarations.any { it is ClassDeclaration || it is FunctionDeclaration } ->
+                                        DefaultDeclKind.REF_VALUE
+                                    else -> DefaultDeclKind.DECL
+                                }
                                 val (ts2323Start, ts2323Len) = exprStmtSpan(stmt)
                                 defaults.add(DefaultExportInfo(stmt, expr.pos, expr.text.length, ts2323Start, ts2323Len, kind))
                             } else {
@@ -54486,6 +54497,11 @@ interface DataView {
             for (info in defaults) {
                 if (info.kind == DefaultDeclKind.DECL || info.kind == DefaultDeclKind.REEXPORT) {
                     val stmt = info.stmt
+                    // B274: an `export default interface` is TYPE-space only — it never makes
+                    // the VALUE-space 'default' a redeclared variable (it still gets the
+                    // TS2323 squiggle when OTHER decls trip the count — the merged symbol's
+                    // every declaration is reported).
+                    if (stmt is InterfaceDeclaration) continue
                     if (stmt is FunctionDeclaration && stmt.name != null) {
                         val name = stmt.name!!.text
                         if (name in overloadNames) continue // don't count duplicate overloads
@@ -54521,48 +54537,71 @@ interface DataView {
             }
 
             val lastIdx = defaults.size - 1
-            val lastStmt = defaults[lastIdx].stmt
+
+            // TS2323 pass — over the FULL defaults list (interfaces included: every
+            // declaration of the merged 'default' symbol is reported).
+            if (emitTs2323) {
+                for (i in defaults.indices) {
+                    val d = defaults[i]
+                    val isLast = i == lastIdx
+                    // For DECL forms: all non-last get TS2323; last gets TS2323 only if it's a
+                    // "real declaration" (ClassDecl/FuncDecl/InterfaceDecl), not an ExportAssignment.
+                    // For REEXPORT forms: only non-last get TS2323 (last re-export gets only TS2528).
+                    // The span uses ts2323Start/ts2323Length (whole statement for ExportAssignment).
+                    if (d.kind == DefaultDeclKind.DECL || d.kind == DefaultDeclKind.REEXPORT) {
+                        val isRealDecl = d.stmt !is ExportAssignment && d.kind != DefaultDeclKind.REEXPORT
+                        if (!isLast || isRealDecl) {
+                            val (ts2323Line, ts2323Char) = getLineAndCharacterOfPosition(source, d.ts2323Start)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot redeclare exported variable 'default'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2323,
+                                fileName = fileName,
+                                line = ts2323Line,
+                                character = ts2323Char,
+                                start = d.ts2323Start,
+                                length = d.ts2323Length,
+                            ))
+                        }
+                    }
+                }
+            }
+
+            // TS2528 pass — an `export default interface` MERGES with a class-valued
+            // export-assignment default (class+interface declaration merging), so it is
+            // NOT a participant when such a REF_VALUE-to-class default exists (B274;
+            // a type-alias/interface ref can't merge with anything, so the interface
+            // stays a participant there — exportDefaultAlias_excludesEverything).
+            // The related-info "last" anchor is the last PARTICIPANT.
+            val participants = if (emitTs2528) {
+                val hasClassRef = defaults.any { d ->
+                    d.kind == DefaultDeclKind.REF_VALUE &&
+                        ((d.stmt as? ExportAssignment)?.expression as? Identifier)?.let { id ->
+                            result.locals[id.text]?.declarations?.any { it is ClassDeclaration }
+                        } == true
+                }
+                defaults.filterNot { hasClassRef && it.kind == DefaultDeclKind.DECL && it.stmt is InterfaceDeclaration }
+                    .ifEmpty { defaults }
+            } else emptyList()
+            if (!emitTs2528 || participants.size < 2) continue
+            val pLastIdx = participants.size - 1
             // When the last export is a FunctionDeclaration, it acts as the "canonical" binding:
             // all preceding exports point to it with TS2752 "The first export default is here.",
             // and the last export points back with TS2753 "Another export default is here."
             // In all other cases, preceding exports point to the last with TS2753/TS6204,
             // and the last export points to all preceding with TS2752.
-            val lastIsFunctionDecl = lastStmt is FunctionDeclaration
+            val lastIsFunctionDecl = participants[pLastIdx].stmt is FunctionDeclaration
 
-            for (i in defaults.indices) {
-                val d = defaults[i]
+            for (i in participants.indices) {
+                val d = participants[i]
                 val (line, character) = getLineAndCharacterOfPosition(source, d.start)
-                val isLast = i == lastIdx
-
-                // TS2323: fires for DECL/REEXPORT forms when declCount >= 2.
-                // For DECL forms: all non-last get TS2323; last gets TS2323 only if it's a
-                // "real declaration" (ClassDecl/FuncDecl/InterfaceDecl), not an ExportAssignment.
-                // For REEXPORT forms: only non-last get TS2323 (last re-export gets only TS2528).
-                // The span for TS2323 uses ts2323Start/ts2323Length (whole statement for ExportAssignment).
-                if (emitTs2323 && (d.kind == DefaultDeclKind.DECL || d.kind == DefaultDeclKind.REEXPORT)) {
-                    val isRealDecl = d.stmt !is ExportAssignment && d.kind != DefaultDeclKind.REEXPORT
-                    if (!isLast || isRealDecl) {
-                        val (ts2323Line, ts2323Char) = getLineAndCharacterOfPosition(source, d.ts2323Start)
-                        diagnostics.add(Diagnostic(
-                            message = "Cannot redeclare exported variable 'default'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2323,
-                            fileName = fileName,
-                            line = ts2323Line,
-                            character = ts2323Char,
-                            start = d.ts2323Start,
-                            length = d.ts2323Length,
-                        ))
-                    }
-                }
-
-                if (!emitTs2528) continue
+                val isLast = i == pLastIdx
 
                 val relatedInfoList = mutableListOf<Diagnostic>()
 
                 if (!isLast) {
                     // Non-last export: point to the last one
-                    val relD = defaults[lastIdx]
+                    val relD = participants[pLastIdx]
                     val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
                     val relCode: Int
                     val relMessage: String
@@ -54591,8 +54630,8 @@ interface DataView {
                     ))
                 } else {
                     // Last export: point to all previous ones
-                    for (j in 0 until lastIdx) {
-                        val relD = defaults[j]
+                    for (j in 0 until pLastIdx) {
+                        val relD = participants[j]
                         val (relLine, relChar) = getLineAndCharacterOfPosition(source, relD.start)
                         val relCode: Int
                         val relMessage: String
