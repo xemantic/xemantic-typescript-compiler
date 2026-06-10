@@ -879,6 +879,12 @@ class Scanner(private val text: String) {
         // Numeric separator validation (TS6188 trailing, TS6189 double `__`) for the
         // body up to the optional `n` BigInt suffix.
         detectNumericSeparatorErrors(start, pos)
+        // tsc scanNumber: a separator directly after a LEADING `0` (`0_8`) is TS6188
+        // at the `_` (the literal is then treated as a normal number; later separators
+        // in decimal/exponent parts stay legal).
+        if (text[start] == '0' && start + 1 < pos && text[start + 1] == '_') {
+            numericTrailingSeparatorPositions = listOf(start + 1) + numericTrailingSeparatorPositions
+        }
 
         // BigInt suffix — only for pure decimal (no legacy octal like 0123n, no float)
         // Legacy octal: starts with '0' followed by more digits (0123) — not a valid BigInt
@@ -894,7 +900,10 @@ class Scanner(private val text: String) {
         }
 
         tokenValue = text.substring(start, pos)
-        detectIdentifierAfterNumericLiteral()
+        // tsc returns EARLY for legacy octals and leading-zero decimals — no
+        // identifier-follow check (the identifier scans as a separate token and the
+        // parser reports TS1005 ';' expected there instead of TS1351).
+        if (!isLegacyOctalLiteral && !hasLeadingZeroDecimal) detectIdentifierAfterNumericLiteral()
         return SyntaxKind.NumericLiteral
     }
 

@@ -209,8 +209,10 @@ class Parser(
         // `this.foo: any;` (mis-typed class-field declaration inside a body).
         if ((token == SyntaxKind.Colon || token == SyntaxKind.NumericLiteral ||
                 token == SyntaxKind.BigIntLiteral) && !scanner.hasPrecedingLineBreak()) {
+            val len = if (token == SyntaxKind.Colon) 1
+                else scanner.getTokenText().length.coerceAtLeast(1)
             reportError("';' expected.", code = 1005,
-                overrideStart = scanner.getTokenPos(), overrideLength = 1)
+                overrideStart = scanner.getTokenPos(), overrideLength = len)
         }
     }
 
@@ -1053,6 +1055,17 @@ class Parser(
             isModuleRootedPropertyAccess(expr)) {
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = 1)
+        }
+        // B288: a NUMERIC-literal expression statement followed by an identifier on the
+        // same line (`00e5;` scans as `00` `e5` — legacy octal / leading-zero literals
+        // don't absorb the identifier) is TS1005 "';' expected." at the identifier.
+        // Same-start dedup mirrors tsc parseErrorAtPosition (a TS1351/TS1124 already
+        // at the identifier's position suppresses it).
+        if (expr is NumericLiteralNode && isIdentifier() && !scanner.hasPrecedingLineBreak() &&
+            diagnostics.lastOrNull()?.start != scanner.getTokenPos()) {
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(),
+                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
         }
         parseSemicolon()
         val trailing = trailingComments()
