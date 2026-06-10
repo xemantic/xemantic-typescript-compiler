@@ -11,6 +11,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **Do not** add codebase overviews, directory listings, or anything discoverable by reading the source.
 - Keep entries concise: one line per lesson, grouped under a heading if a theme emerges.
 - **Durable-invariant test** before adding a gotcha: "Would a future agent rediscover this in under 60 seconds via Grep + reading source?" If yes, it belongs in the git commit message, not here. Every entry costs tokens on every session — the bar for inclusion is **future agents will break things if they don't know this**. Per-fix narratives (test name, specific code path, fix story) go in PLAN-PHASE-4.md session notes instead.
+- **Format rule (2026-06-10 trim — this file was audited down from 284 KB to 170 KB; do not regrow it)**: a new entry is 1–3 lines stating the trap/invariant and where to look — NOT the fix story. No B-numbers, round numbers, or test-name narratives in the entry body (the session note carries those); no new per-round `### Round-NNN gotchas` sections — file new entries under the matching topical section. If an entry needs more than ~5 lines, the invariant probably isn't isolated yet — distill it.
 
 ## Known gotchas
 
@@ -492,7 +493,7 @@ PLAN-PHASE-4.md contains the **live QUEUE** under the heading `## Phase 16 — F
 2. Implement it — the item describes the deliverable.
 3. Run the full suite (`rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"`).
 4. Verify no regressions from the currently passing test count.
-5. Check off the item (`- [x]`), **bump the test count in STATUS.md** to reflect the new passing total, add a session note to PLAN-PHASE-4.md (under the live notes heading, most recent on top), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything). STATUS.md drift is a real failure mode — past sessions committed `(+N)` work without bumping the count, so the next agent saw a stale baseline.
+5. Check off the item (`- [x]`), **bump the test count in STATUS.md** to reflect the new passing total, add a session note to PLAN-PHASE-4.md (under the live notes heading, most recent on top), add a CLAUDE.md gotcha if applicable, **commit and push** (one commit per sub-step — keeps history bisectable and lets the next agent pick up mid-stream without re-running everything). STATUS.md drift is a real failure mode — past sessions committed `(+N)` work without bumping the count, so the next agent saw a stale baseline. **Trim-on-write (the anti-balloon rule)**: when bumping STATUS.md, keep only the ~5 most-recent round notes — move older ones to STATUS-HISTORY.md in the same commit; when adding a session note to PLAN-PHASE-4.md, if more than ~10 rounds are live, move the oldest to PLAN-PHASE-4-HISTORY.md in the same commit. Both files ballooned (160 KB / 1.7 MB) before the 2026-06-10 trim because sessions appended without trimming.
 6. **Loop back to step 1** and pick up the next item. Keep going until one of these stop conditions:
    - Context budget is running out — finish the current item cleanly, commit, then stop.
    - Every remaining queue item is gated on user-policy decisions (Guardrails) AND no in-scope unblocker work remains. This should be rare — under the promote-unblocker default, blockers turn into queue items, so the queue rarely runs dry.
@@ -538,7 +539,7 @@ The original TypeScript compiler source is in `typescript-repo/src/compiler/` (i
 ## AI agent workflow
 
 - Keep this file and `PLAN-PHASE-4.md` up to date after each session so the next agent/developer starts with accurate state.
-- `PLAN-PHASE-4.md` contains the live queue + blockers + workflow; `PLAN-PHASE-4-HISTORY.md` has archived session notes, archived completed queue items, and the full Phase 5–15 record. `STATUS.md` keeps the headline test count plus the last ~5 B-entries; older entries live in `STATUS-HISTORY.md`. `PLAN-PHASE-3.md` has deferred Phase 3 items.
+- `PLAN-PHASE-4.md` contains the live queue + blockers + workflow + the ~5 most-recent rounds of session notes; `PLAN-PHASE-4-HISTORY.md` has everything archived — older session notes, completed queue items, the explored-but-skipped SKIP LOG (add new skip entries there, above the `### End of skip log` terminator), the strategic-map archive, gotchas moved out of CLAUDE.md, and the full Phase 5–15 record. `STATUS.md` keeps the headline test count plus the last ~5 round notes; older entries live in `STATUS-HISTORY.md`. `PLAN-PHASE-3.md` has deferred Phase 3 items. When grepping for whether a test was previously triaged, grep BOTH `PLAN-PHASE-4.md` and `PLAN-PHASE-4-HISTORY.md`.
 - For subagent-based parallel work (rarely needed — most surgical fixes are faster done in-line), see `docs/subagent-workflow.md`.
 
 ## How to run tests
@@ -561,7 +562,10 @@ python3 scripts/find_candidates.py --none --fresh --tsgo # hide tsgo-IRRELEVANT 
 **Skip-log filtering caveat (round 137):** `--fresh` extracts skip-set names as backticked
 `name_ts` tokens — entries logged WITHOUT the `_ts` suffix (most of the round-133..136
 one-liners) are NOT filtered, so previously-triaged tests keep appearing in the NONE
-listing. Cross-check a candidate against PLAN-PHASE-4.md (`grep <name> PLAN-PHASE-4.md`)
+listing. The skip log lives in PLAN-PHASE-4-HISTORY.md since 2026-06-10 (the script reads
+both files and unions the tokens); add new entries there, above the `### End of skip log`
+terminator. Cross-check a candidate against both files
+(`grep <name> PLAN-PHASE-4.md PLAN-PHASE-4-HISTORY.md`)
 before re-investigating; suffix new entries with `_ts`.
 The plain (no-flag) buckets only see tests that already emit some `error TSxxxx`
 — ~33 of >1000 failures. **`--none` is where ~60% of the remaining work lives**
@@ -588,4 +592,4 @@ instead of fixing it.
 
 - Do not add content to this file that is already discoverable by reading the source or build scripts — that inflates context without adding signal, reducing AI agent task success rates (see [arxiv 2602.11988](https://arxiv.org/abs/2602.11988)).
 - Do not use `grep` (without `-a` flag) on Gradle test output — it may contain binary content. Always use `grep -a`.
-- **Do not re-analyze what to fix next.** PLAN.md is already the prioritized plan. Pick the top unfinished item, implement it, done. Do not scan lists of failing tests or explore "low-hanging fruits" — that is wasted analysis time that could be implementation time.
+- **Do not re-analyze what to fix next.** PLAN-PHASE-4.md is already the prioritized plan. Pick the top unfinished item, implement it, done. Do not scan lists of failing tests or explore "low-hanging fruits" — that is wasted analysis time that could be implementation time.
