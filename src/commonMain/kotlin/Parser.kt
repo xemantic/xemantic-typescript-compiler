@@ -6672,8 +6672,12 @@ class Parser(
 
     private fun parseNonUnionType(): TypeNode {
         val pos = getPos()
-        // Error recovery: leading ! in type position (e.g. a: !string) — skip it
+        // Error recovery: leading ! in type position (e.g. a: !string) — skip it.
+        // In .ts files emit TS17020 after the type is parsed (JSDoc non-nullable
+        // is not valid TS syntax); JS files keep the silent JSDoc recovery.
+        var leadingExclPos: Int = -1
         if (token == SyntaxKind.Exclamation) {
+            leadingExclPos = getPos()
             nextToken()
         }
         // Error recovery: leading ? in type position (JSDoc nullable, e.g. ?string) — skip it.
@@ -6782,9 +6786,20 @@ class Parser(
         // diagnostic span construction.
         val typeProperEnd = scanner.getPrevTokenEnd()
 
-        // Error recovery: trailing ! in type position (e.g. string!) — skip it
+        // Error recovery: trailing ! in type position (e.g. string!) — skip it.
+        // In .ts files emit TS17019 (JSDoc non-nullable is not valid TS syntax).
         if (token == SyntaxKind.Exclamation) {
+            val exclEnd = scanner.getPos()
             nextToken()
+            if (!isJsLikeFile) {
+                val typeText = source.substring(type.pos, typeProperEnd)
+                reportError(
+                    message = "'!' at the end of a type is not valid TypeScript syntax. Did you mean to write '$typeText'?",
+                    code = 17019,
+                    overrideStart = type.pos,
+                    overrideLength = exclEnd - type.pos,
+                )
+            }
         }
 
         // Error recovery: trailing ? in type position (JSDoc nullable, e.g. string?) — skip it.
@@ -6825,6 +6840,24 @@ class Parser(
                 overrideStart = leadingQuestionPos,
                 overrideLength = combinedEnd - leadingQuestionPos,
             )
+        }
+
+        if (leadingExclPos >= 0 && !isJsLikeFile) {
+            val combinedEnd = scanner.getPrevTokenEnd()
+            val typeText = source.substring(type.pos, typeProperEnd)
+            reportError(
+                message = "'!' at the start of a type is not valid TypeScript syntax. Did you mean to write '$typeText'?",
+                code = 17020,
+                overrideStart = leadingExclPos,
+                overrideLength = combinedEnd - leadingExclPos,
+            )
+            // Downstream anchors (e.g. TS2355 at the return-type node) span from the `!`
+            // in tsc — extend the node's pos to cover it for the common shapes.
+            type = when (val t = type) {
+                is KeywordTypeNode -> t.copy(pos = leadingExclPos)
+                is TypeReference -> t.copy(pos = leadingExclPos)
+                else -> t
+            }
         }
 
         return type

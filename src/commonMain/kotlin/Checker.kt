@@ -60041,6 +60041,7 @@ interface DataView {
                     }
                 }
                 ch == '?' -> i++ // optional types
+                ch == '!' -> i++ // invalid JSDoc non-nullable recovery (`string!` / `!string`)
                 else -> break
             }
         }
