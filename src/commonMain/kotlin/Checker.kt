@@ -3471,6 +3471,142 @@ class Checker(
         return ConstantValue.NumberValue(result)
     }
 
+    /** B269: enum-initializer evaluation result mirroring TS's EvaluatorResult —
+     *  [value] is a Double, a String, or null (not compile-time evaluable);
+     *  [synStr] is TS's isSyntacticallyString (string/template literal provenance,
+     *  KILLED by cross-file const resolution and by non-Plus operators). */
+    private class EnumEv(val value: Any?, val synStr: Boolean)
+
+    /** JS ToString for concat: integral doubles print without the Kotlin `.0`. */
+    private fun jsConcatString(v: Any): String = when (v) {
+        is Double -> if (!v.isInfinite() && v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+        else -> v.toString()
+    }
+
+    /** Resolve [name] to a const variable's initializer; second = true when the declaration
+     *  lives in a DIFFERENT file (import alias or shared script-global scope) — TS kills
+     *  isSyntacticallyString for cross-file resolutions (the babel-transpilability rule). */
+    private fun resolveConstInitForEnumEval(name: String, fileName: String): Pair<Expression, Boolean>? {
+        val result = fileResults[fileName] ?: return null
+        val symbol = result.locals[name]
+        if (symbol != null) {
+            val target = resolveAlias(symbol)
+            val crossFile = target !== symbol
+            for (decl in target.declarations) {
+                if (decl !is VariableDeclaration) continue
+                val parent = findContainingVariableStatement(decl, target) ?: continue
+                if (parent.declarationList.flags != ConstKeyword) continue
+                val init = decl.initializer ?: continue
+                return init to crossFile
+            }
+            return null
+        }
+        if (isModuleFile(result.sourceFile.statements)) return null
+        for (br in binderResults) {
+            if (br.sourceFile.fileName == fileName) continue
+            if (isDtsFile(br.sourceFile.fileName)) continue
+            if (isModuleFile(br.sourceFile.statements)) continue
+            for (stmt in br.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                if (stmt.declarationList.flags != ConstKeyword) continue
+                for (d in stmt.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text != name) continue
+                    val init = d.initializer ?: continue
+                    return init to true
+                }
+            }
+        }
+        return null
+    }
+
+    private fun enumEvalInit(expr: Expression, members: Map<String, EnumEv>, enumName: String, fileName: String, depth: Int): EnumEv {
+        if (depth > 16) return EnumEv(null, false)
+        return when (expr) {
+            is NumericLiteralNode -> EnumEv(expr.text.replace("_", "").toDoubleOrNull(), false)
+            is StringLiteralNode -> EnumEv(expr.text, true)
+            is NoSubstitutionTemplateLiteralNode -> EnumEv(expr.text, true)
+            is TemplateExpression -> {
+                // A template is syntactically string even when a span fails to evaluate.
+                val sb = StringBuilder(expr.head.text)
+                for (span in expr.templateSpans) {
+                    val r = enumEvalInit(span.expression, members, enumName, fileName, depth + 1)
+                    val v = r.value ?: return EnumEv(null, true)
+                    sb.append(jsConcatString(v))
+                    val lit = span.literal as? StringLiteralNode ?: return EnumEv(null, true)
+                    sb.append(lit.text)
+                }
+                EnumEv(sb.toString(), true)
+            }
+            is ParenthesizedExpression -> enumEvalInit(expr.expression, members, enumName, fileName, depth + 1)
+            is PrefixUnaryExpression -> {
+                val v = enumEvalInit(expr.operand, members, enumName, fileName, depth + 1).value as? Double
+                    ?: return EnumEv(null, false)
+                when (expr.operator) {
+                    SyntaxKind.Plus -> EnumEv(v, false)
+                    SyntaxKind.Minus -> EnumEv(-v, false)
+                    SyntaxKind.Tilde -> EnumEv(v.toLong().inv().toDouble(), false)
+                    else -> EnumEv(null, false)
+                }
+            }
+            is BinaryExpression -> {
+                val l = enumEvalInit(expr.left, members, enumName, fileName, depth + 1)
+                val r = enumEvalInit(expr.right, members, enumName, fileName, depth + 1)
+                val synStr = (l.synStr || r.synStr) && expr.operator == SyntaxKind.Plus
+                val lv = l.value
+                val rv = r.value
+                val value: Any? = when {
+                    lv is Double && rv is Double ->
+                        (evaluateNumericBinary(lv, expr.operator, rv) as? ConstantValue.NumberValue)?.value
+                    expr.operator == SyntaxKind.Plus && lv != null && rv != null &&
+                        (lv is String || rv is String) -> jsConcatString(lv) + jsConcatString(rv)
+                    else -> null
+                }
+                EnumEv(value, synStr)
+            }
+            is Identifier -> {
+                members[expr.text]?.let { return it }
+                val resolved = resolveConstInitForEnumEval(expr.text, fileName) ?: return EnumEv(null, false)
+                val r = enumEvalInit(resolved.first, emptyMap(), "", fileName, depth + 1)
+                if (resolved.second) EnumEv(r.value, false) else EnumEv(r.value, r.synStr)
+            }
+            is PropertyAccessExpression -> {
+                if ((expr.expression as? Identifier)?.text == enumName) {
+                    members[expr.name.text]?.let { return it }
+                }
+                EnumEv(null, false)
+            }
+            else -> EnumEv(null, false)
+        }
+    }
+
+    /** B269: conservative "this enum initializer is definitely string-typed" estimator for
+     *  TS18033 — a member reference is number-domain (a failed-evaluation member is assumed
+     *  numeric by TS); only syntactically-sound string shapes return true (FN-safe). */
+    private fun enumInitIsStringTyped(expr: Expression, memberNames: Set<String>, fileName: String, depth: Int): Boolean {
+        if (depth > 16) return false
+        return when (expr) {
+            is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is TemplateExpression -> true
+            is ParenthesizedExpression -> enumInitIsStringTyped(expr.expression, memberNames, fileName, depth + 1)
+            is AsExpression -> (expr.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword
+            is TypeAssertionExpression -> (expr.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword
+            is NonNullExpression -> enumInitIsStringTyped(expr.expression, memberNames, fileName, depth + 1)
+            is BinaryExpression -> expr.operator == SyntaxKind.Plus &&
+                (enumInitIsStringTyped(expr.left, memberNames, fileName, depth + 1) ||
+                    enumInitIsStringTyped(expr.right, memberNames, fileName, depth + 1))
+            is Identifier -> {
+                if (expr.text in memberNames) false
+                else resolveConstInitForEnumEval(expr.text, fileName)
+                    ?.let { enumInitIsStringTyped(it.first, emptySet(), fileName, depth + 1) } == true
+            }
+            is CallExpression -> {
+                // `2..toFixed(0)` — numeric-literal receiver, string-returning method
+                val callee = expr.expression as? PropertyAccessExpression
+                callee != null && callee.name.text == "toFixed" && callee.expression is NumericLiteralNode
+            }
+            else -> false
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Import reference tracking
     // -----------------------------------------------------------------------
@@ -25003,6 +25139,10 @@ class Checker(
         // Track computed values from earlier members for reference resolution.
         val syntheticSymbol = Symbol(SymbolFlags.RegularEnum, decl.name.text)
         val localValues = mutableMapOf<String, ConstantValue>()
+        // B269: per-member (value, isSyntacticallyString) results + the full member-name set
+        // (a member reference is number-domain for TS18033 even when its value is unknown).
+        val memberEvals = mutableMapOf<String, EnumEv>()
+        val allMemberNames = decl.members.mapNotNull { (it.name as? Identifier)?.text }.toSet()
         var canAutoIncrement = true
         var prevInitializer: Expression? = null
         for (member in decl.members) {
@@ -25013,21 +25153,48 @@ class Checker(
                 else -> null
             }
             if (member.initializer != null) {
-                // B98: TS18055 — under isolatedModules, an enum member whose initializer is a
-                // BARE identifier resolving to a STRING-typed const lacks "syntactically
-                // recognizable string syntax". Template / `"" + n` concat / parenthesized-literal
-                // forms are not bare Identifiers so they're excluded for free.
-                // resolveImportedConstLiteralValue follows the import alias to the declaring file.
+                // B269: evaluator with TS's (value, isSyntacticallyString) semantics — a string
+                // VALUE that is not syntactically string (cross-file const, `2 + str` concat)
+                // is TS18055 under isolatedModules; a FAILED evaluation whose expression is
+                // string-typed is TS18033 (string never satisfies a computed numeric member).
                 val init = member.initializer
-                if (options.isolatedModules && init is Identifier && memberName != null &&
-                    resolveImportedConstLiteralValue(init.text, fileName) is ConstantValue.StringValue
-                ) {
+                val ev = enumEvalInit(init, memberEvals, decl.name.text, fileName, 0)
+                // Fall back to the older cross-enum-capable evaluator for the VALUE when the
+                // B269 evaluator fails; provenance unknown → synStr=true so TS18055 never
+                // fires from a fallback value (conservative).
+                val evStored = if (ev.value == null) {
+                    when (val cv = evaluateEnumInitializer(init, localValues, syntheticSymbol)) {
+                        is ConstantValue.NumberValue -> EnumEv(cv.value, false)
+                        is ConstantValue.StringValue -> EnumEv(cv.value, true)
+                        else -> ev
+                    }
+                } else ev
+                if (memberName != null) memberEvals[memberName] = evStored
+                // expressionTrueEnd falls back to the one-token-overshooting node.end for
+                // template/as-cast shapes — trim trailing trivia and the member comma.
+                val spanEnd = run {
+                    var e = expressionTrueEnd(init).coerceAtMost(source.length)
+                    while (e > init.pos && (source[e - 1].isWhitespace() || source[e - 1] == ',')) e--
+                    e
+                }
+                if (options.isolatedModules && memberName != null && ev.value is String && !ev.synStr) {
                     val (line, character) = getLineAndCharacterOfPosition(source, init.pos)
                     diagnostics.add(Diagnostic(
                         message = "'${decl.name.text}.$memberName' has a string type, but must have syntactically recognizable string syntax when 'isolatedModules' is enabled.",
                         category = DiagnosticCategory.Error, code = 18055,
                         fileName = fileName, line = line, character = character,
-                        start = init.pos, length = init.text.length,
+                        start = init.pos, length = (spanEnd - init.pos).coerceAtLeast(1),
+                    ))
+                }
+                if (evStored.value == null && ModifierFlag.Const !in decl.modifiers &&
+                    enumInitIsStringTyped(init, allMemberNames, fileName, 0)
+                ) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, init.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'string' is not assignable to type 'number' as required for computed enum member values.",
+                        category = DiagnosticCategory.Error, code = 18033,
+                        fileName = fileName, line = line, character = character,
+                        start = init.pos, length = (spanEnd - init.pos).coerceAtLeast(1),
                     ))
                 }
                 // B162: TS1281 — under isolatedModules, an enum member initializer that is a
