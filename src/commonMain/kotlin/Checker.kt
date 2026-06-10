@@ -77206,6 +77206,32 @@ interface DataView {
             if (numNode != null && strNode != null) {
                 val numVal = try { getTypeFromTypeNode(numNode) } catch (_: StackOverflowError) { errorType }
                 val strVal = try { getTypeFromTypeNode(strNode) } catch (_: StackOverflowError) { errorType }
+                // B272: PRIMITIVE index value types — `[n: number]: string` + `[s: string]: number`
+                // is always TS2413 (obj[0] is also obj["0"]). Same own-sig report position as
+                // the named-interface path below; disjoint by value kind.
+                val isPrimVal = { t: Type ->
+                    t is Type.Intrinsic && t.flags.hasAny(TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt)
+                }
+                if (isPrimVal(numVal) && isPrimVal(strVal) &&
+                    !checkTypeRelatedTo(numVal, strVal, assignableRelation)) {
+                    val reportSig = ownNumberSig ?: ownStringSig
+                    if (reportSig != null && stmt.members.contains(reportSig)) {
+                        val start = reportSig.pos
+                        val typePos = reportSig.type?.pos ?: reportSig.pos
+                        var i = typePos
+                        while (i < source.length && source[i] != ';' && source[i] != '\n') i++
+                        val end = if (i < source.length && source[i] == ';') i + 1 else i
+                        if (end > start) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "'number' index type '${typeToString(numVal)}' is not assignable to 'string' index type '${typeToString(strVal)}'.",
+                                category = DiagnosticCategory.Error, code = 2413,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = end - start,
+                            ))
+                        }
+                    }
+                }
                 if (numVal is Type.Interface && strVal is Type.Interface &&
                     numVal !== strVal && numVal !== errorType && strVal !== errorType) {
                     resolveStructuredTypeMembers(numVal)
@@ -77239,6 +77265,58 @@ interface DataView {
             }
         }
 
+        // B272: a zero-arg single-sig method with a NUMERIC name is also subject to the
+        // NUMBER index signature (own or single-level inherited) — a function type is
+        // never assignable to a primitive index value type. (The string-index side is
+        // handled by the 16.4ez primitive-methods branch below.)
+        run {
+            val isNumSig = { s: IndexSignature ->
+                s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
+            }
+            var numSig = members.filterIsInstance<IndexSignature>().firstOrNull(isNumSig)
+            if (numSig == null && (stmt is ClassDeclaration || stmt is InterfaceDeclaration)) {
+                val baseNames: List<String> = when (stmt) {
+                    is ClassDeclaration -> stmt.heritageClauses
+                    is InterfaceDeclaration -> stmt.heritageClauses
+                    else -> null
+                }?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                for (baseName in baseNames) {
+                    val baseSymbol = globals[baseName] ?: continue
+                    val baseMembers = baseSymbol.declarations.flatMap { d ->
+                        when (d) {
+                            is ClassDeclaration -> d.members
+                            is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                            else -> emptyList()
+                        }
+                    }
+                    numSig = baseMembers.filterIsInstance<IndexSignature>().firstOrNull(isNumSig)
+                    if (numSig != null) break
+                }
+            }
+            val numType = numSig?.type?.let { getTypeFromTypeNode(it) }
+            if (numType != null && numType.flags.hasAny(TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt)) {
+                for (member in members) {
+                    if (member !is MethodDeclaration) continue
+                    val mName = member.name as? NumericLiteralNode ?: continue
+                    if (member.parameters.isNotEmpty()) continue
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    if (members.count { it is MethodDeclaration && (it.name as? NumericLiteralNode)?.text == mName.text } > 1) continue
+                    val retDisp = member.type?.let { formatTypeForDisplay(it) ?: typeToString(getTypeFromTypeNode(it)) } ?: "any"
+                    val start = mName.pos
+                    val semiIdx = source.indexOf(';', start)
+                    val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else member.end
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${mName.text}' of type '() => $retDisp' is not assignable to 'number' index type '${typeToString(numType)}'.",
+                        category = DiagnosticCategory.Error, code = 2411,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = (end - start).coerceAtLeast(1),
+                    ))
+                }
+            }
+        }
+
         val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
         if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
 
@@ -77253,7 +77331,12 @@ interface DataView {
             val methodsByName = linkedMapOf<String, MutableList<MethodDeclaration>>()
             for (m in members) {
                 if (m is MethodDeclaration) {
-                    val nm = (m.name as? Identifier)?.text ?: continue
+                    // B272: numeric-named methods (`6(): string`) are also string-indexable.
+                    val nm = when (val n = m.name) {
+                        is Identifier -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> null
+                    } ?: continue
                     if (nm.startsWith("#")) continue
                     // Skip call signatures (name == "") and construct signatures (name == "new") —
                     // per CLAUDE.md, interface call/construct signatures are encoded as
@@ -77273,7 +77356,11 @@ interface DataView {
                 // Only fire when all overloads took no parameters (narrow safety — otherwise
                 // the display could miss-represent parameterized overloads).
                 if (overloads.any { it.parameters.isNotEmpty() }) continue
-                val propTypeDisplay = "{ ${sigStrings.joinToString("; ")}; }"
+                // B272: a SINGLE signature displays in arrow form (`() => string`);
+                // overload sets keep the brace form (`{ (): any; (): any; }`).
+                val propTypeDisplay = if (overloads.size == 1) {
+                    "() => ${sigStrings[0].removePrefix("(): ")}"
+                } else "{ ${sigStrings.joinToString("; ")}; }"
                 val indexTypeDisplay = typeToString(stringIndexType)
                 // Squiggle covers the first overload's full text through its trailing `;`.
                 val start = firstDecl.pos
@@ -77319,6 +77406,8 @@ interface DataView {
                     propName = when (val n = member.name) {
                         is Identifier -> n.text
                         is StringLiteralNode -> n.text
+                        // B272: numeric-named props are ALSO string-indexable (`obj[3]` is `obj["3"]`)
+                        is NumericLiteralNode -> n.text
                         else -> continue
                     }
                     propTypeNode = member.type
@@ -77370,6 +77459,7 @@ interface DataView {
                 } else when (nameNode) {
                     is Identifier -> { start = nameNode.pos; length = nameNode.text.length }
                     is StringLiteralNode -> { start = nameNode.pos; length = nameNode.text.length + 2 }
+                    is NumericLiteralNode -> { start = nameNode.pos; length = nameNode.text.length }
                     else -> continue
                 }
                 // String literal property names include quotes in the display
