@@ -68280,6 +68280,20 @@ interface DataView {
                 // tracked separately, not as property types.
                 val methodName = (decl.name as? Identifier)?.text
                 if (methodName.isNullOrEmpty() || methodName == "new") return anyType
+                // B280: a method on a NAMESPACE-NESTED interface/class must resolve its
+                // param/return annotations with the containing namespace's exports in
+                // scope (`namespace O { class A; interface I { g(a: A): C } }` — without
+                // this, A/C resolve to errorType and overload-return selection dies).
+                // Walk the member's parent chain to the nearest Module ancestor.
+                var nsAncestor = symbol.parent
+                while (nsAncestor != null && !nsAncestor.flags.hasAny(SymbolFlags.Module)) {
+                    nsAncestor = nsAncestor.parent
+                }
+                val nsPushed = if (nsAncestor != null) {
+                    inferenceNamespaceStack.addLast(nsAncestor)
+                    true
+                } else false
+                try {
                 val fnType = Type.Object()
                 // Collect all method declarations for overloads (same name)
                 val methodDecls = symbol.declarations.filterIsInstance<MethodDeclaration>()
@@ -68350,6 +68364,9 @@ interface DataView {
                     ))
                 }
                 fnType
+                } finally {
+                    if (nsPushed) inferenceNamespaceStack.removeLast()
+                }
             }
             is GetAccessor -> {
                 decl.type?.let { return getTypeFromTypeNode(it) }
@@ -68527,6 +68544,21 @@ interface DataView {
 
     /** Resolve members of an interface/class type from its declarations + base types. */
     private fun resolveInterfaceMembers(type: Type.Interface) {
+        // B280: an interface declared INSIDE a namespace must resolve its member
+        // annotations with the containing namespace's exports in scope (`namespace O {
+        // class A; interface I { g(a: A): C } }` — A/C are namespace-local). Without
+        // the push those member types silently resolve to errorType, killing
+        // downstream overload-return resolution (overload1). The nodeTypes cache is
+        // bypassed while inferenceNamespaceStack is non-empty, so no stale entries.
+        val nsPushed = type.symbol?.let { pushInferenceNamespaceFor(it) } ?: false
+        try {
+            resolveInterfaceMembersCore(type)
+        } finally {
+            if (nsPushed) inferenceNamespaceStack.removeLast()
+        }
+    }
+
+    private fun resolveInterfaceMembersCore(type: Type.Interface) {
         val symbol = type.symbol ?: run {
             type.properties = emptyList()
             return
@@ -87900,6 +87932,53 @@ interface DataView {
             // incorrectly and produce false positive TS2769 errors.
             val hasTypeParams = signatures.any { !it.typeParameters.isNullOrEmpty() }
             if (hasTypeParams) return
+            // B280: method-overload ARITY — when the arg count matches NO overload
+            // (and none has a rest param), tsc emits TS2554 with the cross-overload
+            // range instead of TS2769. Too-many squiggles the excess args; too-few
+            // anchors at the method name + TS6210 from the smallest-min overload.
+            // Embedded-lib overloads excluded (simplified arities — B279 lesson).
+            run {
+                val callee = expr.expression as? PropertyAccessExpression ?: return@run
+                if (signatures.any { it.declaration != null && it.declaration in builtinLibMemberDecls }) return@run
+                val anyRest = signatures.any { sig ->
+                    (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+                }
+                if (anyRest) return@run
+                val argCount = expr.arguments.size
+                if (signatures.any { argCount >= it.minArgumentCount && argCount <= it.parameters.size }) return@run
+                val minA = signatures.minOf { it.minArgumentCount }
+                val maxA = signatures.maxOf { it.parameters.size }
+                if (argCount > maxA) {
+                    emitTS2554TooMany(minA, maxA, argCount, expr.arguments, maxA, source, fileName)
+                    return
+                }
+                if (argCount < minA) {
+                    val nameNode = callee.name
+                    if (nameNode.text.isEmpty()) return@run
+                    val bestSig = signatures.firstOrNull { it.minArgumentCount == minA } ?: return@run
+                    val relatedInfo = mutableListOf<Diagnostic>()
+                    val missingParam = bestSig.parameters.getOrNull(argCount)?.valueDeclaration as? Parameter
+                    val pname = missingParam?.name as? Identifier
+                    if (pname != null) {
+                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, pname.pos)
+                        relatedInfo.add(Diagnostic(
+                            message = "An argument for '${pname.text}' was not provided.",
+                            category = DiagnosticCategory.Message, code = 6210,
+                            fileName = fileName, line = rLine, character = rChar,
+                            start = pname.pos, length = pname.text.length,
+                        ))
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Expected ${formatExpectedArgs(minA, maxA)} arguments, but got $argCount.",
+                        category = DiagnosticCategory.Error, code = 2554,
+                        fileName = fileName, line = line, character = character,
+                        start = nameNode.pos, length = nameNode.text.length,
+                        relatedInformation = relatedInfo,
+                    ))
+                    return
+                }
+            }
             // Overload resolution: try each signature in order
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
         }
@@ -88778,6 +88857,11 @@ interface DataView {
             val allSamePos = perOverloadPos.isNotEmpty() && perOverloadPos.all { it == perOverloadPos.first() }
             val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null && (!allSamePos || hasNonFnFnFailing)) {
                 Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
+            } else if (callee is PropertyAccessExpression && !allSamePos) {
+                // B280: a METHOD call whose overloads fail at DIFFERENT arg positions
+                // anchors TS2769 at the method name (tsc's call-node error span),
+                // e.g. `x.h(2,2)` vs `(s1: string, s2: number)`/`(s1: number, s2: string)`.
+                Pair(callee.name.pos, callee.name.text.length)
             } else {
                 getFirstFailingArgPosition(args, signatures.last())
             }
