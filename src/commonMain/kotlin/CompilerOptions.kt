@@ -398,6 +398,11 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                     currentLines.clear()
                     currentFileName = value
                     inGlobalDirectives = false
+                } else if (key == "ts-ignore" || key == "ts-expect-error") {
+                    // `// @ts-ignore: <text>` is a CODE comment-directive (suppression),
+                    // not a harness option — keep it as source content
+                    // (checkJsFiles_skipDiagnostics relies on the line surviving).
+                    if (!inGlobalDirectives) currentLines.add(line)
                 } else {
                     directives[key] = value
                     if (inGlobalDirectives) {

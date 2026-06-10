@@ -923,6 +923,9 @@ class Checker(
         // 7b''''' a3. B230: TS2345 for `<localFn>.apply(x, arguments)` under strict in
         // JS files — IArguments vs the inferred parameter tuple. JS-like files only.
         checkJsApplyArgumentsTuple()
+        // 7b''''' a4. B234: TS2349 for calling a literal-initialized never-reassigned
+        // top-level var in a checkJs file, with tsc's @ts-ignore directive walk-up.
+        checkJsUncallableVarCalls()
         // 7b''''' bis. TS7012: a JSDoc `@overload` block lacking a `@returns`/`@return`
         // tag → the overload implicitly returns `any`. JS-like files under noImplicitAny.
         checkJSDocOverloadTags()
@@ -14880,6 +14883,84 @@ class Checker(
                 jsApplyArgsExpr(e.whenFalse, fnParams, source, fileName)
             }
             else -> {}
+        }
+    }
+
+    /** B234: tsc's @ts-ignore/@ts-expect-error comment-directive rule (program.ts
+     *  markPrecedingCommentDirectiveLine): from the line ABOVE the error, walk UP —
+     *  a directive line suppresses; a blank or slash-slash comment line continues the
+     *  walk; anything else (incl. the body/tail lines of a multi-line block comment)
+     *  stops it. Directive forms: slash-slash (2 or 3 slashes) or one-line block
+     *  comment, then "@ts-ignore"/"@ts-expect-error", optional trailing text. Broader
+     *  than the import-line-only [hasTsErrorSuppressionAbove]. */
+    private fun tsIgnoreDirectiveSuppressed(pos: Int, source: String): Boolean {
+        val directiveRe = Regex("""^\s*(//{1,2}|/\*+)\s*@ts-(ignore|expect-error)\b?""")
+        // collect line starts up to pos's line
+        var lineStart = source.lastIndexOf('\n', (pos - 1).coerceAtLeast(0)) + 1
+        while (lineStart > 0) {
+            val prevEnd = lineStart - 1 // the '\n'
+            val prevStart = source.lastIndexOf('\n', prevEnd - 1) + 1
+            val lineText = source.substring(prevStart, prevEnd).trim().removeSuffix("\r").trim()
+            if (directiveRe.containsMatchIn(lineText)) return true
+            if (lineText.isNotEmpty() && !lineText.startsWith("//")) return false
+            lineStart = prevStart
+        }
+        return false
+    }
+
+    /** B234: TS2349 for CALLING a top-level JS var whose only value is a primitive
+     *  literal — `var x = 0; x();` → "This expression is not callable." + "  Type
+     *  'Number' has no call signatures." (apparent wrapper display). checkJs files
+     *  only; the var must have exactly ONE declaration, a literal initializer, and NO
+     *  assignment anywhere in the file (a later `x = function(){}` makes the call
+     *  legal in JS). Calls are suppressed per tsc's comment-directive walk-up rule
+     *  ([tsIgnoreDirectiveSuppressed]) — checkJsFiles_skipDiagnostics is exactly this. */
+    private fun checkJsUncallableVarCalls() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // name -> wrapper display; null entry = disqualified
+            val candidates = mutableMapOf<String, String?>()
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    if (n in candidates) { candidates[n] = null; continue }
+                    candidates[n] = when (d.initializer) {
+                        is NumericLiteralNode -> "Number"
+                        is StringLiteralNode -> "String"
+                        else -> null
+                    }
+                }
+            }
+            if (candidates.values.all { it == null }) continue
+            // Disqualify any name that is ever an assignment target (JS reassignment
+            // could make it callable). Conservative textual scan: `name =` not `==`.
+            for ((n, v) in candidates.entries.toList()) {
+                if (v == null) continue
+                if (Regex("""\b${Regex.escape(n)}\s*=[^=]""").findAll(source).any { m ->
+                        // exclude the declaration's own initializer position
+                        stmts.none { st -> st is VariableStatement && st.declarationList.declarations.any { d ->
+                            (d.name as? Identifier)?.text == n && m.range.first >= d.pos && m.range.first < d.end
+                        } }
+                    }) candidates[n] = null
+            }
+            for (stmt in stmts) {
+                val expr = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = expr.expression as? Identifier ?: continue
+                val wrapper = candidates[callee.text] ?: continue
+                if (tsIgnoreDirectiveSuppressed(callee.pos, source)) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not callable.",
+                    category = DiagnosticCategory.Error, code = 2349, fileName = fileName,
+                    line = line, character = character, start = callee.pos, length = callee.text.length,
+                    messageChain = listOf("  Type '$wrapper' has no call signatures."),
+                ))
+            }
         }
     }
 
