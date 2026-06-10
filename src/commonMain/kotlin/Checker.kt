@@ -1311,6 +1311,8 @@ class Checker(
         checkObjectRestSpreadTypes()
         // 64d2a. Check object-SPREAD source types (TS2698)
         checkObjectSpreadInvalidTypes()
+        // 64d2a2 (B245). Namespace-import member writes (TS2540/TS2339)
+        checkNamespaceImportMemberWrites()
         // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
         checkShiftOverflow()
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
@@ -96284,6 +96286,352 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    private class NsImportInfo(
+        val exportedValues: Set<String>,
+        val allTopLevelNames: Set<String>,
+        val displayBase: String,
+    )
+
+    /**
+     * B245: namespace-import bindings are immutable — `import * as ns from './m'`
+     * makes every member of `ns` a read-only view of the module's exports. Any
+     * WRITE position targeting `ns.x` / `ns['x']` (assignment incl. compound,
+     * `++`/`--`, for-in/for-of target) fires:
+     *  - TS2540 "Cannot assign to 'x' because it is a read-only property." when
+     *    `x` IS an exported value of the resolved module;
+     *  - TS2339 "Property 'x' does not exist on type 'typeof import("<base>")'."
+     *    for a DOT access whose name appears NOWHERE in the module's top-level
+     *    declarations. (An element access with an unknown literal key is the
+     *    legal implicit-any shape under default options — no error.)
+     *
+     * FP firewall: the target must be a resolvable .ts/.tsx FILE module with no
+     * `export =` and no `export * from` (re-exports make the export set open);
+     * a shadow set threaded through function-likes/blocks suppresses re-bound
+     * alias names; READ positions are untouched.
+     */
+    private fun checkNamespaceImportMemberWrites() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val sf = result.sourceFile
+            val aliases = mutableMapOf<String, NsImportInfo>()
+            for (stmt in sf.statements) {
+                val imp = stmt as? ImportDeclaration ?: continue
+                val clause = imp.importClause ?: continue
+                if (clause.isTypeOnly) continue
+                val nsImport = clause.namedBindings as? NamespaceImport ?: continue
+                val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val resolved = resolveModuleSpecifier(spec, imp) ?: continue
+                if (isDtsFile(resolved) || !(resolved.endsWith(".ts") || resolved.endsWith(".tsx"))) continue
+                val target = fileResults[resolved]?.sourceFile ?: continue
+                if (target.statements.any { it is ExportAssignment && it.isExportEquals }) continue
+                if (target.statements.any { it is ExportDeclaration && it.exportClause == null }) continue
+                val exportedValues = mutableSetOf<String>()
+                val allNames = mutableSetOf<String>()
+                for (ts in target.statements) {
+                    when (ts) {
+                        is VariableStatement -> {
+                            val names = mutableSetOf<String>()
+                            for (d in ts.declarationList.declarations) collectBindingNames(d.name, names)
+                            allNames += names
+                            if (ModifierFlag.Export in ts.modifiers) exportedValues += names
+                        }
+                        is FunctionDeclaration -> ts.name?.text?.let {
+                            allNames += it; if (ModifierFlag.Export in ts.modifiers) exportedValues += it
+                        }
+                        is ClassDeclaration -> ts.name?.text?.let {
+                            allNames += it; if (ModifierFlag.Export in ts.modifiers) exportedValues += it
+                        }
+                        is EnumDeclaration -> ts.name.text.let {
+                            allNames += it; if (ModifierFlag.Export in ts.modifiers) exportedValues += it
+                        }
+                        is ModuleDeclaration -> (ts.name as? Identifier)?.text?.let {
+                            allNames += it; if (ModifierFlag.Export in ts.modifiers) exportedValues += it
+                        }
+                        is InterfaceDeclaration -> allNames += ts.name.text
+                        is TypeAliasDeclaration -> allNames += ts.name.text
+                        is ImportDeclaration -> {
+                            ts.importClause?.name?.text?.let { allNames += it }
+                            when (val nb = ts.importClause?.namedBindings) {
+                                is NamespaceImport -> allNames += nb.name.text
+                                is NamedImports -> for (el in nb.elements) allNames += el.name.text
+                                else -> {}
+                            }
+                        }
+                        is ImportEqualsDeclaration -> allNames += ts.name.text
+                        is ExportDeclaration -> {
+                            val ec = ts.exportClause
+                            if (ec is NamedExports) for (el in ec.elements) {
+                                allNames += el.name.text
+                                if (!ts.isTypeOnly && !el.isTypeOnly) exportedValues += el.name.text
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+                aliases[nsImport.name.text] = NsImportInfo(exportedValues, allNames, moduleFileBaseNoExt(resolved))
+            }
+            if (aliases.isEmpty()) continue
+            val source = sf.text
+            try {
+                nsWriteStmts(sf.statements, source, fileName, aliases, emptySet())
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** B245: hoisted local binding names declared directly in a statement list. */
+    private fun nsWriteLocalNames(stmts: List<Statement>, into: MutableSet<String>) {
+        for (s in stmts) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) collectBindingNames(d.name, into)
+            is FunctionDeclaration -> s.name?.let { into += it.text }
+            is ClassDeclaration -> s.name?.let { into += it.text }
+            is EnumDeclaration -> into += s.name.text
+            is ModuleDeclaration -> (s.name as? Identifier)?.let { into += it.text }
+            else -> {}
+        }
+    }
+
+    private fun nsWriteStmts(
+        stmts: List<Statement>, source: String, fileName: String,
+        aliases: Map<String, NsImportInfo>, shadowed: Set<String>
+    ) {
+        val inner = shadowed.toMutableSet()
+        nsWriteLocalNames(stmts, inner)
+        if (aliases.keys.all { it in inner }) return
+        for (s in stmts) nsWriteStmt(s, source, fileName, aliases, inner)
+    }
+
+    private fun nsWriteFuncLike(
+        params: List<Parameter>, bodyNode: Node?, source: String, fileName: String,
+        aliases: Map<String, NsImportInfo>, shadowed: Set<String>
+    ) {
+        val inner = shadowed.toMutableSet()
+        for (p in params) collectBindingNames(p.name, inner)
+        for (p in params) p.initializer?.let { nsWriteExpr(it, source, fileName, aliases, inner) }
+        when (bodyNode) {
+            is Block -> nsWriteStmts(bodyNode.statements, source, fileName, aliases, inner)
+            is Expression -> nsWriteExpr(bodyNode, source, fileName, aliases, inner)
+            else -> {}
+        }
+    }
+
+    private fun nsWriteStmt(
+        stmt: Statement, source: String, fileName: String,
+        aliases: Map<String, NsImportInfo>, shadowed: Set<String>
+    ) {
+        when (stmt) {
+            is ExpressionStatement -> nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+            }
+            is ReturnStatement -> stmt.expression?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+            is ThrowStatement -> stmt.expression?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+            is Block -> nsWriteStmts(stmt.statements, source, fileName, aliases, shadowed)
+            is IfStatement -> {
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+                nsWriteStmt(stmt.thenStatement, source, fileName, aliases, shadowed)
+                stmt.elseStatement?.let { nsWriteStmt(it, source, fileName, aliases, shadowed) }
+            }
+            is ForStatement -> {
+                when (val init = stmt.initializer) {
+                    is VariableDeclarationList -> for (d in init.declarations) {
+                        d.initializer?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+                    }
+                    is Expression -> nsWriteExpr(init, source, fileName, aliases, shadowed)
+                    else -> {}
+                }
+                stmt.condition?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+                stmt.incrementor?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+                nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+            }
+            is ForInStatement -> {
+                (stmt.initializer as? Expression)?.let { nsCheckWriteTarget(it, source, fileName, aliases, shadowed) }
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+                nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+            }
+            is ForOfStatement -> {
+                (stmt.initializer as? Expression)?.let { nsCheckWriteTarget(it, source, fileName, aliases, shadowed) }
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+                nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+            }
+            is WhileStatement -> {
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+                nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+            }
+            is DoStatement -> {
+                nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+            }
+            is SwitchStatement -> {
+                nsWriteExpr(stmt.expression, source, fileName, aliases, shadowed)
+                for (clause in stmt.caseBlock) when (clause) {
+                    is CaseClause -> {
+                        nsWriteExpr(clause.expression, source, fileName, aliases, shadowed)
+                        nsWriteStmts(clause.statements, source, fileName, aliases, shadowed)
+                    }
+                    is DefaultClause -> nsWriteStmts(clause.statements, source, fileName, aliases, shadowed)
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                nsWriteStmt(stmt.tryBlock, source, fileName, aliases, shadowed)
+                stmt.catchClause?.let { cc ->
+                    val inner = shadowed.toMutableSet()
+                    cc.variableDeclaration?.let { collectBindingNames(it.name, inner) }
+                    nsWriteStmts(cc.block.statements, source, fileName, aliases, inner)
+                }
+                stmt.finallyBlock?.let { nsWriteStmt(it, source, fileName, aliases, shadowed) }
+            }
+            is LabeledStatement -> nsWriteStmt(stmt.statement, source, fileName, aliases, shadowed)
+            is FunctionDeclaration -> nsWriteFuncLike(stmt.parameters, stmt.body, source, fileName, aliases, shadowed)
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> nsWriteFuncLike(m.parameters, m.body, source, fileName, aliases, shadowed)
+                is Constructor -> nsWriteFuncLike(m.parameters, m.body, source, fileName, aliases, shadowed)
+                is GetAccessor -> nsWriteFuncLike(m.parameters, m.body, source, fileName, aliases, shadowed)
+                is SetAccessor -> nsWriteFuncLike(m.parameters, m.body, source, fileName, aliases, shadowed)
+                is PropertyDeclaration -> m.initializer?.let { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                nsWriteStmts(it.statements, source, fileName, aliases, shadowed)
+            }
+            else -> {}
+        }
+    }
+
+    private fun nsWriteExpr(
+        expr: Expression, source: String, fileName: String,
+        aliases: Map<String, NsImportInfo>, shadowed: Set<String>
+    ) {
+        when (expr) {
+            is BinaryExpression -> {
+                // Worklist — deep a+b+c / a=b=c chains StackOverflow naive recursion.
+                val work = ArrayDeque<Expression>()
+                work.add(expr)
+                while (work.isNotEmpty()) {
+                    val e = work.removeLast()
+                    if (e is BinaryExpression) {
+                        if (isAssignmentOperator(e.operator)) {
+                            nsCheckWriteTarget(e.left, source, fileName, aliases, shadowed)
+                        }
+                        work.add(e.left); work.add(e.right)
+                    } else {
+                        nsWriteExpr(e, source, fileName, aliases, shadowed)
+                    }
+                }
+            }
+            is PrefixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    nsCheckWriteTarget(expr.operand, source, fileName, aliases, shadowed)
+                }
+                nsWriteExpr(expr.operand, source, fileName, aliases, shadowed)
+            }
+            is PostfixUnaryExpression -> {
+                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
+                    nsCheckWriteTarget(expr.operand, source, fileName, aliases, shadowed)
+                }
+                nsWriteExpr(expr.operand, source, fileName, aliases, shadowed)
+            }
+            is ParenthesizedExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is CallExpression -> {
+                nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+                for (a in expr.arguments) nsWriteExpr(a, source, fileName, aliases, shadowed)
+            }
+            is NewExpression -> {
+                nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+                expr.arguments?.forEach { nsWriteExpr(it, source, fileName, aliases, shadowed) }
+            }
+            is ConditionalExpression -> {
+                nsWriteExpr(expr.condition, source, fileName, aliases, shadowed)
+                nsWriteExpr(expr.whenTrue, source, fileName, aliases, shadowed)
+                nsWriteExpr(expr.whenFalse, source, fileName, aliases, shadowed)
+            }
+            is ObjectLiteralExpression -> for (el in expr.properties) when (el) {
+                is PropertyAssignment -> nsWriteExpr(el.initializer, source, fileName, aliases, shadowed)
+                is SpreadAssignment -> nsWriteExpr(el.expression, source, fileName, aliases, shadowed)
+                is ShorthandPropertyAssignment -> el.objectAssignmentInitializer?.let {
+                    nsWriteExpr(it, source, fileName, aliases, shadowed)
+                }
+                is MethodDeclaration -> nsWriteFuncLike(el.parameters, el.body, source, fileName, aliases, shadowed)
+                is GetAccessor -> nsWriteFuncLike(el.parameters, el.body, source, fileName, aliases, shadowed)
+                is SetAccessor -> nsWriteFuncLike(el.parameters, el.body, source, fileName, aliases, shadowed)
+                else -> {}
+            }
+            is ArrayLiteralExpression -> for (e in expr.elements) nsWriteExpr(e, source, fileName, aliases, shadowed)
+            is PropertyAccessExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is ElementAccessExpression -> {
+                nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+                nsWriteExpr(expr.argumentExpression, source, fileName, aliases, shadowed)
+            }
+            is SpreadElement -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is AsExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is TypeAssertionExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is NonNullExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is AwaitExpression -> nsWriteExpr(expr.expression, source, fileName, aliases, shadowed)
+            is FunctionExpression -> nsWriteFuncLike(expr.parameters, expr.body, source, fileName, aliases, shadowed)
+            is ArrowFunction -> nsWriteFuncLike(expr.parameters, expr.body, source, fileName, aliases, shadowed)
+            else -> {}
+        }
+    }
+
+    private fun nsCheckWriteTarget(
+        targetIn: Expression, source: String, fileName: String,
+        aliases: Map<String, NsImportInfo>, shadowed: Set<String>
+    ) {
+        var t = targetIn
+        while (t is ParenthesizedExpression) t = t.expression
+        val recvName: String
+        val propName: String
+        val spanStart: Int
+        val spanLen: Int
+        val isDot: Boolean
+        when (t) {
+            is PropertyAccessExpression -> {
+                recvName = (t.expression as? Identifier)?.text ?: return
+                propName = t.name.text
+                spanStart = t.name.pos
+                spanLen = t.name.text.length
+                isDot = true
+            }
+            is ElementAccessExpression -> {
+                recvName = (t.expression as? Identifier)?.text ?: return
+                val k = t.argumentExpression as? StringLiteralNode ?: return
+                propName = k.text
+                spanStart = k.pos
+                spanLen = (k.rawText?.length ?: k.text.length) + 2
+                isDot = false
+            }
+            else -> return
+        }
+        if (recvName in shadowed) return
+        val info = aliases[recvName] ?: return
+        if (propName in info.exportedValues) {
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "Cannot assign to '$propName' because it is a read-only property.",
+                category = DiagnosticCategory.Error,
+                code = 2540,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = spanLen,
+            ))
+        } else if (isDot && propName !in info.allTopLevelNames) {
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type 'typeof import(\"${info.displayBase}\")'.",
+                category = DiagnosticCategory.Error,
+                code = 2339,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = spanLen,
+            ))
+        }
     }
 
     /** B156: a type DEFINITELY cannot be an object-spread source (TS2698). FP-safe —
