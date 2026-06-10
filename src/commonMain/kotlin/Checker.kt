@@ -1344,6 +1344,8 @@ class Checker(
         checkDecoratorUseBeforeDeclaration()
         // 72a4j (B261): TS2345 for optional destructured-param bindings as call args (+ null-default TS2322)
         checkOptionalDestructuredParamCallArgs()
+        // 72a4k (B262): TS2345 for JSDoc-optional contextually-typed fn-expr params as call args
+        checkJsDocOptionalContextualParamCalls()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99081,6 +99083,118 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B262: TS2345 'K | undefined' → 'K' for a JS function-expression param marked
+     * OPTIONAL via JSDoc `@param [b]` and contextually typed `K` by a `@type {Fn}`
+     * typedef annotation (contextuallyTypedParametersOptionalInJSDoc). All JSDoc
+     * facts are RAW-SCANNED from source (typedefs are not parsed/bound anywhere —
+     * B148 gotcha): the typedef's fn-type param list gives the contextual K, the
+     * bracketed `[b]` gives optionality, and the callee's `@param {K} x` tags give
+     * its param types. Straight-line body statements only; bare-Identifier args
+     * only; same-primitive match only. checkJs + strictNullChecks gated.
+     */
+    private fun checkJsDocOptionalContextualParamCalls() {
+        if (!options.checkJs || !strictNullChecks) return
+        val typedefRe = Regex("""@typedef\s*\{\(([^)]*)\)\s*=>\s*[^}]*\}\s*([A-Za-z_$][\w$]*)""")
+        val typeTagRe = Regex("""@type\s*\{([A-Za-z_$][\w$]*)\}""")
+        val optParamRe = Regex("""@param\s*(?:\{[^}]*\}\s*)?\[([A-Za-z_$][\w$]*)\]""")
+        val paramTagRe = Regex("""@param\s*\{(\w+)\}\s*([A-Za-z_$][\w$]*)""")
+        val prims = setOf("number", "string", "boolean", "bigint", "symbol")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // typedef name -> ordered param prim types (null = non-prim)
+            val typedefs = mutableMapOf<String, List<String?>>()
+            for (m in typedefRe.findAll(source)) {
+                typedefs[m.groupValues[2]] = m.groupValues[1].split(",").map { p ->
+                    val t = p.substringAfter(":", "").trim()
+                    if (t in prims) t else null
+                }
+            }
+            // top-level fn decls' JSDoc param prim types: fn -> (paramName -> K)
+            val calleeParams = mutableMapOf<String, Map<String, String>>()
+            for (stmt in result.sourceFile.statements) {
+                val fn = stmt as? FunctionDeclaration ?: continue
+                val n = fn.name?.text ?: continue
+                val tags = mutableMapOf<String, String>()
+                fn.leadingComments?.forEach { c ->
+                    for (m in paramTagRe.findAll(c.text)) {
+                        if (m.groupValues[1] in prims) tags[m.groupValues[2]] = m.groupValues[1]
+                    }
+                }
+                if (tags.isNotEmpty()) calleeParams[n] = tags
+            }
+            if (typedefs.isEmpty() || calleeParams.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                // @type {Fn} on the statement
+                val typeName = stmt.leadingComments?.firstNotNullOfOrNull {
+                    typeTagRe.find(it.text)?.groupValues?.get(1)
+                } ?: continue
+                val ctxParams = typedefs[typeName] ?: continue
+                for (d in stmt.declarationList.declarations) {
+                    val fnExpr = d.initializer as? FunctionExpression ?: continue
+                    val body = fnExpr.body ?: continue
+                    // bracketed-optional @param names between the statement start and the body
+                    val slice = source.substring(
+                        stmt.pos.coerceIn(0, source.length),
+                        body.pos.coerceIn(0, source.length),
+                    )
+                    val optionalNames = optParamRe.findAll(slice).map { it.groupValues[1] }.toSet()
+                    if (optionalNames.isEmpty()) continue
+                    // binding name -> contextual prim K (optional param + contextual prim)
+                    val bindings = mutableMapOf<String, String>()
+                    for ((i, p) in fnExpr.parameters.withIndex()) {
+                        val pn = (p.name as? Identifier)?.text ?: continue
+                        if (pn !in optionalNames || p.initializer != null) continue
+                        val k = ctxParams.getOrNull(i) ?: continue
+                        // a `@param {number} [b]` reaches the AST as type=number via the
+                        // primitive JSDoc bridge — accept when it matches the contextual K
+                        val astPrim = when ((p.type as? KeywordTypeNode)?.kind) {
+                            SyntaxKind.NumberKeyword -> "number"
+                            SyntaxKind.StringKeyword -> "string"
+                            SyntaxKind.BooleanKeyword -> "boolean"
+                            null -> null
+                            else -> "?"
+                        }
+                        if (p.type != null && astPrim != k) continue
+                        bindings[pn] = k
+                    }
+                    if (bindings.isEmpty()) continue
+                    for (s in body.statements) {
+                        val e = (s as? ExpressionStatement)?.expression ?: break
+                        val call = e as? CallExpression ?: continue
+                        val calleeName = (call.expression as? Identifier)?.text ?: continue
+                        val callee = calleeParams[calleeName] ?: continue
+                        for ((i, arg) in call.arguments.withIndex()) {
+                            val argId = arg as? Identifier ?: continue
+                            val bk = bindings[argId.text] ?: continue
+                            // callee's param at this index (by declaration order)
+                            val fnDecl = result.sourceFile.statements
+                                .filterIsInstance<FunctionDeclaration>()
+                                .firstOrNull { it.name?.text == calleeName } ?: continue
+                            val paramName = (fnDecl.parameters.getOrNull(i)?.name as? Identifier)?.text
+                                ?: continue
+                            val pk = callee[paramName] ?: continue
+                            if (pk != bk) continue
+                            val (line, ch) = getLineAndCharacterOfPosition(source, argId.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Argument of type '$bk | undefined' is not assignable to parameter of type '$bk'.",
+                                category = DiagnosticCategory.Error, code = 2345,
+                                fileName = fileName, line = line, character = ch,
+                                start = argId.pos, length = argId.text.length,
+                                messageChain = listOf(
+                                    "  Type 'undefined' is not assignable to type '$bk'.",
+                                ),
+                            ))
+                        }
+                    }
                 }
             }
         }
