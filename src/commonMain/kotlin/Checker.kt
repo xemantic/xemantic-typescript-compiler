@@ -1355,6 +1355,8 @@ class Checker(
         checkOptionalDestructuredParamCallArgs()
         // 72a4k (B262): TS2345 for JSDoc-optional contextually-typed fn-expr params as call args
         checkJsDocOptionalContextualParamCalls()
+        // 72a4l (B264): TS2345/TS2769 for inherited overloaded generic declare-class ctors
+        checkInheritedOverloadedCtorArgs()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99099,6 +99101,176 @@ interface DataView {
                         if (pn != null && (p.type as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword) pn else null
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
+                }
+            }
+        }
+    }
+
+    /**
+     * B264: TS2345 / TS2769 for `new Derived(...)` where the constructor is INHERITED
+     * from an overloaded generic `declare class` instantiated through the heritage
+     * chain (inheritedConstructorWithRestParams2: `Derived extends Base extends
+     * BaseBase<string, number>`). The main new-expression path skips overloaded
+     * generic ctors entirely. AST-only model: ctor params must be bare in-scope-TP
+     * refs / primitive keywords / rest arrays thereof, substituted by PRIMITIVE
+     * heritage type args; call args must be literals. One arity-applicable overload
+     * failing → TS2345 at the first mismatching arg; several applicable all failing →
+     * TS2769 at the CALLEE name with the per-overload "Overload i of N,
+     * '(<params>): <Class>', gave the following error." chain (overload indices are
+     * 1-based over ALL overloads; only arity-applicable ones are listed). Any
+     * unrecognized shape bails (FN, never FP).
+     */
+    private fun checkInheritedOverloadedCtorArgs() {
+        val primKw = mapOf(
+            SyntaxKind.StringKeyword to "string", SyntaxKind.NumberKeyword to "number",
+            SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
+        )
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val classes = result.sourceFile.statements
+                .filterIsInstance<ClassDeclaration>()
+                .filter { it.name != null }
+                .associateBy { it.name!!.text }
+
+            class ParamSpec(val name: String, val type: String, val isRest: Boolean, val isOptional: Boolean)
+            class CtorInfo(val overloads: List<List<ParamSpec>>, val total: Int)
+
+            // resolve the ctor-owning class through the extends chain, substituting TPs
+            fun resolveCtor(cls0: ClassDeclaration): CtorInfo? {
+                var cls = cls0
+                var hops = 0
+                var subst = emptyMap<String, String>()
+                while (cls.members.none { it is Constructor } && hops < 6) {
+                    val ext = cls.heritageClauses
+                        ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.types?.singleOrNull() ?: return null
+                    val baseName = (ext.expression as? Identifier)?.text ?: return null
+                    val base = classes[baseName] ?: return null
+                    val args = ext.typeArguments
+                    subst = if (args != null) {
+                        val tps = base.typeParameters ?: return null
+                        if (tps.size != args.size) return null
+                        tps.indices.associate { i ->
+                            tps[i].name.text to (primKw[(args[i] as? KeywordTypeNode)?.kind] ?: return null)
+                        }
+                    } else {
+                        if (!base.typeParameters.isNullOrEmpty()) return null
+                        emptyMap()
+                    }
+                    cls = base
+                    hops++
+                }
+                val ctors = cls.members.filterIsInstance<Constructor>()
+                if (ctors.isEmpty()) return null
+                // OVERLOADED signatures only — the single-signature inherited-ctor case is
+                // already handled by the existing rest-arg path (double-emit otherwise:
+                // inheritedConstructorWithRestParams regressed on the first cut)
+                val sigs = ctors.filter { it.body == null }
+                if (sigs.size < 2) return null
+                val overloads = sigs.map { c ->
+                    c.parameters.map { p ->
+                        val pn = (p.name as? Identifier)?.text ?: return null
+                        val t = p.type ?: return null
+                        val typeName: String
+                        val rest = p.dotDotDotToken
+                        if (rest) {
+                            val at = t as? ArrayType ?: return null
+                            typeName = when (val et = at.elementType) {
+                                is KeywordTypeNode -> primKw[et.kind] ?: return null
+                                is TypeReference -> subst[(et.typeName as? Identifier)?.text] ?: return null
+                                else -> return null
+                            }
+                        } else {
+                            typeName = when (t) {
+                                is KeywordTypeNode -> primKw[t.kind] ?: return null
+                                is TypeReference -> subst[(t.typeName as? Identifier)?.text] ?: return null
+                                else -> return null
+                            }
+                        }
+                        ParamSpec(pn, typeName, rest, p.questionToken)
+                    }
+                }
+                return CtorInfo(overloads, overloads.size)
+            }
+
+            fun argPrim(e: Expression): String? = when (e) {
+                is StringLiteralNode -> "string"
+                is NumericLiteralNode -> "number"
+                is Identifier -> when (e.text) { "true", "false" -> "boolean"; else -> null }
+                else -> null
+            }
+            fun arityFits(ps: List<ParamSpec>, n: Int): Boolean {
+                val restIdx = ps.indexOfFirst { it.isRest }
+                val minCount = ps.count { !it.isRest && !it.isOptional }
+                return if (restIdx >= 0) n >= minCount else n in minCount..ps.size
+            }
+            // first (argIndex, argType, paramType) mismatch or null
+            fun firstMismatch(ps: List<ParamSpec>, args: List<String>): Triple<Int, String, String>? {
+                val restIdx = ps.indexOfFirst { it.isRest }
+                for ((i, a) in args.withIndex()) {
+                    val pt = if (restIdx >= 0 && i >= restIdx) ps[restIdx].type
+                    else ps.getOrNull(i)?.type ?: return null
+                    if (a != pt) return Triple(i, a, pt)
+                }
+                return null
+            }
+            fun paramsDisplay(ps: List<ParamSpec>): String = ps.joinToString(", ") { p ->
+                val prefix = if (p.isRest) "..." else ""
+                val opt = if (p.isOptional) "?" else ""
+                val t = if (p.isRest) "${p.type}[]" else p.type
+                "$prefix${p.name}$opt: $t"
+            }
+
+            for (stmt in result.sourceFile.statements) {
+                val ne = (stmt as? ExpressionStatement)?.expression as? NewExpression ?: continue
+                val calleeId = ne.expression as? Identifier ?: continue
+                if (!ne.typeArguments.isNullOrEmpty() || !ne.leadingTypeArguments.isNullOrEmpty()) continue
+                val cls = classes[calleeId.text] ?: continue
+                if (cls.members.any { it is Constructor }) continue  // own ctor → main path owns it
+                if (!cls.typeParameters.isNullOrEmpty()) continue
+                val info = resolveCtor(cls) ?: continue
+                val callArgs = ne.arguments ?: continue
+                val argTypesOrNull = callArgs.map { argPrim(it) }
+                if (argTypesOrNull.any { it == null }) continue
+                val argTypes = argTypesOrNull.filterNotNull()
+                val applicable = info.overloads.withIndex().filter { arityFits(it.value, argTypes.size) }
+                if (applicable.isEmpty()) continue
+                val mismatches = applicable.map { it to firstMismatch(it.value, argTypes) }
+                if (mismatches.any { it.second == null }) continue  // some overload matches
+                if (applicable.size == 1) {
+                    val (idx, argT, paramT) = mismatches[0].second!!
+                    val argNode = callArgs[idx]
+                    val len = when (argNode) {
+                        is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
+                        is NumericLiteralNode -> argNode.text.length
+                        is Identifier -> argNode.text.length
+                        else -> 1
+                    }
+                    val (line, ch) = getLineAndCharacterOfPosition(source, argNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
+                        category = DiagnosticCategory.Error, code = 2345,
+                        fileName = fileName, line = line, character = ch,
+                        start = argNode.pos, length = len,
+                    ))
+                } else {
+                    val chain = mutableListOf<String>()
+                    for ((iv, mm) in mismatches) {
+                        val (_, argT, paramT) = mm!!
+                        chain.add("  Overload ${iv.index + 1} of ${info.total}, " +
+                            "'(${paramsDisplay(iv.value)}): ${calleeId.text}', gave the following error.")
+                        chain.add("    Argument of type '$argT' is not assignable to parameter of type '$paramT'.")
+                    }
+                    val (line, ch) = getLineAndCharacterOfPosition(source, calleeId.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        category = DiagnosticCategory.Error, code = 2769,
+                        fileName = fileName, line = line, character = ch,
+                        start = calleeId.pos, length = calleeId.text.length,
+                        messageChain = chain,
+                    ))
                 }
             }
         }
