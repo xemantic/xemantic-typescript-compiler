@@ -37436,10 +37436,58 @@ interface DataView {
                         // Skipped when explicit type args are present (those filter overloads to
                         // generic ones, changing the applicable arity — out of scope here).
                         val argCount = expr.arguments.size
-                        if (argCount < info.minParams) {
+                        val spreads = expr.arguments.filterIsInstance<SpreadElement>()
+                        if (spreads.isNotEmpty() && spreads.all { it.expression is ArrayLiteralExpression }) {
+                            // B270: spread-of-array-literal args have a knowable effective count;
+                            // overflow inside the spread squiggles the spread argument itself.
+                            if (!info.hasRest) {
+                                val effective = expr.arguments.sumOf { a ->
+                                    if (a is SpreadElement) (a.expression as ArrayLiteralExpression).elements.size else 1
+                                }
+                                if (effective > info.maxParams) {
+                                    val sp = spreads.first()
+                                    val start = sp.pos
+                                    val len = (expressionTrueEnd(sp.expression) - start).coerceAtLeast(1)
+                                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                    val expected = if (info.minParams == info.maxParams) "${info.maxParams}" else "${info.minParams}-${info.maxParams}"
+                                    diagnostics.add(Diagnostic(
+                                        message = "Expected $expected arguments, but got $effective.",
+                                        category = DiagnosticCategory.Error, code = 2554,
+                                        fileName = fileName, line = line, character = ch,
+                                        start = start, length = len,
+                                    ))
+                                }
+                            }
+                        } else if (argCount < info.minParams) {
                             emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
                         } else if (!info.hasRest && argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+                        } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
+                            info.overloadSigs.none { argCount >= it.minParams && (it.hasRest || argCount <= it.maxParams) }
+                        ) {
+                            // B270: TS2575 — argCount falls in a GAP between overload arities
+                            // (within the global range but accepted by no signature). Neighbors
+                            // come from per-signature MIN counts, mirroring TS's
+                            // getArgumentArityError below/above computation.
+                            var below = -1
+                            var above = Int.MAX_VALUE
+                            for (sig in info.overloadSigs) {
+                                val mc = sig.minParams
+                                if (mc < argCount && mc > below) below = mc
+                                else if (argCount < mc && mc < above) above = mc
+                            }
+                            if (below >= 0 && above != Int.MAX_VALUE) {
+                                val callee = expr.expression
+                                val start = callee.pos
+                                val len = ((callee as? Identifier)?.text?.length ?: 1).coerceAtLeast(1)
+                                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "No overload expects $argCount arguments, but overloads do exist that expect either $below or $above arguments.",
+                                    category = DiagnosticCategory.Error, code = 2575,
+                                    fileName = fileName, line = line, character = ch,
+                                    start = start, length = len,
+                                ))
+                            }
                         }
                     } else if (info != null && info.isOverloaded && !expr.typeArguments.isNullOrEmpty()
                         && info.overloadSigs.isNotEmpty()
