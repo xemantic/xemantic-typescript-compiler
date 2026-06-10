@@ -1483,6 +1483,10 @@ class Checker(
         checkIsolatedModulesScriptNamespaces()
         // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
         checkVerbatimModuleSyntax()
+        // 68b2. TS2866: isolatedModules — non-type-only import of a type-only export
+        // shadowing a GLOBAL VALUE that the file actually uses (B287). Runs after 68b
+        // so same-position TS1295/TS1484 sort first (stable sort, insertion order).
+        checkIsolatedModulesGlobalValueShadow()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
         // 69b. Check bare `import("./m")` used as a type where m has no `export =` (TS1340)
@@ -14616,14 +14620,18 @@ class Checker(
         stmts: List<Statement>, source: String, fileName: String,
         insideRegularNamespace: Boolean,
         fileIsModule: Boolean = true,
+        insideAmbientModule: Boolean = false,
     ) {
         for (stmt in stmts) {
             if (stmt is ModuleDeclaration) {
                 val nameNode = stmt.name
                 val isGlobalBlock = nameNode is Identifier && nameNode.text == "global"
                 // 17.187: also fires for top-level `declare global` in a
-                // non-module file (no imports/exports).
-                val nonModuleTopLevel = isGlobalBlock && !insideRegularNamespace && !fileIsModule
+                // non-module file (no imports/exports). B287: a `global { }` block
+                // DIRECTLY inside a `declare module "X"` body is LEGAL ("...or
+                // ambient module declarations") and already-ambient (no TS2670).
+                val nonModuleTopLevel = isGlobalBlock && !insideRegularNamespace && !fileIsModule &&
+                    !insideAmbientModule
                 if (isGlobalBlock && (insideRegularNamespace || nonModuleTopLevel)) {
                     val start = nameNode.pos
                     val length = 6  // "global"
@@ -14656,9 +14664,10 @@ class Checker(
                 // A ModuleDeclaration is a "regular namespace" if its name is an Identifier
                 // (not a StringLiteralNode for `declare module "X"`).
                 val nowInsideRegular = insideRegularNamespace || (nameNode is Identifier && !isGlobalBlock)
+                val nowInsideAmbient = insideAmbientModule || nameNode is StringLiteralNode
                 when (val body = stmt.body) {
-                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular, fileIsModule)
-                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular, fileIsModule)
+                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular, fileIsModule, nowInsideAmbient)
+                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular, fileIsModule, nowInsideAmbient)
                     else -> {}
                 }
             }
@@ -32412,6 +32421,7 @@ interface DateConstructor {
     new(): Date;
     new(value: number): Date;
     new(value: string): Date;
+    new(year: number, monthIndex: number, date?: number, hours?: number, minutes?: number, seconds?: number, ms?: number): Date;
     (): string;
     readonly prototype: Date;
     parse(s: string): number;
@@ -108264,6 +108274,138 @@ interface DataView {
      * (`export type X = ...`, `export interface X {}`). Walks the target file's top-level
      * statements and inspects each export form.
      */
+    /** B287 TS2866: under isolatedModules, a NON-type-only named import whose target
+     *  export is type-only, where the importing file USES a same-named GLOBAL VALUE
+     *  (`import { Date } from './types'` + `new Date(...)`) — a single-file transpiler
+     *  cannot tell whether to elide the import. Value-use detection is conservative:
+     *  `new Name(...)` / `Name(...)` callee positions in the file's raw statements. */
+    private fun checkIsolatedModulesGlobalValueShadow() {
+        if (!options.isolatedModules) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            var globalValueUses: Set<String>? = null
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val clause = stmt.importClause ?: continue
+                if (clause.isTypeOnly) continue
+                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val nb = clause.namedBindings as? NamedImports ?: continue
+                for (element in nb.elements) {
+                    if (element.isTypeOnly) continue
+                    val localName = element.name.text
+                    val sourceName = (element.propertyName ?: element.name).text
+                    if (localName !in KNOWN_GLOBALS) continue
+                    if (!isExportedNameTypeOnly(sourceName, spec)) continue
+                    if (globalValueUses == null) globalValueUses = collectNewCallCalleeNames(result.sourceFile.statements)
+                    if (localName !in globalValueUses) continue
+                    val nameNode = element.propertyName ?: element.name
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Import '$localName' conflicts with global value used in this file, so must be declared with a type-only import when 'isolatedModules' is enabled.",
+                        category = DiagnosticCategory.Error, code = 2866,
+                        fileName = fileName, line = line, character = character,
+                        start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Bare-identifier callee names of `new X(...)` / `X(...)` anywhere in [stmts]. */
+    private fun collectNewCallCalleeNames(stmts: List<Statement>): Set<String> {
+        val out = mutableSetOf<String>()
+        // local funs can't forward-reference — route the expr→stmt recursion through a ref
+        var walkStmts: (List<Statement>) -> Unit = { }
+        fun walkExpr(e: Expression?) {
+            when (e) {
+                null -> {}
+                is NewExpression -> {
+                    (e.expression as? Identifier)?.let { out.add(it.text) }
+                    walkExpr(e.expression); e.arguments?.forEach { walkExpr(it) }
+                }
+                is CallExpression -> {
+                    (e.expression as? Identifier)?.let { out.add(it.text) }
+                    walkExpr(e.expression); e.arguments.forEach { walkExpr(it) }
+                }
+                is BinaryExpression -> {
+                    // iterative right-spine for deep chains
+                    var cur: Expression = e
+                    while (cur is BinaryExpression) { walkExpr(cur.left); cur = cur.right }
+                    walkExpr(cur)
+                }
+                is ParenthesizedExpression -> walkExpr(e.expression)
+                is PropertyAccessExpression -> walkExpr(e.expression)
+                is ElementAccessExpression -> { walkExpr(e.expression); walkExpr(e.argumentExpression) }
+                is AsExpression -> walkExpr(e.expression)
+                is SatisfiesExpression -> walkExpr(e.expression)
+                is NonNullExpression -> walkExpr(e.expression)
+                is TypeAssertionExpression -> walkExpr(e.expression)
+                is PrefixUnaryExpression -> walkExpr(e.operand)
+                is PostfixUnaryExpression -> walkExpr(e.operand)
+                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
+                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
+                is ObjectLiteralExpression -> e.properties.forEach { p ->
+                    when (p) {
+                        is PropertyAssignment -> walkExpr(p.initializer)
+                        is SpreadAssignment -> walkExpr(p.expression)
+                        else -> {}
+                    }
+                }
+                is SpreadElement -> walkExpr(e.expression)
+                is AwaitExpression -> walkExpr(e.expression)
+                is ArrowFunction -> when (val b = e.body) {
+                    is Block -> walkStmts(b.statements)
+                    is Expression -> walkExpr(b)
+                    else -> {}
+                }
+                is FunctionExpression -> walkStmts(e.body.statements)
+                else -> {}
+            }
+        }
+        fun walkStmt(s: Statement) {
+            when (s) {
+                is ExpressionStatement -> walkExpr(s.expression)
+                is VariableStatement -> s.declarationList.declarations.forEach { walkExpr(it.initializer) }
+                is ReturnStatement -> walkExpr(s.expression)
+                is IfStatement -> { walkExpr(s.expression); walkStmt(s.thenStatement); s.elseStatement?.let { walkStmt(it) } }
+                is Block -> walkStmts(s.statements)
+                is FunctionDeclaration -> s.body?.let { walkStmts(it.statements) }
+                is ClassDeclaration -> s.members.forEach { m ->
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { walkStmts(it.statements) }
+                        is Constructor -> m.body?.let { walkStmts(it.statements) }
+                        is PropertyDeclaration -> walkExpr(m.initializer)
+                        is GetAccessor -> m.body?.let { walkStmts(it.statements) }
+                        is SetAccessor -> m.body?.let { walkStmts(it.statements) }
+                        else -> {}
+                    }
+                }
+                is ForStatement -> { (s.initializer as? Expression)?.let { walkExpr(it) }; s.condition?.let { walkExpr(it) }; s.incrementor?.let { walkExpr(it) }; walkStmt(s.statement) }
+                is ForOfStatement -> { walkExpr(s.expression); walkStmt(s.statement) }
+                is ForInStatement -> { walkExpr(s.expression); walkStmt(s.statement) }
+                is WhileStatement -> { walkExpr(s.expression); walkStmt(s.statement) }
+                is DoStatement -> { walkStmt(s.statement); walkExpr(s.expression) }
+                is ThrowStatement -> walkExpr(s.expression)
+                is TryStatement -> { walkStmts(s.tryBlock.statements); s.catchClause?.block?.let { walkStmts(it.statements) }; s.finallyBlock?.let { walkStmts(it.statements) } }
+                is SwitchStatement -> { walkExpr(s.expression); s.caseBlock.forEach { c ->
+                    when (c) {
+                        is CaseClause -> { walkExpr(c.expression); walkStmts(c.statements) }
+                        is DefaultClause -> walkStmts(c.statements)
+                        else -> {}
+                    }
+                } }
+                is LabeledStatement -> walkStmt(s.statement)
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walkStmts(it.statements) }
+                else -> {}
+            }
+        }
+        walkStmts = { list -> list.forEach { walkStmt(it) } }
+        stmts.forEach { walkStmt(it) }
+        return out
+    }
+
     private fun isExportedNameTypeOnly(name: String, moduleSpecifier: String): Boolean {
         val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
         val targetResult = fileResults[targetFile] ?: return false
@@ -108284,6 +108426,13 @@ interface DataView {
                 is VariableStatement ->
                     if (ModifierFlag.Export in stmt.modifiers &&
                         stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) hasValue = true
+                // B287: an exported VALUE-FREE namespace (only types/interfaces inside)
+                // is a type-only export — `export namespace Event { export type T }`
+                // erases entirely, so importing it without `import type` is TS1484.
+                is ModuleDeclaration ->
+                    if ((stmt.name as? Identifier)?.text == name && ModifierFlag.Export in stmt.modifiers) {
+                        if (isNamespaceInstantiated(stmt)) hasValue = true else hasTypeOnly = true
+                    }
                 is ExportDeclaration -> {
                     val clause = stmt.exportClause as? NamedExports ?: continue
                     for (spec in clause.elements) {
