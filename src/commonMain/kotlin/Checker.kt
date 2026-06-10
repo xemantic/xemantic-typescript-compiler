@@ -63505,6 +63505,132 @@ interface DataView {
     }
 
     /**
+     * B298: object literal vs `Mapped<T>[keyof T]` (mappedTypeIndexedAccess) —
+     * `type Pairs<T> = { [K in keyof T]: { key: K; value: T[K] } }` indexed by
+     * `keyof T` is the union of per-key template instantiations. Evaluated entirely
+     * AST-side for the exact shape: a 1-TP mapped alias whose template is a
+     * TypeLiteral of `K`-typed and `T[K]`-typed members, indexed by `keyof` of the
+     * SAME type the alias is instantiated with. The literal's discriminant value
+     * (the `K`-typed member) picks the constituent; a definite primitive mismatch
+     * on another member emits TS2322 at the var name with the per-property chain.
+     * Display: an ALIAS-WRAPPED annotation renders as written ('Pair<FooBar>');
+     * an inline indexed-access renders the EXPANDED union.
+     */
+    private fun tryEmitMappedIndexedAccessMismatch(
+        init: ObjectLiteralExpression, ann0: TypeNode, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        fun aliasDeclOf(nm: String): TypeAliasDeclaration? =
+            ((currentFileLocals?.get(nm) ?: globals[nm])?.declarations?.singleOrNull()) as? TypeAliasDeclaration
+        // Normalize the annotation to (mappedAliasName, concreteArgNode, displayAsWritten?)
+        var indexed: IndexedAccessType? = null
+        var aliasDisplay: String? = null
+        var aliasArgMap: Map<String, TypeNode>? = null // alias TP name -> concrete node
+        if (ann0 is IndexedAccessType) {
+            indexed = ann0
+        } else if (ann0 is TypeReference) {
+            val nm = (ann0.typeName as? Identifier)?.text ?: return false
+            val ad = aliasDeclOf(nm) ?: return false
+            val tps = ad.typeParameters?.map { it.name.text } ?: emptyList()
+            val args = ann0.typeArguments ?: emptyList()
+            if (tps.size != args.size) return false
+            indexed = ad.type as? IndexedAccessType ?: return false
+            aliasArgMap = tps.zip(args).toMap()
+            val argNames = args.map { ((it as? TypeReference)?.typeName as? Identifier)?.text ?: return false }
+            aliasDisplay = nm + (if (argNames.isEmpty()) "" else argNames.joinToString(", ", "<", ">"))
+        } else return false
+        fun substitute(t: TypeNode): TypeNode {
+            val nm = ((t as? TypeReference)?.typeName as? Identifier)?.text
+            return aliasArgMap?.get(nm) ?: t
+        }
+        val objRef = indexed!!.objectType as? TypeReference ?: return false
+        val mappedName = (objRef.typeName as? Identifier)?.text ?: return false
+        val mappedArg = substitute(objRef.typeArguments?.singleOrNull() ?: return false)
+        val idxOp = indexed!!.indexType as? TypeOperator ?: return false
+        if (idxOp.operator != SyntaxKind.KeyOfKeyword) return false
+        val keyofTargetName = (((substitute(idxOp.type)) as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+        val concreteName = ((mappedArg as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+        if (keyofTargetName != concreteName) return false
+        // The mapped alias: 1 TP, MappedType over `keyof <TP>`, TypeLiteral template.
+        val mapped = aliasDeclOf(mappedName) ?: return false
+        val mtp = mapped.typeParameters?.singleOrNull()?.name?.text ?: return false
+        val mt = mapped.type as? MappedType ?: return false
+        val keyTp = mt.typeParameter.name.text
+        val mtConstraint = mt.typeParameter.constraint as? TypeOperator ?: return false
+        if (mtConstraint.operator != SyntaxKind.KeyOfKeyword) return false
+        if (((mtConstraint.type as? TypeReference)?.typeName as? Identifier)?.text != mtp) return false
+        val template = mt.type as? TypeLiteral ?: return false
+        // Concrete keyed type: an alias of a TypeLiteral.
+        val concrete = aliasDeclOf(concreteName)?.type as? TypeLiteral ?: return false
+        fun primRender(t: TypeNode?): String? = when ((t as? KeywordTypeNode)?.kind) {
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            else -> null
+        }
+        class TplMember(val name: String, val isKey: Boolean, val indexedByKey: Boolean, val ann: TypeNode?)
+        val tplMembers = template.members.map { m ->
+            val pd = m as? PropertyDeclaration ?: return false
+            val mn = (pd.name as? Identifier)?.text ?: return false
+            val t = pd.type ?: return false
+            val isKey = (t as? TypeReference)?.let { (it.typeName as? Identifier)?.text == keyTp && it.typeArguments == null } == true
+            val byKey = (t as? IndexedAccessType)?.let { ia ->
+                ((ia.objectType as? TypeReference)?.typeName as? Identifier)?.text == mtp &&
+                    ((ia.indexType as? TypeReference)?.typeName as? Identifier)?.text == keyTp
+            } == true
+            if (!isKey && !byKey) return false
+            TplMember(mn, isKey, byKey, t)
+        }
+        val keyMember = tplMembers.singleOrNull { it.isKey } ?: return false
+        // Constituents: one per concrete member, with renders.
+        class Constituent(val key: String, val valueRenders: Map<String, String>, val display: String)
+        val constituents = concrete.members.map { cm ->
+            val pd = cm as? PropertyDeclaration ?: return false
+            val kn = (pd.name as? Identifier)?.text ?: return false
+            val vRender = primRender(pd.type) ?: return false
+            val renders = mutableMapOf<String, String>()
+            val parts = tplMembers.map { tm ->
+                val r = if (tm.isKey) "\"$kn\"" else vRender
+                renders[tm.name] = r
+                "${tm.name}: $r;"
+            }
+            Constituent(kn, renders, "{ ${parts.joinToString(" ")} }")
+        }
+        if (constituents.isEmpty()) return false
+        // The literal: must carry the key member as a string literal.
+        var keyValue: String? = null
+        class LitProp(val name: String, val render: String)
+        val litProps = init.properties.map { p ->
+            val pa = p as? PropertyAssignment ?: return false
+            val pn = (pa.name as? Identifier)?.text ?: return false
+            val render = when (val v = pa.initializer) {
+                is StringLiteralNode -> { if (pn == keyMember.name) keyValue = v.text; "\"${v.text}\"" }
+                is NumericLiteralNode -> "number"
+                is Identifier -> if (v.text == "true" || v.text == "false") "boolean" else return false
+                else -> return false
+            }
+            LitProp(pn, render)
+        }
+        val picked = constituents.firstOrNull { it.key == keyValue } ?: return false
+        val mismatch = litProps.firstOrNull { lp ->
+            lp.name != keyMember.name && picked.valueRenders[lp.name]?.let { it != lp.render } == true
+        } ?: return false
+        val srcDisplay = "{ ${litProps.joinToString(" ") { "${it.name}: ${it.render};" }} }"
+        val targetDisplay = aliasDisplay ?: constituents.joinToString(" | ") { it.display }
+        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcDisplay' is not assignable to type '$targetDisplay'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = name.pos, length = name.text.length,
+            messageChain = listOf(
+                "  Types of property '${mismatch.name}' are incompatible.",
+                "    Type '${mismatch.render}' is not assignable to type '${picked.valueRenders[mismatch.name]}'.",
+            ),
+        ))
+        return true
+    }
+
+    /**
      * B296: function/class-expression initializer vs a UNION of interface refs —
      * tsc relates against the KIND-matching constituent and elaborates through it
      * (errorsWithInvokablesInUnions01). Union display = constituents ordered by
@@ -63703,6 +63829,14 @@ interface DataView {
             val ann = decl.type as? UnionType ?: return@run
             if (init !is ArrowFunction && init !is FunctionExpression && init !is ClassExpression) return@run
             if (tryEmitInvokableUnionMismatch(init, ann, name, source, fileName)) return
+        }
+        // B298: object literal vs a `Mapped<T>[keyof T]` indexed-access annotation —
+        // evaluate the mapped-over-keys union AST-side, pick the constituent by the
+        // literal's discriminant value, report the property mismatch.
+        run {
+            val init = decl.initializer as? ObjectLiteralExpression ?: return@run
+            val ann = decl.type ?: return@run
+            if (tryEmitMappedIndexedAccessMismatch(init, ann, name, source, fileName)) return
         }
 
         // B101: narrow FP-safe TS2322 for `var x: <primitive> = this.voidMethod()`.
