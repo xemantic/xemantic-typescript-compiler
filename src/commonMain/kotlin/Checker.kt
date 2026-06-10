@@ -1567,6 +1567,10 @@ class Checker(
         checkJsDocTypeExportAssignment()
         // 82c. B200: TS2345 for call-of-call args against a typeof-narrowed callback param.
         checkNarrowedTypeofCallbackCalls()
+        // 82d. B271: empty-DOM-element-stub receivers — additive intersection emission +
+        // TS2339→TS2812 rewrite when @lib is explicit without 'dom'.
+        checkEmptyDomIntersectionAccess()
+        applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
     }
 
@@ -83992,6 +83996,78 @@ interface DataView {
             else -> {}
         }
         return false
+    }
+
+    /** B271: is [name] declared ONLY as user (non-lib) interface(s) with ZERO members and
+     *  no heritage — the "empty DOM stub" shape of containerSeemsToBeEmptyDomElement. */
+    private fun isEmptyUserInterface(name: String, fileName: String?): Boolean {
+        val sym = fileName?.let { fileResults[it]?.locals?.get(name) } ?: globals[name] ?: return false
+        if (sym.declarations.isEmpty()) return false
+        return sym.declarations.all { d ->
+            d is InterfaceDeclaration && d.members.isEmpty() && d.heritageClauses.isNullOrEmpty() && d !in builtinLibDecls
+        }
+    }
+
+    /** B271 (additive half): `(x as A & B).prop` where EVERY intersection constituent is an
+     *  empty user interface — the access can never succeed, so TS2339 with the `A & B`
+     *  display always fires (Object.prototype members excluded). Top-level statements only. */
+    private fun checkEmptyDomIntersectionAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                var recv: Expression = pa.expression
+                while (recv is ParenthesizedExpression) recv = recv.expression
+                val asExpr = recv as? AsExpression ?: continue
+                val inter = asExpr.type as? IntersectionType ?: continue
+                val names = intersectionEmptyIfaceNames(inter, fileName) ?: continue
+                if (pa.name.text in OBJECT_PROTOTYPE_PROPERTIES) continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${pa.name.text}' does not exist on type '${names.joinToString(" & ")}'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = ch,
+                    start = pa.name.pos, length = pa.name.text.length,
+                ))
+            }
+        }
+    }
+
+    private fun intersectionEmptyIfaceNames(node: IntersectionType, fileName: String): List<String>? {
+        val names = mutableListOf<String>()
+        for (t in node.types) {
+            val tr = t as? TypeReference ?: return null
+            if (!tr.typeArguments.isNullOrEmpty()) return null
+            val n = (tr.typeName as? Identifier)?.text ?: return null
+            if (!isEmptyUserInterface(n, fileName)) return null
+            names.add(n)
+        }
+        return if (names.size >= 2) names else null
+    }
+
+    /** B271 (rewrite half): mirror of TS's containerSeemsToBeEmptyDomElement — when @lib is
+     *  EXPLICIT and excludes 'dom', a TS2339 whose receiver display is built entirely of
+     *  empty user interfaces named like DOM types (`EventTarget|Node|(HTML…)?Element`)
+     *  becomes TS2812 with the "Try changing the 'lib' compiler option to include 'dom'."
+     *  suffix. A NON-empty interface (e.g. a `Node` with members) stays TS2339. */
+    private fun applyDomLibSuggestionRewrite() {
+        if (options.lib.isEmpty()) return
+        if (options.lib.any { val l = it.lowercase(); l == "dom" || l.startsWith("dom.") }) return
+        val msgRe = Regex("^Property '(.+)' does not exist on type '(.+)'\\.$")
+        val domName = Regex("^(?:EventTarget|Node|(?:HTML[a-zA-Z]*)?Element)$")
+        for (i in diagnostics.indices) {
+            val d = diagnostics[i]
+            if (d.code != 2339) continue
+            val m = msgRe.matchEntire(d.message) ?: continue
+            val names = m.groupValues[2].split(" & ")
+            if (!names.all { domName.matches(it) && isEmptyUserInterface(it, d.fileName) }) continue
+            diagnostics[i] = d.copy(
+                code = 2812,
+                message = d.message + " Try changing the 'lib' compiler option to include 'dom'.",
+            )
+        }
     }
 
     private fun checkMemberAccessMissing(
