@@ -1338,6 +1338,8 @@ class Checker(
         checkTypeArgumentConstraints()
         // B247b: object-literal accessor-pair implied getter return type
         checkObjectLiteralAccessorImpliedReturn()
+        // B249: binding pattern destructuring an inferred-unknown generic call result
+        checkBindingPatternUnknownInference()
         // 64f2. Check interface extends interface (TS2430)
         checkInterfaceExtendsInterface()
         // 64f3. Check circular base class references (TS2506)
@@ -80191,6 +80193,124 @@ interface DataView {
      * type and the widened return-expression type must both resolve to PRIMITIVE-only
      * shapes (object/generic targets bail).
      */
+    /**
+     * B249: a BINDING PATTERN is not an inference source — `declare function f<T>(): T;
+     * const { p1 } = f();` infers T = unknown (no args, no type args, no contextual
+     * annotation), so the destructure errors like any other unknown-destructure
+     * (B139's catch-var shapes): empty `{}` → TS2571 "Object is of type 'unknown'.";
+     * non-empty object pattern → TS2339 per property; array pattern → TS2488
+     * (+ TS2571 when EMPTY — tsc emits both for `const [] = f()`).
+     *
+     * FP firewall: un-annotated decl; initializer is a DIRECT no-arg no-type-arg call
+     * of a single-declaration generic FunctionDeclaration with ZERO parameters whose
+     * return annotation is a BARE reference to one of its own UNCONSTRAINED,
+     * default-free type params; strictNullChecks only.
+     */
+    private fun checkBindingPatternUnknownInference() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                bpUnknownStmts(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun bpUnknownStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                bpUnknownCheckDecl(d, source, fileName)
+            }
+            is FunctionDeclaration -> s.body?.let { bpUnknownStmts(it.statements, source, fileName) }
+            is Block -> bpUnknownStmts(s.statements, source, fileName)
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { bpUnknownStmts(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun bpUnknownCheckDecl(d: VariableDeclaration, source: String, fileName: String) {
+        if (d.type != null) return
+        val pattern = d.name
+        if (pattern !is ObjectBindingPattern && pattern !is ArrayBindingPattern) return
+        val call = d.initializer as? CallExpression ?: return
+        if (call.arguments.isNotEmpty()) return
+        if (!call.typeArguments.isNullOrEmpty()) return
+        val calleeName = (call.expression as? Identifier)?.text ?: return
+        val sym = currentFileLocals?.get(calleeName) ?: globals[calleeName] ?: return
+        val fd = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull() ?: return
+        val tps = fd.typeParameters ?: return
+        if (tps.isEmpty()) return
+        if (fd.parameters.isNotEmpty()) return
+        val retRef = fd.type as? TypeReference ?: return
+        if (!retRef.typeArguments.isNullOrEmpty()) return
+        val retName = (retRef.typeName as? Identifier)?.text ?: return
+        val tp = tps.firstOrNull { it.name.text == retName } ?: return
+        if (tp.constraint != null || tp.default != null) return
+
+        fun emitAt(startPos: Int, len: Int, code: Int, message: String) {
+            val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+            diagnostics.add(Diagnostic(
+                message = message, category = DiagnosticCategory.Error, code = code,
+                fileName = fileName, line = line, character = character,
+                start = startPos, length = len,
+            ))
+        }
+        when (pattern) {
+            is ObjectBindingPattern -> {
+                if (pattern.elements.isEmpty()) {
+                    val (startPos, len) = objectBindingPatternSpan(pattern, source)
+                    emitAt(startPos, len, 2571, "Object is of type 'unknown'.")
+                } else {
+                    for (el in pattern.elements) {
+                        if (el.dotDotDotToken) continue
+                        val nameNode = el.propertyName ?: el.name
+                        val (propName, pos) = when (nameNode) {
+                            is Identifier -> nameNode.text to nameNode.pos
+                            is StringLiteralNode -> nameNode.text to nameNode.pos
+                            is NumericLiteralNode -> nameNode.text to nameNode.pos
+                            else -> continue
+                        }
+                        if (pos < 0) continue
+                        emitAt(pos, propName.length, 2339, "Property '$propName' does not exist on type 'unknown'.")
+                    }
+                }
+            }
+            is ArrayBindingPattern -> {
+                val (startPos, len) = arrayBindingPatternSpan(pattern, source)
+                if (startPos < 0) return
+                emitAt(startPos, len, 2488, "Type 'unknown' must have a '[Symbol.iterator]()' method that returns an iterator.")
+                if (pattern.elements.isEmpty()) {
+                    emitAt(startPos, len, 2571, "Object is of type 'unknown'.")
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** B249: bracket-matched span of an OBJECT binding pattern (mirror of
+     *  [arrayBindingPatternSpan] for `{`). */
+    private fun objectBindingPatternSpan(pattern: ObjectBindingPattern, source: String): Pair<Int, Int> {
+        var start = pattern.pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        if (start >= source.length || source[start] != '{') return pattern.pos to 1
+        var depth = 0
+        var i = start
+        while (i < source.length) {
+            when (source[i]) {
+                '{', '[' -> depth++
+                '}', ']' -> { depth--; if (depth == 0) { i++; return start to (i - start) } }
+            }
+            i++
+        }
+        return start to (i - start)
+    }
+
     private fun checkObjectLiteralAccessorImpliedReturn() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
