@@ -61745,6 +61745,15 @@ interface DataView {
                     return // per-property diagnostics emitted — suppress the coarse var-decl TS2322
                 }
             }
+            // B231: DIRECT object-literal init — simple props are owned by the existing
+            // emitPerPropertyMismatches/excess-props paths, but NOTHING recurses into an
+            // ARRAY-literal property value (`b: [ {…} ]` vs `B[]`). Walk ONLY those
+            // (arrayPropsOnly) so deep literal chains like a.b[0].c.d[0]… are checked
+            // without double-emitting on the simple-prop paths.
+            if (init is ObjectLiteralExpression && targetType is Type.Object &&
+                !(targetType is Type.Reference && targetType.target?.symbol?.name == "Array")) {
+                checkNestedObjLitPropTypes(init, targetType, source, fileName, arrayPropsOnly = true)
+            }
             // Class-Identifier-as-value with construct-sig target — `const foo: { new(): Foo } = Foo`.
             // canUseTypeEngine skips class-instance-vs-constructor comparisons, so this case
             // would otherwise fall through to the string fallback (no chain). Display the
@@ -62097,8 +62106,26 @@ interface DataView {
                 // NOTHING — emit the per-element TS2322s before suppressing the outer one
                 // (targetTypeTest3). LITERAL elements only — non-literal elements are
                 // covered by the pre-existing element walker (arraySigChecking double-emit).
+                // (B231 made the walk recurse into nested array-literal elements; an
+                // UNCONDITIONAL call here was tried and reverted — it FP'd TS2353/TS2322
+                // on relation-passing array literals in contextualTypeAny/contextualTyping9/
+                // arrayLiteralTypeInference. Keep the canUse && !isAssignable gate.)
                 checkArrayLiteralElementsAgainstType(init, targetType, source, fileName, literalElementsOnly = true)
                 return
+            }
+            // B231b: nested array-OF-ARRAY literal vs Array<Array<…>> target — inference
+            // through nested array literals can yield any (relation passes or canUse is
+            // false), so the gated call above misses `[[[[[42]]]]]` vs string[][][][][].
+            // Walk ONLY when every element is itself an array literal AND the target
+            // element type is an Array reference — scalar/object-element literals (the
+            // contextualTypeAny `["", x]` any-infected shape) never enter.
+            if (init is ArrayLiteralExpression && !(canUse && !isAssignable) &&
+                targetType is Type.Reference && targetType.target.symbol?.name == "Array" &&
+                (targetType.resolvedTypeArguments?.firstOrNull() as? Type.Reference)
+                    ?.target?.symbol?.name == "Array" &&
+                init.elements.isNotEmpty() && init.elements.all { it is ArrayLiteralExpression }
+            ) {
+                checkArrayLiteralElementsAgainstType(init, targetType, source, fileName, literalElementsOnly = true)
             }
             if (canUse && !isAssignable) {
                 // B69.7: Widen literal source for display when target type doesn't
@@ -90100,6 +90127,17 @@ interface DataView {
         val elementType = arrayParamType.resolvedTypeArguments?.firstOrNull() ?: return
         if (elementType === anyType || elementType === errorType) return
         if (elementType is Type.TypeParam) return
+        // B231: nested array-of-array literals — `[[[[[42]]]]]` vs `string[][][][][]`
+        // recurses each array-literal element against the inner Array type, bottoming
+        // out at the primitive per-element TS2322 (`42` vs string).
+        if (elementType is Type.Reference && elementType.target.symbol?.name == "Array") {
+            for (elem in arrLit.elements) {
+                if (elem is ArrayLiteralExpression) {
+                    checkArrayLiteralElementsAgainstType(elem, elementType, source, fileName, literalElementsOnly)
+                }
+            }
+            return
+        }
         if (!isSimpleCheckableType(elementType)) {
             // For object element types, fall through to existing object-element TS2353 path
             if (elementType is Type.Object) {
@@ -90232,6 +90270,7 @@ interface DataView {
     private fun checkNestedObjLitPropTypes(
         objLit: ObjectLiteralExpression, targetType: Type, source: String, fileName: String,
         viaUnion: Boolean = false,
+        arrayPropsOnly: Boolean = false,
     ): Boolean {
         var emitted = false
         val targetObj = targetType as? Type.Object ?: return false
@@ -90248,9 +90287,31 @@ interface DataView {
             }
             val tgtMemberType = getTargetPropertyType(targetObj, propName) ?: continue
             if (tgtMemberType === anyType || tgtMemberType === errorType) continue
+            if (arrayPropsOnly && value !is ArrayLiteralExpression) continue
             if (value is ObjectLiteralExpression) {
                 val tgtObj = selectObjectConstituentForObjectLiteral(tgtMemberType) ?: continue
                 if (checkNestedObjLitPropTypes(value, tgtObj, source, fileName, viaUnion || tgtMemberType is Type.Union)) emitted = true
+            } else if (value is ArrayLiteralExpression) {
+                // B231: recurse into ARRAY-literal property values — `b: [ {…}, … ]` vs
+                // `B[]` checks each object-literal element against the array ELEMENT type,
+                // so deep literal chains (a.b[0].c.d[0]…) keep being walked. Each element
+                // also gets the missing-REQUIRED-property check (TS2741/TS2739/TS2740) —
+                // the per-property loop alone can't see ABSENT props (the deep `{}` vs H
+                // shape). Gated to a non-union, concrete Array element target.
+                val elemTarget = (tgtMemberType as? Type.Reference)
+                    ?.takeIf { it.target.symbol?.name == "Array" }
+                    ?.resolvedTypeArguments?.firstOrNull()
+                if (elemTarget != null && elemTarget !== anyType && elemTarget !== errorType &&
+                    elemTarget !is Type.Union && elemTarget !is Type.TypeParam) {
+                    val elemObj = selectObjectConstituentForObjectLiteral(elemTarget)
+                    if (elemObj != null) {
+                        for (elem in value.elements) {
+                            if (elem !is ObjectLiteralExpression) continue
+                            if (checkNestedObjLitPropTypes(elem, elemObj, source, fileName, viaUnion)) emitted = true
+                            if (!viaUnion && emitNestedMissingRequiredProps(elem, elemObj, source, fileName)) emitted = true
+                        }
+                    }
+                }
             } else {
                 val valueType = try { getTypeOfExpression(value) } catch (_: Throwable) { continue }
                 if (valueType === anyType || valueType === errorType) continue
@@ -90331,6 +90392,47 @@ interface DataView {
             }
         }
         return emitted
+    }
+
+    /** B231: missing-REQUIRED-property emission for a nested object-literal element of an
+     *  array-literal property value (`h: [ {} ]` vs `H[]` → TS2741 "Property 'i' is missing
+     *  in type '{}' but required in type 'H'." spanning the whole literal). Reuses
+     *  [collectMissingProperties] (statics/prototype/optional-aware). */
+    private fun emitNestedMissingRequiredProps(
+        objLit: ObjectLiteralExpression, target: Type.Object, source: String, fileName: String,
+    ): Boolean {
+        if (objLit.properties.any { it is SpreadAssignment }) return false
+        val srcType = try { getTypeOfObjectLiteral(objLit) } catch (_: StackOverflowError) { return false }
+        if (srcType !is Type.Object) return false
+        val missing = try { collectMissingProperties(srcType, target) } catch (_: StackOverflowError) { return false }
+        if (missing.isEmpty()) return false
+        val displaySource = typeToString(srcType)
+        val displayTarget = typeToString(target)
+        val end = if (objLit.closeBracePos > objLit.pos) objLit.closeBracePos + 1 else objLit.end
+        val length = (end - objLit.pos).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, objLit.pos)
+        val message = if (missing.size == 1) {
+            "Property '${missing[0]}' is missing in type '$displaySource' but required in type '$displayTarget'."
+        } else {
+            formatTs2740Message(displaySource, displayTarget, missing)
+        }
+        // TS2728 "'i' is declared here." related info for the single-missing case.
+        val related = if (missing.size == 1) {
+            target.members?.get(missing[0])?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                ?.let { listOf(it) } ?: emptyList()
+        } else emptyList()
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = if (missing.size == 1) 2741 else if (missing.size <= 4) 2739 else 2740,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = objLit.pos,
+            length = length,
+            relatedInformation = related,
+        ))
+        return true
     }
 
     private fun checkArrayLiteralElementExcessProps(
