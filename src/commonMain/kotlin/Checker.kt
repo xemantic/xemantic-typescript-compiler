@@ -1328,6 +1328,8 @@ class Checker(
         checkMappedIntersectionIndexWrite()
         // 72a4b (B251): TS2551/TS2339 + TS2862 for writes on a `Record<keyof TP | "lit", V>`-cast local
         checkGenericRecordCastAccess()
+        // 72a4c (B254): TS2322 for generic mapped-param fn-alias assignments (`b = f`)
+        checkGenericMappedFnAliasAssignments()
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
         checkIndexedAccessTpMismatchAssignment()
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
@@ -99066,6 +99068,102 @@ interface DataView {
                     }.toSet()
                     stmt.body?.let { scanBody(it.statements, tps, paramStringNames, source, fileName) }
                 }
+            }
+        }
+    }
+
+    /**
+     * B254: TS2322 for assigning between GENERIC fn-type aliases whose single param is
+     * a homomorphic mapped type over the fn's own type param
+     * (mappedTypeInferenceFromApparentType): `type foo = <T>(target: { [K in keyof T]:
+     * T[K] }) => void` assigned into `type bar = <U extends string[]>(source: { [K in
+     * keyof U]: Obj[K] }) => void` — after unifying T:=U the params compare
+     * contravariantly: bar's `Obj[K]` template vs foo's `U[K]`; the concrete `Obj` is
+     * never assignable to the bare TP `U`. Mapped params resolve shallowly so the
+     * relation engine never sees this — self-contained AST-shape check with the full
+     * 6-line chain. Gate (FP firewall): both annotations bare alias refs to single-TP
+     * single-param void-returning FunctionTypes; params mapped `[K in keyof OWN_TP]:
+     * X[K]` with the SAME key name; assignment-SOURCE template object == its own TP;
+     * assignment-TARGET template object == a concrete locally-resolvable name. Any
+     * other shape is silent (FN, never FP).
+     */
+    private fun checkGenericMappedFnAliasAssignments() {
+        // shape of `<TP>(p: { [K in keyof TP]: X[K] }) => void`
+        class MappedFnShape(val tpName: String, val paramName: String, val keyName: String, val templateObj: String)
+        fun fnShape(alias: TypeAliasDeclaration): MappedFnShape? {
+            if (alias.typeParameters != null) return null  // the TP must be on the fn, not the alias
+            val fn = alias.type as? FunctionType ?: return null
+            val tp = fn.typeParameters?.singleOrNull() ?: return null
+            val param = fn.parameters.singleOrNull() ?: return null
+            if ((fn.type as? KeywordTypeNode)?.kind != SyntaxKind.VoidKeyword) return null
+            val mt = param.type as? MappedType ?: return null
+            if (mt.nameType != null || mt.questionToken || mt.readonlyToken) return null
+            val keyName = mt.typeParameter.name.text
+            val cons = mt.typeParameter.constraint as? TypeOperator ?: return null
+            if (cons.operator != SyntaxKind.KeyOfKeyword) return null
+            val consRef = ((cons.type as? TypeReference)?.typeName as? Identifier) ?: return null
+            if (consRef.text != tp.name.text) return null
+            val ia = mt.type as? IndexedAccessType ?: return null
+            val obj = ia.objectType as? TypeReference ?: return null
+            if (obj.typeArguments != null) return null
+            val objName = (obj.typeName as? Identifier)?.text ?: return null
+            val idx = ((ia.indexType as? TypeReference)?.typeName as? Identifier) ?: return null
+            if (idx.text != keyName) return null
+            val pname = (param.name as? Identifier)?.text ?: return null
+            return MappedFnShape(tp.name.text, pname, keyName, objName)
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val aliases = mutableMapOf<String, TypeAliasDeclaration>()
+            val varAnn = mutableMapOf<String, String>()  // var -> bare alias-ref name
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is TypeAliasDeclaration) aliases[stmt.name.text] = stmt
+                if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val t = d.type as? TypeReference ?: continue
+                    if (t.typeArguments != null) continue
+                    varAnn[n] = (t.typeName as? Identifier)?.text ?: continue
+                }
+            }
+            if (aliases.isEmpty() || varAnn.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                val e = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (e.operator != SyntaxKind.Equals) continue
+                val lhs = e.left as? Identifier ?: continue
+                val rhs = e.right as? Identifier ?: continue
+                val tAliasName = varAnn[lhs.text] ?: continue
+                val sAliasName = varAnn[rhs.text] ?: continue
+                if (tAliasName == sAliasName) continue
+                val tShape = aliases[tAliasName]?.let { fnShape(it) } ?: continue
+                val sShape = aliases[sAliasName]?.let { fnShape(it) } ?: continue
+                if (tShape.keyName != sShape.keyName) continue
+                // SOURCE template must be its own TP; TARGET template a concrete name
+                if (sShape.templateObj != sShape.tpName) continue
+                if (tShape.templateObj == tShape.tpName) continue
+                val concrete = tShape.templateObj
+                val concreteResolves = aliases.containsKey(concrete) ||
+                    globals[concrete]?.declarations?.any {
+                        it is TypeAliasDeclaration || it is InterfaceDeclaration
+                    } == true
+                if (!concreteResolves) continue
+                val u = tShape.tpName
+                val k = tShape.keyName
+                val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$sAliasName' is not assignable to type '$tAliasName'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = lhs.pos, length = lhs.text.length,
+                    messageChain = listOf(
+                        "  Types of parameters '${sShape.paramName}' and '${tShape.paramName}' are incompatible.",
+                        "    Type '{ [$k in keyof $u]: $concrete[$k]; }' is not assignable to type '{ [$k in keyof $u]: $u[$k]; }'.",
+                        "      Type '$concrete[$k]' is not assignable to type '$u[$k]'.",
+                        "        Type '$concrete' is not assignable to type '$u'.",
+                        "          '$u' could be instantiated with an arbitrary type which could be unrelated to '$concrete'.",
+                    ),
+                ))
             }
         }
     }
