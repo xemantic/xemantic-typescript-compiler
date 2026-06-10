@@ -16192,6 +16192,7 @@ class Checker(
             // Same for names augmented via any file's `declare global { var X }`.
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) {
                 fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
+                fileScope.names.addAll(TEST_RUNNER_GLOBALS_TS2593)
             }
             fileScope.names.addAll(globalAugmentationNames)
             // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
@@ -19693,6 +19694,24 @@ class Checker(
                 message = "Cannot find name '$name'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
                 category = DiagnosticCategory.Error,
                 code = 2591,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+            return
+        }
+
+        // B227: TS2593 for the test-runner globals (describe/suite/it/test) — mirrors
+        // the TS2591 node-builtin block above. Placed before TS2552 so e.g. `test`
+        // never spell-suggests something else. `.js`/`.jsx` files never reach here
+        // for these names (they are re-seeded into the file scope).
+        if (name in TEST_RUNNER_GLOBALS_TS2593 && name !in globalAugmentationNames) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find name '$name'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.",
+                category = DiagnosticCategory.Error,
+                code = 2593,
                 fileName = fileName,
                 line = line,
                 character = character,
@@ -30254,6 +30273,14 @@ class Checker(
             "Buffer", "module", "process", "require",
         )
 
+        /** B227: unresolved uses of these names get TS2593 ("Do you need to install type
+         *  definitions for a test runner?...") — TypeScript's special-cased jest/mocha set.
+         *  Deliberately NOT in KNOWN_GLOBALS (seeding would mask the diagnostic); mirrors
+         *  the NODE_BUILTIN_GLOBALS_TS2591 pattern incl. the `.js`/`.jsx` re-seed. */
+        private val TEST_RUNNER_GLOBALS_TS2593: Set<String> = setOf(
+            "describe", "suite", "it", "test",
+        )
+
         private val KNOWN_GLOBALS: Set<String> = setOf(
             // Special identifiers
             "undefined", "globalThis",
@@ -30392,9 +30419,13 @@ class Checker(
             "__non_webpack_require__",
             // Web Worker APIs
             "importScripts",
-            // Testing frameworks
-            "describe", "it", "test", "expect", "jest", "beforeEach", "afterEach",
-            "beforeAll", "afterAll", "suite",
+            // Testing frameworks. NOTE: `describe`/`suite`/`it`/`test` are NOT here —
+            // they live in TEST_RUNNER_GLOBALS_TS2593 (B227): TypeScript emits TS2593
+            // ("install type definitions for a test runner") for unresolved uses, so
+            // seeding them would silently mask that diagnostic. They are still seeded
+            // for `.js`/`.jsx` files (see the B66.1-style addAll in checkUnresolvedNames).
+            "expect", "jest", "beforeEach", "afterEach",
+            "beforeAll", "afterAll",
             // jQuery / common libraries
             "$", "jQuery",
             // Common global augmentations
@@ -98399,6 +98430,28 @@ interface DataView {
                                     emitTS2307(litNode, bareSpec, source, fileName)
                                 }
                             }
+                        }
+                        // B227: TS2307 for a RELATIVE import-type specifier that doesn't
+                        // resolve — `b: import('./b').B` with no ./b in the compilation.
+                        // Mirrors the B98.r1 import-declaration gate exactly: explicit
+                        // `@module: commonjs` + default moduleResolution + no path/root
+                        // config, index-aware resolution fails, no ambient module, no
+                        // untyped JS sibling, no @ts-ignore above.
+                        val isRelativeSpec = bareSpec.startsWith("./") || bareSpec.startsWith("../")
+                        if (isRelativeSpec && !isAmbientSpec
+                            && !isJsLikeFileName(fileName) && !isDtsFile(fileName)
+                            && options.module == ModuleKind.CommonJS
+                            && options.moduleResolution == null
+                            && options.paths.isNullOrEmpty()
+                            && options.baseUrl == null
+                            && options.rootDirs.isNullOrEmpty()
+                            && options.rootDir == null
+                            && options.moduleSuffixes.isNullOrEmpty()
+                            && resolveRelativeIncludingIndex(bareSpec, fileName) == null
+                            && resolveRelativeJsSibling(bareSpec, fileName) == null
+                            && !hasTsErrorSuppressionAbove(litNode.pos, source)
+                        ) {
+                            emitTS2307(litNode, bareSpec, source, fileName)
                         }
                     }
                 }
