@@ -31624,6 +31624,12 @@ declare namespace Intl {
     interface DateTimeFormat { format(date?: any): string; resolvedOptions(): any; }
     var DateTimeFormat: { new (locales?: any, options?: any): DateTimeFormat; (locales?: any, options?: any): DateTimeFormat; supportedLocalesOf(locales: any, options?: any): string[]; };
 }
+interface CSSStyleDeclaration {
+    cssText: string;
+    readonly length: number;
+    animationTimingFunction: string;
+    getPropertyValue(property: string): string;
+}
 interface Performance {
     readonly timeOrigin: number;
     clearMarks(markName?: string): void;
@@ -65175,6 +65181,10 @@ interface DataView {
                 ))
                 return
             }
+            // B243: literal-keyed bracket-notation setter writes (`obj['prop'] = v`,
+            // `obj[keyUnion] = v`) — the element-access mirror of the dot-notation
+            // setter-write paths (B54.5 / 17.72 intersection).
+            if (checkElementAccessSetterWrite(target, value, source, fileName)) return
             // Only handle PropertyAccess receivers rooted at `this` for now — the most common
             // shape and the one B85.1b's varTypes population is designed for.
             val receiverExpr = target.expression as? PropertyAccessExpression ?: return
@@ -65892,14 +65902,21 @@ interface DataView {
         return true
     }
 
-    private fun checkIntersectionPropertyAssignment(
-        target: PropertyAccessExpression,
-        value: Expression,
-        intersection: Type.Intersection,
-        propName: String,
-        source: String,
-        fileName: String,
-    ): Boolean {
+    private class IntersectionWriteTypes(
+        val writeTypes: List<Type>,
+        val hasSetterContribution: Boolean,
+        val hasReadOnlyConstituent: Boolean,
+    )
+
+    /**
+     * 17.72 (extracted for B243 reuse): collect the per-constituent WRITE types of
+     * [propName] across an intersection's constituents — a SetAccessor's parameter
+     * type, or a plain data property's type. Getter-only constituents are flagged
+     * read-only and contribute nothing.
+     */
+    private fun collectIntersectionWriteTypes(
+        intersection: Type.Intersection, propName: String
+    ): IntersectionWriteTypes {
         val writeTypes = mutableListOf<Type>()
         var hasSetterContribution = false
         var hasReadOnlyConstituent = false
@@ -65958,6 +65975,132 @@ interface DataView {
                 writeTypes.add(writeType)
             }
         }
+        return IntersectionWriteTypes(writeTypes, hasSetterContribution, hasReadOnlyConstituent)
+    }
+
+    /**
+     * B243: `obj['prop'] = value` / `obj[keyUnion] = value` — setter-aware write-type
+     * checking for LITERAL-keyed element-access assignments on an Identifier receiver.
+     * The bracket-notation mirror of the dot-notation setter path (B54.5) and the
+     * intersection write-type path (17.72). A union-typed key (`k: 'a' | 'b'`)
+     * intersects the per-key write types (TypeScript's union-key write rule).
+     *
+     * Returns true when the shape was HANDLED (whether or not a diagnostic was
+     * emitted); false → caller falls through to the pre-existing element-access
+     * paths. FP firewall: only fires when ≥1 write type came from a SetAccessor
+     * (plain data-prop bracket writes keep prior no-emission behavior), receiver
+     * must resolve to a non-generic Object/Interface or Intersection (Reference
+     * bails — the B89.1 generic-setter caveat), and getter-only / missing members
+     * bail (TS2540 territory).
+     */
+    private fun checkElementAccessSetterWrite(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String
+    ): Boolean {
+        val recv = target.expression as? Identifier ?: return false
+        val arg = target.argumentExpression
+        val keys: List<String> = when {
+            arg is StringLiteralNode -> listOf(arg.text)
+            arg is Identifier -> {
+                val keyType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return false }
+                when {
+                    keyType is Type.StringLiteral -> listOf(keyType.value)
+                    keyType is Type.Union && keyType.types.all { it is Type.StringLiteral } ->
+                        keyType.types.map { (it as Type.StringLiteral).value }
+                    else -> return false
+                }
+            }
+            else -> return false
+        }
+        if (keys.isEmpty()) return false
+        val recvType = try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return false }
+        if (recvType === anyType || recvType === errorType) return false
+
+        var anySetter = false
+        val perKeyWriteTypes = mutableListOf<Type>()
+        for (key in keys) {
+            when (recvType) {
+                is Type.Intersection -> {
+                    val collected = collectIntersectionWriteTypes(recvType, key)
+                    if (collected.hasReadOnlyConstituent || collected.writeTypes.isEmpty()) return false
+                    if (collected.hasSetterContribution) anySetter = true
+                    perKeyWriteTypes.add(reduceIntersectionForWriteType(collected.writeTypes))
+                }
+                is Type.Reference -> return false
+                is Type.Object -> {
+                    try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return false }
+                    val propSym = recvType.members?.get(key) ?: return false
+                    val setterDecl = propSym.declarations.firstOrNull { it is SetAccessor } as? SetAccessor
+                    if (setterDecl == null) return false  // data-prop / getter-only: keep prior behavior
+                    anySetter = true
+                    val wt = setterDecl.parameters.firstOrNull()?.type?.let {
+                        try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                    } ?: return false
+                    if (wt === anyType || wt === errorType) return false
+                    perKeyWriteTypes.add(wt)
+                }
+                else -> return false
+            }
+        }
+        if (!anySetter) return false
+        val writeType = reduceIntersectionForWriteType(perKeyWriteTypes)
+        if (writeType === anyType || writeType === errorType) return false
+        if (writeType.flags.hasAny(TypeFlags.Never)) return false
+        // Mirror 17.72's literal-preservation display rule.
+        val valueType = if (propTypeContainsLiteral(writeType)) {
+            literalTypeOfExpression(value) ?: getTypeOfExpression(value)
+        } else {
+            try { getTypeOfExpression(value) } catch (_: StackOverflowError) { return false }
+        }
+        if (valueType === anyType || valueType === errorType) return false
+        if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+            // Nullish writes are checkable only under strictNullChecks and only against
+            // a primitive-shaped write type (object/TypeParam write types would need
+            // the full relation's nullish rules — bail conservatively).
+            if (!strictNullChecks) return false
+            if (!isPrimitiveOnlyWriteType(writeType)) return false
+        }
+        if (checkTypeRelatedTo(valueType, writeType, assignableRelation)) return true
+        val start = target.expression.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '${typeToString(valueType)}' is not assignable to type '${typeToString(writeType)}'.",
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return true
+    }
+
+    /** B243: true when [t] is built purely of primitives / literals / null / undefined. */
+    private fun isPrimitiveOnlyWriteType(t: Type): Boolean = when (t) {
+        is Type.Union -> t.types.all { isPrimitiveOnlyWriteType(it) }
+        is Type.StringLiteral, is Type.NumberLiteral, is Type.BigIntLiteral -> true
+        is Type.Intrinsic -> t !== anyType && t !== errorType && t.flags.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or
+                TypeFlags.ESSymbol or TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or TypeFlags.Null or
+                TypeFlags.Undefined
+        )
+        else -> false
+    }
+
+    private fun checkIntersectionPropertyAssignment(
+        target: PropertyAccessExpression,
+        value: Expression,
+        intersection: Type.Intersection,
+        propName: String,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val collected = collectIntersectionWriteTypes(intersection, propName)
+        val writeTypes = collected.writeTypes
+        val hasSetterContribution = collected.hasSetterContribution
+        val hasReadOnlyConstituent = collected.hasReadOnlyConstituent
         // Gate: only emit when at least one setter contributed. This preserves
         // existing behavior for plain property intersections.
         if (!hasSetterContribution) return false
@@ -66037,6 +66180,17 @@ interface DataView {
         if (b is Type.Union) {
             val mapped = b.types.map { intersectTwoTypesForWrite(a, it) }
             return getUnionType(mapped)
+        }
+
+        // B243: nullish ∩ other reduction under strictNullChecks — `boolean & null`
+        // → never, `null & null` → null. Without strict null checks null/undefined
+        // are assignable everywhere; keep the prior general-intersection fallback.
+        if (strictNullChecks) {
+            val aNullish = a.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            val bNullish = b.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            if (aNullish || bNullish) {
+                return if (a === b) a else neverType
+            }
         }
 
         // Both non-union, non-special — apply primitive / literal pairwise reduction.
