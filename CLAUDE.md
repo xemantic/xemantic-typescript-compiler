@@ -539,7 +539,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 - **No non-stdlib dependencies in `commonMain`**: The project targets Kotlin Native (in addition to JVM/JS), so `commonMain` must use only `kotlin.*` and `kotlinx.*` packages. No `java.*`, no `BigDecimal`, no JVM-only types. Use Kotlin's built-in numeric types and stdlib math (`kotlin.math.*`).
 - **Enum context resolution** (Kotlin 2.1+): When the expected type is an enum, use unqualified entry names — write `Equals`, not `SyntaxKind.Equals`. This applies to `when` branch conditions, named arguments (`operator = Equals`), comparisons (`flags == VarKeyword`), and any other position where the enum type is inferred. Caveat: if a data class has the same name as an enum entry (e.g. `LabeledStatement`), keep the `SyntaxKind.` prefix to avoid ambiguity.
 - **`in 0..<x` range checks**: Prefer `pos in 0..<end` over `pos >= 0 && end > pos` for range validation — uses Kotlin's `rangeUntil` (`..<`) operator for exclusive upper bound.
-- **No JVM-only APIs in `commonMain`**: `Map.putIfAbsent` → use `getOrPut`; `Math.pow` → use `kotlin.math.pow` extension. Always use Kotlin stdlib equivalents for multiplatform compatibility.
+- **No JVM-only APIs in `commonMain`**: `Map.putIfAbsent` → use `getOrPut`; `Math.pow` → use `kotlin.math.pow` extension; `RegexOption.DOT_MATCHES_ALL` → use `[\s\S]` in the pattern (B259). `./gradlew compileKotlinJvm` does NOT catch these — it compiles only the JVM target. Always use Kotlin stdlib equivalents for multiplatform compatibility.
 - **`when` guard conditions** (Kotlin 2.1+): Use `when (val ch = x) { '/' if condition -> ... }` instead of `when { ch == '/' && condition -> ... }`. The `if` guard after the match value keeps pattern matching readable and avoids nested `when`/`if` blocks.
 
 ## AI agent mission
@@ -620,6 +620,11 @@ python3 scripts/find_candidates.py --none --fresh --code TS2307   # focus one di
 python3 scripts/find_candidates.py --output --fresh     # JS/decl/sourcemap output diffs
 python3 scripts/find_candidates.py --none --fresh --tsgo # hide tsgo-IRRELEVANT failures (see below)
 ```
+**Skip-log filtering caveat (round 137):** `--fresh` extracts skip-set names as backticked
+`name_ts` tokens — entries logged WITHOUT the `_ts` suffix (most of the round-133..136
+one-liners) are NOT filtered, so previously-triaged tests keep appearing in the NONE
+listing. Cross-check a candidate against PLAN-PHASE-4.md (`grep <name> PLAN-PHASE-4.md`)
+before re-investigating; suffix new entries with `_ts`.
 The plain (no-flag) buckets only see tests that already emit some `error TSxxxx`
 — ~33 of >1000 failures. **`--none` is where ~60% of the remaining work lives**
 (see PLAN-PHASE-4.md § "STRATEGIC MAP"). Do not call the pool exhausted until
