@@ -86262,6 +86262,342 @@ interface DataView {
     }
 
     /**
+     * B290: a receiver expression that syntactically resolves to a FRESH object
+     * literal — a direct literal, a parenthesized one, or a property-access chain
+     * whose every step lands on an object-literal property initializer
+     * (`({ foo: {...} }).foo`). Mirrors tsc's type freshness for the
+     * isObjectLiteralType branch of getPropertyTypeForIndexType: widening (variable
+     * declarations) drops the ObjectLiteral flag, so only these syntactic shapes
+     * keep it.
+     */
+    private fun freshObjectLiteralOf(e: Expression): ObjectLiteralExpression? = when (e) {
+        is ObjectLiteralExpression -> e
+        is ParenthesizedExpression -> freshObjectLiteralOf(e.expression)
+        is PropertyAccessExpression -> {
+            val obj = freshObjectLiteralOf(e.expression)
+            val pa = obj?.properties?.firstOrNull {
+                it is PropertyAssignment && (it.name as? Identifier)?.text == e.name.text
+            } as? PropertyAssignment
+            pa?.initializer as? ObjectLiteralExpression
+        }
+        else -> null
+    }
+
+    /**
+     * B290: source-scan write-context detection for an element access ending at
+     * [accessEnd] (position just past the closing `]`). True for `= ` (not `==`),
+     * the compound assignment operators, and postfix/prefix `++`/`--`. Mirrors
+     * tsc's isAssignmentTarget for the TS7052 get/set suggestion selection.
+     */
+    private fun elementAccessIsWriteContext(source: String, accessEnd: Int, recvStart: Int): Boolean {
+        var i = accessEnd
+        while (i < source.length && (source[i] == ' ' || source[i] == '\t')) i++
+        if (i + 1 < source.length) {
+            val a = source[i]; val b = source[i + 1]
+            if ((a == '+' && b == '+') || (a == '-' && b == '-')) return true
+        }
+        if (i < source.length && source[i] == '=' &&
+            source.getOrNull(i + 1) != '=' && source.getOrNull(i + 1) != '>') return true
+        // Compound assignments only — `<=`, `>=`, `==`, `!=` are deliberately absent.
+        for (op in arrayOf(">>>=", "**=", "<<=", ">>=", "&&=", "||=", "??=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=")) {
+            if (source.startsWith(op, i)) return true
+        }
+        var j = recvStart - 1
+        while (j >= 0 && (source[j] == ' ' || source[j] == '\t' || source[j] == '(')) j--
+        if (j >= 1 && ((source[j] == '+' && source[j - 1] == '+') || (source[j] == '-' && source[j - 1] == '-'))) return true
+        return false
+    }
+
+    /** B290: tsc tryGetPropertyAccessOrIdentifierToString — identifier / dotted chain only. */
+    private fun entityPathOf(e: Expression): String? = when (e) {
+        is Identifier -> e.text
+        is PropertyAccessExpression -> entityPathOf(e.expression)?.let { "$it.${e.name.text}" }
+        else -> null
+    }
+
+    /**
+     * B290: nearest PRECEDING `var/let/const <name> = {objLit}` declaration in the
+     * file, by position. Block-scoped declarations are not bound (B83.5) and the
+     * file-wide local-type map is last-write-wins, so sibling blocks re-declaring
+     * the same name display the wrong shape — position precedence approximates
+     * lexical scoping well enough for the receiver-type display.
+     */
+    private fun nearestPrecedingObjectLiteralDecl(fileName: String, name: String, beforePos: Int): ObjectLiteralExpression? {
+        val stmts = fileResults[fileName]?.sourceFile?.statements ?: return null
+        var best: ObjectLiteralExpression? = null
+        var bestPos = -1
+        fun visitStmt(stmt: Node) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    val init = d.initializer as? ObjectLiteralExpression ?: continue
+                    if (n.text == name && d.pos < beforePos && d.pos > bestPos) { best = init; bestPos = d.pos }
+                }
+                is Block -> stmt.statements.forEach(::visitStmt)
+                is IfStatement -> { visitStmt(stmt.thenStatement); stmt.elseStatement?.let(::visitStmt) }
+                is WhileStatement -> visitStmt(stmt.statement)
+                is DoStatement -> visitStmt(stmt.statement)
+                is ForStatement -> visitStmt(stmt.statement)
+                is ForInStatement -> visitStmt(stmt.statement)
+                is ForOfStatement -> visitStmt(stmt.statement)
+                is FunctionDeclaration -> stmt.body?.statements?.forEach(::visitStmt)
+                else -> {}
+            }
+        }
+        stmts.forEach(::visitStmt)
+        return best
+    }
+
+    /**
+     * B290: the noImplicitAny element-access family — TS7052 ("has no index
+     * signature. Did you mean to call 'x.get'?"), TS7053 ("expression of type 'K'
+     * can't be used to index type 'T'." + "Property 'p' does not exist" chain),
+     * and the fresh-object-literal READ TS2339. Mirrors tsc's
+     * getPropertyTypeForIndexType error block (checker.ts ~19330):
+     *  - fresh literal receiver + READ + single literal key → TS2339 at the whole
+     *    access (writes WIDEN the receiver in checkElementAccessExpression, which
+     *    drops the ObjectLiteral flag — so writes fall to the suggestion path);
+     *  - suggestion path: method = isAssignmentTarget ? "set" : "get"; receiver has
+     *    a single-call-signature member of that name with ≥1 required param whose
+     *    first param accepts the key type → TS7052, suggestion prefixed with the
+     *    dotted receiver path when expressible (bare method name otherwise);
+     *  - else TS7053 with a per-key-kind chain: string literal → the value, union →
+     *    FIRST missing member, enum → '[EnumName.member]' of the first member whose
+     *    stringified VALUE is missing, unique symbol → '[symName]'.
+     * Returns true when a diagnostic was emitted (caller must return).
+     */
+    private fun tryEmitNoImplicitAnyIndexAccess(
+        expr: ElementAccessExpression, source: String, fileName: String,
+    ): Boolean {
+        if (!(options.noImplicitAny || options.strict)) return false
+        if (isJsLikeFileName(fileName)) return false
+        val arg = expr.argumentExpression
+        val recvExpr = expr.expression
+
+        // ---- key classification ----
+        var singleKey: String? = null
+        var unionKeys: List<String>? = null
+        var enumName: String? = null
+        var enumMembers: List<Pair<String, String>>? = null // memberName -> key string
+        var uniqueSymbolName: String? = null
+        when (arg) {
+            is StringLiteralNode -> singleKey = arg.text
+            is Identifier -> {
+                if (arg.text == "null" || arg.text == "undefined") return false
+                val argSym = globals[arg.text]
+                val argDecl = argSym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+                val ann = argDecl?.type
+                val annRefName = ((ann as? TypeReference)?.typeName as? Identifier)?.text
+                val annRefSym = annRefName?.let { globals[it] }
+                val enumDecl = annRefSym?.declarations?.firstOrNull { it is EnumDeclaration } as? EnumDeclaration
+                if (ann is TypeOperator && ann.operator == SyntaxKind.UniqueKeyword) {
+                    uniqueSymbolName = arg.text
+                } else if (annRefSym != null && annRefSym.flags.hasAny(SymbolFlags.Enum) && enumDecl != null &&
+                    !annRefSym.flags.hasAny(SymbolFlags.Module)) {
+                    computeEnumSymbolValues(annRefSym)
+                    val values = enumValues[annRefSym.id] ?: return false
+                    val members = mutableListOf<Pair<String, String>>()
+                    for (m in enumDecl.members) {
+                        val n = (m.name as? Identifier)?.text ?: (m.name as? StringLiteralNode)?.text ?: return false
+                        val v = values[n] ?: return false
+                        val keyStr = when (v) {
+                            is ConstantValue.NumberValue -> v.toString()
+                            is ConstantValue.StringValue -> v.value
+                        }
+                        members.add(n to keyStr)
+                    }
+                    if (members.isEmpty()) return false
+                    enumName = annRefName
+                    enumMembers = members
+                } else {
+                    val t = try { getTypeOfIdentifier(arg) } catch (_: StackOverflowError) { null }
+                    when {
+                        t is Type.StringLiteral -> singleKey = t.value
+                        t is Type.Union && t.types.isNotEmpty() && t.types.all { it is Type.StringLiteral } ->
+                            unionKeys = t.types.map { (it as Type.StringLiteral).value }
+                        else -> return false
+                    }
+                }
+            }
+            else -> return false
+        }
+
+        // ---- receiver classification ----
+        val freshLit = freshObjectLiteralOf(recvExpr)
+        var rt: Type? = null
+        if (freshLit != null) {
+            rt = try { getTypeOfExpression(freshLit) } catch (_: StackOverflowError) { null }
+        } else if (recvExpr is Identifier) {
+            val declInit = nearestPrecedingObjectLiteralDecl(fileName, recvExpr.text, expr.pos)
+            rt = if (declInit != null) try { getTypeOfExpression(declInit) } catch (_: StackOverflowError) { null }
+            else try { getTypeOfExpression(recvExpr) } catch (_: StackOverflowError) { null }
+        } else if (recvExpr is PropertyAccessExpression) {
+            rt = try { getTypeOfExpression(recvExpr) } catch (_: StackOverflowError) { null }
+        }
+        if (rt == null) return false
+        // Enum receivers (the enum OBJECT `E["key"]` or enum-typed values) are owned
+        // by the pre-existing enum element-access branches (TS7015 / TS2339-typeof) —
+        // an enum's implicit reverse/forward index structure is not modeled here.
+        if ((rt as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return false
+        if ((recvExpr as? Identifier)?.let { globals[it.text] }?.flags?.hasAny(SymbolFlags.Enum) == true) return false
+
+        // Resolve member names + the get/set member check per receiver kind.
+        val memberNames: Set<String>
+        val isNamedReceiver: Boolean // interface/reference → TS7052-only (member model incomplete for TS7053)
+        var methodChecker: ((String) -> Boolean)? = null
+        when {
+            rt is Type.Reference || rt is Type.Interface -> {
+                val target = (rt as? Type.Reference)?.target ?: rt as Type.Interface
+                val sym = target.symbol ?: return false
+                if (sym.declarations.size != 1) return false
+                val ifaceDecl = sym.declarations[0] as? InterfaceDeclaration ?: return false
+                if (ifaceDecl in builtinLibDecls) return false
+                if (!ifaceDecl.heritageClauses.isNullOrEmpty()) return false
+                if (ifaceDecl.members.any { it is IndexSignature }) return false
+                val tpNames = ifaceDecl.typeParameters?.map { it.name.text } ?: emptyList()
+                val typeArgs = (rt as? Type.Reference)?.resolvedTypeArguments
+                if (tpNames.isNotEmpty() && (typeArgs == null || typeArgs.size != tpNames.size)) return false
+                memberNames = ifaceDecl.members.mapNotNull { m ->
+                    when (m) {
+                        is MethodDeclaration -> (m.name as? Identifier)?.text
+                        is PropertyDeclaration -> (m.name as? Identifier)?.text
+                        else -> null
+                    }
+                }.toSet()
+                isNamedReceiver = true
+                methodChecker = checker@{ method ->
+                    val mds = ifaceDecl.members.filterIsInstance<MethodDeclaration>()
+                        .filter { (it.name as? Identifier)?.text == method }
+                    if (mds.size != 1) return@checker false
+                    val md = mds[0]
+                    val required = md.parameters.count { !it.questionToken && it.initializer == null && !it.dotDotDotToken }
+                    if (required < 1 || md.parameters.isEmpty()) return@checker false
+                    val p0 = md.parameters[0].type ?: return@checker false
+                    // The key is a string literal (named receivers only reach here for
+                    // string keys) — param must resolve to `string` or `any`.
+                    val resolvesToString = when {
+                        p0 is KeywordTypeNode && p0.kind == SyntaxKind.StringKeyword -> true
+                        p0 is KeywordTypeNode && p0.kind == SyntaxKind.AnyKeyword -> true
+                        p0 is TypeReference && (p0.typeName as? Identifier)?.text in tpNames -> {
+                            val idx = tpNames.indexOf((p0.typeName as Identifier).text)
+                            val at = typeArgs?.getOrNull(idx)
+                            at === stringType || at === anyType
+                        }
+                        else -> false
+                    }
+                    resolvesToString && singleKey != null
+                }
+            }
+            rt is Type.Object -> {
+                try { resolveStructuredTypeMembers(rt) } catch (_: StackOverflowError) { return false }
+                if (rt.stringIndexInfo != null || rt.numberIndexInfo != null) return false
+                if (!rt.callSignatures.isNullOrEmpty() || !rt.constructSignatures.isNullOrEmpty()) return false
+                val props = rt.properties ?: emptyList()
+                memberNames = props.mapTo(mutableSetOf()) { it.name }
+                isNamedReceiver = false
+                methodChecker = checker@{ method ->
+                    val m = props.firstOrNull { it.name == method } ?: return@checker false
+                    val mt = (try { getTypeOfSymbol(m) } catch (_: StackOverflowError) { null }) as? Type.Object ?: return@checker false
+                    val sigs = mt.callSignatures ?: return@checker false
+                    if (sigs.size != 1) return@checker false
+                    val sig = sigs[0]
+                    if (sig.minArgumentCount < 1 && sig.parameters.isEmpty()) return@checker false
+                    val p0 = sig.parameters.getOrNull(0) ?: return@checker false
+                    val p0t = try { getTypeOfSymbol(p0) } catch (_: StackOverflowError) { null } ?: return@checker false
+                    when {
+                        p0t === stringType || p0t === anyType || p0t === errorType ->
+                            singleKey != null || unionKeys != null
+                        p0t is Type.StringLiteral -> singleKey != null && p0t.value == singleKey
+                        p0t is Type.Union && p0t.types.all { it is Type.StringLiteral } -> {
+                            val accepted = p0t.types.mapTo(mutableSetOf()) { (it as Type.StringLiteral).value }
+                            when {
+                                singleKey != null -> singleKey in accepted
+                                unionKeys != null -> unionKeys!!.all { it in accepted }
+                                else -> false
+                            }
+                        }
+                        else -> false
+                    }
+                }
+            }
+            else -> return false
+        }
+
+        fun keyPresent(k: String): Boolean = k in memberNames || k in OBJECT_PROTOTYPE_PROPERTIES
+
+        // Existence / spelling-suggestion bail for single keys (defer to the
+        // pre-existing TS2339/TS2551 element-access paths).
+        if (singleKey != null) {
+            if (keyPresent(singleKey)) return false
+            if (getSpellingSuggestionFromNames(singleKey, memberNames) != null) return false
+        }
+
+        // Whole-access span: receiver start .. just past the closing `]`.
+        val argEnd = expressionTrueEnd(arg)
+        var cb = argEnd
+        while (cb < source.length && source[cb] != ']') cb++
+        val accessEnd = if (cb < source.length) cb + 1 else argEnd
+        val spanStart = recvExpr.pos
+        val spanLength = (accessEnd - spanStart).coerceAtLeast(1)
+        val isWrite = elementAccessIsWriteContext(source, accessEnd, recvExpr.pos)
+        val recvDisplay = typeToString(widenType(rt))
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+
+        // Fresh literal + READ + single literal key → TS2339 (tsc's
+        // isObjectLiteralType branch; only single literals take it).
+        if (freshLit != null && !isWrite) {
+            if (singleKey == null) return false
+            diagnostics.add(Diagnostic(
+                message = "Property '$singleKey' does not exist on type '$recvDisplay'.",
+                category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                line = line, character = character, start = spanStart, length = spanLength,
+            ))
+            return true
+        }
+
+        val method = if (isWrite) "set" else "get"
+        if (methodChecker(method)) {
+            val path = entityPathOf(recvExpr)
+            val suggestion = if (path != null) "$path.$method" else method
+            diagnostics.add(Diagnostic(
+                message = "Element implicitly has an 'any' type because type '$recvDisplay' has no index signature. Did you mean to call '$suggestion'?",
+                category = DiagnosticCategory.Error, code = 7052, fileName = fileName,
+                line = line, character = character, start = spanStart, length = spanLength,
+            ))
+            return true
+        }
+
+        // TS7053 chain path — anonymous receivers only (named-interface member
+        // resolution is incomplete: merged/inherited members would FP).
+        if (isNamedReceiver) return false
+        val chainProp: String
+        val indexDisplay: String
+        when {
+            singleKey != null -> { chainProp = singleKey; indexDisplay = "\"$singleKey\"" }
+            unionKeys != null -> {
+                val missing = unionKeys!!.firstOrNull { !keyPresent(it) } ?: return false
+                chainProp = missing
+                indexDisplay = unionKeys!!.joinToString(" | ") { "\"$it\"" }
+            }
+            enumName != null -> {
+                val firstMissing = enumMembers!!.firstOrNull { !keyPresent(it.second) } ?: return false
+                chainProp = "[$enumName.${firstMissing.first}]"
+                indexDisplay = enumName!!
+            }
+            uniqueSymbolName != null -> { chainProp = "[$uniqueSymbolName]"; indexDisplay = "unique symbol" }
+            else -> return false
+        }
+        diagnostics.add(Diagnostic(
+            message = "Element implicitly has an 'any' type because expression of type '$indexDisplay' can't be used to index type '$recvDisplay'.",
+            category = DiagnosticCategory.Error, code = 7053,
+            messageChain = listOf("  Property '$chainProp' does not exist on type '$recvDisplay'."),
+            fileName = fileName,
+            line = line, character = character, start = spanStart, length = spanLength,
+        ))
+        return true
+    }
+
+    /**
      * Element access with literal key: `obj["prop"]` or `obj[0]`.
      * Mirrors `checkSinglePropertyAccess` for the TS2339/TS2551 diagnostic, but only
      * when the argument expression is a string or numeric literal (so the key is known
@@ -86456,6 +86792,11 @@ interface DataView {
                 }
             }
         }
+        // B290: the noImplicitAny element-access family (TS7052/TS7053/fresh-read
+        // TS2339). Runs BEFORE the r167 union-key block so non-fresh receivers get
+        // the tsc TS7053 chain; fresh-receiver union keys deliberately fall through
+        // to r167 (its domain).
+        if (tryEmitNoImplicitAnyIndexAccess(expr, source, fileName)) return
         // B98.r167: TS2339 for `{ objLit }[id]` where `id` has a UNION-of-literal
         // type and one literal is not a key of the FRESH object literal. Gated:
         // receiver resolves to a fresh Type.Object (own props, no index sig, no
