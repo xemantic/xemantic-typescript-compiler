@@ -12358,13 +12358,65 @@ class Transformer(
 
         val statements = mutableListOf<Statement>()
 
+        // B351: a STATIC member (property initializer or static block) referencing the
+        // decorated class NAME observes the DECORATED binding — tsc (classAliases) hoists
+        // `var C1_1;`, injects `static { C1_1 = this; }` as the FIRST member, rewrites the
+        // static references to the alias, and emits `C1 = C1_1 = __decorate(...)`.
+        // Static-block form: target >= ES2022 only.
+        var classAlias: String? = null
+        var aliasedMembers = result.members
+        if (hasClassDecorators && options.effectiveTarget >= ScriptTarget.ES2022) {
+            val refsClass = result.members.any { m ->
+                val refs = mutableSetOf<String>()
+                when (m) {
+                    is PropertyDeclaration ->
+                        if (ModifierFlag.Static in m.modifiers && m.initializer != null) collectRefsFromNode(m.initializer, refs)
+                    is ClassStaticBlockDeclaration -> collectRefsFromNode(m.body, refs)
+                    else -> {}
+                }
+                className in refs
+            }
+            if (refsClass) {
+                val alias = uniqueName(className)
+                classAlias = alias
+                hoistedVarScopes.lastOrNull()?.add(alias)
+                val captureBlock = ClassStaticBlockDeclaration(
+                    body = Block(
+                        statements = listOf(ExpressionStatement(
+                            expression = BinaryExpression(
+                                left = syntheticId(alias), operator = Equals, right = syntheticId("this"),
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+                aliasedMembers = listOf<ClassElement>(captureBlock) + result.members.map { m ->
+                    when (m) {
+                        is PropertyDeclaration ->
+                            if (ModifierFlag.Static in m.modifiers && m.initializer != null)
+                                m.copy(initializer = replaceIdentifierInExpr(m.initializer, className, alias))
+                            else m
+                        is ClassStaticBlockDeclaration -> m.copy(
+                            body = m.body.copy(statements = m.body.statements.map {
+                                replaceIdentifierInStmt(it, className, alias)
+                            })
+                        )
+                        else -> m
+                    }
+                }
+            }
+        }
+
         if (hasClassDecorators) {
             // Change: `class Foo { ... }` → `let Foo = class Foo { ... };`
             val classExpr = ClassExpression(
                 name = decl.name,
                 typeParameters = null,
                 heritageClauses = result.heritageClauses,
-                members = result.members,
+                members = aliasedMembers,
                 modifiers = strippedModifiers - ModifierFlag.Export - ModifierFlag.Default,
                 pos = decl.pos,
                 end = decl.end,
@@ -12427,7 +12479,8 @@ class Transformer(
                     if (!param.decorators.isNullOrEmpty()) idx to param.decorators else null
                 } ?: emptyList()
             statements.add(generateClassDecorateStatement(
-                className, decl.decorators, constructorParams, classTypeParams, ctorParamDecorators
+                className, decl.decorators, constructorParams, classTypeParams, ctorParamDecorators,
+                aliasName = classAlias,
             ))
             // For ESM exported classes with class decorators, add `export { Foo }` after __decorate
             // because the let declaration doesn't have `export` (decorator reassignment issue).
@@ -12954,6 +13007,8 @@ class Transformer(
         constructorParams: List<Parameter>? = null,
         classTypeParams: Set<String> = emptySet(),
         ctorParamDecorators: List<Pair<Int, List<Decorator>>> = emptyList(),
+        /** B351: the class-alias temp (`C1_1`) — emits `C1 = C1_1 = __decorate(...)`. */
+        aliasName: String? = null,
     ): Statement {
         val decoratorExprs = decorators.map { dec ->
             val transformed = transformExpression(dec.expression)
@@ -13013,11 +13068,14 @@ class Transformer(
             pos = -1, end = -1,
         )
 
+        val rhs: Expression = if (aliasName != null) {
+            BinaryExpression(left = syntheticId(aliasName), operator = Equals, right = call, pos = -1, end = -1)
+        } else call
         return ExpressionStatement(
             expression = BinaryExpression(
                 left = syntheticId(className),
                 operator = Equals,
-                right = call,
+                right = rhs,
                 pos = -1, end = -1,
             ),
             pos = -1, end = -1,
