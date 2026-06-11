@@ -224,10 +224,29 @@ class Transformer(
     // __setFunctionName helper assigns the binding name to the class's `.name` property.
     private var needsSetFunctionNameHelper = false
 
+    // B339: set when a private-field read/write is downleveled to the helper form.
+    private var needsClassPrivateFieldGetHelper = false
+    private var needsClassPrivateFieldSetHelper = false
+
     // Transiently set in transformVariableDeclaration when the initializer is an anonymous
     // ClassExpression. Consumed by transformClassExpression to emit `__setFunctionName(_a, "X")`
     // in the comma-list capture pattern. Restored after the inner transform returns.
     private var pendingClassExprBindingName: String? = null
+
+    // B339: active private-field downlevel environments (innermost last). Maps the cooked
+    // member name (incl. leading '#') to its WeakMap var, or null for a '#' member that is
+    // declared but NOT field-downleveled (private method/accessor — the null blocks an
+    // outer-class field with the same name from being wrongly matched). Pushed per class in
+    // transformClassBody when target < ES2022; consulted by the `expr.#x` read/write rewrites.
+    private val privateFieldEnvStack = mutableListOf<Map<String, String?>>()
+
+    private fun lookupPrivateFieldVar(name: String): String? {
+        for (i in privateFieldEnvStack.indices.reversed()) {
+            val env = privateFieldEnvStack[i]
+            if (name in env) return env[name]
+        }
+        return null
+    }
 
     // Set to true when an `import X = require("mod")` is rewritten under
     // module:node*/nodenext + ESM file (per package.json `type: module`). Causes the
@@ -253,6 +272,8 @@ class Transformer(
             "__metadata" -> if (!needsMetadataHelper) { needsMetadataHelper = true; helperUsageOrder.add(name) }
             "__param" -> if (!needsParamHelper) { needsParamHelper = true; helperUsageOrder.add(name) }
             "__setFunctionName" -> if (!needsSetFunctionNameHelper) { needsSetFunctionNameHelper = true; helperUsageOrder.add(name) }
+            "__classPrivateFieldGet" -> if (!needsClassPrivateFieldGetHelper) { needsClassPrivateFieldGetHelper = true; helperUsageOrder.add(name) }
+            "__classPrivateFieldSet" -> if (!needsClassPrivateFieldSetHelper) { needsClassPrivateFieldSetHelper = true; helperUsageOrder.add(name) }
         }
     }
 
@@ -338,6 +359,8 @@ class Transformer(
         needsMakeTemplateObjectHelper = false
         needsCreateRequireHelper = false
         needsSetFunctionNameHelper = false
+        needsClassPrivateFieldGetHelper = false
+        needsClassPrivateFieldSetHelper = false
         pendingClassExprBindingName = null
         helperUsageOrder.clear()
         topLevelNumericConstants.clear()
@@ -513,6 +536,8 @@ class Transformer(
                     "__metadata" -> helpers.add(RawStatement(code = METADATA_HELPER))
                     "__param" -> helpers.add(RawStatement(code = PARAM_HELPER))
                     "__setFunctionName" -> helpers.add(RawStatement(code = SET_FUNCTION_NAME_HELPER))
+                    "__classPrivateFieldGet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_GET_HELPER))
+                    "__classPrivateFieldSet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_SET_HELPER))
                 }
             }
         }
@@ -8573,6 +8598,30 @@ class Transformer(
             }
         }
 
+        // B339: private-field WRITE downlevel — `expr.#x = v` →
+        // `__classPrivateFieldSet(expr', _C_x, v', "f")` (tsc classPrivateFields).
+        // Only plain `=` writes; compound assigns / ++ / -- stay unrewritten (no consumer yet).
+        if (root.operator == Equals) {
+            val lhs = root.left as? PropertyAccessExpression
+            val pname = (lhs?.name as? Identifier)?.text
+            if (lhs != null && pname != null && pname.startsWith("#")) {
+                val wmVar = lookupPrivateFieldVar(pname)
+                if (wmVar != null) {
+                    requireHelper("__classPrivateFieldSet")
+                    return CallExpression(
+                        expression = helperExpr("__classPrivateFieldSet"),
+                        arguments = listOf(
+                            transformExpression(lhs.expression),
+                            syntheticId(wmVar),
+                            transformExpression(root.right),
+                            StringLiteralNode(text = "f", pos = -1, end = -1),
+                        ),
+                        pos = -1, end = -1,
+                    )
+                }
+            }
+        }
+
         // Collect the left-spine: walk down .left while it's a BinaryExpression
         // that doesn't need special downlevel handling (**, **=, ??).
         // For special operators we stop flattening so they get proper treatment.
@@ -8870,6 +8919,24 @@ class Transformer(
                         whenFalse = access,
                         pos = -1, end = -1,
                     )
+                }
+                // B339: private-field READ downlevel — `expr.#x` →
+                // `__classPrivateFieldGet(expr', _C_x, "f")` when an enclosing class
+                // downleveled the field to a WeakMap.
+                if (expr.name.text.startsWith("#")) {
+                    val wmVar = lookupPrivateFieldVar(expr.name.text)
+                    if (wmVar != null) {
+                        requireHelper("__classPrivateFieldGet")
+                        return CallExpression(
+                            expression = helperExpr("__classPrivateFieldGet"),
+                            arguments = listOf(
+                                transformExpression(expr.expression),
+                                syntheticId(wmVar),
+                                StringLiteralNode(text = "f", pos = -1, end = -1),
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    }
                 }
                 val baseName = (expr.expression as? Identifier)?.text
                 val memberName = expr.name.text
@@ -11968,6 +12035,26 @@ class Transformer(
             }
         }
 
+        // B339: push the private-field environment for this class so member-body
+        // `expr.#x` reads/writes rewrite to __classPrivateFieldGet/Set against the
+        // WeakMap vars. Non-field '#' members map to null (blocks outer-class matches).
+        val privateEnv = mutableMapOf<String, String?>()
+        if (needsPrivateFieldDownlevel) {
+            for (m in members) {
+                val nm = when (m) {
+                    is PropertyDeclaration -> m.name
+                    is MethodDeclaration -> m.name
+                    is GetAccessor -> m.name
+                    is SetAccessor -> m.name
+                    else -> null
+                } as? Identifier ?: continue
+                if (nm.text.startsWith("#")) privateEnv[nm.text] = null
+            }
+            for (info in privateFieldInfos) privateEnv["#${info.fieldName}"] = info.weakMapVar
+        }
+        val pushedPrivateEnv = privateEnv.isNotEmpty()
+        if (pushedPrivateEnv) privateFieldEnvStack.add(privateEnv)
+
         // Determine constructor parameter properties
         val paramProperties = existingConstructor?.parameters
             ?.filter { p -> p.modifiers.any { it in parameterPropertyModifiers } }
@@ -12552,6 +12639,8 @@ class Transformer(
             }
             listOf(ExpressionStatement(expression = commaExpr, pos = -1, end = -1))
         } else emptyList()
+
+        if (pushedPrivateEnv) privateFieldEnvStack.removeLast()
 
         return ClassTransformResult(
             heritageClauses = transformedHeritage,
@@ -16074,6 +16163,23 @@ class Transformer(
         /** TypeScript `__param` helper — emitted for parameter decorators. */
         val PARAM_HELPER = """var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
+};
+"""
+
+        /** `__classPrivateFieldGet` helper — private-field READ downlevel (target < ES2022). */
+        val CLASS_PRIVATE_FIELD_GET_HELPER = """var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+"""
+
+        /** `__classPrivateFieldSet` helper — private-field WRITE downlevel (target < ES2022). */
+        val CLASS_PRIVATE_FIELD_SET_HELPER = """var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
 };
 """
 
