@@ -7883,8 +7883,45 @@ class Transformer(
         if (privateFieldScope != null) {
             hoistedPrivateFieldScopes.removeLast()
             if (privateFieldScope.isNotEmpty()) {
+                // B339b: multiple classes' WeakMap vars merge into ONE `var _A_x, _B_x;`
+                // statement (tsc hoists all per-scope state vars together).
+                val merged: List<Statement> = if (privateFieldScope.size > 1 && privateFieldScope.all { it is VariableStatement }) {
+                    listOf(VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = privateFieldScope.flatMap { (it as VariableStatement).declarationList.declarations },
+                            flags = VarKeyword,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                } else privateFieldScope
                 val insertAt = result.indexOfFirst { it !is NotEmittedStatement }.takeIf { it >= 0 } ?: 0
-                result.addAll(insertAt, privateFieldScope)
+                // B339b: a DETACHED leading comment on the first real statement (blank line
+                // ≥2 newlines in source) anchors to the hoisted var (same rule as the
+                // hoistedVarScopes transfer below) so the helpers-lift can move it above
+                // the helper preamble.
+                val firstRealStmt = result.getOrNull(insertAt)
+                val firstRealComments = firstRealStmt?.leadingComments
+                val hasDetached = atTopLevel &&
+                    !firstRealComments.isNullOrEmpty() &&
+                    firstRealStmt.pos >= 0 &&
+                    firstRealComments.any { c ->
+                        c.end >= 0 && sourceText.substring(c.end, firstRealStmt.pos).count { it == '\n' } >= 2
+                    }
+                val mergedFirst = merged.firstOrNull() as? VariableStatement
+                val strippedFirst: Statement? = when (firstRealStmt) {
+                    is VariableStatement -> firstRealStmt.copy(leadingComments = null)
+                    is ExpressionStatement -> firstRealStmt.copy(leadingComments = null)
+                    is FunctionDeclaration -> firstRealStmt.copy(leadingComments = null)
+                    is ClassDeclaration -> firstRealStmt.copy(leadingComments = null)
+                    else -> null
+                }
+                if (hasDetached && mergedFirst != null && strippedFirst != null) {
+                    result[insertAt] = strippedFirst
+                    result.addAll(insertAt, listOf(mergedFirst.copy(leadingComments = firstRealComments)) + merged.drop(1))
+                } else {
+                    result.addAll(insertAt, merged)
+                }
             }
         }
 
@@ -7905,9 +7942,13 @@ class Transformer(
                         pos = -1, end = -1,
                     ))
                 }
-                // Insert hoisted vars AFTER any leading NotEmittedStatements (orphaned comments).
-                // This preserves orphaned comment ordering relative to hoisted var declarations.
-                val insertAt = result.indexOfFirst { it !is NotEmittedStatement }.takeIf { it >= 0 } ?: 0
+                // Insert hoisted vars AFTER any leading NotEmittedStatements (orphaned comments)
+                // AND after prologue directives ("use strict", "prologue" — tsc places temps
+                // after the directive prologue, B339b).
+                val insertAt = result.indexOfFirst {
+                    it !is NotEmittedStatement &&
+                        !(it is ExpressionStatement && it.expression is StringLiteralNode)
+                }.takeIf { it >= 0 } ?: 0
                 // At top level: if the first real statement has DETACHED leading comments
                 // (separated by a blank line), transfer them to the hoisted var declaration.
                 // TypeScript's emitter anchors pre-statement comments to the hoisted var when
@@ -8595,6 +8636,77 @@ class Transformer(
             val objLit = rawLeft as? ObjectLiteralExpression
             if (objLit != null && objLit.properties.any { it is SpreadAssignment }) {
                 return transformObjectRestDestructuringAssignment(root, objLit)
+            }
+        }
+
+        // B339b: private-field DESTRUCTURING-assignment target (tsc classPrivateFields
+        // setter-object form): `({ key: this.#x } = rhs)` →
+        // `(_a = this, { key: ({ set value(_b) { __classPrivateFieldSet(_a, _wm, _b, "f"); } }).value } = rhs)`
+        // — the receiver captures into a ctor-local hoisted temp, the target becomes a
+        // one-setter object's `.value`. Only direct PropertyAssignment values are handled.
+        if (root.operator == Equals && root.left is ObjectLiteralExpression && privateFieldEnvStack.isNotEmpty()) {
+            val objLit = root.left as ObjectLiteralExpression
+            fun privateTargetVar(p: Node): String? {
+                val v = (p as? PropertyAssignment)?.initializer as? PropertyAccessExpression ?: return null
+                if (!v.name.text.startsWith("#")) return null
+                return lookupPrivateFieldVar(v.name.text)
+            }
+            if (objLit.properties.any { privateTargetVar(it) != null }) {
+                requireHelper("__classPrivateFieldSet")
+                val captures = mutableListOf<Expression>()
+                val newProps = objLit.properties.map { p ->
+                    val wm = privateTargetVar(p)
+                    if (wm == null) return@map p
+                    val pa = p as PropertyAssignment
+                    val target = pa.initializer as PropertyAccessExpression
+                    val recvTemp = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(recvTemp)
+                    captures.add(BinaryExpression(
+                        left = syntheticId(recvTemp),
+                        operator = Equals,
+                        right = transformExpression(target.expression),
+                        pos = -1, end = -1,
+                    ))
+                    val paramTemp = nextTempVarName()
+                    val setter = SetAccessor(
+                        name = syntheticId("value"),
+                        parameters = listOf(Parameter(name = syntheticId(paramTemp), pos = -1, end = -1)),
+                        body = Block(
+                            statements = listOf(ExpressionStatement(
+                                expression = CallExpression(
+                                    expression = helperExpr("__classPrivateFieldSet"),
+                                    arguments = listOf(
+                                        syntheticId(recvTemp),
+                                        syntheticId(wm),
+                                        syntheticId(paramTemp),
+                                        StringLiteralNode(text = "f", pos = -1, end = -1),
+                                    ),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )),
+                            multiLine = false,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                    pa.copy(initializer = PropertyAccessExpression(
+                        expression = ParenthesizedExpression(
+                            expression = ObjectLiteralExpression(properties = listOf(setter), multiLine = false, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        ),
+                        name = syntheticId("value"),
+                        pos = -1, end = -1,
+                    ))
+                }
+                var result: Expression = root.copy(
+                    left = objLit.copy(properties = newProps),
+                    right = transformExpression(root.right),
+                )
+                for (c in captures.reversed()) {
+                    result = BinaryExpression(left = c, operator = Comma, right = result, pos = -1, end = -1)
+                }
+                return result
             }
         }
 
@@ -12235,8 +12347,14 @@ class Transformer(
                     bodyStatements.addAll(superIndex + 1, propInitStatements)
                 } else {
                     // Find insertion point: after prologue directives (= after "use strict" etc.)
+                    // and after synthetic hoisted temp vars (`var _a;` from the body transform —
+                    // tsc keeps them at the function top, before the prop inits; B339b).
                     val firstRealIdx = bodyStatements.indexOfFirst { stmt ->
-                        !(stmt is ExpressionStatement && stmt.expression is StringLiteralNode)
+                        val isDirective = stmt is ExpressionStatement && stmt.expression is StringLiteralNode
+                        val isSyntheticHoistedVar = stmt is VariableStatement && stmt.pos < 0 &&
+                            stmt.declarationList.flags == VarKeyword &&
+                            stmt.declarationList.declarations.all { it.initializer == null }
+                        !(isDirective || isSyntheticHoistedVar)
                     }.let { if (it < 0) bodyStatements.size else it }
                     // If the first real statement has leading comments AND the constructor
                     // body also assigns to one of the same properties as the prop inits,
