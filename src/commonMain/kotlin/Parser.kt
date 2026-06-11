@@ -191,10 +191,14 @@ class Parser(
         // regressions in broader error-recovery paths. Covers patterns like
         // `this.foo: any;` (mis-typed class-field declaration inside a body).
         if ((token == SyntaxKind.Colon || token == SyntaxKind.Question ||
+                token == SyntaxKind.EqualsGreaterThan ||
                 token == SyntaxKind.NumericLiteral ||
                 token == SyntaxKind.BigIntLiteral) && !scanner.hasPrecedingLineBreak()) {
-            val len = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) 1
-                else scanner.getTokenText().length.coerceAtLeast(1)
+            val len = when (token) {
+                SyntaxKind.Colon, SyntaxKind.Question -> 1
+                SyntaxKind.EqualsGreaterThan -> 2
+                else -> scanner.getTokenText().length.coerceAtLeast(1)
+            }
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = len)
         }
@@ -5384,11 +5388,26 @@ class Parser(
         val maybeArrow = scanner.lookAhead {
             scanner.scan() // skip (
             var depth = 1
+            // tsc: a PARAMETER cannot start with `(` — `(a, (b, c)) => x` and
+            // `((a)) => x` are parenthesized comma expressions, not arrows
+            // (fatarrowfunctionsOptionalArgsErrors2). Track the previous top-level
+            // token: `(` right after the list opener or after a top-level comma
+            // kills arrow-ness; `(` after `=`/`:`/etc. (defaults, type annotations)
+            // is fine.
+            var prev = SyntaxKind.OpenParen
+            var invalidParamStart = false
             while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
-                if (scanner.getToken() == SyntaxKind.OpenParen) depth++
-                else if (scanner.getToken() == SyntaxKind.CloseParen) depth--
+                val t = scanner.getToken()
+                if (t == SyntaxKind.OpenParen) {
+                    if (depth == 1 && (prev == SyntaxKind.OpenParen || prev == SyntaxKind.Comma)) {
+                        invalidParamStart = true
+                    }
+                    depth++
+                } else if (t == SyntaxKind.CloseParen) depth--
+                prev = t
                 if (depth > 0) scanner.scan()
             }
+            if (invalidParamStart) return@lookAhead false
             if (depth == 0) {
                 scanner.scan() // skip )
                 when (scanner.getToken()) {
