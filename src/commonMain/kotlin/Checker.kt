@@ -40447,6 +40447,28 @@ interface DataView {
             }
             is PropertyAccessExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                // B358: `this.<unknown>` where the containing arrow captures GLOBAL
+                // `this` (the TS7041 condition) — the access is an implicit-any
+                // element on `typeof globalThis` → TS7017 at the property name.
+                // noImplicitAny-family gate: explicit @strict:false (without
+                // noImplicitAny) suppresses (noImplicitThisFunctions).
+                val recv = expr.expression
+                if (recv is Identifier && recv.text == "this" && !thisIsTyped &&
+                    !insideFunction && insideArrowFunction &&
+                    (options.noImplicitAny || options.strict ||
+                        (!options.strictExplicitlyFalse && !options.noImplicitAnyExplicitlyFalse))
+                ) {
+                    val nm = expr.name as? Identifier
+                    if (nm != null && nm.text !in KNOWN_GLOBALS && globals[nm.text] == null) {
+                        val (l, c) = getLineAndCharacterOfPosition(source, nm.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Element implicitly has an 'any' type because type 'typeof globalThis' has no index signature.",
+                            category = DiagnosticCategory.Error, code = 7017,
+                            fileName = fileName, line = l, character = c,
+                            start = nm.pos, length = nm.text.length,
+                        ))
+                    }
+                }
             }
             is ElementAccessExpression -> {
                 checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
@@ -47348,13 +47370,17 @@ interface DataView {
     private fun ulProcessScope(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) {
             if (stmt is VariableStatement && ModifierFlag.Declare !in stmt.modifiers &&
-                stmt.declarationList.flags == SyntaxKind.LetKeyword) {
+                (stmt.declarationList.flags == SyntaxKind.LetKeyword ||
+                    stmt.declarationList.flags == SyntaxKind.VarKeyword)) {
                 for (d in stmt.declarationList.declarations) {
                     val nameNode = d.name as? Identifier ?: continue
                     if (d.type != null || d.initializer != null || d.exclamationToken) continue
                     val st = UlState()
                     for (s in stmts) ulScanStmt(s, nameNode.text, inNested = false, st)
-                    if (st.suppressed || st.sameScopeAssignments == 0 || st.capturedReads.isEmpty()) continue
+                    // B358b: a NEVER-assigned captured read fires too (the type cannot
+                    // be determined at the capture either way) — implicitAnyDeclare-
+                    // VariablesWithoutTypeAndInit's `var y; function f() { y }`.
+                    if (st.suppressed || st.capturedReads.isEmpty()) continue
                     val (dl, dc) = getLineAndCharacterOfPosition(source, nameNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "Variable '${nameNode.text}' implicitly has type 'any' in some locations where its type cannot be determined.",
