@@ -1407,6 +1407,9 @@ class Transformer(
         // The list preserves source order so chained wraps emit `exports.Y = exports.X = ...`
         // in TypeScript's reverse-source order via reversed traversal at the wrap site.
         val namedExportLocalToExport = mutableMapOf<String, MutableList<String>>()
+        // B322: clause ALIASES of direct-exported vars (`export let x` + `export { x as y }`):
+        // assignments to x must chain `exports.y = exports.x = …`.
+        val directExportClauseAliases = mutableMapOf<String, MutableList<String>>()
         for (stmt in originalSourceFile.statements) {
             if (stmt is ExportDeclaration && stmt.moduleSpecifier == null && stmt.exportClause is NamedExports) {
                 for (spec in (stmt.exportClause as NamedExports).elements) {
@@ -1415,7 +1418,10 @@ class Transformer(
                     val localName = (spec.propertyName ?: spec.name).text
                     if (localName in pureTypeNames) continue
                     if (localName in functionOnlyNames) continue   // functions use stub path, handled separately
-                    if (localName in directExportedVarNames) continue  // direct-exported vars already handled
+                    if (localName in directExportedVarNames) {     // direct-exported vars already handled
+                        if (exportName != localName) directExportClauseAliases.getOrPut(localName) { mutableListOf() }.add(exportName)
+                        continue
+                    }
                     if (localName in runtimeDeclaredNames) {
                         namedExportLocalToExport.getOrPut(localName) { mutableListOf() }.add(exportName)
                     }
@@ -2336,8 +2342,21 @@ class Transformer(
                                     } else syntheticId(localName)
                                     val isNewExport = exportName !in exportedVarNames
                                     if (isNewExport) exportedVarNames.add(exportName)
+                                    // B322 (tsc appendExportsOfVariableStatement): export sync
+                                    // assignments are appended only for INITIALIZED declarations.
+                                    // A name declared exclusively as uninitialized top-level vars
+                                    // gets NO sync (the void0 hoist covers it; assignments update
+                                    // the export binding at each assignment site).
+                                    val uninitVarOnly = run {
+                                        val varDecls = originalSourceFile.statements
+                                            .filterIsInstance<VariableStatement>()
+                                            .flatMap { it.declarationList.declarations }
+                                            .filter { localName in collectBoundNames(it.name) }
+                                        varDecls.isNotEmpty() && varDecls.all { it.initializer == null } &&
+                                            originalSourceFile.statements.none { it is ClassDeclaration && it.name?.text == localName }
+                                    }
                                     val exportAssignment = makeExportAssignment(exportName, localExpr)
-                                    if (isNewExport) {
+                                    if (isNewExport && !uninitVarOnly) {
                                         val anchorStmt = importStmtForLocalName[localName]
                                             ?: declarationStmtForName[localName]
                                         if (anchorStmt != null) {
@@ -2407,8 +2426,22 @@ class Transformer(
                                 if (nm in directExportedVarNames) null
                                 else namedExportLocalToExport[nm]
                             }
+                            // B322: clause aliases of a DIRECT-exported var. The pre-scan only
+                            // catches names already known direct at that point (initialized /
+                            // declare); uninitialized export-lets land in namedExportLocalToExport
+                            // instead — merge both sources.
+                            val directAssignAliases: List<String> =
+                                if (assignedExportName != null && assignedExportName in directExportedVarNames)
+                                    ((directExportClauseAliases[assignedExportName] ?: emptyList()) +
+                                        (namedExportLocalToExport[assignedExportName]?.filter { it != assignedExportName } ?: emptyList())).distinct()
+                                else emptyList()
                             if (assignedExportName != null && assignedExportName !in directExportedVarNames) {
                                 result.add(wrapWithExportAssignment(stmt as ExpressionStatement, assignedExportName))
+                            } else if (directAssignAliases.isNotEmpty()) {
+                                // `x = expr` where x is DIRECT-exported with clause aliases:
+                                // wrap `exports.alias = (x = expr)`; the global identifier-rewrite
+                                // pass later turns the inner x into exports.x.
+                                result.add(wrapStatementWithLateExports(stmt as ExpressionStatement, directAssignAliases))
                             } else if (!lateExportNames.isNullOrEmpty()) {
                                 result.add(wrapStatementWithLateExports(stmt as ExpressionStatement, lateExportNames))
                             } else {
@@ -2636,6 +2669,51 @@ class Transformer(
             result.addAll(rewritten)
         }
 
+        // B321/B322: deep export-mutation rewrites — runs BEFORE the global direct-export
+        // identifier rewrite so destructuring patterns still hold raw identifiers.
+        // (1) B321 unary: ++/-- of late-exported locals (export { x } keeping a local binding)
+        //     anywhere in the statement tree (tsc module.ts visitPreOrPostfixUnaryExpression);
+        //     top-level wrapStatementWithLateExports no longer handles unary forms.
+        // (2) B322 destructuring: `({x, y} = v)` / `([x, y] = v)` assignments whose targets
+        //     include exported names are FLATTENED (tsc flattenDestructuringAssignment via
+        //     the module transform's export-wrapping callback): temps for multi-element
+        //     patterns, per-element assignments chained with `exports.N = `.
+        // Both allocate file-hoisted temps (`var _a, _b;` between "use strict" and the
+        // esModule preamble).
+        run {
+            val targets = mutableMapOf<String, CjsExportTargetInfo>()
+            for ((local, names) in namedExportLocalToExport) targets[local] = CjsExportTargetInfo(keepsLocal = true, exportNames = names)
+            for (name in directExportedVarNames) {
+                // Clause aliases of uninitialized export-lets land in namedExportLocalToExport
+                // (the pre-scan runs before the main loop classifies them direct) — merge both.
+                val aliases = ((directExportClauseAliases[name] ?: emptyList()) +
+                    (namedExportLocalToExport[name]?.filter { it != name } ?: emptyList())).distinct()
+                targets[name] = CjsExportTargetInfo(keepsLocal = false, exportNames = listOf(name) + aliases)
+            }
+            if (targets.isNotEmpty()) {
+                val unaryState = CjsUnaryRewriteState(usedNames = collectValueReferences(result).toMutableSet())
+                val deepRewritten = result.map { stmt -> cjsUnaryRewriteStmt(stmt, unaryState, targets) }
+                if (deepRewritten.indices.any { deepRewritten[it] !== result[it] }) {
+                    result.clear()
+                    result.addAll(deepRewritten)
+                }
+                if (unaryState.temps.isNotEmpty()) {
+                    // Insert `var _a, _b, …;` at position 0 — the esModule preamble sits at
+                    // result[0] now and "use strict" is added even later, so this lands between
+                    // them (matching tsc's hoist position).
+                    result.add(0, VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = unaryState.temps.map { t ->
+                                VariableDeclaration(name = Identifier(text = t, pos = -1, end = -1), pos = -1, end = -1)
+                            },
+                            flags = VarKeyword, pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                }
+            }
+        }
+
         // Rewrite references to "direct" exported vars (exports.x = value, no local var kept)
         // and conflicting exported names (import/export same name — need (0, exports.name)() form).
         // References to these names throughout the body must become exports.name.
@@ -2656,34 +2734,6 @@ class Transformer(
             }
             result.clear()
             result.addAll(rewritten)
-        }
-
-        // B321: rewrite ++/-- mutations of late-exported locals (export { x } keeping a local
-        // binding) ANYWHERE in the statement tree — function bodies, conditions, nested
-        // expressions, and top-level statements (the wrapStatementWithLateExports path above
-        // no longer handles unary forms). tsc: module.ts visitPreOrPostfixUnaryExpression.
-        // Value-used postfix occurrences allocate file-hoisted temps (`var _a, _b;` at top).
-        if (namedExportLocalToExport.isNotEmpty()) {
-            val unaryState = CjsUnaryRewriteState(usedNames = collectValueReferences(result).toMutableSet())
-            val unaryRewritten = result.map { stmt -> cjsUnaryRewriteStmt(stmt, unaryState, namedExportLocalToExport) }
-            if (unaryRewritten.indices.any { unaryRewritten[it] !== result[it] }) {
-                result.clear()
-                result.addAll(unaryRewritten)
-            }
-            if (unaryState.temps.isNotEmpty()) {
-                // Insert `var _a, _b, …;` at position 0 — the esModule preamble sits at
-                // result[0] now and "use strict" is added even later, so this lands between
-                // them (matching tsc's hoist position).
-                result.add(0, VariableStatement(
-                    declarationList = VariableDeclarationList(
-                        declarations = unaryState.temps.map { t ->
-                            VariableDeclaration(name = Identifier(text = t, pos = -1, end = -1), pos = -1, end = -1)
-                        },
-                        flags = VarKeyword, pos = -1, end = -1,
-                    ),
-                    pos = -1, end = -1,
-                ))
-            }
         }
 
         // Post-process decorator metadata: wrap `X_1.default.Foo` args in safety checks.
@@ -6535,6 +6585,14 @@ class Transformer(
     }
 
     /**
+     * B322: how a destructuring/unary target name maps to its export bindings.
+     * [keepsLocal] — the local var binding survives (late `export { x }` of a declared local);
+     * false for "Direct"-path vars that exist only as `exports.x`. [exportNames] is the full
+     * ordered export-name list (the local's own export name first, clause aliases after).
+     */
+    private data class CjsExportTargetInfo(val keepsLocal: Boolean, val exportNames: List<String>)
+
+    /**
      * B321 state for the deep `++X`/`X++` exported-local rewrite (tsc module transform
      * visitPreOrPostfixUnaryExpression). Allocates file-level temps `_a`, `_b`, … skipping
      * names already referenced anywhere in the output (earlier transforms hoist their own
@@ -6570,7 +6628,7 @@ class Transformer(
      * wrapStatementWithLateExports). `active` shrinks when entering a function that
      * re-declares the name (shadowing).
      */
-    private fun cjsUnaryRewriteStmt(stmt: Statement, st: CjsUnaryRewriteState, active: Map<String, List<String>>): Statement {
+    private fun cjsUnaryRewriteStmt(stmt: Statement, st: CjsUnaryRewriteState, active: Map<String, CjsExportTargetInfo>): Statement {
         if (active.isEmpty()) return stmt
         return when (stmt) {
             is ExpressionStatement -> {
@@ -6684,7 +6742,7 @@ class Transformer(
         }
     }
 
-    private fun cjsUnaryRewriteDeclList(list: VariableDeclarationList, st: CjsUnaryRewriteState, active: Map<String, List<String>>): VariableDeclarationList {
+    private fun cjsUnaryRewriteDeclList(list: VariableDeclarationList, st: CjsUnaryRewriteState, active: Map<String, CjsExportTargetInfo>): VariableDeclarationList {
         val nd = list.declarations.map { d ->
             val init = d.initializer ?: return@map d
             val ne = cjsUnaryRewriteExpr(init, st, active, discarded = false)
@@ -6693,7 +6751,7 @@ class Transformer(
         return if (nd.indices.all { nd[it] === list.declarations[it] }) list else list.copy(declarations = nd)
     }
 
-    private fun cjsUnaryRewriteClassMember(m: ClassElement, st: CjsUnaryRewriteState, active: Map<String, List<String>>): ClassElement = when (m) {
+    private fun cjsUnaryRewriteClassMember(m: ClassElement, st: CjsUnaryRewriteState, active: Map<String, CjsExportTargetInfo>): ClassElement = when (m) {
         is PropertyDeclaration -> {
             val init = m.initializer
             if (init == null) m else {
@@ -6744,7 +6802,7 @@ class Transformer(
         else -> m
     }
 
-    private fun cjsUnaryRewriteExpr(expr: Expression, st: CjsUnaryRewriteState, active: Map<String, List<String>>, discarded: Boolean): Expression {
+    private fun cjsUnaryRewriteExpr(expr: Expression, st: CjsUnaryRewriteState, active: Map<String, CjsExportTargetInfo>, discarded: Boolean): Expression {
         fun exportsProp(name: String): Expression = PropertyAccessExpression(
             expression = syntheticId("exports"),
             name = Identifier(text = name, pos = -1, end = -1),
@@ -6753,7 +6811,10 @@ class Transformer(
         return when (expr) {
             is PostfixUnaryExpression -> {
                 val opnd = expr.operand
-                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier) active[opnd.text] else null
+                // Unary wrapping applies only to keepsLocal targets (B321); direct-path vars
+                // are handled by the later global exports.X identifier rewrite.
+                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier)
+                    active[opnd.text]?.takeIf { it.keepsLocal }?.exportNames else null
                 if (names != null) {
                     val operandClone = (opnd as Identifier).copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
                     if (discarded) {
@@ -6789,7 +6850,8 @@ class Transformer(
             }
             is PrefixUnaryExpression -> {
                 val opnd = expr.operand
-                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier) active[opnd.text] else null
+                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier)
+                    active[opnd.text]?.takeIf { it.keepsLocal }?.exportNames else null
                 if (names != null) {
                     // exports.x = ++x  (paren-wrapped in value position)
                     var wrapped: Expression = expr
@@ -6801,6 +6863,13 @@ class Transformer(
                 }
             }
             is BinaryExpression -> {
+                // B322: destructuring assignment whose targets include exported names —
+                // flatten per tsc flattenDestructuringAssignment (statement context only).
+                if (discarded && expr.operator == Equals &&
+                    (expr.left is ObjectLiteralExpression || expr.left is ArrayLiteralExpression)) {
+                    val flattened = tryFlattenExportedDestructuring(expr, st, active)
+                    if (flattened != null) return flattened
+                }
                 // Iterative left-spine: deep `a+b+c+…` chains must not recurse on `left`
                 // (binderBinaryExpressionStress StackOverflow gotcha). Comma semantics:
                 // the LEFT operand of a comma is always value-discarded; the RIGHT operand
@@ -6810,6 +6879,10 @@ class Transformer(
                 var cur: Expression = expr
                 var curDiscard = discarded
                 while (cur is BinaryExpression) {
+                    // Stop the spine at a nested destructuring assignment so it re-enters
+                    // this function's entry check (flatten hook) as a leaf.
+                    if (cur !== expr && cur.operator == Equals &&
+                        (cur.left is ObjectLiteralExpression || cur.left is ArrayLiteralExpression)) break
                     nodes.add(cur)
                     nodeDiscard.add(curDiscard)
                     curDiscard = cur.operator == SyntaxKind.Comma
@@ -6949,12 +7022,139 @@ class Transformer(
     }
 
     /**
+     * B322: flattens `({x, y} = value)` / `([x, y] = value)` when at least one (recursive)
+     * target is an exported name. tsc flattenDestructuringAssignment with the module
+     * transform's export-wrapping callback: a multi-element pattern allocates a file temp
+     * (`_a = value`), each element assigns from `_a.prop` / `_a[i]`; a single-element pattern
+     * reads `value.prop` / `value[0]` directly. Exported targets chain `exports.N = ` wraps
+     * (first export name innermost; Direct-path targets use `exports.<own>` as the base
+     * assignment target). Returns null (no flatten) for unsupported shapes: spreads, defaults,
+     * computed/string property names, array holes.
+     */
+    private fun tryFlattenExportedDestructuring(expr: BinaryExpression, st: CjsUnaryRewriteState, active: Map<String, CjsExportTargetInfo>): Expression? {
+        val scan = cjsScanDestructuringPattern(expr.left, active) ?: return null
+        if (!scan) return null  // valid shape but no exported target — leave as-is
+        val value = cjsUnaryRewriteExpr(expr.right, st, active, discarded = false)
+        val exprs = mutableListOf<Expression>()
+        cjsFlattenDestructuringPattern(expr.left, value, st, active, exprs)
+        if (exprs.isEmpty()) return null
+        var chain: Expression = exprs[0]
+        for (i in 1 until exprs.size) chain = BinaryExpression(left = chain, operator = SyntaxKind.Comma, right = exprs[i], pos = -1, end = -1)
+        return chain
+    }
+
+    /** Returns null when the pattern has unsupported shapes; otherwise whether any target is exported. */
+    private fun cjsScanDestructuringPattern(pattern: Expression, active: Map<String, CjsExportTargetInfo>): Boolean? {
+        fun scanTarget(t: Expression): Boolean? = when (t) {
+            is Identifier -> t.text in active
+            is ObjectLiteralExpression -> cjsScanDestructuringPattern(t, active)
+            is ArrayLiteralExpression -> cjsScanDestructuringPattern(t, active)
+            is PropertyAccessExpression -> false
+            is ElementAccessExpression -> false
+            else -> null  // defaults (BinaryExpression), spreads, holes — unsupported
+        }
+        var hasExported = false
+        when (pattern) {
+            is ObjectLiteralExpression -> for (p in pattern.properties) when (p) {
+                is PropertyAssignment -> {
+                    if (p.name !is Identifier) return null
+                    hasExported = (scanTarget(p.initializer) ?: return null) || hasExported
+                }
+                is ShorthandPropertyAssignment -> {
+                    if (p.objectAssignmentInitializer != null) return null
+                    hasExported = (p.name.text in active) || hasExported
+                }
+                else -> return null
+            }
+            is ArrayLiteralExpression -> for (el in pattern.elements) {
+                hasExported = (scanTarget(el) ?: return null) || hasExported
+            }
+            else -> return null
+        }
+        return hasExported
+    }
+
+    private fun cjsFlattenDestructuringPattern(
+        pattern: Expression,
+        value: Expression,
+        st: CjsUnaryRewriteState,
+        active: Map<String, CjsExportTargetInfo>,
+        exprs: MutableList<Expression>,
+    ) {
+        fun exportsProp(name: String): Expression = PropertyAccessExpression(
+            expression = syntheticId("exports"),
+            name = Identifier(text = name, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        fun assignTarget(target: Expression, sub: Expression) {
+            when (target) {
+                is ObjectLiteralExpression -> cjsFlattenDestructuringPattern(target, sub, st, active, exprs)
+                is ArrayLiteralExpression -> cjsFlattenDestructuringPattern(target, sub, st, active, exprs)
+                is Identifier -> {
+                    val info = active[target.text]
+                    if (info == null) {
+                        exprs.add(BinaryExpression(left = syntheticId(target.text), operator = Equals, right = sub, pos = -1, end = -1))
+                    } else {
+                        var e: Expression
+                        val wrapNames: List<String>
+                        if (info.keepsLocal) {
+                            e = BinaryExpression(left = syntheticId(target.text), operator = Equals, right = sub, pos = -1, end = -1)
+                            wrapNames = info.exportNames
+                        } else {
+                            e = BinaryExpression(left = exportsProp(info.exportNames[0]), operator = Equals, right = sub, pos = -1, end = -1)
+                            wrapNames = info.exportNames.drop(1)
+                        }
+                        for (n in wrapNames) e = BinaryExpression(left = exportsProp(n), operator = Equals, right = e, pos = -1, end = -1)
+                        exprs.add(e)
+                    }
+                }
+                else -> exprs.add(BinaryExpression(left = target, operator = Equals, right = sub, pos = -1, end = -1))
+            }
+        }
+        when (pattern) {
+            is ObjectLiteralExpression -> {
+                val base = if (pattern.properties.size > 1) {
+                    val t = st.allocTemp()
+                    exprs.add(BinaryExpression(left = syntheticId(t), operator = Equals, right = value, pos = -1, end = -1))
+                    syntheticId(t)
+                } else value
+                for (p in pattern.properties) when (p) {
+                    is PropertyAssignment -> assignTarget(
+                        p.initializer,
+                        PropertyAccessExpression(expression = base, name = Identifier(text = (p.name as Identifier).text, pos = -1, end = -1), pos = -1, end = -1),
+                    )
+                    is ShorthandPropertyAssignment -> assignTarget(
+                        Identifier(text = p.name.text, pos = -1, end = -1),
+                        PropertyAccessExpression(expression = base, name = Identifier(text = p.name.text, pos = -1, end = -1), pos = -1, end = -1),
+                    )
+                    else -> {}
+                }
+            }
+            is ArrayLiteralExpression -> {
+                val base = if (pattern.elements.size > 1) {
+                    val t = st.allocTemp()
+                    exprs.add(BinaryExpression(left = syntheticId(t), operator = Equals, right = value, pos = -1, end = -1))
+                    syntheticId(t)
+                } else value
+                pattern.elements.forEachIndexed { i, el ->
+                    assignTarget(el, ElementAccessExpression(
+                        expression = base,
+                        argumentExpression = NumericLiteralNode(text = i.toString(), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    ))
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
      * Drops names from the active export-rewrite map that are shadowed inside a function:
      * the function's own name, parameter bindings, and any var/let/const/function/class
      * declaration anywhere in the body (over-conservative for block-scoped declarations —
      * skipping a rewrite is the safe direction).
      */
-    private fun cjsUnaryShrinkActive(active: Map<String, List<String>>, parameters: List<Parameter>, body: Node?, ownName: String?): Map<String, List<String>> {
+    private fun cjsUnaryShrinkActive(active: Map<String, CjsExportTargetInfo>, parameters: List<Parameter>, body: Node?, ownName: String?): Map<String, CjsExportTargetInfo> {
         val declared = mutableSetOf<String>()
         ownName?.let { declared.add(it) }
         for (p in parameters) declared.addAll(collectBoundNames(p.name))
