@@ -96,6 +96,16 @@ class Transformer(
     private var sourceText = ""
     private var currentFileName = ""
 
+    /** B333: current file uses the AUTOMATIC JSX runtime (react-jsx/react-jsxdev option
+     *  or an overriding `@jsxRuntime` pragma — last pragma wins). */
+    private var jsxAutomaticRuntime = false
+    /** B333: the react-jsxdev option — jsxDEV calls + the `_jsxFileName` const. */
+    private var jsxDevRuntime = false
+    /** B333: set when an automatic-runtime call was generated — triggers the
+     *  `const jsx_runtime_1 = require("react/jsx-runtime");` injection. */
+    private var jsxRuntimeCallEmitted = false
+
+
     // Maps const enum name → (member name → value).
     // Value is Double for numeric members, String for string members, or null if non-constant.
     // Populated in a pre-pass before transformation so all uses can be inlined.
@@ -297,6 +307,20 @@ class Transformer(
     fun transform(sourceFile: SourceFile): SourceFile {
         sourceText = sourceFile.text
         currentFileName = sourceFile.fileName
+        // B333: per-file JSX runtime decision — the base comes from the @jsx option
+        // (react-jsx/react-jsxdev = automatic), overridden by `/* @jsxRuntime
+        // classic|automatic */` pragma comments (the LAST pragma wins, tsc
+        // collects them in order). Dev-ness (jsxDEV + _jsxFileName) comes from the
+        // OPTION only — a `react` file with an `automatic` pragma uses plain jsx/jsxs.
+        jsxAutomaticRuntime = run {
+            var auto = options.jsx == "react-jsx" || options.jsx == "react-jsxdev"
+            JSX_RUNTIME_PRAGMA.findAll(sourceFile.text).forEach {
+                auto = it.groupValues[1] == "automatic"
+            }
+            auto
+        }
+        jsxDevRuntime = options.jsx == "react-jsxdev"
+        jsxRuntimeCallEmitted = false
         hasSeenRuntimeStatement = false
         hasSeenAnyTopLevelStatement = false
         functionScopeDepth = 0
@@ -572,10 +596,34 @@ class Transformer(
             // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
             val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
                 needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper
+            // B333: automatic-runtime JSX — `const jsx_runtime_1 = require("react/jsx-runtime");`
+            // first among the body statements (lands right after the CJS exports-void0
+            // preamble); react-jsxdev adds the `_jsxFileName` const.
+            val jsxRuntimeStmts = if (jsxRuntimeCallEmitted) {
+                val mod = if (jsxDevRuntime) "react/jsx-dev-runtime" else "react/jsx-runtime"
+                val rtName = if (jsxDevRuntime) "jsx_dev_runtime_1" else "jsx_runtime_1"
+                val requireStmt = makeRequireConst(rtName, StringLiteralNode(text = mod, pos = -1, end = -1))
+                if (jsxDevRuntime) {
+                    val fileNameStmt = VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = listOf(VariableDeclaration(
+                                name = Identifier(text = "_jsxFileName", pos = -1, end = -1),
+                                type = null,
+                                initializer = StringLiteralNode(
+                                    text = currentFileName.substringAfterLast('/'), pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            )),
+                            flags = ConstKeyword, pos = -1, end = -1,
+                        ),
+                        modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                    )
+                    listOf(requireStmt, fileNameStmt)
+                } else listOf(requireStmt)
+            } else emptyList()
             val statementsForCJS = if (options.importHelpers && needsInlineHelperForCjs) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
-                listOf(tslibStmt) + withHelpers
-            } else withHelpers
+                listOf(tslibStmt) + jsxRuntimeStmts + withHelpers
+            } else jsxRuntimeStmts + withHelpers
             val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
             return sourceFile.copy(statements = cjsStatements)
         }
@@ -9423,15 +9471,129 @@ class Transformer(
     }
 
     private fun transformJsxElement(node: JsxElement): Expression =
-        buildJsxCall(node.openingElement.tagName, node.openingElement.attributes, node.children,
+        if (jsxAutomaticRuntime)
+            buildJsxAutomaticCall(node.openingElement.tagName, node.openingElement.attributes, node.children, node.pos)
+        else buildJsxCall(node.openingElement.tagName, node.openingElement.attributes, node.children,
             openingEnd = node.openingElement.end)
 
     private fun transformJsxSelfClosingElement(node: JsxSelfClosingElement): Expression =
-        buildJsxCall(node.tagName, node.attributes, emptyList())
+        if (jsxAutomaticRuntime)
+            buildJsxAutomaticCall(node.tagName, node.attributes, emptyList(), node.pos)
+        else buildJsxCall(node.tagName, node.attributes, emptyList())
 
     private fun transformJsxFragment(node: JsxFragment): Expression =
-        buildJsxCall(getJsxFragmentFactory(), emptyList(), node.children, tagIsExpr = true,
+        if (jsxAutomaticRuntime)
+            buildJsxAutomaticCall(null, emptyList(), node.children, node.pos)
+        else buildJsxCall(getJsxFragmentFactory(), emptyList(), node.children, tagIsExpr = true,
             openingEnd = node.pos)
+
+    /** B333: the AUTOMATIC JSX runtime call (tsc transformers/jsx.ts):
+     *  `(0, jsx_runtime_1.jsx)(tag, props-with-children)` — children fold INTO props
+     *  (one child → `children: x`; several → `children: [..]` via `jsxs`); an empty
+     *  props+children set is `{}` (never `null`). A null [tagName] is a fragment —
+     *  `jsx_runtime_1.Fragment`. Under react-jsxdev every call is
+     *  `jsxDEV(tag, props, void 0, isStaticChildren, { fileName: _jsxFileName,
+     *  lineNumber, columnNumber }, this)`. */
+    private fun buildJsxAutomaticCall(
+        tagName: Expression?,
+        attributes: List<Node>,
+        children: List<Node>,
+        nodePos: Int,
+    ): Expression {
+        jsxRuntimeCallEmitted = true
+        val runtimeName = if (jsxDevRuntime) "jsx_dev_runtime_1" else "jsx_runtime_1"
+        val tagExpr: Expression = when {
+            tagName == null -> PropertyAccessExpression(
+                expression = syntheticId(runtimeName), name = syntheticId("Fragment"), pos = -1, end = -1)
+            tagName is Identifier && tagName.text[0].isLowerCase() ->
+                StringLiteralNode(text = tagName.text, pos = -1, end = -1)
+            else -> transformExpression(tagName)
+        }
+        // Attribute props (same shapes as the classic path).
+        val attrProps = attributes.mapNotNull { attr ->
+            when (attr) {
+                is JsxAttribute -> {
+                    val attrValue = attr.value
+                    val value: Expression = when {
+                        attrValue == null -> Identifier(text = "true", pos = -1, end = -1)
+                        attrValue is JsxExpressionContainer -> attrValue.expression?.let { transformExpression(it) }
+                            ?: Identifier(text = "undefined", pos = -1, end = -1)
+                        attrValue is Expression -> transformExpression(attrValue)
+                        else -> Identifier(text = "undefined", pos = -1, end = -1)
+                    }
+                    PropertyAssignment(
+                        name = Identifier(text = attr.name, pos = -1, end = -1),
+                        initializer = value, pos = -1, end = -1,
+                    )
+                }
+                is JsxSpreadAttribute -> SpreadAssignment(
+                    expression = transformExpression(attr.expression), pos = -1, end = -1)
+                else -> null
+            }
+        }
+        val childArgs: List<Expression> = children.mapNotNull { child ->
+            when (child) {
+                is JsxText -> {
+                    val trimmed = child.text.trim()
+                    if (trimmed.isEmpty()) null else StringLiteralNode(text = trimmed, pos = -1, end = -1)
+                }
+                is JsxExpressionContainer -> child.expression?.let { transformExpression(it) }
+                is JsxElement -> transformJsxElement(child)
+                is JsxSelfClosingElement -> transformJsxSelfClosingElement(child)
+                is JsxFragment -> transformJsxFragment(child)
+                else -> null
+            }
+        }
+        val staticChildren = childArgs.size > 1
+        val props = attrProps + when {
+            childArgs.isEmpty() -> emptyList()
+            staticChildren -> listOf(PropertyAssignment(
+                name = Identifier(text = "children", pos = -1, end = -1),
+                initializer = ArrayLiteralExpression(elements = childArgs, pos = -1, end = -1),
+                pos = -1, end = -1))
+            else -> listOf(PropertyAssignment(
+                name = Identifier(text = "children", pos = -1, end = -1),
+                initializer = childArgs[0], pos = -1, end = -1))
+        }
+        val propsExpr: Expression = transformObjectLiteral(
+            ObjectLiteralExpression(properties = props, pos = -1, end = -1))
+        val fnName = if (jsxDevRuntime) "jsxDEV" else if (staticChildren) "jsxs" else "jsx"
+        val callee = ParenthesizedExpression(
+            expression = BinaryExpression(
+                left = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                operator = SyntaxKind.Comma,
+                right = PropertyAccessExpression(
+                    expression = syntheticId(runtimeName), name = syntheticId(fnName), pos = -1, end = -1),
+                pos = -1, end = -1),
+            pos = -1, end = -1)
+        val args = if (!jsxDevRuntime) {
+            listOf(tagExpr, propsExpr)
+        } else {
+            // Source coordinates of the element's `<` (1-based; pos may include trivia).
+            var p = nodePos.coerceAtLeast(0)
+            while (p < sourceText.length && sourceText[p] != '<') p++
+            var lineNo = 1; var lineStart = 0
+            for (i in 0 until p.coerceAtMost(sourceText.length)) {
+                if (sourceText[i] == '\n') { lineNo++; lineStart = i + 1 }
+            }
+            val colNo = p - lineStart + 1
+            listOf(
+                tagExpr, propsExpr,
+                VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                Identifier(text = if (staticChildren) "true" else "false", pos = -1, end = -1),
+                ObjectLiteralExpression(properties = listOf(
+                    PropertyAssignment(name = Identifier(text = "fileName", pos = -1, end = -1),
+                        initializer = syntheticId("_jsxFileName"), pos = -1, end = -1),
+                    PropertyAssignment(name = Identifier(text = "lineNumber", pos = -1, end = -1),
+                        initializer = NumericLiteralNode(text = lineNo.toString(), pos = -1, end = -1), pos = -1, end = -1),
+                    PropertyAssignment(name = Identifier(text = "columnNumber", pos = -1, end = -1),
+                        initializer = NumericLiteralNode(text = colNo.toString(), pos = -1, end = -1), pos = -1, end = -1),
+                ), pos = -1, end = -1),
+                Identifier(text = "this", pos = -1, end = -1),
+            )
+        }
+        return CallExpression(expression = callee, arguments = args, pos = -1, end = -1)
+    }
 
     private fun buildJsxCall(
         tagName: Expression,
@@ -9517,12 +9679,14 @@ class Transformer(
         }
 
         // Detect if the JSX element spans multiple lines — if so, emit createElement multi-line.
-        // Check if any non-trivial child's source position comes after a newline relative
-        // to the opening element end.
-        // Detect if the JSX element spans multiple lines.
-        // If any JsxText child contains a newline, the element is multi-line.
+        // If any JsxText child contains a newline, the element is multi-line. ALSO (B333,
+        // tsc startOnNewLine on synthesized children): any JSX-ELEMENT child makes the
+        // call multi-line even from single-line source (`<><div></div></>` →
+        // `React.createElement(React.Fragment, null,\n    React.createElement("div", null))`
+        // — no corpus baseline ever keeps an element child on the parent's line).
         val isMultiLine = childArgs.isNotEmpty() &&
-            children.any { it is JsxText && it.text.contains('\n') }
+            (children.any { it is JsxText && it.text.contains('\n') } ||
+                children.any { it is JsxElement || it is JsxSelfClosingElement || it is JsxFragment })
 
         return CallExpression(
             expression = factory,
@@ -15795,6 +15959,7 @@ class Transformer(
     }
 
     companion object {
+        private val JSX_RUNTIME_PRAGMA = Regex("""/\*\s*@jsxRuntime\s+(classic|automatic)\s*\*/""")
         /** Strict-mode future reserved words that cannot be used as variable names. */
         val strictModeReservedWords = setOf(
             "implements", "interface", "let", "package",
