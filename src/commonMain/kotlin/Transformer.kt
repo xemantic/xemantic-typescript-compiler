@@ -228,6 +228,11 @@ class Transformer(
     private var needsClassPrivateFieldGetHelper = false
     private var needsClassPrivateFieldSetHelper = false
 
+    // B345: set when the ES-decorators (TC39, !experimentalDecorators) class transform emits
+    // __esDecorate / __runInitializers calls.
+    private var needsEsDecorateHelper = false
+    private var needsRunInitializersHelper = false
+
     // Transiently set in transformVariableDeclaration when the initializer is an anonymous
     // ClassExpression. Consumed by transformClassExpression to emit `__setFunctionName(_a, "X")`
     // in the comma-list capture pattern. Restored after the inner transform returns.
@@ -281,6 +286,8 @@ class Transformer(
             "__setFunctionName" -> if (!needsSetFunctionNameHelper) { needsSetFunctionNameHelper = true; helperUsageOrder.add(name) }
             "__classPrivateFieldGet" -> if (!needsClassPrivateFieldGetHelper) { needsClassPrivateFieldGetHelper = true; helperUsageOrder.add(name) }
             "__classPrivateFieldSet" -> if (!needsClassPrivateFieldSetHelper) { needsClassPrivateFieldSetHelper = true; helperUsageOrder.add(name) }
+            "__esDecorate" -> if (!needsEsDecorateHelper) { needsEsDecorateHelper = true; helperUsageOrder.add(name) }
+            "__runInitializers" -> if (!needsRunInitializersHelper) { needsRunInitializersHelper = true; helperUsageOrder.add(name) }
         }
     }
 
@@ -545,6 +552,8 @@ class Transformer(
                     "__setFunctionName" -> helpers.add(RawStatement(code = SET_FUNCTION_NAME_HELPER))
                     "__classPrivateFieldGet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_GET_HELPER))
                     "__classPrivateFieldSet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_SET_HELPER))
+                    "__esDecorate" -> helpers.add(RawStatement(code = ES_DECORATE_HELPER))
+                    "__runInitializers" -> helpers.add(RawStatement(code = RUN_INITIALIZERS_HELPER))
                 }
             }
         }
@@ -627,7 +636,8 @@ class Transformer(
             // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
             // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
             val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
-                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
+                needsEsDecorateHelper || needsRunInitializersHelper
             // B333: automatic-runtime JSX — `const jsx_runtime_1 = require("react/jsx-runtime");`
             // first among the body statements (lands right after the CJS exports-void0
             // preamble); react-jsxdev adds the `_jsxFileName` const.
@@ -668,7 +678,8 @@ class Transformer(
             options.importHelpers && isCurrentFileModule
         ) {
             val needsInlineHelperForPreserveCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
-                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
+                needsEsDecorateHelper || needsRunInitializersHelper
             if (needsInlineHelperForPreserveCjs) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
                 return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
@@ -715,6 +726,8 @@ class Transformer(
                     "__decorate" -> tslibNames.add("__decorate")
                     "__metadata" -> tslibNames.add("__metadata")
                     "__param" -> tslibNames.add("__param")
+                    "__esDecorate" -> tslibNames.add("__esDecorate")
+                    "__runInitializers" -> tslibNames.add("__runInitializers")
                 }
             }
             if (tslibNames.isNotEmpty()) {
@@ -10982,11 +10995,255 @@ class Transformer(
     // Class declaration transform
     // -----------------------------------------------------------------
 
+    /**
+     * B345: TC39 ES-decorators downlevel for CLASS decorators, static-block form (target >= ES2022):
+     * ```
+     * let C = (() => {
+     *     let _classDecorators = [dec()];
+     *     let _classDescriptor;
+     *     let _classExtraInitializers = [];
+     *     let _classThis;
+     *     var C = class {
+     *         static { _classThis = this; }
+     *         static {
+     *             const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+     *             __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+     *             C = _classThis = _classDescriptor.value;
+     *             if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+     *             __runInitializers(_classThis, _classExtraInitializers);
+     *         }
+     *         <members>
+     *     };
+     *     return C = _classThis;
+     * })();
+     * export { C };   // ESM exported classes
+     * ```
+     */
+    private fun transformEsDecoratedClassStaticBlockForm(decl: ClassDeclaration): List<Statement> {
+        requireHelper("__esDecorate")
+        requireHelper("__runInitializers")
+        val className = decl.name!!.text
+
+        val result = transformClassBody(
+            name = decl.name,
+            typeParameters = decl.typeParameters,
+            heritageClauses = decl.heritageClauses,
+            members = decl.members,
+            modifiers = decl.modifiers,
+        )
+
+        fun letDecl(name: String, init: Expression?): VariableStatement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(name), initializer = init, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.LetKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+        fun assign(left: Expression, right: Expression): Expression =
+            BinaryExpression(left = left, operator = SyntaxKind.Equals, right = right, pos = -1, end = -1)
+        fun exprStmt(e: Expression): Statement = ExpressionStatement(expression = e, pos = -1, end = -1)
+
+        val bodyStmts = mutableListOf<Statement>()
+        bodyStmts.add(letDecl("_classDecorators", ArrayLiteralExpression(
+            elements = decl.decorators!!.map { transformExpression(it.expression) },
+            pos = -1, end = -1,
+        )))
+        bodyStmts.add(letDecl("_classDescriptor", null))
+        bodyStmts.add(letDecl("_classExtraInitializers", ArrayLiteralExpression(elements = emptyList(), pos = -1, end = -1)))
+        bodyStmts.add(letDecl("_classThis", null))
+
+        // static { _classThis = this; }
+        val captureBlock = ClassStaticBlockDeclaration(
+            body = Block(
+                statements = listOf(exprStmt(assign(syntheticId("_classThis"), syntheticId("this")))),
+                multiLine = false, pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // The decoration static block.
+        val metadataInit = ConditionalExpression(
+            condition = BinaryExpression(
+                left = BinaryExpression(
+                    left = TypeOfExpression(expression = syntheticId("Symbol"), pos = -1, end = -1),
+                    operator = SyntaxKind.EqualsEqualsEquals,
+                    right = StringLiteralNode(text = "function", singleQuote = false, rawText = null, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            whenTrue = CallExpression(
+                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("create"), pos = -1, end = -1),
+                arguments = listOf(syntheticId("null")), pos = -1, end = -1,
+            ),
+            whenFalse = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        val metadataConst = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId("_metadata"), initializer = metadataInit, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.ConstKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+        fun prop(name: String, value: Expression) = PropertyAssignment(
+            name = syntheticId(name), initializer = value, pos = -1, end = -1,
+        )
+        val esDecorateCall = exprStmt(CallExpression(
+            expression = helperExpr("__esDecorate"),
+            arguments = listOf(
+                syntheticId("null"),
+                assign(syntheticId("_classDescriptor"), ObjectLiteralExpression(
+                    properties = listOf(prop("value", syntheticId("_classThis"))),
+                    multiLine = false, pos = -1, end = -1,
+                )),
+                syntheticId("_classDecorators"),
+                ObjectLiteralExpression(
+                    properties = listOf(
+                        prop("kind", StringLiteralNode(text = "class", singleQuote = false, rawText = null, pos = -1, end = -1)),
+                        prop("name", PropertyAccessExpression(expression = syntheticId("_classThis"), name = syntheticId("name"), pos = -1, end = -1)),
+                        prop("metadata", syntheticId("_metadata")),
+                    ),
+                    multiLine = false, pos = -1, end = -1,
+                ),
+                syntheticId("null"),
+                syntheticId("_classExtraInitializers"),
+            ),
+            pos = -1, end = -1,
+        ))
+        val reassign = exprStmt(assign(
+            syntheticId(className),
+            assign(syntheticId("_classThis"), PropertyAccessExpression(
+                expression = syntheticId("_classDescriptor"), name = syntheticId("value"), pos = -1, end = -1,
+            )),
+        ))
+        val defineMetadata = IfStatement(
+            expression = syntheticId("_metadata"),
+            thenStatement = exprStmt(CallExpression(
+                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("defineProperty"), pos = -1, end = -1),
+                arguments = listOf(
+                    syntheticId("_classThis"),
+                    PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
+                    ObjectLiteralExpression(
+                        properties = listOf(
+                            prop("enumerable", syntheticId("true")),
+                            prop("configurable", syntheticId("true")),
+                            prop("writable", syntheticId("true")),
+                            prop("value", syntheticId("_metadata")),
+                        ),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                ),
+                pos = -1, end = -1,
+            )),
+            elseStatement = null, pos = -1, end = -1,
+        )
+        val runExtras = exprStmt(CallExpression(
+            expression = helperExpr("__runInitializers"),
+            arguments = listOf(syntheticId("_classThis"), syntheticId("_classExtraInitializers")),
+            pos = -1, end = -1,
+        ))
+        val decorationBlock = ClassStaticBlockDeclaration(
+            body = Block(
+                statements = listOf(metadataConst, esDecorateCall, reassign, defineMetadata, runExtras),
+                multiLine = true, pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // var C = class { static { _classThis = this; } static { ... } <members> };
+        val classExpr = ClassExpression(
+            name = null,
+            typeParameters = null,
+            heritageClauses = result.heritageClauses,
+            members = listOf(captureBlock, decorationBlock) + result.members,
+            modifiers = emptySet(),
+            pos = -1, end = -1,
+        )
+        val innerVar = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(className), initializer = classExpr, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.VarKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+        bodyStmts.addAll(result.leadingStatements)
+        bodyStmts.add(innerVar)
+        bodyStmts.addAll(result.trailingStatements)
+        bodyStmts.add(ReturnStatement(
+            expression = assign(syntheticId(className), syntheticId("_classThis")),
+            pos = -1, end = -1,
+        ))
+
+        val iife = CallExpression(
+            expression = ParenthesizedExpression(
+                expression = ArrowFunction(
+                    parameters = emptyList(),
+                    body = Block(statements = bodyStmts, multiLine = true, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            arguments = emptyList(), pos = -1, end = -1,
+        )
+
+        val strippedModifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract
+        val isExported = ModifierFlag.Export in strippedModifiers
+        val isESM = isESModuleFormat(options, currentFileName)
+        val varModifiers = if (isExported && !isESM) setOf(ModifierFlag.Export) else emptySet()
+        val letStatement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(className), initializer = iife, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.LetKeyword, pos = -1, end = -1,
+            ),
+            modifiers = varModifiers, pos = decl.pos, end = decl.end,
+            leadingComments = decl.leadingComments,
+        )
+
+        val statements = mutableListOf<Statement>(letStatement)
+        if (isExported && isESM) {
+            statements.add(ExportDeclaration(
+                exportClause = NamedExports(
+                    elements = listOf(ExportSpecifier(
+                        propertyName = null,
+                        name = syntheticId(className),
+                        isTypeOnly = false, pos = -1, end = -1,
+                    )),
+                    pos = -1, end = -1,
+                ),
+                moduleSpecifier = null, pos = -1, end = -1,
+            ))
+        }
+        return statements
+    }
+
     private fun transformClassDeclaration(decl: ClassDeclaration): List<Statement> {
         val hasClassDecorators = options.experimentalDecorators && !decl.decorators.isNullOrEmpty()
         val hasAnyDecorators = options.experimentalDecorators && (
             hasClassDecorators || classHasMemberDecorators(decl)
         )
+
+        // B345: TC39 ES-decorators (no experimentalDecorators) — class decorators downlevel
+        // to the `let C = (() => { ... __esDecorate ... })();` IIFE form. Narrow gate:
+        // named class, CLASS decorators only (member decorators are B346/B347 territory),
+        // target >= ES2022 (static-block form).
+        if (!options.experimentalDecorators && !decl.decorators.isNullOrEmpty() &&
+            decl.name != null && !classHasMemberDecorators(decl) &&
+            ModifierFlag.Default !in decl.modifiers &&
+            options.effectiveTarget >= ScriptTarget.ES2022
+        ) {
+            return transformEsDecoratedClassStaticBlockForm(decl)
+        }
 
         // Mark decorator helpers needed BEFORE transforming the class body,
         // so that __decorate/__metadata/__param appear before __awaiter in the helper ordering
@@ -16853,6 +17110,46 @@ class Transformer(
         val SET_FUNCTION_NAME_HELPER = """var __setFunctionName = (this && this.__setFunctionName) || function (f, name, prefix) {
     if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
     return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
+};
+"""
+
+        /** `__esDecorate` helper — TC39 ES-decorators (no experimentalDecorators) application. */
+        val ES_DECORATE_HELPER = """var __esDecorate = (this && this.__esDecorate) || function (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+    function accept(f) { if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected"); return f; }
+    var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+    var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+    var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+    var _, done = false;
+    for (var i = decorators.length - 1; i >= 0; i--) {
+        var context = {};
+        for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+        for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+        context.addInitializer = function (f) { if (done) throw new TypeError("Cannot add initializers after decoration has completed"); extraInitializers.push(accept(f || null)); };
+        var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+        if (kind === "accessor") {
+            if (result === void 0) continue;
+            if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+            if (_ = accept(result.get)) descriptor.get = _;
+            if (_ = accept(result.set)) descriptor.set = _;
+            if (_ = accept(result.init)) initializers.unshift(_);
+        }
+        else if (_ = accept(result)) {
+            if (kind === "field") initializers.unshift(_);
+            else descriptor[key] = _;
+        }
+    }
+    if (target) Object.defineProperty(target, contextIn.name, descriptor);
+    done = true;
+};
+"""
+
+        /** `__runInitializers` helper — runs ES-decorator initializers/extraInitializers. */
+        val RUN_INITIALIZERS_HELPER = """var __runInitializers = (this && this.__runInitializers) || function (thisArg, initializers, value) {
+    var useValue = arguments.length > 2;
+    for (var i = 0; i < initializers.length; i++) {
+        value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+    }
+    return useValue ? value : void 0;
 };
 """
 
