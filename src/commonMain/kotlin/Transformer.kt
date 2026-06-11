@@ -11607,35 +11607,55 @@ class Transformer(
         // Computed property name temp variable extraction: extract non-literal computed property
         // names to temp vars so the expression is evaluated once at class definition time.
         // `[x] = 10` → `var _a; ... this[_a] = 10 ... _a = x;`
+        // B323 (tsc classProperties pendingExpressions): MOVED fields (instance fields → ctor;
+        // static fields → trailing `A[_a] = init` when target < ES2022) capture their computed
+        // name in MEMBER ORDER; pending captures are HOSTED in the next KEPT member's
+        // computed-name slot (`static [(_a = A.p1, A.p2)]()`); leftovers flush as a statement
+        // right after the class.
         val computedPropTempVars = mutableMapOf<ClassElement, String>() // member → temp var name
         val computedPropLeadingVars = mutableListOf<String>()
         val computedPropAssignments = mutableListOf<Pair<String, Expression>>()
-        // Only extract computed names for instance properties WITH INITIALIZERS that will be
-        // moved to the constructor (!useDefineForClassFields). Properties without initializers
-        // are type annotations that get erased. Methods/accessors keep computed names inline.
+        // kept member → pending captures to prepend inside its computed-name brackets
+        val hostedComputedCaptures = mutableMapOf<ClassElement, List<Pair<String, Expression>>>()
         if (!useDefineForClassFields) {
+            val pendingCaptures = mutableListOf<Pair<String, Expression>>()
             for (member in members) {
-                if (member !is PropertyDeclaration) continue
-                if (member.initializer == null) continue // type-only property, erased
-                if (ModifierFlag.Static in member.modifiers) continue
-                if (ModifierFlag.Declare in member.modifiers) continue
-                val nm = member.name
-                // Skip private fields (#field) — handled separately by WeakMap transform
-                if (nm is Identifier && nm.text.startsWith("#")) continue
-                val computedName = nm as? ComputedPropertyName ?: continue
-                val expr = computedName.expression
-                // Only extract non-literal expressions — literals don't need temp vars
-                val needsTemp = expr !is StringLiteralNode && expr !is NumericLiteralNode
-                    && !(expr is PrefixUnaryExpression && expr.operand is NumericLiteralNode)
-                if (needsTemp) {
-                    val tempVar = nextTempVarName()
-                    computedPropTempVars[member] = tempVar
-                    computedPropLeadingVars.add(tempVar)
-                    // Track for CJS hoisting — these vars need to appear before Object.defineProperty
-                    if (functionScopeDepth == 0) computedPropHoistNames.add(tempVar)
-                    computedPropAssignments.add(tempVar to transformExpression(expr))
+                val movedField = (member as? PropertyDeclaration)?.takeIf { p ->
+                    p.initializer != null &&
+                        ModifierFlag.Declare !in p.modifiers &&
+                        !(p.name is Identifier && (p.name as Identifier).text.startsWith("#")) &&
+                        (ModifierFlag.Static !in p.modifiers || options.effectiveTarget < ScriptTarget.ES2022)
+                }
+                if (movedField != null) {
+                    val computedName = movedField.name as? ComputedPropertyName ?: continue
+                    val expr = computedName.expression
+                    // Only extract non-literal expressions — literals don't need temp vars
+                    val needsTemp = expr !is StringLiteralNode && expr !is NumericLiteralNode
+                        && !(expr is PrefixUnaryExpression && expr.operand is NumericLiteralNode)
+                    if (needsTemp) {
+                        val tempVar = nextTempVarName()
+                        computedPropTempVars[member] = tempVar
+                        computedPropLeadingVars.add(tempVar)
+                        // Track for CJS hoisting — these vars need to appear before Object.defineProperty
+                        if (functionScopeDepth == 0) computedPropHoistNames.add(tempVar)
+                        pendingCaptures.add(tempVar to transformExpression(expr))
+                    }
+                } else if (pendingCaptures.isNotEmpty()) {
+                    // A KEPT member with a computed name hosts the pending captures inside
+                    // its own brackets (tsc visitComputedPropertyName + pendingExpressions).
+                    val keeps = when (member) {
+                        is MethodDeclaration -> member.body != null && member.name is ComputedPropertyName
+                        is GetAccessor -> member.body != null && ModifierFlag.Abstract !in member.modifiers && member.name is ComputedPropertyName
+                        is SetAccessor -> member.body != null && ModifierFlag.Abstract !in member.modifiers && member.name is ComputedPropertyName
+                        else -> false
+                    }
+                    if (keeps) {
+                        hostedComputedCaptures[member] = pendingCaptures.toList()
+                        pendingCaptures.clear()
+                    }
                 }
             }
+            computedPropAssignments.addAll(pendingCaptures)
         }
 
         // Private field WeakMap downlevel: when target < ES2022, transform #field to WeakMap pattern
@@ -12074,7 +12094,42 @@ class Transformer(
                     // Skip — collected in staticBlocks, emitted as IIFE trailing statements
                 }
                 else -> {
-                    val transformed = transformClassElement(member)
+                    var transformed = transformClassElement(member)
+                    // B323: a kept member hosting pending computed-name captures gets
+                    // `[(_a = expr, …, own)]` — the captures evaluate in member order.
+                    val hosted = hostedComputedCaptures[member]
+                    if (transformed != null && hosted != null) {
+                        val ownName = when (val t = transformed) {
+                            is MethodDeclaration -> t.name
+                            is GetAccessor -> t.name
+                            is SetAccessor -> t.name
+                            else -> null
+                        }
+                        val ownExpr = (ownName as? ComputedPropertyName)?.expression
+                        if (ownExpr != null) {
+                            var chain: Expression = BinaryExpression(
+                                left = syntheticId(hosted[0].first), operator = Equals, right = hosted[0].second, pos = -1, end = -1,
+                            )
+                            for (i in 1 until hosted.size) {
+                                chain = BinaryExpression(
+                                    left = chain, operator = SyntaxKind.Comma,
+                                    right = BinaryExpression(left = syntheticId(hosted[i].first), operator = Equals, right = hosted[i].second, pos = -1, end = -1),
+                                    pos = -1, end = -1,
+                                )
+                            }
+                            chain = BinaryExpression(left = chain, operator = SyntaxKind.Comma, right = ownExpr, pos = -1, end = -1)
+                            val newName = ComputedPropertyName(
+                                expression = ParenthesizedExpression(expression = chain, pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            )
+                            transformed = when (val t = transformed) {
+                                is MethodDeclaration -> t.copy(name = newName)
+                                is GetAccessor -> t.copy(name = newName)
+                                is SetAccessor -> t.copy(name = newName)
+                                else -> t
+                            }
+                        }
+                    }
                     if (transformed != null) outputMembers.add(transformed)
                 }
             }
@@ -12146,7 +12201,10 @@ class Transformer(
                         )
                         is ComputedPropertyName -> ElementAccessExpression(
                             expression = classId,
-                            argumentExpression = transformExpression(nm.expression),
+                            // B323: moved static fields with captured computed names assign via
+                            // the temp (`A[_a] = 0`) — the capture itself is hosted earlier.
+                            argumentExpression = computedPropTempVars[prop]?.let { syntheticId(it) }
+                                ?: transformExpression(nm.expression),
                             pos = -1, end = -1,
                         )
                         else -> null
