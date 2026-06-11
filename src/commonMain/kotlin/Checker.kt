@@ -1403,6 +1403,8 @@ class Checker(
         checkJsDocBareGenericTags()
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
         checkDecoratorUseBeforeDeclaration()
+        // B354: uncalled-decorator arity (TS1329) + decorator return-type (TS1270/TS1271).
+        checkPotentiallyUncalledDecorators()
         // 72a4j (B261): TS2345 for optional destructured-param bindings as call args (+ null-default TS2322)
         checkOptionalDestructuredParamCallArgs()
         // 72a4k (B262): TS2345 for JSDoc-optional contextually-typed fn-expr params as call args
@@ -103682,6 +103684,195 @@ interface DataView {
      * implicit-any walker is OFF (mirrors checkImplicitAnyDefaultVarFunctions's
      * gate) to avoid double-emit.
      */
+    /**
+     * B354: uncalled-decorator signature checking (tsc isPotentiallyUncalledDecorator +
+     * getDecoratorArgumentCount + the decorator-call return-type rules). For a
+     * BARE-IDENTIFIER decorator `@f` resolving to in-file `declare function` overloads:
+     *  - TS1329 when EVERY signature has minArgumentCount 0, no rest param, and fewer
+     *    declared params than the decorator position supplies (class=1, property=2,
+     *    method/accessor = sig.params<=2 ? 2 : 3) — span covers `@`+name.
+     *  - otherwise (single all-`any`-param signature only — the call definitely
+     *    resolves) when the return annotation is an in-file interface that is
+     *    call-signatures-only (own call sigs, or heritage ONLY to the lib
+     *    ClassDecorator/MethodDecorator/PropertyDecorator/ParameterDecorator types) —
+     *    such a type fails the weak-type rule against TypedPropertyDescriptor and is
+     *    never void/typeof-Class: class → TS1270 'void | typeof <C>', property →
+     *    TS1271, method → TS1270 'void | TypedPropertyDescriptor<sig>' — span covers
+     *    the expression only (no `@`). Accessors/parameters and called decorators skip.
+     */
+    private fun checkPotentiallyUncalledDecorators() {
+        if (!options.experimentalDecorators) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val funcs = mutableMapOf<String, MutableList<FunctionDeclaration>>()
+            val ifaces = mutableMapOf<String, MutableList<InterfaceDeclaration>>()
+            val otherValueNames = mutableSetOf<String>()
+            for (s in stmts) when (s) {
+                is FunctionDeclaration -> s.name?.text?.let { funcs.getOrPut(it) { mutableListOf() }.add(s) }
+                is InterfaceDeclaration -> ifaces.getOrPut(s.name.text) { mutableListOf() }.add(s)
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    (d.name as? Identifier)?.text?.let { otherValueNames.add(it) }
+                }
+                is ClassDeclaration -> s.name?.text?.let { otherValueNames.add(it) }
+                is EnumDeclaration -> otherValueNames.add(s.name.text)
+                else -> {}
+            }
+
+            fun realParams(f: FunctionDeclaration) = f.parameters.filter {
+                !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
+            }
+            fun minArgs(f: FunctionDeclaration) = realParams(f).takeWhile {
+                !it.questionToken && it.initializer == null && !it.dotDotDotToken
+            }.size
+            fun hasRest(f: FunctionDeclaration) = realParams(f).any { it.dotDotDotToken }
+
+            // kind: 0=class, 1=property, 2=method
+            fun argCount(kind: Int, sig: FunctionDeclaration): Int = when (kind) {
+                0 -> 1
+                1 -> 2
+                else -> if (realParams(sig).size <= 2) 2 else 3
+            }
+
+            /** Call-signatures-only in-file interface (never assignable to void/typeof
+             *  C and fails the weak-type rule vs TypedPropertyDescriptor). */
+            fun isCallOnlyDecoratorInterface(name: String): Boolean {
+                val decls = ifaces[name] ?: return false
+                if (name in otherValueNames || name in funcs) return false
+                var anyCallable = false
+                for (d in decls) {
+                    for (m in d.members) {
+                        if (m !is MethodDeclaration || (m.name as? Identifier)?.text != "") return false
+                        anyCallable = true
+                    }
+                    for (h in d.heritageClauses.orEmpty()) for (t in h.types) {
+                        val tn = (t.expression as? Identifier)?.text ?: return false
+                        if (tn !in setOf("ClassDecorator", "MethodDecorator", "PropertyDecorator", "ParameterDecorator")) return false
+                        if (tn in ifaces || tn in otherValueNames || tn in funcs) return false
+                        anyCallable = true
+                    }
+                }
+                return anyCallable
+            }
+
+            fun renderMethodSig(m: MethodDeclaration): String? {
+                if (m.typeParameters != null || m.asteriskToken) return null
+                val parts = mutableListOf<String>()
+                for (p in m.parameters) {
+                    if (p.isCommentPlaceholder) continue
+                    val pn = (p.name as? Identifier)?.text ?: return null
+                    val pt = oruRenderType(p.type) ?: return null
+                    parts.add("$pn${if (p.questionToken) "?" else ""}: $pt")
+                }
+                val ret = when {
+                    m.type != null -> oruRenderType(m.type) ?: return null
+                    m.body != null && !bodyHasValueReturn(m.body!!.statements) -> "void"
+                    else -> return null
+                }
+                return "(${parts.joinToString(", ")}) => $ret"
+            }
+
+            fun checkDec(dec: Decorator, kind: Int, className: String?, methodSig: String?) {
+                val expr = dec.expression as? Identifier ?: return
+                if (expr.text in otherValueNames) return
+                val sigs = funcs[expr.text]?.filter { it.body == null } ?: return
+                if (sigs.isEmpty()) return
+                val uncalled = sigs.all {
+                    minArgs(it) == 0 && !hasRest(it) && realParams(it).size < argCount(kind, it)
+                }
+                if (uncalled) {
+                    val atPos = source.lastIndexOf('@', expr.pos.coerceAtMost(source.length - 1))
+                    if (atPos < 0) return
+                    val (line, ch) = getLineAndCharacterOfPosition(source, atPos)
+                    diagnostics.add(Diagnostic(
+                        message = "'${expr.text}' accepts too few arguments to be used as a decorator here. Did you mean to call it first and write '@${expr.text}()'?",
+                        category = DiagnosticCategory.Error, code = 1329,
+                        fileName = fileName, line = line, character = ch,
+                        start = atPos, length = expr.pos + expr.text.length - atPos,
+                    ))
+                    return
+                }
+                // Return-type check: single signature whose params are all `any`-typed
+                // (the synthetic decorator call definitely resolves).
+                val sig = sigs.singleOrNull() ?: return
+                if (realParams(sig).any { p ->
+                        val t = p.type
+                        !(t == null || (t is KeywordTypeNode && t.kind == SyntaxKind.AnyKeyword) ||
+                            (p.dotDotDotToken && t is ArrayType && (t.elementType as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword))
+                    }) return
+                val ret = sig.type as? TypeReference ?: return
+                if (ret.typeArguments != null) return
+                val rname = (ret.typeName as? Identifier)?.text ?: return
+                if (!isCallOnlyDecoratorInterface(rname)) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, expr.pos)
+                when (kind) {
+                    0 -> {
+                        if (className == null) return
+                        diagnostics.add(Diagnostic(
+                            message = "Decorator function return type '$rname' is not assignable to type 'void | typeof $className'.",
+                            category = DiagnosticCategory.Error, code = 1270,
+                            fileName = fileName, line = line, character = ch,
+                            start = expr.pos, length = expr.text.length,
+                        ))
+                    }
+                    1 -> diagnostics.add(Diagnostic(
+                        message = "Decorator function return type is '$rname' but is expected to be 'void' or 'any'.",
+                        category = DiagnosticCategory.Error, code = 1271,
+                        fileName = fileName, line = line, character = ch,
+                        start = expr.pos, length = expr.text.length,
+                    ))
+                    else -> {
+                        if (methodSig == null) return
+                        diagnostics.add(Diagnostic(
+                            message = "Decorator function return type '$rname' is not assignable to type 'void | TypedPropertyDescriptor<$methodSig>'.",
+                            category = DiagnosticCategory.Error, code = 1270,
+                            fileName = fileName, line = line, character = ch,
+                            start = expr.pos, length = expr.text.length,
+                        ))
+                    }
+                }
+            }
+
+            for (s in stmts) {
+                val cls = s as? ClassDeclaration ?: continue
+                cls.decorators?.forEach { checkDec(it, 0, cls.name?.text, null) }
+                for (m in cls.members) when (m) {
+                    is PropertyDeclaration -> m.decorators?.forEach { checkDec(it, 1, null, null) }
+                    is MethodDeclaration -> {
+                        val sigRender = renderMethodSig(m)
+                        m.decorators?.forEach { checkDec(it, 2, null, sigRender) }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    /** True when any return statement in the (non-nested-function) body carries an expression. */
+    private fun bodyHasValueReturn(stmts: List<Statement>): Boolean {
+        for (s in stmts) {
+            when (s) {
+                is ReturnStatement -> if (s.expression != null) return true
+                is IfStatement -> {
+                    if (bodyHasValueReturn(listOf(s.thenStatement))) return true
+                    if (s.elseStatement != null && bodyHasValueReturn(listOf(s.elseStatement!!))) return true
+                }
+                is Block -> if (bodyHasValueReturn(s.statements)) return true
+                is WhileStatement -> if (bodyHasValueReturn(listOf(s.statement))) return true
+                is ForStatement -> if (bodyHasValueReturn(listOf(s.statement))) return true
+                is TryStatement -> {
+                    if (bodyHasValueReturn(s.tryBlock.statements)) return true
+                    if (s.catchClause?.block?.statements?.let { bodyHasValueReturn(it) } == true) return true
+                    if (s.finallyBlock?.statements?.let { bodyHasValueReturn(it) } == true) return true
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
+
     private fun checkDecoratorUseBeforeDeclaration() {
         val emit7006 = !(options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse
         for (result in binderResults) {
