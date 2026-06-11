@@ -866,13 +866,15 @@ class Parser(
                     if (token == SyntaxKind.OpenParen && !scanner.hasPrecedingLineBreak()) {
                         reportError("',' expected.", code = 1005, overrideLength = 1)
                     }
-                    // tsc abortParsingListOrMoveToNextToken: a same-line `.` starts
+                    // tsc abortParsingListOrMoveToNextToken: a same-line `.` or `:` starts
                     // NOTHING in any enclosing context — skip it and RE-ENTER the list
                     // (`const {x} = (a: any).props;` — the missing-'=>' arrow ends
                     // zero-width, the '.' is skipped, `props` becomes a second
-                    // declarator; the ',' expected and TS1134 are same-start-deduped
-                    // by the "'=>' expected." at the same position).
-                    if (token == SyntaxKind.Dot && !scanner.hasPrecedingLineBreak()) {
+                    // declarator; `var y = x:number => x*x` — ',' expected at the ':',
+                    // `number` becomes a second declarator and the `=>` TERMINATES the
+                    // list per tsc isVariableDeclaratorListTerminator, so the statement's
+                    // parseSemicolon reports ';' expected at the '=>').
+                    if ((token == SyntaxKind.Dot || token == SyntaxKind.Colon) && !scanner.hasPrecedingLineBreak()) {
                         reportError("',' expected.", code = 1005, overrideLength = 1)
                         nextToken()
                         if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
@@ -5560,8 +5562,48 @@ class Parser(
         }
         if (identColonArrow) return parseArrowFunction(emptySet())
 
+        // tsc tristate: `(...` is DEFINITELY an arrow (rest parameter start) — even
+        // with the `=>` missing (`var x4 = (...a: any[]) { }` → "'=>' expected.").
+        val restArrow = scanner.lookAhead {
+            scanner.scan()
+            scanner.getToken() == SyntaxKind.DotDotDot
+        }
+        if (restArrow) return parseArrowFunction(emptySet())
+
+        // tsc tristate FALSE: a first inner token that cannot START a parameter
+        // (not identifier/this/'...'/binding-pattern/')') is definitely NOT an
+        // arrow — `(1)=>` stays a parenthesized expression and the `=>` belongs
+        // to the enclosing context. An identifier followed by anything other
+        // than `,`/`=`/`)`/`?`/`:` (e.g. `(a + b)`) is also definitely-not.
+        val tristateFalse = scanner.lookAhead {
+            scanner.scan() // skip (
+            val second = scanner.getToken()
+            when {
+                second == SyntaxKind.OpenBrace || second == SyntaxKind.OpenBracket -> false
+                isIdentifierToken(second) || second == SyntaxKind.ThisKeyword -> {
+                    val secondIsModifier = second == SyntaxKind.PublicKeyword ||
+                            second == SyntaxKind.PrivateKeyword || second == SyntaxKind.ProtectedKeyword ||
+                            second == SyntaxKind.ReadonlyKeyword || second == SyntaxKind.OverrideKeyword ||
+                            second == SyntaxKind.DeclareKeyword || second == SyntaxKind.AbstractKeyword
+                    scanner.scan()
+                    val third = scanner.getToken()
+                    when {
+                        third == SyntaxKind.Comma || third == SyntaxKind.Equals ||
+                                third == SyntaxKind.CloseParen || third == SyntaxKind.Question ||
+                                third == SyntaxKind.Colon -> false
+                        // tsc: a MODIFIER followed by an identifier (`(public x`,
+                        // `(readonly x`) is Tristate.True — not definitely-false.
+                        secondIsModifier && (isIdentifierToken(third) || third == SyntaxKind.ThisKeyword) &&
+                                third != SyntaxKind.AsKeyword -> false
+                        else -> true
+                    }
+                }
+                else -> true
+            }
+        }
+
         // Try complex arrow detection: (params) => body  or  (params): RetType => body
-        val maybeArrow = scanner.lookAhead {
+        val maybeArrow = !tristateFalse && scanner.lookAhead {
             scanner.scan() // skip (
             var depth = 1
             // tsc: a PARAMETER cannot start with `(` — `(a, (b, c)) => x` and
@@ -5980,6 +6022,21 @@ class Parser(
             return PropertyAssignment(name = name, initializer = valueWithComments, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments)
         }
 
+        // tsc parsePropertyAssignment: a property NAME followed by a same-line
+        // LITERAL is a missing ':' — "':' expected." at the literal, which then
+        // parses as the VALUE (`{return 0;}` recovers as `{ return: 0 }`; the
+        // object-literal loop's `;`-recovery handles the separator).
+        if (name is Identifier && !scanner.hasPrecedingLineBreak() &&
+            (token == SyntaxKind.NumericLiteral || token == SyntaxKind.StringLiteral ||
+                token == SyntaxKind.BigIntLiteral)
+        ) {
+            reportError("':' expected.", code = 1005,
+                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+            val value = parseAssignmentExpression()
+            return PropertyAssignment(name = name, initializer = value, modifiers = modifiers,
+                pos = pos, end = getEnd(), leadingComments = comments)
+        }
+
         // Shorthand: { name } or { name = default }
         if (name is Identifier) {
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
@@ -6284,7 +6341,18 @@ class Parser(
                 if (argTrailing != null) argExpr = argExpr.withTrailingComments(argTrailing)
                 args.add(argExpr)
             }
-            if (!parseOptional(SyntaxKind.Comma)) break
+            if (!parseOptional(SyntaxKind.Comma)) {
+                // tsc parseDelimitedList recovery: a same-line `=>` after an argument
+                // reports ',' expected, is skipped (no context owns it — the deduped
+                // TS1135 is omitted), and the list RE-ENTERS: `foo((1)=>{return 0;})`
+                // → arguments `(1)` and the recovered object literal `{ return: 0 }`.
+                if (token == SyntaxKind.EqualsGreaterThan && !scanner.hasPrecedingLineBreak()) {
+                    reportError("',' expected.", code = 1005, overrideLength = 2)
+                    nextToken()
+                    continue
+                }
+                break
+            }
         }
         // For empty argument lists, capture any comments between `(` and `)`.
         if (args.isEmpty()) {
