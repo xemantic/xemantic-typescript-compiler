@@ -42785,6 +42785,7 @@ interface DataView {
                 emitTS1517ForCharClassRanges(expr, source, fileName)
                 emitTS1501ForFlagTargetAvailability(expr, source, fileName)
                 emitTS1005ForVModeUnterminatedClass(expr, source, fileName)
+                emitRegexGrammarSubset(expr, source, fileName)
             }
             else -> {}
         }
@@ -43050,6 +43051,289 @@ interface DataView {
                 category = DiagnosticCategory.Error, code = 1532, fileName = fileName,
                 line = line, character = character, start = absPos, length = name.length,
                 relatedInformation = related,
+            ))
+        }
+    }
+
+    /**
+     * B361: scoped port of tsc's scanRegularExpressionWorker (annexB=true, scanner.ts
+     * 2613–3609) covering the term/quantifier grammar and atom/class escapes —
+     * TS1005('}' expected), TS1125, TS1505, TS1506, TS1507, TS1508, TS1510, TS1512,
+     * TS1516, TS1531, TS1535. With annexB=true, tsc's `anyUnicodeModeOrNonAnnexB`
+     * reduces to "has the u flag" (= [strict] here). Constructs OUTSIDE the subset
+     * BAIL the whole regex silently (emit nothing): groups `(...)`, the `v` flag,
+     * braced `\p{...}` bodies in non-u mode, octal/decimal escapes through
+     * scanEscapeSequence, unterminated classes. The existing narrow per-regex
+     * emitters (TS1538/TS1503/TS1532/TS1499/TS1517/TS1501/TS1005-vmode) keep their
+     * codes — no overlap (range ORDER stays with B275's TS1517; this walker only
+     * adds the class-escape-bounded TS1516). Same-start dedup mirrors tsc
+     * parseErrorAtPosition (an error at the same start as the previous is dropped —
+     * this is why `\u\i` reports only TS1125: the `\i` TS1535 lands on the same
+     * position and dies).
+     */
+    private fun emitRegexGrammarSubset(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val end = text.lastIndexOf('/')
+        if (end <= 0) return
+        val flagsStr = text.substring(end + 1)
+        if (flagsStr.contains('v')) return
+        val strict = flagsStr.contains('u')
+
+        // Pre-screen: groups are out of subset.
+        run {
+            var i = 1
+            var inCls = false
+            while (i < end) {
+                when (text[i]) {
+                    '\\' -> i++
+                    '[' -> inCls = true
+                    ']' -> inCls = false
+                    '(' -> if (!inCls) return
+                }
+                i++
+            }
+        }
+
+        var bailed = false
+        val pending = mutableListOf<Triple<Int, Int, Pair<Int, String>>>()
+        var lastStart = -1
+        fun err(offset: Int, len: Int, code: Int, msg: String) {
+            if (offset == lastStart) return
+            lastStart = offset
+            pending.add(Triple(offset, len, code to msg))
+        }
+        var pos = 1
+        fun chAt(i: Int): Char = if (i in 1 until end) text[i] else ' '
+        fun atEnd() = pos >= end
+        fun isHexD(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+        fun isAsciiLetter(c: Char) = c in 'a'..'z' || c in 'A'..'Z'
+
+        fun scanEscapeSequenceSub(atomEscape: Boolean) {
+            val start = pos // at the backslash
+            pos++
+            if (atEnd()) { bailed = true; return }
+            val c = text[pos]; pos++
+            when (c) {
+                '0' -> if (!atEnd() && text[pos].isDigit()) bailed = true
+                in '1'..'9' -> bailed = true
+                'b', 't', 'n', 'v', 'f', 'r', '\'', '"' -> {}
+                'u' -> {
+                    if (!atEnd() && text[pos] == '{') {
+                        // Braced form: TS1538 (non-u) is owned by the dedicated
+                        // emitter; u-mode bodies are out of subset — consume silently.
+                        val close = text.indexOf('}', pos)
+                        if (close < 0 || close >= end) bailed = true else pos = close + 1
+                    } else {
+                        while (pos < start + 6) {
+                            if (atEnd() || !isHexD(text[pos])) {
+                                err(pos, 0, 1125, "Hexadecimal digit expected.")
+                                return
+                            }
+                            pos++
+                        }
+                    }
+                }
+                'x' -> {
+                    while (pos < start + 4) {
+                        if (atEnd() || !isHexD(text[pos])) {
+                            err(pos, 0, 1125, "Hexadecimal digit expected.")
+                            return
+                        }
+                        pos++
+                    }
+                }
+                else -> {
+                    if (strict) err(pos - 2, 2, 1535, "This character cannot be escaped in a regular expression.")
+                }
+            }
+        }
+
+        fun scanCharacterEscape(atomEscape: Boolean) {
+            // pos at the char AFTER the backslash
+            if (atEnd()) { bailed = true; return }
+            when (text[pos]) {
+                'c' -> {
+                    pos++
+                    if (!atEnd() && isAsciiLetter(text[pos])) pos++
+                    else if (strict) err(pos - 2, 2, 1512, "'\\c' must be followed by an ASCII letter.")
+                    else if (atomEscape) pos-- // AnnexB: `\` is a lone backslash; the c re-scans
+                }
+                '^', '$', '/', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|' -> pos++
+                else -> { pos--; scanEscapeSequenceSub(atomEscape) }
+            }
+        }
+
+        fun scanCharacterClassEscape(): Boolean {
+            if (atEnd()) return false
+            when (val c = text[pos]) {
+                'd', 'D', 's', 'S', 'w', 'W' -> { pos++; return true }
+                'p', 'P' -> {
+                    pos++
+                    if (!atEnd() && text[pos] == '{') {
+                        // Braced property bodies (and their non-u availability error)
+                        // are out of subset.
+                        bailed = true
+                        return true
+                    } else if (strict) {
+                        err(pos - 2, 2, 1531, "'\\$c' must be followed by a Unicode property value expression enclosed in braces.")
+                        return true
+                    } else {
+                        pos--
+                        return false
+                    }
+                }
+                else -> return false
+            }
+        }
+
+        fun scanDecimalEscape(): Boolean {
+            if (!atEnd() && text[pos] in '1'..'9') {
+                while (!atEnd() && text[pos].isDigit()) pos++
+                return true
+            }
+            return false
+        }
+
+        fun scanAtomEscape() {
+            // pos at the char after the backslash
+            if (!atEnd() && text[pos] == 'k') {
+                pos++
+                if (!atEnd() && text[pos] == '<') bailed = true // group names: out of subset
+                else if (strict) err(pos - 2, 2, 1510, "'\\k' must be followed by a capturing group name enclosed in angle brackets.")
+                return
+            }
+            if (!scanCharacterClassEscape()) {
+                if (!scanDecimalEscape()) scanCharacterEscape(atomEscape = true)
+            }
+        }
+
+        /** Returns true when the atom is a CHARACTER (false = class escape like \w). */
+        fun scanClassAtom(): Boolean {
+            if (chAt(pos) == '\\') {
+                pos++
+                if (atEnd()) { bailed = true; return true }
+                return when (text[pos]) {
+                    'b', '-' -> { pos++; true }
+                    else -> {
+                        if (scanCharacterClassEscape()) false
+                        else { scanCharacterEscape(atomEscape = false); true }
+                    }
+                }
+            }
+            pos++
+            return true
+        }
+
+        fun scanClassRanges() {
+            if (chAt(pos) == '^') pos++
+            while (true) {
+                if (bailed) return
+                if (atEnd()) { bailed = true; return } // unterminated class
+                if (text[pos] == ']') return
+                val minStart = pos
+                val minIsChar = scanClassAtom()
+                if (chAt(pos) == '-') {
+                    pos++
+                    if (atEnd()) { bailed = true; return }
+                    if (text[pos] == ']') return
+                    if (!minIsChar && strict) {
+                        err(minStart, pos - 1 - minStart, 1516, "A character class range must not be bounded by another character class.")
+                    }
+                    val maxStart = pos
+                    val maxIsChar = scanClassAtom()
+                    if (!maxIsChar && strict) {
+                        err(maxStart, pos - maxStart, 1516, "A character class range must not be bounded by another character class.")
+                        continue
+                    }
+                    // Range ORDER (TS1517) is owned by the existing B275 walker.
+                }
+            }
+        }
+
+        var quantifiable = false
+        while (!bailed && !atEnd()) {
+            val start = pos
+            when (val ch = text[pos]) {
+                '^', '$' -> { pos++; quantifiable = false }
+                '\\' -> {
+                    pos++
+                    if (!atEnd() && (text[pos] == 'b' || text[pos] == 'B')) { pos++; quantifiable = false }
+                    else { scanAtomEscape(); quantifiable = true }
+                }
+                '{' -> {
+                    pos++
+                    val digitsStart = pos
+                    while (!atEnd() && text[pos].isDigit()) pos++
+                    val min = text.substring(digitsStart, pos)
+                    if (!strict && min.isEmpty()) { quantifiable = true }
+                    else {
+                        var fall = true
+                        if (chAt(pos) == ',') {
+                            pos++
+                            val maxStart = pos
+                            while (!atEnd() && text[pos].isDigit()) pos++
+                            val max = text.substring(maxStart, pos)
+                            if (min.isEmpty()) {
+                                if (max.isNotEmpty() || chAt(pos) == '}') {
+                                    err(digitsStart, 0, 1505, "Incomplete quantifier. Digit expected.")
+                                } else {
+                                    err(start, 1, 1508, "Unexpected '{'. Did you mean to escape it with backslash?")
+                                    quantifiable = true; fall = false
+                                }
+                            } else if (max.isNotEmpty() && (min.toLongOrNull() ?: 0L) > (max.toLongOrNull() ?: 0L) &&
+                                (strict || chAt(pos) == '}')
+                            ) {
+                                err(digitsStart, pos - digitsStart, 1506, "Numbers out of order in quantifier.")
+                            }
+                        } else if (min.isEmpty()) {
+                            if (strict) err(start, 1, 1508, "Unexpected '{'. Did you mean to escape it with backslash?")
+                            quantifiable = true; fall = false
+                        }
+                        if (fall) {
+                            if (chAt(pos) != '}') {
+                                if (strict) { err(pos, 0, 1005, "'}' expected."); pos-- }
+                                else { quantifiable = true; fall = false }
+                            }
+                            if (fall) {
+                                pos++
+                                if (chAt(pos) == '?') pos++
+                                if (!quantifiable) err(start, pos - start, 1507, "There is nothing available for repetition.")
+                                quantifiable = false
+                            }
+                        }
+                    }
+                }
+                '*', '+', '?' -> {
+                    pos++
+                    if (chAt(pos) == '?') pos++
+                    if (!quantifiable) err(start, pos - start, 1507, "There is nothing available for repetition.")
+                    quantifiable = false
+                }
+                '.' -> { pos++; quantifiable = true }
+                '[' -> {
+                    pos++
+                    scanClassRanges()
+                    if (bailed) return
+                    if (chAt(pos) == ']') pos++ else { bailed = true; return }
+                    quantifiable = true
+                }
+                ')', ']', '}' -> {
+                    if (strict || ch == ')') err(pos, 1, 1508, "Unexpected '$ch'. Did you mean to escape it with backslash?")
+                    pos++
+                    quantifiable = true
+                }
+                '|' -> { pos++; quantifiable = false }
+                else -> { pos++; quantifiable = true }
+            }
+        }
+        if (bailed) return
+        for ((off, len, cm) in pending) {
+            val absPos = node.pos + off
+            val (l, c2) = getLineAndCharacterOfPosition(source, absPos)
+            diagnostics.add(Diagnostic(
+                message = cm.second, category = DiagnosticCategory.Error, code = cm.first,
+                fileName = fileName, line = l, character = c2, start = absPos, length = len,
             ))
         }
     }
