@@ -1974,12 +1974,16 @@ class Transformer(
                     val resultSizeBefore = result.size
 
                     if (clause == null) {
-                        // Side-effect import: require("mod")
+                        // Side-effect import: require("mod"). A MISSING specifier (parse
+                        // recovery, e.g. `import while = …` — reservedWords2) emits a
+                        // bare `require();` like tsc.
+                        val specMissing = moduleSpecifier is Identifier && moduleSpecifier.text.isEmpty()
                         result.add(
                             ExpressionStatement(
                                 expression = CallExpression(
                                     expression = syntheticId("require"),
-                                    arguments = listOf(normalizeModuleSpecifier(moduleSpecifier)),
+                                    arguments = if (specMissing) emptyList()
+                                        else listOf(normalizeModuleSpecifier(moduleSpecifier)),
                                     pos = -1, end = -1,
                                 ),
                                 pos = -1, end = -1,
@@ -2068,6 +2072,10 @@ class Transformer(
                             // esModuleInterop: const x = __importStar(require("y"))
                             // no esModuleInterop: const x = require("y")
                             val localName = bindings.name.text
+                            // A MISSING namespace name (parse recovery — `import * as
+                            // while from "foo"`, reservedWords2) can never be referenced:
+                            // tsc elides the whole import.
+                            if (localName.isEmpty()) continue
                             if (options.esModuleInterop) {
                                 needsImportStar = true
                                 result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))

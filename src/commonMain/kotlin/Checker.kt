@@ -990,6 +990,9 @@ class Checker(
         }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
+        // 10b. B332: TS2300 '(Missing)' for the file-level empty-name group (parse
+        // recovery — reservedWords2).
+        checkEmptyNameDeclarationConflicts()
         // 40c. TS2395 export-consistency for merges inside string-named ambient
         // modules in .d.ts files (the general path skips .d.ts files).
         checkDtsAmbientModuleExportConsistency()
@@ -13464,8 +13467,41 @@ class Checker(
         for (s in stmts) walkVarFn7006Stmt(s, source, fileName)
     }
 
+    /** B332: a parameter list that contains a zero-width MISSING-name parameter is a
+     *  parse-recovered signature (reserved word in name position — reservedWords2's
+     *  `m(null: string)` → params `(Missing)`, `string`): tsc reports TS7006 for every
+     *  annotation-less parameter there even in default mode. Display '(Missing)' for
+     *  empty names (zero-width squiggle). */
+    private fun maybeEmit7006ForRecoveredParams(params: List<Parameter>, source: String, fileName: String) {
+        if (params.none { p -> (p.name as? Identifier)?.let { it.text.isEmpty() && it.pos >= 0 && it.pos == it.end } == true }) return
+        for (param in params) {
+            if (param.type != null || param.initializer != null || param.dotDotDotToken) continue
+            val name = param.name as? Identifier ?: continue
+            val display = if (name.text.isEmpty()) "(Missing)" else name.text
+            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Parameter '$display' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error,
+                code = 7006,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = name.pos,
+                length = name.text.length,
+            ))
+        }
+    }
+
     private fun walkVarFn7006Stmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
+            is FunctionDeclaration -> maybeEmit7006ForRecoveredParams(stmt.parameters, source, fileName)
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is MethodDeclaration -> maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
+                    is Constructor -> maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
+                    else -> {}
+                }
+            }
             is VariableStatement -> {
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 for (decl in stmt.declarationList.declarations) {
@@ -20864,9 +20900,15 @@ class Checker(
         // `module X {}` legacy namespace syntax) still get TS2591 when used as
         // bare identifiers because `@types/node` isn't loaded.
         if (name in KEYWORD_IDENTIFIERS && name != "abstract" && name != "declare" &&
-            name !in NODE_BUILTIN_GLOBALS_TS2591) return
+            name != "namespace" && name != "from" && name !in NODE_BUILTIN_GLOBALS_TS2591) return
         if (name == "abstract" && (inTypePosition || scope.has(name))) return
         if (name == "declare" && (inTypePosition || scope.has(name))) return
+        // `namespace` in expression position (e.g. the `namespace void {}` misdeclaration
+        // recovery — tsc parses it as an expression statement) and `from` (the
+        // `import * as while from "foo"` recovery leaves `from` in a while-condition)
+        // are TS2304 (reservedWords2).
+        if (name == "namespace" && (inTypePosition || scope.has(name))) return
+        if (name == "from" && (inTypePosition || scope.has(name))) return
         // TS2583: ES2015+ lib global referenced (type OR value position) under
         // `@noLib: true` or `@lib`/default-lib that excludes the introducing lib.
         // The KNOWN_GLOBALS set contains these names, so they would otherwise pass
@@ -24170,6 +24212,66 @@ class Checker(
             // B98.r93: TS2300 for a clodule (class + namespace merge) whose combined
             // STATIC value space has a name declared with ≥2 distinct merge-kinds.
             checkCloduleValueSpaceConflicts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B332: file-level EMPTY-NAME ("") declaration group — parse recovery synthesizes
+     * zero-width missing names (reserved words in declaration positions, reservedWords2),
+     * and tsc's binder merges them into one "" symbol: when the group mixes ≥2 DISTINCT
+     * kinds, every NON-ENUM member gets TS2300 "Duplicate identifier '(Missing)'." at its
+     * (zero-width) name node; enum members keep only the existing TS2567. var+var alone
+     * (same kind) merges legally — never flagged. FP-safe: empty names only arise from
+     * parse recovery.
+     */
+    private fun checkEmptyNameDeclarationConflicts() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // kind to name node
+            val group = mutableListOf<Pair<String, Node>>()
+            fun collectPatternMissing(node: Node?) {
+                when (node) {
+                    is ObjectBindingPattern -> for (e in node.elements) {
+                        val n = e.name
+                        if (n is Identifier && n.text.isEmpty() && n.pos == n.end) group.add("var" to n)
+                        else collectPatternMissing(n)
+                    }
+                    is ArrayBindingPattern -> for (e in node.elements) {
+                        val be = e as? BindingElement ?: continue
+                        val n = be.name
+                        if (n is Identifier && n.text.isEmpty() && n.pos == n.end) group.add("var" to n)
+                        else collectPatternMissing(n)
+                    }
+                    else -> {}
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is FunctionDeclaration -> {
+                        val n = stmt.name
+                        if (n != null && n.text.isEmpty() && n.pos >= 0 && n.pos == n.end) group.add("function" to n)
+                    }
+                    is EnumDeclaration -> {
+                        if (stmt.name.text.isEmpty() && stmt.name.pos >= 0 && stmt.name.pos == stmt.name.end) group.add("enum" to stmt.name)
+                    }
+                    is ImportDeclaration -> {
+                        val nb = stmt.importClause?.namedBindings
+                        if (nb is NamespaceImport && nb.name.text.isEmpty() && nb.name.pos >= 0 && nb.name.pos == nb.name.end) {
+                            group.add("alias" to nb.name)
+                        }
+                    }
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) collectPatternMissing(d.name)
+                    else -> {}
+                }
+            }
+            if (group.size < 2) continue
+            if (group.map { it.first }.distinct().size < 2) continue
+            for ((kind, node) in group) {
+                if (kind == "enum") continue
+                emitDuplicate2300("", node, source, fileName, spanLength = 0)
+            }
         }
     }
 

@@ -99,6 +99,11 @@ class Parser(
 
     /** True once the binary-file TS1490 has been reported (the scanner's U+FFFD marker). */
     private var binaryMarkerReported = false
+
+    /** Token position where the current expression STATEMENT began — the missing-LHS
+     *  `=`-skip recovery in parseAssignmentExpression applies only there (tsc's
+     *  statement-level TS1128-skip), never in nested expression contexts. */
+    private var exprStatementStartPos = -1
     private val reportedHashBangs = mutableSetOf<Int>()
 
     /** Identifier texts tsc's parseErrorForMissingSemicolonAfter special-cases away
@@ -261,11 +266,19 @@ class Parser(
         }
         val closeToken = tokenToString(kind)
         if (openTokenStack.isNotEmpty()) openTokenStack.removeAt(openTokenStack.lastIndex)
-        reportErrorWithRelatedInfo(
-            "'$closeToken' expected.", 1005,
-            "The parser expected to find a '$closeToken' to match the '$openToken' token here.",
-            1007, openPos
-        )
+        if (openPos < 0) {
+            // Caller signals the OPEN token was never consumed (recovered statement) —
+            // plain "expected" without the TS1007 related info; tsc's span covers the
+            // whole offending token (`"foo"` in reservedWords2 line 2).
+            reportError("'$closeToken' expected.", code = 1005,
+                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+        } else {
+            reportErrorWithRelatedInfo(
+                "'$closeToken' expected.", 1005,
+                "The parser expected to find a '$closeToken' to match the '$openToken' token here.",
+                1007, openPos
+            )
+        }
         return false
     }
 
@@ -650,7 +663,17 @@ class Parser(
         }
         TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration() else parseExpressionStatement()
         EnumKeyword -> parseEnumDeclaration()
-        NamespaceKeyword -> parseModuleDeclaration()
+        // tsc isDeclaration: `namespace` starts a declaration iff followed by a
+        // same-line identifier or string literal — `namespace void {}` is an
+        // EXPRESSION statement (TS2819 from the recovery below + checker TS2304).
+        NamespaceKeyword -> if (lookAhead {
+                nextToken()
+                !scanner.hasPrecedingLineBreak() && (isIdentifier() || token == SyntaxKind.StringLiteral)
+            }) {
+            parseModuleDeclaration()
+        } else {
+            parseExpressionStatement()
+        }
         GlobalKeyword -> {
             // `global { }` / `global <identifier>` / `global export` start a global
             // augmentation declaration (tsc isStartOfDeclaration's GlobalKeyword case:
@@ -1011,6 +1034,15 @@ class Parser(
                     break
                 }
             }
+        } else if (isKeyword()) {
+            // tsc parsingContextErrors(VariableDeclarations): a RESERVED keyword in
+            // declarator-name position is TS1389 "'{0}' is not allowed as a variable
+            // declaration name." and the list ABORTS unconsumed (`var typeof = 10;` —
+            // the keyword re-parses as its own expression statement; the var statement's
+            // ';' expected is same-start-deduped). TS1123 is a tsc grammar error
+            // (hasParseDiagnostics-suppressed) — never paired with TS1389.
+            reportError("'${scanner.getTokenValue()}' is not allowed as a variable declaration name.",
+                code = 1389, overrideLength = scanner.getTokenText().length)
         } else {
             // Report error but produce empty declarations list (e.g. bare `let;`)
             reportError("Variable declaration list cannot be empty.", code = 1123)
@@ -1141,6 +1173,17 @@ class Parser(
                 nextToken()
                 continue
             }
+            // tsc parsingContextErrors(ArrayBindingElements) ABORT arm: a fully-RESERVED
+            // keyword (`var [debugger, if] = …`) can't start an element but CAN start a
+            // statement in an outer context — TS1181 "Array element destructuring pattern
+            // expected." at the keyword and the pattern ABORTS unconsumed (`var [];` +
+            // a debugger statement in the reservedWords2 emit; the `]`-expected and the
+            // statement's ';'-expected are same-start-deduped).
+            if (isKeyword() && !isIdentifier()) {
+                reportError("Array element destructuring pattern expected.", code = 1181,
+                    overrideLength = scanner.getTokenText().length)
+                break
+            }
             elements.add(parseBindingElement())
             if (!parseOptional(SyntaxKind.Comma)) break
             // Check if the comma we just consumed was a trailing comma
@@ -1265,6 +1308,7 @@ class Parser(
     private fun parseExpressionStatement(): ExpressionStatement {
         val pos = getPos()
         val comments = leadingComments()
+        exprStatementStartPos = scanner.getTokenPos()
         val expr = parseExpression()
         // Capture same-line trailing comments between expression and `;`
         // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
@@ -1349,6 +1393,20 @@ class Parser(
                     overrideStart = scanner.getTokenPos(),
                     overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
             }
+        } else if (expr is Identifier && (expr.text == "namespace" || expr.text == "module") &&
+            !scanner.hasPrecedingLineBreak() &&
+            token != SyntaxKind.Semicolon && token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+            // tsc parseErrorForMissingSemicolonAfter "namespace"/"module" special case:
+            // `namespace void {}` → TS2819 "Namespace name cannot be 'void'." at the
+            // token; a bare `{` follow is TS1437 "Namespace must be given a name.".
+            if (token == SyntaxKind.OpenBrace) {
+                reportError("Namespace must be given a name.", code = 1437,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 1)
+            } else {
+                reportError("Namespace name cannot be '${scanner.getTokenValue()}'.", code = 2819,
+                    overrideStart = scanner.getTokenPos(),
+                    overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+            }
         } else if (token == SyntaxKind.CloseParen && !scanner.hasPrecedingLineBreak()) {
             // tsc parseErrorForMissingSemicolonAfter (generic fallback): a same-line `)`
             // after an expression statement cannot ASI — ';' expected at the `)`. The
@@ -1400,11 +1458,12 @@ class Parser(
         parseExpected(SyntaxKind.IfKeyword)
         val afterKeyword = trailingComments()
         val openParenPos = scanner.getTokenPos()
-        parseExpected(SyntaxKind.OpenParen)
+        val openParenOk = parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
+        // TS1007 related info only when the '(' was actually consumed (see while).
+        parseExpectedClosing(SyntaxKind.CloseParen, if (openParenOk) openParenPos else -1)
         val afterCloseParen = trailingComments()
         val thenStmt = parseStatement() ?: EmptyStatement()
         // 17.176: TS1313 — `if (cond);` (then-body is `;`). Distinguish a real
@@ -1489,11 +1548,14 @@ class Parser(
         parseExpected(SyntaxKind.WhileKeyword)
         val afterKeyword = trailingComments()
         val openParenPos = scanner.getTokenPos()
-        parseExpected(SyntaxKind.OpenParen)
+        val openParenOk = parseExpected(SyntaxKind.OpenParen)
         val afterOpenParen = trailingComments()
         val expr = parseExpression()
         val beforeCloseParen = trailingComments()
-        parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
+        // The TS1007 "to match the '(' token here" related info only makes sense when
+        // the '(' was actually CONSUMED — a while-statement recovered from `while = …`
+        // (reservedWords2) has no opening paren to point at.
+        parseExpectedClosing(SyntaxKind.CloseParen, if (openParenOk) openParenPos else -1)
         val afterCloseParen = trailingComments()
         val stmt = parseStatement() ?: EmptyStatement()
         return WhileStatement(
@@ -1906,6 +1968,14 @@ class Parser(
         val pos = getPos()
         val comments = leadingComments()
         nextToken()
+        // A same-line ',' after `debugger` can't ASI — "';' expected." at the comma
+        // (reservedWords2's recovered `debugger, if] = …`; the statement-level TS1128
+        // at the same comma is then same-start-deduped). Kept OUT of the general
+        // parseSemicolon trigger set: type-literal member separators route through
+        // parseSemicolon too (strictSubtypeAndNarrowing caught the broad version).
+        if (token == SyntaxKind.Comma && !scanner.hasPrecedingLineBreak()) {
+            reportError("';' expected.", code = 1005, overrideLength = 1)
+        }
         parseSemicolon()
         val trailing = trailingComments()
         return DebuggerStatement(pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
@@ -1952,16 +2022,13 @@ class Parser(
             } else if (ModifierFlag.Default !in modifiers && isKeyword() &&
                 !scanner.hasPrecedingLineBreak()) {
                 // tsc createIdentifier: a RESERVED word in function-name position reports
-                // TS1359 "Identifier expected. '{0}' is a reserved word that cannot be
-                // used here." at the token WITHOUT consuming it (`function function() {}`
-                // — the '(' -expected from the empty param-list parse is same-start-
-                // deduped, and the reserved word re-parses as its own statement).
-                reportError(
-                    "Identifier expected. '${scanner.getTokenValue()}' is a reserved word that cannot be used here.",
-                    code = 1359,
-                    overrideStart = scanner.getTokenPos(),
-                    overrideLength = scanner.getTokenText().length)
-                Identifier(text = "", pos = scanner.getTokenPos(), end = scanner.getTokenPos())
+                // TS1359 at the token WITHOUT consuming it (`function function() {}` /
+                // `function throw() {}` — the '(' -expected from the empty param-list
+                // parse is same-start-deduped, and the reserved word re-parses as its
+                // own statement). The missing name is ZERO-WIDTH at the prev token's end
+                // (reservedWords2 anchors TS7010/TS2300 at (5,9), the space after
+                // `function`).
+                parseDeclarationNameOrMissing()
             } else null
         }
         val parsedTypeParams = parseTypeParametersOpt()
@@ -3385,7 +3452,10 @@ class Parser(
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.EnumKeyword)
-        val name = parseIdentifier()
+        // `enum void {}` — a RESERVED name is TS1359 + a zero-width missing name; the
+        // '{'-expected at `void` is deduped, the member list goes missing (B324 arm
+        // below) and `void {}` re-parses as a void-expression statement (reservedWords2).
+        val name = parseDeclarationNameOrMissing()
         if (!parseExpected(SyntaxKind.OpenBrace)) {
             // B324 (tsc parseEnumDeclaration): a missing '{' yields a MISSING member list —
             // nothing further is consumed; the offending token stays for the outer context.
@@ -3526,10 +3596,30 @@ class Parser(
         }
         if (isTypeOnly) nextToken()
 
+        // tsc parseImportDeclaration: a fully-RESERVED keyword after `import` matches NO
+        // clause shape (tsc's `identifier = isIdentifier() ? parseIdentifier() : undefined`
+        // stays undefined and `while` is not `*`/`{`/string) — the module-specifier
+        // expression parse fails with TS1109 at the keyword, NOTHING is consumed, and the
+        // keyword re-parses as its own statement (reservedWords2's
+        // `import while = require("dfdf")` emits `require();` + a while-statement).
+        // Identifier-capable keywords (strict-reserved like `public`) still take the
+        // import-equals / default-import paths below.
+        if (isKeyword() && !isIdentifier()) {
+            val missingPos = scanner.getPrevTokenEnd()
+            reportError("Expression expected.", code = 1109,
+                overrideLength = scanner.getTokenText().length)
+            parseSemicolon()
+            return ImportDeclaration(
+                moduleSpecifier = Identifier(text = "", pos = missingPos, end = missingPos),
+                modifiers = outerModifiers,
+                pos = pos, end = getEnd(), leadingComments = comments,
+            )
+        }
+
         // import = require() or import = X.Y
-        // Also allow keyword tokens (e.g. `import public = require("1")`) — TypeScript parses these
-        // as ImportEqualsDeclaration even when the name is a strict-mode reserved word.
-        if ((isIdentifier() || isKeyword()) && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
+        // (identifier-capable names only — strict-mode reserved words like `public` are
+        // identifier-capable and TypeScript parses them as ImportEqualsDeclaration).
+        if (isIdentifier() && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
             val name = parseIdentifier()
             // 17.207: TS2438 — `import string = ...` (reserved primitive type
             // name as import alias). Squiggle on the name (length = name text).
@@ -3601,7 +3691,21 @@ class Parser(
 
         // import clause from "module"
         val clause = parseImportClause(isTypeOnly)
-        parseExpected(SyntaxKind.FromKeyword)
+        val fromOk = parseExpected(SyntaxKind.FromKeyword)
+        if (!fromOk && token != SyntaxKind.StringLiteral) {
+            // tsc: with `from` missing and no string follow, the specifier-expression
+            // parse fails without consuming (all follow-ups same-start-deduped) — the
+            // offending token re-parses as its own statement (`import * as while from
+            // "foo"` leaves `while from "foo"` to become a while-statement).
+            val missingPos = scanner.getPrevTokenEnd()
+            parseSemicolon()
+            return ImportDeclaration(
+                importClause = clause,
+                moduleSpecifier = Identifier(text = "", pos = missingPos, end = missingPos),
+                modifiers = outerModifiers,
+                pos = pos, end = getEnd(), leadingComments = comments,
+            )
+        }
         val moduleSpec = parseStringLiteral()
         val assertClause = parseImportAttributes()
         val assertClausePos = lastImportAttributesPos
@@ -3648,7 +3752,10 @@ class Parser(
             val pos = getPos()
             nextToken()
             parseExpected(SyntaxKind.AsKeyword)
-            val name = parseIdentifier()
+            // `import * as while from "foo"` — TS1359 + a zero-width missing name; the
+            // `from`-expected / specifier / ';' follow-ups are all same-start-deduped
+            // and `while from "foo"` re-parses as a while-statement (reservedWords2).
+            val name = parseDeclarationNameOrMissing()
             NamespaceImport(name = name, pos = pos, end = getEnd())
         } else {
             parseNamedImports()
@@ -4377,9 +4484,15 @@ class Parser(
         val expr = parseConditionalExpression()
 
         if (isAssignmentOperator(token)) {
-            // Error recovery: if LHS is a missing identifier (no valid expression start),
-            // skip the assignment operator and return just the RHS (e.g. `= fn()` → `fn()`).
-            if (expr is Identifier && expr.text.isEmpty()) {
+            // Error recovery: if LHS is a missing identifier (no valid expression start)
+            // at the very START of an expression statement, skip the assignment operator
+            // and return just the RHS — tsc's statement-level recovery skips the orphan
+            // `=` with a deduped TS1128 and parses `fn()` as its own statement
+            // (`{ a, b } = fn()` → block + `fn();`, destructionAssignmentError). In any
+            // NESTED expression context the assignment BINDS with the missing LHS
+            // (tsc isLeftHandSideExpression accepts Identifier — `while ( = require(""))`
+            // keeps `<missing> = require("")` as the condition, reservedWords2).
+            if (expr is Identifier && expr.text.isEmpty() && expr.pos == exprStatementStartPos) {
                 nextToken() // skip the invalid assignment operator
                 return parseAssignmentExpression()
             }
@@ -4388,7 +4501,13 @@ class Parser(
             // LHS never continues as an assignment — e.g. in `( y = z === = 'function')`
             // the `= 'function'` must NOT bind to `z === <missing>`; the paren closes
             // (')' expected, same-start-deduped) and the OUTER paren-LHS assignment binds.
-            if (expr is BinaryExpression || expr is ConditionalExpression) {
+            if (expr is BinaryExpression || expr is ConditionalExpression ||
+                expr is TypeOfExpression || expr is VoidExpression ||
+                expr is DeleteExpression || expr is AwaitExpression ||
+                expr is PrefixUnaryExpression) {
+                // (B332: unary expressions aren't LeftHandSideExpression kinds either —
+                // `typeof = 10` keeps `typeof <missing>` as its own statement and the
+                // orphan `= 10` re-parses; tsc emits `typeof ;` + `10;`.)
                 return expr
             }
             val op = token
@@ -5784,6 +5903,13 @@ class Parser(
                                 "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses.",
                                 code = 2809,
                             )
+                        } else if (scanner.getTokenPos() == exprStatementStartPos) {
+                            // tsc: a statement STARTING with `=` (not `}`-preceded) is
+                            // TS1128 "Declaration or statement expected." — the orphan
+                            // `= [1, 2];` after an aborted binding pattern
+                            // (reservedWords2 line 9). Nested `=` positions (a typeof/
+                            // while-condition operand) keep TS1109.
+                            reportError("Declaration or statement expected.", code = 1128)
                         } else {
                             reportError("Expression expected.", code = 1109)
                         }
@@ -6714,13 +6840,36 @@ class Parser(
             // on a parameter, etc.).
             if (isKeyword() && !isIdentifier() && token != SyntaxKind.ThisKeyword &&
                 token != SyntaxKind.ExportKeyword && token != SyntaxKind.DefaultKeyword &&
-                token != SyntaxKind.ConstKeyword && token != SyntaxKind.InKeyword) {
+                token != SyntaxKind.ConstKeyword && token != SyntaxKind.InKeyword &&
+                !isStartOfType(token)) {
+                // (B332: keywords that can START A TYPE — null/void/true/typeof/… — ARE
+                // parameter starts per tsc isStartOfParameter→isStartOfType; they take
+                // the parseParameter path below and get TS1359 + a missing name there.)
                 val kwText = source.substring(scanner.getTokenPos(), scanner.getPos())
                 reportError("'$kwText' is not allowed as a parameter name.", code = 1390)
                 paramListAborted = true
                 return params
             }
+            val paramStartPos = scanner.getTokenPos()
             var param = parseParameter()
+            // tsc parseDelimitedList no-progress guard + skip-recovery: a parameter that
+            // consumed NOTHING (reserved word in name position — TS1359 + zero-width
+            // missing name, e.g. `m(null: string)`) gets "',' expected." at the token
+            // (same-start-deduped against the TS1359), the token is CONSUMED, and the
+            // list re-enters; a follow token that can't start a parameter is TS1138
+            // "Parameter declaration expected." + consumed (the `:`), so `string` becomes
+            // the next parameter (reservedWords2 line 12: `m(, string)` in the emit).
+            if (scanner.getTokenPos() == paramStartPos && token != SyntaxKind.CloseParen &&
+                token != SyntaxKind.EndOfFile) {
+                params.add(param)
+                reportError("',' expected.", code = 1005, overrideLength = 1)
+                nextToken()
+                if (token == SyntaxKind.Colon || token == SyntaxKind.Equals) {
+                    reportError("Parameter declaration expected.", code = 1138, overrideLength = 1)
+                    nextToken()
+                }
+                continue
+            }
             if (nextParamFromCommaRecovery) {
                 param = param.copy(commaRecovered = true)
                 nextParamFromCommaRecovery = false
@@ -6825,7 +6974,21 @@ class Parser(
         val modifiers = parseParameterModifiers()
         val dotDotDot = parseOptional(SyntaxKind.DotDotDot)
         val dotTrailing = if (dotDotDot) trailingComments() else null
-        val name = parseBindingNameOrPattern()
+        // tsc parseNameOfParameter: a RESERVED word in name position is TS1359 + a
+        // zero-width missing name (not consumed) — except a MODIFIER-kind keyword
+        // (export/default/const/in reach here) is then CONSUMED so the list makes
+        // progress (`function f(default: number)` → one missing-named param with a
+        // `number` annotation; tsc's comment cites `function foo(static)`).
+        val name = if (token != SyntaxKind.OpenBrace && token != SyntaxKind.OpenBracket &&
+            token != SyntaxKind.ThisKeyword && isKeyword() && !isIdentifier()) {
+            val missing = parseDeclarationNameOrMissing()
+            if (modifiers.isEmpty() && decorators.isNullOrEmpty() &&
+                (token == SyntaxKind.ExportKeyword || token == SyntaxKind.DefaultKeyword ||
+                    token == SyntaxKind.ConstKeyword || token == SyntaxKind.InKeyword)) {
+                nextToken()
+            }
+            missing
+        } else parseBindingNameOrPattern()
         // Consume optional `!` (definite assignment assertion on parameter, e.g. `param!: Type`).
         // This is a TypeScript-specific syntax; the `!` is consumed but not stored since it has no
         // semantic effect after type erasure.
@@ -8260,6 +8423,27 @@ class Parser(
     }
 
     private fun isIdentifier(): Boolean = isIdentifierToken(token)
+
+    /** tsc createIdentifier for declaration-name positions: an identifier-capable token
+     *  parses normally; a RESERVED keyword reports TS1359 "Identifier expected. '{0}' is
+     *  a reserved word that cannot be used here." at the token WITHOUT consuming it and
+     *  yields a ZERO-WIDTH missing Identifier at the PREVIOUS token's end (tsc
+     *  createMissingNode at getNodePos() — `function throw()`'s missing name sits on the
+     *  space after `function`); anything else falls back to [parseIdentifier]'s TS1003
+     *  path. The follow-up '{'/'('-expected at the keyword is same-start-deduped. */
+    private fun parseDeclarationNameOrMissing(): Identifier {
+        if (isIdentifier()) return parseIdentifier()
+        if (isKeyword()) {
+            reportError(
+                "Identifier expected. '${scanner.getTokenValue()}' is a reserved word that cannot be used here.",
+                code = 1359,
+                overrideStart = scanner.getTokenPos(),
+                overrideLength = scanner.getTokenText().length)
+            val p = scanner.getPrevTokenEnd()
+            return Identifier(text = "", pos = p, end = p)
+        }
+        return parseIdentifier()
+    }
 
     private fun isIdentifierToken(t: SyntaxKind): Boolean =
         t == SyntaxKind.Identifier ||
