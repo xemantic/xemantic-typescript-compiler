@@ -48605,6 +48605,11 @@ interface DataView {
                 if (kwStart >= 0 &&
                     source.substring(kwStart, kwStart + kw.length) == kw &&
                     (kwStart == 0 || !source[kwStart - 1].isLetterOrDigit())) {
+                    // `async` requires its next token on the SAME LINE to count as a
+                    // modifier (tsc nextTokenIsOnSameLineAndCanFollowModifier) —
+                    // `export default async\n export function foo()` is an ASI'd
+                    // export-default of the identifier `async`, not a modifier run.
+                    if (kw == "async" && source.substring(p + 1, pos).contains('\n')) break
                     pos = kwStart
                     found = true
                     break
@@ -50524,7 +50529,66 @@ interface DataView {
                 (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
                 (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers)
             }
+            // TS1262: `await` used as a declared name at the top level of an external
+            // module (tsc binder.ts checkContextualIdentifier — AwaitKeyword +
+            // isExternalModule + isInTopLevelContext). Fn/class declaration NAMES bind
+            // in the surrounding (top-level) scope; import-specifier propertyName is
+            // an identifier-name position (exempt), the binding name is not.
+            currentFileBindsAwaitTopLevel = false
+            if (isModule) checkTopLevelAwaitNames(result.sourceFile.statements, source, fileName)
             checkAwaitInStatements(result.sourceFile.statements, source, fileName, isAsync = isModule)
+        }
+    }
+
+    /** True while checking a file whose top level binds the name `await` (import/fn/var/class) —
+     * suppresses the TS2311 "Did you mean to write this in an async function?" heuristic, since
+     * `await(...)` then resolves to the real binding (tsc only emits TS2311 on resolution FAILURE). */
+    private var currentFileBindsAwaitTopLevel = false
+
+    private fun checkTopLevelAwaitNames(stmts: List<Statement>, source: String, fileName: String) {
+        fun emit(name: Identifier?) {
+            if (name == null || name.text != "await" || name.pos < 0) return
+            currentFileBindsAwaitTopLevel = true
+            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Identifier expected. 'await' is a reserved word at the top-level of a module.",
+                category = DiagnosticCategory.Error,
+                code = 1262,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = name.pos,
+                length = name.text.length,
+            ))
+        }
+        fun walkBindingName(node: Node?) {
+            when (node) {
+                is Identifier -> emit(node)
+                is ObjectBindingPattern -> for (e in node.elements) walkBindingName(e.name)
+                is ArrayBindingPattern -> for (e in node.elements) walkBindingName((e as? BindingElement)?.name)
+                else -> {}
+            }
+        }
+        for (stmt in stmts) {
+            when (stmt) {
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    emit(clause.name)
+                    when (val nb = clause.namedBindings) {
+                        is NamespaceImport -> emit(nb.name)
+                        is NamedImports -> for (s in nb.elements) emit(s.name)
+                        else -> {}
+                    }
+                }
+                is ImportEqualsDeclaration -> emit(stmt.name)
+                is FunctionDeclaration -> if (ModifierFlag.Declare !in stmt.modifiers) emit(stmt.name)
+                is ClassDeclaration -> if (ModifierFlag.Declare !in stmt.modifiers) emit(stmt.name)
+                is EnumDeclaration -> if (ModifierFlag.Declare !in stmt.modifiers) emit(stmt.name)
+                is VariableStatement -> if (ModifierFlag.Declare !in stmt.modifiers) {
+                    for (d in stmt.declarationList.declarations) walkBindingName(d.name)
+                }
+                else -> {}
+            }
         }
     }
 
@@ -50723,7 +50787,8 @@ interface DataView {
                 // it's a regular identifier — but referencing it here is almost
                 // certainly a missing-async mistake.
                 val callee = expr.expression
-                if (!isAsync && callee is Identifier && callee.text == "await") {
+                if (!isAsync && callee is Identifier && callee.text == "await" &&
+                    !currentFileBindsAwaitTopLevel) {
                     val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
                     diagnostics.add(Diagnostic(
                         message = "Cannot find name 'await'. Did you mean to write this in an async function?",

@@ -906,7 +906,9 @@ class TypeScriptCompiler {
             if (!isPlainJsFile && parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
                 // B327: TS1108 joins — tsc checkReturnStatement reports it via
                 // grammarErrorOnFirstToken (hasParseDiagnostics-suppressed).
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 }
+                // B330: TS1262 joins — tsc binder checkContextualIdentifier gates on
+                // !file.parseDiagnostics.length.
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1372,7 +1374,7 @@ class TypeScriptCompiler {
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll {
                     val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108) &&
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262) &&
                         fn in filesWithRealParseDiagnostics &&
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }
