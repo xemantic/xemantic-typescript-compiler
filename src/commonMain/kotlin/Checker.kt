@@ -1014,6 +1014,9 @@ class Checker(
         checkDeclarationEmitComputedSymbolNameability()
         // 14a''. B314: mapped-type unique-symbol key serialization (TS4118)
         checkDeclarationEmitMappedUniqueSymbolKey()
+        // 14a'''b. B317: exported anonymous-class-typed mixin results with
+        // private/protected members (TS4094)
+        checkDeclarationEmitMixinPrivateProtected()
         // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
         checkDeclarationEmitHugeInferredType()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
@@ -5955,6 +5958,107 @@ class Checker(
                         fileName = f, line = l, character = c,
                         start = nameNode.pos, length = nameNode.text.length,
                     ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B317 (declarationEmitMixinPrivateProtected, TS4094): an EXPORTED position whose
+     * type is `identityFn(M)` where M is a local `const M = class { ... }` with
+     * private/protected members and identityFn is `<T>(x: T): T` — the export's type
+     * is the ANONYMOUS class type, whose non-public members can't appear in a `.d.ts`.
+     * One TS4094 per private/protected member (alphabetical). Anchors: `export default
+     * <call>;` → the whole statement incl. ';'; `export class N extends <call>` → the
+     * class NAME; anonymous `export default class extends <call>` → the `export` keyword.
+     */
+    private fun checkDeclarationEmitMixinPrivateProtected() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val statements = result.sourceFile.statements
+            if (!isModuleFile(statements)) continue
+            val source = result.sourceFile.text
+            val mixinMembers = mutableMapOf<String, List<String>>()
+            val identityFns = mutableSetOf<String>()
+            for (stmt in statements) {
+                if (stmt is FunctionDeclaration) {
+                    val tp = stmt.typeParameters?.singleOrNull() ?: continue
+                    val p = stmt.parameters.singleOrNull() ?: continue
+                    val pt = ((p.type as? TypeReference)?.typeName as? Identifier)?.text
+                    val rt = ((stmt.type as? TypeReference)?.typeName as? Identifier)?.text
+                    if (pt == tp.name.text && rt == tp.name.text) stmt.name?.text?.let { identityFns.add(it) }
+                }
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    var init: Expression = d.initializer ?: continue
+                    while (init is ParenthesizedExpression) init = init.expression
+                    val ce = init as? ClassExpression ?: continue
+                    val privs = ce.members.mapNotNull { m ->
+                        val mods = when (m) {
+                            is MethodDeclaration -> m.modifiers
+                            is PropertyDeclaration -> m.modifiers
+                            else -> return@mapNotNull null
+                        }
+                        if (ModifierFlag.Private !in mods && ModifierFlag.Protected !in mods) return@mapNotNull null
+                        when (m) {
+                            is MethodDeclaration -> (m.name as? Identifier)?.text
+                            is PropertyDeclaration -> (m.name as? Identifier)?.text
+                            else -> null
+                        }
+                    }.sorted()
+                    if (privs.isNotEmpty()) mixinMembers[nm] = privs
+                }
+            }
+            if (mixinMembers.isEmpty() || identityFns.isEmpty()) continue
+            fun mixinCallMembers(e: Expression?): List<String>? {
+                var x = e ?: return null
+                while (x is ParenthesizedExpression) x = x.expression
+                val call = x as? CallExpression ?: return null
+                val callee = (call.expression as? Identifier)?.text ?: return null
+                if (callee !in identityFns) return null
+                val arg = (call.arguments.singleOrNull() as? Identifier)?.text ?: return null
+                return mixinMembers[arg]
+            }
+            fun emit(privs: List<String>, start: Int, length: Int) {
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                for (p in privs) {
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$p' of exported anonymous class type may not be private or protected.",
+                        category = DiagnosticCategory.Error, code = 4094,
+                        fileName = f, line = l, character = c,
+                        start = start, length = length,
+                    ))
+                }
+            }
+            for (stmt in statements) {
+                when (stmt) {
+                    is ExportAssignment -> {
+                        if (stmt.isExportEquals) continue
+                        val privs = mixinCallMembers(stmt.expression) ?: continue
+                        val exprEnd = stmt.expression?.let { expressionTrueEnd(it) } ?: continue
+                        val semi = source.indexOf(';', exprEnd)
+                        val end = if (semi >= 0) semi + 1 else exprEnd
+                        emit(privs, stmt.pos, end - stmt.pos)
+                    }
+                    is ClassDeclaration -> {
+                        if (ModifierFlag.Export !in stmt.modifiers) continue
+                        val ext = stmt.heritageClauses
+                            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                            ?.types?.firstOrNull()?.expression ?: continue
+                        val privs = mixinCallMembers(ext) ?: continue
+                        val nameNode = stmt.name
+                        if (nameNode != null) emit(privs, nameNode.pos, nameNode.text.length)
+                        else {
+                            // stmt.pos points at `class` (modifiers consumed before) —
+                            // anchor at the `export` keyword.
+                            val expStart = source.lastIndexOf("export", stmt.pos).takeIf { it >= 0 } ?: stmt.pos
+                            emit(privs, expStart, "export".length)
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
