@@ -1237,6 +1237,11 @@ class Checker(
         checkEvolvingEmptyArrayImplicitAny()
         // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
         checkUninitializedLetCapturedReads()
+        // 37a5. B353: object-rest destructuring from a class instance — methods,
+        //       accessors, and private/protected members do not spread into the
+        //       rest (tsc getRestType + isSpreadableProperty); accessing one on
+        //       the rest variable is TS2339.
+        checkObjectRestUnspreadableAccess()
         checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
@@ -47294,6 +47299,282 @@ interface DataView {
                 if (stmtMentionsName(stmt, name)) st.suppressed = true
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // B353: object-REST destructuring from a class instance — unspreadable
+    // member access on the rest variable (tsc getRestType + isSpreadableProperty).
+    // Class-declared methods, get/set accessors, and private/protected members
+    // do NOT spread into the rest. Accessing one on the rest var is TS2339 with
+    // either the generic display 'Omit<this|T, "k1" | "k2">' (destructured keys
+    // first, then public accessor/method names in declaration order — private/
+    // protected names drop silently via keyof semantics) or, for a non-generic
+    // source, the literal remaining-public-data-props display '{ p: string; }'/'{}'.
+    // FP firewall: heritage-free, type-param-free, index-signature-free,
+    // non-merged top-level class only; the accessed name must be a class-declared
+    // EXCLUDED member; rest-var reassignment suppresses; computed/unrenderable
+    // shapes bail.
+    // ------------------------------------------------------------------
+    private fun checkObjectRestUnspreadableAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val fileStmts = result.sourceFile.statements
+            try { oruScope(fileStmts, null, null, fileStmts, source, fileName) } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private class OruFnCtx(val typeParameters: List<TypeParameter>?, val parameters: List<Parameter>)
+
+    private fun oruScope(
+        stmts: List<Statement>, enclosingClass: ClassDeclaration?, fnCtx: OruFnCtx?,
+        fileStmts: List<Statement>, source: String, fileName: String,
+    ) {
+        for (stmt in stmts) {
+            if (stmt is VariableStatement && ModifierFlag.Declare !in stmt.modifiers) {
+                for (d in stmt.declarationList.declarations) {
+                    oruAnalyzeDecl(d, stmts, enclosingClass, fnCtx, fileStmts, source, fileName)
+                }
+            }
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let {
+                    oruScope(it.statements, enclosingClass, OruFnCtx(stmt.typeParameters, stmt.parameters), fileStmts, source, fileName)
+                }
+                is ClassDeclaration -> for (m in stmt.members) when (m) {
+                    is MethodDeclaration -> m.body?.let { oruScope(it.statements, stmt, OruFnCtx(m.typeParameters, m.parameters), fileStmts, source, fileName) }
+                    is Constructor -> m.body?.let { oruScope(it.statements, stmt, OruFnCtx(null, m.parameters), fileStmts, source, fileName) }
+                    is GetAccessor -> m.body?.let { oruScope(it.statements, stmt, OruFnCtx(null, m.parameters), fileStmts, source, fileName) }
+                    is SetAccessor -> m.body?.let { oruScope(it.statements, stmt, OruFnCtx(null, m.parameters), fileStmts, source, fileName) }
+                    else -> {}
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { oruScope(it.statements, enclosingClass, fnCtx, fileStmts, source, fileName) }
+                is Block -> oruScope(stmt.statements, enclosingClass, fnCtx, fileStmts, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun oruAnalyzeDecl(
+        d: VariableDeclaration, scopeStmts: List<Statement>, enclosingClass: ClassDeclaration?,
+        fnCtx: OruFnCtx?, fileStmts: List<Statement>, source: String, fileName: String,
+    ) {
+        val pattern = d.name as? ObjectBindingPattern ?: return
+        if (pattern.elements.count { it.dotDotDotToken } != 1) return
+        val restElem = pattern.elements.last().takeIf { it.dotDotDotToken } ?: return
+        val restName = (restElem.name as? Identifier)?.text ?: return
+        if (d.type != null) return
+        val init = d.initializer ?: return
+
+        // Destructured (non-rest) keys, pattern order. Computed names bail.
+        val destructured = mutableListOf<String>()
+        for (el in pattern.elements) {
+            if (el.dotDotDotToken) continue
+            destructured.add(when (val keyNode = el.propertyName ?: el.name) {
+                is Identifier -> keyNode.text
+                is StringLiteralNode -> keyNode.text
+                else -> return
+            })
+        }
+
+        // Resolve the source class + genericity from the initializer shape.
+        // A same-name interface or namespace would merge spreadable members — bail.
+        fun classByName(n: String): ClassDeclaration? {
+            var cls: ClassDeclaration? = null
+            for (s in fileStmts) {
+                when {
+                    s is ClassDeclaration && s.name?.text == n -> { if (cls != null) return null; cls = s }
+                    s is InterfaceDeclaration && s.name.text == n -> return null
+                    s is ModuleDeclaration && (s.name as? Identifier)?.text == n -> return null
+                }
+            }
+            return cls
+        }
+        var generic: String? = null
+        val classDecl: ClassDeclaration = when {
+            init is Identifier && init.text == "this" -> { generic = "this"; enclosingClass }
+            init is AsExpression -> {
+                val tr = init.type as? TypeReference ?: return
+                if (tr.typeArguments != null) return
+                classByName((tr.typeName as? Identifier)?.text ?: return)
+            }
+            init is Identifier -> {
+                // A parameter typed `T` (type param with a class constraint) or a class type.
+                val p = fnCtx?.parameters?.firstOrNull { (it.name as? Identifier)?.text == init.text } ?: return
+                val pt = p.type as? TypeReference ?: return
+                if (pt.typeArguments != null) return
+                val ptName = (pt.typeName as? Identifier)?.text ?: return
+                val tp = fnCtx.typeParameters?.firstOrNull { it.name.text == ptName }
+                if (tp != null) {
+                    val c = tp.constraint as? TypeReference ?: return
+                    if (c.typeArguments != null) return
+                    generic = ptName
+                    classByName((c.typeName as? Identifier)?.text ?: return)
+                } else classByName(ptName)
+            }
+            else -> return
+        } ?: return
+
+        if (!classDecl.heritageClauses.isNullOrEmpty()) return
+        if (!classDecl.typeParameters.isNullOrEmpty()) return
+
+        // Classify instance members (declaration order).
+        val publicData = LinkedHashMap<String, TypeNode?>()
+        val unspreadable = mutableListOf<String>()
+        val privateProtected = mutableSetOf<String>()
+        fun nameOf(n: NameNode?): String? = when (n) {
+            is Identifier -> n.text.takeIf { !it.startsWith("#") }
+            is StringLiteralNode -> n.text
+            else -> null
+        }
+        for (m in classDecl.members) {
+            when (m) {
+                is Constructor -> for (p in m.parameters) {
+                    val mods = p.modifiers
+                    if (ModifierFlag.Public !in mods && ModifierFlag.Private !in mods &&
+                        ModifierFlag.Protected !in mods && ModifierFlag.Readonly !in mods) continue
+                    val pn = (p.name as? Identifier)?.text ?: return
+                    if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) privateProtected.add(pn)
+                    else publicData[pn] = p.type
+                }
+                is PropertyDeclaration -> {
+                    if (ModifierFlag.Static in m.modifiers) continue
+                    val pn = nameOf(m.name) ?: return
+                    if (ModifierFlag.Private in m.modifiers || ModifierFlag.Protected in m.modifiers) privateProtected.add(pn)
+                    else publicData[pn] = m.type
+                }
+                is MethodDeclaration, is GetAccessor, is SetAccessor -> {
+                    val mods = when (m) {
+                        is MethodDeclaration -> m.modifiers; is GetAccessor -> m.modifiers
+                        is SetAccessor -> m.modifiers; else -> emptySet()
+                    }
+                    if (ModifierFlag.Static in mods) continue
+                    val mn = when (m) {
+                        is MethodDeclaration -> m.name; is GetAccessor -> m.name
+                        is SetAccessor -> m.name; else -> null
+                    }
+                    val pn = nameOf(mn) ?: return
+                    if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) privateProtected.add(pn)
+                    else if (pn !in unspreadable) unspreadable.add(pn)
+                }
+                is IndexSignature -> return
+                else -> {}
+            }
+        }
+
+        // The accessed name must be a class-declared excluded member.
+        val excluded = HashSet<String>()
+        excluded.addAll(destructured.filter { it in publicData || it in privateProtected || it in unspreadable })
+        excluded.addAll(unspreadable)
+        excluded.addAll(privateProtected)
+        if (excluded.isEmpty()) return
+
+        val display: String = if (generic != null) {
+            val omitKeys = (destructured + unspreadable.filter { it !in destructured }).distinct()
+            if (omitKeys.isEmpty()) return
+            "Omit<$generic, ${omitKeys.joinToString(" | ") { "\"$it\"" }}>"
+        } else {
+            val remaining = publicData.filterKeys { it !in destructured }
+            if (remaining.isEmpty()) "{}"
+            else {
+                val parts = mutableListOf<String>()
+                for ((k, t) in remaining) parts.add("$k: ${oruRenderType(t) ?: return};")
+                "{ ${parts.joinToString(" ")} }"
+            }
+        }
+
+        // Scan the scope for `rest.<name>` accesses; assignment to the rest var suppresses.
+        var suppressed = false
+        val hits = mutableListOf<Pair<String, Int>>()
+        val work = ArrayDeque<Expression>()
+        fun push(e: Expression?) { if (e != null) work.add(e) }
+        fun scanStmt(s: Statement) {
+            when (s) {
+                is ExpressionStatement -> push(s.expression)
+                is VariableStatement -> {
+                    // A re-declaration of the rest name shadows — suppress.
+                    for (vd in s.declarationList.declarations) {
+                        if (vd !== d && (vd.name as? Identifier)?.text == restName) { suppressed = true; return }
+                        if (vd !== d) push(vd.initializer)
+                    }
+                }
+                is ReturnStatement -> push(s.expression)
+                is IfStatement -> { push(s.expression); scanStmt(s.thenStatement); s.elseStatement?.let { scanStmt(it) } }
+                is WhileStatement -> { push(s.expression); scanStmt(s.statement) }
+                is DoStatement -> { push(s.expression); scanStmt(s.statement) }
+                is ForStatement -> {
+                    (s.initializer as? Expression)?.let { push(it) }
+                    push(s.condition); push(s.incrementor); scanStmt(s.statement)
+                }
+                is Block -> s.statements.forEach { scanStmt(it) }
+                is SwitchStatement -> {
+                    push(s.expression)
+                    for (cl in s.caseBlock) {
+                        (cl as? CaseClause)?.expression?.let { push(it) }
+                        val cs = when (cl) { is CaseClause -> cl.statements; is DefaultClause -> cl.statements; else -> emptyList() }
+                        cs.forEach { scanStmt(it) }
+                    }
+                }
+                else -> {}
+            }
+        }
+        scopeStmts.forEach { if (!suppressed) scanStmt(it) }
+        while (work.isNotEmpty() && !suppressed) {
+            when (val e = work.removeFirst()) {
+                is PropertyAccessExpression -> {
+                    val recv = e.expression
+                    if (recv is Identifier && recv.text == restName) {
+                        val nm = e.name as? Identifier
+                        if (nm != null && nm.text in excluded) hits.add(nm.text to nm.pos)
+                    } else push(recv)
+                }
+                is BinaryExpression -> {
+                    val l = e.left
+                    if (e.operator == SyntaxKind.Equals && l is Identifier && l.text == restName) { suppressed = true; break }
+                    push(e.left); push(e.right)
+                }
+                is CallExpression -> { push(e.expression); e.arguments.forEach { push(it) } }
+                is ElementAccessExpression -> { push(e.expression); push(e.argumentExpression) }
+                is ParenthesizedExpression -> push(e.expression)
+                is PrefixUnaryExpression -> push(e.operand)
+                is PostfixUnaryExpression -> push(e.operand)
+                is ConditionalExpression -> { push(e.condition); push(e.whenTrue); push(e.whenFalse) }
+                is TypeOfExpression -> push(e.expression)
+                is NonNullExpression -> push(e.expression)
+                is AsExpression -> push(e.expression)
+                is ObjectLiteralExpression -> for (p in e.properties) when (p) {
+                    is PropertyAssignment -> push(p.initializer)
+                    is SpreadAssignment -> push(p.expression)
+                    else -> {}
+                }
+                is ArrayLiteralExpression -> e.elements.forEach { push(it) }
+                is SpreadElement -> push(e.expression)
+                else -> {}
+            }
+        }
+        if (suppressed) return
+        for ((nm, pos) in hits.sortedBy { it.second }) {
+            val (l, c) = getLineAndCharacterOfPosition(source, pos)
+            diagnostics.add(Diagnostic(
+                message = "Property '$nm' does not exist on type '$display'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = l, character = c, start = pos, length = nm.length,
+            ))
+        }
+    }
+
+    /** Minimal TypeNode render for the B353 literal rest display — bail (null) on anything fancy. */
+    private fun oruRenderType(t: TypeNode?): String? = when (t) {
+        is KeywordTypeNode -> when (t.kind) {
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.AnyKeyword -> "any"
+            SyntaxKind.UnknownKeyword -> "unknown"
+            else -> null
+        }
+        is TypeReference -> if (t.typeArguments == null) (t.typeName as? Identifier)?.text else null
+        else -> null
     }
 
     private fun stmtMentionsName(stmt: Statement, name: String): Boolean {
