@@ -31764,6 +31764,8 @@ class Checker(
         private val KNOWN_GLOBALS: Set<String> = setOf(
             // Special identifiers
             "undefined", "globalThis",
+            // lib.dom value globals resolvable by bare name (config-gated via DOM_GLOBAL_NAMES)
+            "name",
             // ES5 globals
             "NaN", "Infinity", "eval",
             "parseInt", "parseFloat", "isNaN", "isFinite",
@@ -31953,6 +31955,7 @@ class Checker(
          */
         private val DOM_GLOBAL_NAMES: Set<String> = setOf(
             // DOM — common types
+            "name", // lib.dom `declare const name: void` (window.name)
             "document", "window", "navigator", "location", "history", "screen",
             "self", "top", "parent", "frames", "opener",
             "alert", "confirm", "prompt", "open", "close", "print",
@@ -32030,7 +32033,7 @@ class Checker(
          * in both positions. `undefined`/`null` are excluded from this list — they work as types.
          */
         private val VALUE_ONLY_GLOBALS: Set<String> = setOf(
-            "globalThis", "NaN", "Infinity", "eval",
+            "globalThis", "NaN", "Infinity", "eval", "name",
             "parseInt", "parseFloat", "isNaN", "isFinite",
             "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
             "escape", "unescape",

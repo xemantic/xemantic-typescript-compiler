@@ -5538,6 +5538,20 @@ class Parser(
                 postCommaPerElem.add(postCommaTrailing)
             } else {
                 hasTrailingComma = false
+                // tsc parseDelimitedList recovery: a non-comma non-`]` follow token gets
+                // ',' expected (same-start-deduped when colliding); an expression-start
+                // token re-enters the list (`[name:string]` → elements name, string);
+                // outer-owned closers/`;` abort; anything else is skipped one token.
+                if (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
+                    if (token == SyntaxKind.CloseParen || token == SyntaxKind.CloseBrace ||
+                        token == SyntaxKind.Semicolon) break
+                    reportError("',' expected.", code = 1005)
+                    postCommaPerElem.add(null)
+                    if (isStartOfExpression()) continue
+                    reportError("Expression expected.", code = 1109)
+                    nextToken()
+                    continue
+                }
                 break
             }
         }
