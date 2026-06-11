@@ -10497,10 +10497,12 @@ class Transformer(
         }
 
         // In ESM mode (non-nodenext, non-preserve), `import x = require("mod")` is dropped
-        // entirely (not valid ESM syntax). Preserve mode keeps it if referenced.
+        // entirely (not valid ESM syntax). Preserve mode keeps it if referenced — and
+        // under verbatimModuleSyntax UNCONDITIONALLY (no elision at all; modulePreserve4's
+        // unreferenced `import a1 = require("./a")` must emit `const a1 = require("./a");`).
         if (isRequire && isESModuleFormat(options, currentFileName)) {
             if (options.effectiveModule == ModuleKind.Preserve) {
-                if (checker?.isReferencedAliasDeclaration(decl) != true) {
+                if (!options.verbatimModuleSyntax && checker?.isReferencedAliasDeclaration(decl) != true) {
                     return emptyList()
                 }
             } else {
@@ -10587,7 +10589,16 @@ class Transformer(
                 val localName = (spec.propertyName ?: spec.name).text
                 localName !in topLevelTypeOnlyNames
             }
-            if (filtered.isEmpty()) return orphanedComments(decl)
+            if (filtered.isEmpty()) {
+                // A source-empty `export {}` is kept VERBATIM under verbatimModuleSyntax
+                // (modulePreserve4's dummy.js) — gate on verbatimModuleSyntax ONLY, not
+                // Preserve (impliedNodeFormatEmit1-4 legitimately elide theirs under
+                // plain preserve — the round-96 reverted attempt).
+                if (options.verbatimModuleSyntax && clause.elements.isEmpty()) {
+                    return listOf(decl)
+                }
+                return orphanedComments(decl)
+            }
             if (filtered.size != clause.elements.size) {
                 return listOf(
                     decl.copy(exportClause = clause.copy(elements = filtered))

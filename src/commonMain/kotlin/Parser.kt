@@ -3923,6 +3923,7 @@ class Parser(
                 leadingComments = comments,
                 assertClause = assertClauseNamed,
                 assertClausePos = assertClauseNamedPos,
+                trailingComments = trailingComments(),
             )
         }
 
