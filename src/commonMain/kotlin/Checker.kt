@@ -1242,6 +1242,10 @@ class Checker(
         //       rest (tsc getRestType + isSpreadableProperty); accessing one on
         //       the rest variable is TS2339.
         checkObjectRestUnspreadableAccess()
+        // 37a6. B357: computed property names referencing const literals resolve
+        //       to literal keys (1 ≡ "1") — TS2717 re-declaration mismatch +
+        //       TS2322 for assignments between all-computed-key interface vars.
+        checkComputedLiteralKeyMembers()
         checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
@@ -47415,6 +47419,158 @@ interface DataView {
                 // Any unmodeled statement KIND containing the name suppresses (default-
                 // suppress-on-unknown, per the TS7034/TS7005 gotcha).
                 if (stmtMentionsName(stmt, name)) st.suppressed = true
+            }
+        }
+    }
+
+    /**
+     * B357 (dynamicNamesErrors): computed property names referencing top-level
+     * `const k = <literal>` resolve to literal KEYS — a numeric `1` and a string
+     * `"1"` are the SAME key. Two pieces:
+     *  - TS2717 (+ related TS6203 at the first declaration) when a later interface
+     *    PROPERTY re-declares an earlier member's key with a different annotated
+     *    type; gated to pairs where at least one side is a COMPUTED name (plain
+     *    named pairs belong to the existing duplicate walker).
+     *  - TS2322 with the 2-level property chain for `a = b` where both sides are
+     *    variables annotated with interfaces whose members are ALL computed-
+     *    literal-key properties with renderable primitive types and a same-key
+     *    type mismatch exists (named→named is blocked from the relation engine,
+     *    so nothing else fires here).
+     */
+    private fun checkComputedLiteralKeyMembers() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val constKeys = mutableMapOf<String, String>()
+            for (s in stmts) {
+                val vs = s as? VariableStatement ?: continue
+                if (vs.declarationList.flags != SyntaxKind.ConstKeyword) continue
+                for (d in vs.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    when (val init = d.initializer) {
+                        is StringLiteralNode -> constKeys[n] = init.text
+                        is NumericLiteralNode -> constKeys[n] = init.text
+                        else -> {}
+                    }
+                }
+            }
+            if (constKeys.isEmpty()) continue
+
+            class CMember(
+                val key: String, val display: String, val typeStr: String?,
+                val namePos: Int, val nameLen: Int, val isComputed: Boolean, val isProperty: Boolean,
+            )
+            fun memberOf(m: ClassElement): CMember? {
+                val (nameNode, typeNode, isProp) = when (m) {
+                    is PropertyDeclaration -> Triple(m.name, m.type, true)
+                    is MethodDeclaration -> Triple(m.name, m.type, false)
+                    else -> return null
+                }
+                return when (nameNode) {
+                    is NumericLiteralNode -> CMember(nameNode.text, nameNode.text,
+                        oruRenderType(typeNode), nameNode.pos, nameNode.text.length, false, isProp)
+                    is StringLiteralNode -> CMember(nameNode.text, "\"${nameNode.text}\"",
+                        oruRenderType(typeNode), nameNode.pos, nameNode.text.length + 2, false, isProp)
+                    is ComputedPropertyName -> {
+                        val inner = (nameNode.expression as? Identifier)?.text ?: return null
+                        val key = constKeys[inner] ?: return null
+                        val close = source.indexOf(']', nameNode.pos)
+                        if (close < 0) return null
+                        CMember(key, "[$inner]", oruRenderType(typeNode),
+                            nameNode.pos, close - nameNode.pos + 1, true, isProp)
+                    }
+                    else -> null
+                }
+            }
+
+            // --- TS2717 within each interface (computed-involved pairs only) ---
+            for (s in stmts) {
+                val iface = s as? InterfaceDeclaration ?: continue
+                val firstByKey = mutableMapOf<String, CMember>()
+                for (m in iface.members) {
+                    val cm = memberOf(m) ?: continue
+                    val first = firstByKey.getOrPut(cm.key) { cm }
+                    if (first === cm) continue
+                    if (!cm.isProperty || cm.typeStr == null || first.typeStr == null) continue
+                    if (cm.typeStr == first.typeStr) continue
+                    if (!cm.isComputed && !first.isComputed) continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, cm.namePos)
+                    val (fl, fc) = getLineAndCharacterOfPosition(source, first.namePos)
+                    diagnostics.add(Diagnostic(
+                        message = "Subsequent property declarations must have the same type.  Property '${cm.display}' must be of type '${first.typeStr}', but here has type '${cm.typeStr}'.",
+                        category = DiagnosticCategory.Error, code = 2717,
+                        fileName = fileName, line = line, character = ch,
+                        start = cm.namePos, length = cm.nameLen,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "'${cm.display}' was also declared here.",
+                            category = DiagnosticCategory.Message, code = 6203,
+                            fileName = fileName, line = fl, character = fc,
+                            start = first.namePos, length = first.nameLen,
+                        )),
+                    ))
+                }
+            }
+
+            // --- TS2322 for assignments between all-computed-key interface vars ---
+            val ifaceByName = mutableMapOf<String, InterfaceDeclaration?>()
+            for (s in stmts) if (s is InterfaceDeclaration) {
+                ifaceByName[s.name.text] = if (s.name.text in ifaceByName) null else s
+            }
+            fun fullMembers(name: String): List<CMember>? {
+                val d = ifaceByName[name] ?: return null
+                if (!d.heritageClauses.isNullOrEmpty() || !d.typeParameters.isNullOrEmpty()) return null
+                val out = mutableListOf<CMember>()
+                for (m in d.members) {
+                    val cm = memberOf(m) ?: return null
+                    if (!cm.isComputed || !cm.isProperty || cm.typeStr == null) return null
+                    out.add(cm)
+                }
+                return out.ifEmpty { null }
+            }
+            val varIface = mutableMapOf<String, String>()
+            for (s in stmts) {
+                val vs = s as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val tr = d.type as? TypeReference ?: continue
+                    if (tr.typeArguments != null) continue
+                    (tr.typeName as? Identifier)?.text?.let { varIface[n] = it }
+                }
+            }
+            for (s in stmts) {
+                val es = s as? ExpressionStatement ?: continue
+                val bin = es.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? Identifier ?: continue
+                val rhs = bin.right as? Identifier ?: continue
+                val tgtName = varIface[lhs.text] ?: continue
+                val srcName = varIface[rhs.text] ?: continue
+                if (tgtName == srcName) continue
+                val tgt = fullMembers(tgtName) ?: continue
+                val src = fullMembers(srcName) ?: continue
+                val srcByKey = src.associateBy { it.key }
+                var chain: List<String>? = null
+                for (tm in tgt) {
+                    val sm = srcByKey[tm.key] ?: break
+                    if (sm.typeStr != tm.typeStr) {
+                        chain = listOf(
+                            "  Types of property '${tm.display}' are incompatible.",
+                            "    Type '${sm.typeStr}' is not assignable to type '${tm.typeStr}'.",
+                        )
+                        break
+                    }
+                }
+                val tail = chain ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$srcName' is not assignable to type '$tgtName'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = lhs.pos, length = lhs.text.length,
+                    messageChain = tail,
+                ))
             }
         }
     }
