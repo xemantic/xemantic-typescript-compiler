@@ -15969,7 +15969,31 @@ class Checker(
                 val base = classesByName[baseName] ?: continue
                 if (base === cls) continue
                 val fieldDisplay = collectClassInstanceFields(base)
-                if (fieldDisplay.isEmpty()) continue
+                // B352: top-level EXPANDO statics of the base (`C.X = …`) read via `super.X`
+                // in a derived STATIC BLOCK are "used before being assigned" (TS2565) —
+                // tsc's definite-assignment can't see the expando assignment from the
+                // static block's flow container. Strict-gated; expando-ONLY names (a
+                // class-body member of the same name wins).
+                val expandoStatics = HashSet<String>()
+                if (strictNullChecks) {
+                    for (stmt in result.sourceFile.statements) {
+                        val e = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                        if (e.operator != SyntaxKind.Equals) continue
+                        val pa = e.left as? PropertyAccessExpression ?: continue
+                        if ((pa.expression as? Identifier)?.text == baseName) expandoStatics.add(pa.name.text)
+                    }
+                    for (m in base.members) {
+                        val nm: NameNode? = when (m) {
+                            is PropertyDeclaration -> m.name
+                            is MethodDeclaration -> m.name
+                            is GetAccessor -> m.name
+                            is SetAccessor -> m.name
+                            else -> null
+                        }
+                        nm?.let { nameTextOrNull(it)?.let { t -> expandoStatics.remove(t) } }
+                    }
+                }
+                if (fieldDisplay.isEmpty() && expandoStatics.isEmpty()) continue
                 for (member in cls.members) {
                     val body: Node? = when (member) {
                         is MethodDeclaration -> member.body
@@ -15996,6 +16020,15 @@ class Checker(
                                 name = arg.text; pos = arg.pos; len = (arg.rawText?.length ?: arg.text.length) + 2
                             }
                             else -> return@walkAccessesNoFnBoundary
+                        }
+                        if (member is ClassStaticBlockDeclaration && name in expandoStatics) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$name' is used before being assigned.",
+                                category = DiagnosticCategory.Error, code = 2565, fileName = fileName,
+                                line = line, character = character, start = pos, length = len,
+                            ))
+                            return@walkAccessesNoFnBoundary
                         }
                         val display = fieldDisplay[name] ?: return@walkAccessesNoFnBoundary
                         val (line, character) = getLineAndCharacterOfPosition(source, pos)
@@ -16043,6 +16076,9 @@ class Checker(
             is SetAccessor -> nameTextOrNull(member.name)?.let { protoNames.add(it) }
             is PropertyDeclaration -> {
                 val nm = nameTextOrNull(member.name) ?: continue
+                // B352: STATIC fields ARE reachable via super (the constructor prototype
+                // chain) — only INSTANCE fields are own-instance properties.
+                if (ModifierFlag.Static in member.modifiers) continue
                 if (ModifierFlag.Accessor in member.modifiers) protoNames.add(nm)
                 else fields.putIfAbsent(nm, if (member.name is StringLiteralNode) quotedName(member.name as StringLiteralNode) else nm)
             }
