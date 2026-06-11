@@ -2396,10 +2396,11 @@ class Transformer(
                             //   var bizz = 8; bizz++;        + export { bizz }      → exports.bizz = (bizz++, bizz);
                             //   var bizz = 8; ++bizz;        + export { bizz }      → exports.bizz = ++bizz;
                             // Returns the list of export names (in source order) for the mutated local, or null.
+                            // Unary ++/-- mutations are handled by the deep B321 post-pass
+                            // (cjsUnaryRewriteStmt) which also covers nested/function-body
+                            // positions — only assignment forms are wrapped here.
                             val lateExportLocalName: String? = if (stmt is ExpressionStatement) when (val e = stmt.expression) {
                                 is BinaryExpression -> if (isAssignmentOperator(e.operator) && e.left is Identifier) e.left.text else null
-                                is PrefixUnaryExpression -> if ((e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) && e.operand is Identifier) e.operand.text else null
-                                is PostfixUnaryExpression -> if ((e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) && e.operand is Identifier) e.operand.text else null
                                 else -> null
                             } else null
                             val lateExportNames: List<String>? = lateExportLocalName?.let { nm ->
@@ -2655,6 +2656,34 @@ class Transformer(
             }
             result.clear()
             result.addAll(rewritten)
+        }
+
+        // B321: rewrite ++/-- mutations of late-exported locals (export { x } keeping a local
+        // binding) ANYWHERE in the statement tree — function bodies, conditions, nested
+        // expressions, and top-level statements (the wrapStatementWithLateExports path above
+        // no longer handles unary forms). tsc: module.ts visitPreOrPostfixUnaryExpression.
+        // Value-used postfix occurrences allocate file-hoisted temps (`var _a, _b;` at top).
+        if (namedExportLocalToExport.isNotEmpty()) {
+            val unaryState = CjsUnaryRewriteState(usedNames = collectValueReferences(result).toMutableSet())
+            val unaryRewritten = result.map { stmt -> cjsUnaryRewriteStmt(stmt, unaryState, namedExportLocalToExport) }
+            if (unaryRewritten.indices.any { unaryRewritten[it] !== result[it] }) {
+                result.clear()
+                result.addAll(unaryRewritten)
+            }
+            if (unaryState.temps.isNotEmpty()) {
+                // Insert `var _a, _b, …;` at position 0 — the esModule preamble sits at
+                // result[0] now and "use strict" is added even later, so this lands between
+                // them (matching tsc's hoist position).
+                result.add(0, VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = unaryState.temps.map { t ->
+                            VariableDeclaration(name = Identifier(text = t, pos = -1, end = -1), pos = -1, end = -1)
+                        },
+                        flags = VarKeyword, pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            }
         }
 
         // Post-process decorator metadata: wrap `X_1.default.Foo` args in safety checks.
@@ -6503,6 +6532,477 @@ class Transformer(
             )
         }
         return stmt.copy(expression = wrapped)
+    }
+
+    /**
+     * B321 state for the deep `++X`/`X++` exported-local rewrite (tsc module transform
+     * visitPreOrPostfixUnaryExpression). Allocates file-level temps `_a`, `_b`, … skipping
+     * names already referenced anywhere in the output (earlier transforms hoist their own
+     * `_a` temps inside function scopes).
+     */
+    private class CjsUnaryRewriteState(
+        val usedNames: MutableSet<String>,
+    ) {
+        val temps = mutableListOf<String>()
+        fun allocTemp(): String {
+            for (c in 'a'..'z') {
+                val n = "_$c"
+                if (n !in usedNames) { usedNames.add(n); temps.add(n); return n }
+            }
+            var i = 1
+            while (true) {
+                val n = "_$i"
+                if (n !in usedNames) { usedNames.add(n); temps.add(n); return n }
+                i++
+            }
+        }
+    }
+
+    /**
+     * B321: deep rewrite of `++X` / `--X` / `X++` / `X--` mutations of late-exported locals
+     * (`export { x }` keeping a local binding) anywhere in the statement tree — function
+     * bodies, conditions, nested expressions. Mirrors tsc's module-transform
+     * visitPreOrPostfixUnaryExpression:
+     *   prefix (any position):    `exports.x = ++x`
+     *   postfix, value discarded: `exports.x = (x++, x)`
+     *   postfix, value used:      `(exports.x = (_a = x++, x), _a)` with a file-hoisted temp
+     * Multiple export names chain with the first name innermost (same as
+     * wrapStatementWithLateExports). `active` shrinks when entering a function that
+     * re-declares the name (shadowing).
+     */
+    private fun cjsUnaryRewriteStmt(stmt: Statement, st: CjsUnaryRewriteState, active: Map<String, List<String>>): Statement {
+        if (active.isEmpty()) return stmt
+        return when (stmt) {
+            is ExpressionStatement -> {
+                val e = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = true)
+                if (e === stmt.expression) stmt else stmt.copy(expression = e)
+            }
+            is VariableStatement -> {
+                val newList = cjsUnaryRewriteDeclList(stmt.declarationList, st, active)
+                if (newList === stmt.declarationList) stmt else stmt.copy(declarationList = newList)
+            }
+            is Block -> {
+                val ns = stmt.statements.map { cjsUnaryRewriteStmt(it, st, active) }
+                if (ns.indices.all { ns[it] === stmt.statements[it] }) stmt else stmt.copy(statements = ns)
+            }
+            is IfStatement -> {
+                val c = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val t = cjsUnaryRewriteStmt(stmt.thenStatement, st, active)
+                val e = stmt.elseStatement?.let { cjsUnaryRewriteStmt(it, st, active) }
+                if (c === stmt.expression && t === stmt.thenStatement && e === stmt.elseStatement) stmt
+                else stmt.copy(expression = c, thenStatement = t, elseStatement = e)
+            }
+            is WhileStatement -> {
+                val c = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val b = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (c === stmt.expression && b === stmt.statement) stmt else stmt.copy(expression = c, statement = b)
+            }
+            is DoStatement -> {
+                val c = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val b = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (c === stmt.expression && b === stmt.statement) stmt else stmt.copy(expression = c, statement = b)
+            }
+            is ForStatement -> {
+                val init = when (val i = stmt.initializer) {
+                    is VariableDeclarationList -> cjsUnaryRewriteDeclList(i, st, active)
+                    is Expression -> cjsUnaryRewriteExpr(i, st, active, discarded = true)
+                    else -> i
+                }
+                val cond = stmt.condition?.let { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                val inc = stmt.incrementor?.let { cjsUnaryRewriteExpr(it, st, active, discarded = true) }
+                val body = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (init === stmt.initializer && cond === stmt.condition && inc === stmt.incrementor && body === stmt.statement) stmt
+                else stmt.copy(initializer = init, condition = cond, incrementor = inc, statement = body)
+            }
+            is ForInStatement -> {
+                val e = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val b = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (e === stmt.expression && b === stmt.statement) stmt else stmt.copy(expression = e, statement = b)
+            }
+            is ForOfStatement -> {
+                val e = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val b = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (e === stmt.expression && b === stmt.statement) stmt else stmt.copy(expression = e, statement = b)
+            }
+            is ReturnStatement -> {
+                val e = stmt.expression?.let { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (e === stmt.expression) stmt else stmt.copy(expression = e)
+            }
+            is ThrowStatement -> {
+                val e = stmt.expression?.let { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (e === stmt.expression) stmt else stmt.copy(expression = e)
+            }
+            is SwitchStatement -> {
+                val e = cjsUnaryRewriteExpr(stmt.expression, st, active, discarded = false)
+                val cb = stmt.caseBlock.map { clause ->
+                    when (clause) {
+                        is CaseClause -> {
+                            val ce = cjsUnaryRewriteExpr(clause.expression, st, active, discarded = false)
+                            val cs = clause.statements.map { cjsUnaryRewriteStmt(it, st, active) }
+                            if (ce === clause.expression && cs.indices.all { cs[it] === clause.statements[it] }) clause
+                            else clause.copy(expression = ce, statements = cs)
+                        }
+                        is DefaultClause -> {
+                            val cs = clause.statements.map { cjsUnaryRewriteStmt(it, st, active) }
+                            if (cs.indices.all { cs[it] === clause.statements[it] }) clause else clause.copy(statements = cs)
+                        }
+                        else -> clause
+                    }
+                }
+                if (e === stmt.expression && cb.indices.all { cb[it] === stmt.caseBlock[it] }) stmt
+                else stmt.copy(expression = e, caseBlock = cb)
+            }
+            is TryStatement -> {
+                val t = cjsUnaryRewriteStmt(stmt.tryBlock, st, active) as Block
+                val c = stmt.catchClause?.let { cc ->
+                    val sub = if (cc.variableDeclaration != null)
+                        active.filterKeys { it !in collectBoundNames(cc.variableDeclaration.name) }
+                    else active
+                    val nb = cjsUnaryRewriteStmt(cc.block, st, sub) as Block
+                    if (nb === cc.block) cc else cc.copy(block = nb)
+                }
+                val f = stmt.finallyBlock?.let { cjsUnaryRewriteStmt(it, st, active) as Block }
+                if (t === stmt.tryBlock && c === stmt.catchClause && f === stmt.finallyBlock) stmt
+                else stmt.copy(tryBlock = t, catchClause = c, finallyBlock = f)
+            }
+            is LabeledStatement -> {
+                val b = cjsUnaryRewriteStmt(stmt.statement, st, active)
+                if (b === stmt.statement) stmt else stmt.copy(statement = b)
+            }
+            is FunctionDeclaration -> {
+                val body = stmt.body ?: return stmt
+                val sub = cjsUnaryShrinkActive(active, stmt.parameters, body, stmt.name?.text)
+                if (sub.isEmpty()) return stmt
+                val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                if (nb === body) stmt else stmt.copy(body = nb)
+            }
+            is ClassDeclaration -> {
+                val nm = stmt.members.map { cjsUnaryRewriteClassMember(it, st, active) }
+                if (nm.indices.all { nm[it] === stmt.members[it] }) stmt else stmt.copy(members = nm)
+            }
+            else -> stmt
+        }
+    }
+
+    private fun cjsUnaryRewriteDeclList(list: VariableDeclarationList, st: CjsUnaryRewriteState, active: Map<String, List<String>>): VariableDeclarationList {
+        val nd = list.declarations.map { d ->
+            val init = d.initializer ?: return@map d
+            val ne = cjsUnaryRewriteExpr(init, st, active, discarded = false)
+            if (ne === init) d else d.copy(initializer = ne)
+        }
+        return if (nd.indices.all { nd[it] === list.declarations[it] }) list else list.copy(declarations = nd)
+    }
+
+    private fun cjsUnaryRewriteClassMember(m: ClassElement, st: CjsUnaryRewriteState, active: Map<String, List<String>>): ClassElement = when (m) {
+        is PropertyDeclaration -> {
+            val init = m.initializer
+            if (init == null) m else {
+                val ne = cjsUnaryRewriteExpr(init, st, active, discarded = false)
+                if (ne === init) m else m.copy(initializer = ne)
+            }
+        }
+        is MethodDeclaration -> {
+            val body = m.body
+            if (body == null) m else {
+                val sub = cjsUnaryShrinkActive(active, m.parameters, body, null)
+                if (sub.isEmpty()) m else {
+                    val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                    if (nb === body) m else m.copy(body = nb)
+                }
+            }
+        }
+        is Constructor -> {
+            val body = m.body
+            if (body == null) m else {
+                val sub = cjsUnaryShrinkActive(active, m.parameters, body, null)
+                if (sub.isEmpty()) m else {
+                    val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                    if (nb === body) m else m.copy(body = nb)
+                }
+            }
+        }
+        is GetAccessor -> {
+            val body = m.body
+            if (body == null) m else {
+                val sub = cjsUnaryShrinkActive(active, m.parameters, body, null)
+                if (sub.isEmpty()) m else {
+                    val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                    if (nb === body) m else m.copy(body = nb)
+                }
+            }
+        }
+        is SetAccessor -> {
+            val body = m.body
+            if (body == null) m else {
+                val sub = cjsUnaryShrinkActive(active, m.parameters, body, null)
+                if (sub.isEmpty()) m else {
+                    val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                    if (nb === body) m else m.copy(body = nb)
+                }
+            }
+        }
+        else -> m
+    }
+
+    private fun cjsUnaryRewriteExpr(expr: Expression, st: CjsUnaryRewriteState, active: Map<String, List<String>>, discarded: Boolean): Expression {
+        fun exportsProp(name: String): Expression = PropertyAccessExpression(
+            expression = syntheticId("exports"),
+            name = Identifier(text = name, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return when (expr) {
+            is PostfixUnaryExpression -> {
+                val opnd = expr.operand
+                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier) active[opnd.text] else null
+                if (names != null) {
+                    val operandClone = (opnd as Identifier).copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
+                    if (discarded) {
+                        // exports.x = (x++, x)
+                        var wrapped: Expression = ParenthesizedExpression(
+                            expression = BinaryExpression(left = expr, operator = SyntaxKind.Comma, right = operandClone, pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                        for (name in names) wrapped = BinaryExpression(left = exportsProp(name), operator = Equals, right = wrapped, pos = -1, end = -1)
+                        wrapped
+                    } else {
+                        // (exports.x = (_a = x++, x), _a)
+                        val temp = st.allocTemp()
+                        var wrapped: Expression = ParenthesizedExpression(
+                            expression = BinaryExpression(
+                                left = BinaryExpression(left = syntheticId(temp), operator = Equals, right = expr, pos = -1, end = -1),
+                                operator = SyntaxKind.Comma,
+                                right = operandClone,
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                        for (name in names) wrapped = BinaryExpression(left = exportsProp(name), operator = Equals, right = wrapped, pos = -1, end = -1)
+                        ParenthesizedExpression(
+                            expression = BinaryExpression(left = wrapped, operator = SyntaxKind.Comma, right = syntheticId(temp), pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        )
+                    }
+                } else {
+                    val no = cjsUnaryRewriteExpr(expr.operand, st, active, discarded = false)
+                    if (no === expr.operand) expr else expr.copy(operand = no)
+                }
+            }
+            is PrefixUnaryExpression -> {
+                val opnd = expr.operand
+                val names = if ((expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) && opnd is Identifier) active[opnd.text] else null
+                if (names != null) {
+                    // exports.x = ++x  (paren-wrapped in value position)
+                    var wrapped: Expression = expr
+                    for (name in names) wrapped = BinaryExpression(left = exportsProp(name), operator = Equals, right = wrapped, pos = -1, end = -1)
+                    if (discarded) wrapped else ParenthesizedExpression(expression = wrapped, pos = -1, end = -1)
+                } else {
+                    val no = cjsUnaryRewriteExpr(expr.operand, st, active, discarded = false)
+                    if (no === expr.operand) expr else expr.copy(operand = no)
+                }
+            }
+            is BinaryExpression -> {
+                // Iterative left-spine: deep `a+b+c+…` chains must not recurse on `left`
+                // (binderBinaryExpressionStress StackOverflow gotcha). Comma semantics:
+                // the LEFT operand of a comma is always value-discarded; the RIGHT operand
+                // inherits the comma's own discard state.
+                val nodes = ArrayList<BinaryExpression>()
+                val nodeDiscard = ArrayList<Boolean>()
+                var cur: Expression = expr
+                var curDiscard = discarded
+                while (cur is BinaryExpression) {
+                    nodes.add(cur)
+                    nodeDiscard.add(curDiscard)
+                    curDiscard = cur.operator == SyntaxKind.Comma
+                    cur = cur.left
+                }
+                var rebuilt: Expression = cjsUnaryRewriteExpr(cur, st, active, curDiscard)
+                for (i in nodes.indices.reversed()) {
+                    val b = nodes[i]
+                    val rightDiscarded = b.operator == SyntaxKind.Comma && nodeDiscard[i]
+                    val newRight = cjsUnaryRewriteExpr(b.right, st, active, rightDiscarded)
+                    rebuilt = if (rebuilt === b.left && newRight === b.right) b else b.copy(left = rebuilt, right = newRight)
+                }
+                rebuilt
+            }
+            is ParenthesizedExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is ConditionalExpression -> {
+                val c = cjsUnaryRewriteExpr(expr.condition, st, active, discarded = false)
+                val t = cjsUnaryRewriteExpr(expr.whenTrue, st, active, discarded = false)
+                val f = cjsUnaryRewriteExpr(expr.whenFalse, st, active, discarded = false)
+                if (c === expr.condition && t === expr.whenTrue && f === expr.whenFalse) expr
+                else expr.copy(condition = c, whenTrue = t, whenFalse = f)
+            }
+            is CallExpression -> {
+                val callee = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                val args = expr.arguments.map { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (callee === expr.expression && args.indices.all { args[it] === expr.arguments[it] }) expr
+                else expr.copy(expression = callee, arguments = args)
+            }
+            is NewExpression -> {
+                val callee = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                val args = expr.arguments?.map { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (callee === expr.expression && (args == null || args.indices.all { args[it] === expr.arguments!![it] })) expr
+                else expr.copy(expression = callee, arguments = args)
+            }
+            is PropertyAccessExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is ElementAccessExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                val na = cjsUnaryRewriteExpr(expr.argumentExpression, st, active, discarded = false)
+                if (ne === expr.expression && na === expr.argumentExpression) expr
+                else expr.copy(expression = ne, argumentExpression = na)
+            }
+            is ArrayLiteralExpression -> {
+                val els = expr.elements.map { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (els.indices.all { els[it] === expr.elements[it] }) expr else expr.copy(elements = els)
+            }
+            is ObjectLiteralExpression -> {
+                val props = expr.properties.map { p ->
+                    when (p) {
+                        is PropertyAssignment -> {
+                            val ne = cjsUnaryRewriteExpr(p.initializer, st, active, discarded = false)
+                            if (ne === p.initializer) p else p.copy(initializer = ne)
+                        }
+                        is ShorthandPropertyAssignment -> {
+                            val ne = p.objectAssignmentInitializer?.let { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                            if (ne === p.objectAssignmentInitializer) p else p.copy(objectAssignmentInitializer = ne)
+                        }
+                        is SpreadAssignment -> {
+                            val ne = cjsUnaryRewriteExpr(p.expression, st, active, discarded = false)
+                            if (ne === p.expression) p else p.copy(expression = ne)
+                        }
+                        is MethodDeclaration -> cjsUnaryRewriteClassMember(p, st, active)
+                        is GetAccessor -> cjsUnaryRewriteClassMember(p, st, active)
+                        is SetAccessor -> cjsUnaryRewriteClassMember(p, st, active)
+                        else -> p
+                    }
+                }
+                if (props.indices.all { props[it] === expr.properties[it] }) expr else expr.copy(properties = props)
+            }
+            is SpreadElement -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is TemplateExpression -> {
+                val spans = expr.templateSpans.map { sp ->
+                    val ne = cjsUnaryRewriteExpr(sp.expression, st, active, discarded = false)
+                    if (ne === sp.expression) sp else sp.copy(expression = ne)
+                }
+                if (spans.indices.all { spans[it] === expr.templateSpans[it] }) expr else expr.copy(templateSpans = spans)
+            }
+            is TaggedTemplateExpression -> {
+                val nt = cjsUnaryRewriteExpr(expr.tag, st, active, discarded = false)
+                if (nt === expr.tag) expr else expr.copy(tag = nt)
+            }
+            is DeleteExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is TypeOfExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is VoidExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is AwaitExpression -> {
+                val ne = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is YieldExpression -> {
+                val ne = expr.expression?.let { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
+                if (ne === expr.expression) expr else expr.copy(expression = ne)
+            }
+            is ArrowFunction -> {
+                val sub = cjsUnaryShrinkActive(active, expr.parameters, expr.body, null)
+                if (sub.isEmpty()) expr else when (val body = expr.body) {
+                    is Block -> {
+                        val nb = cjsUnaryRewriteStmt(body, st, sub) as Block
+                        if (nb === body) expr else expr.copy(body = nb)
+                    }
+                    is Expression -> {
+                        val nb = cjsUnaryRewriteExpr(body, st, sub, discarded = false)
+                        if (nb === body) expr else expr.copy(body = nb)
+                    }
+                    else -> expr
+                }
+            }
+            is FunctionExpression -> {
+                val sub = cjsUnaryShrinkActive(active, expr.parameters, expr.body, expr.name?.text)
+                if (sub.isEmpty()) expr else {
+                    val nb = cjsUnaryRewriteStmt(expr.body, st, sub) as Block
+                    if (nb === expr.body) expr else expr.copy(body = nb)
+                }
+            }
+            is ClassExpression -> {
+                val nm = expr.members.map { cjsUnaryRewriteClassMember(it, st, active) }
+                if (nm.indices.all { nm[it] === expr.members[it] }) expr else expr.copy(members = nm)
+            }
+            else -> expr
+        }
+    }
+
+    /**
+     * Drops names from the active export-rewrite map that are shadowed inside a function:
+     * the function's own name, parameter bindings, and any var/let/const/function/class
+     * declaration anywhere in the body (over-conservative for block-scoped declarations —
+     * skipping a rewrite is the safe direction).
+     */
+    private fun cjsUnaryShrinkActive(active: Map<String, List<String>>, parameters: List<Parameter>, body: Node?, ownName: String?): Map<String, List<String>> {
+        val declared = mutableSetOf<String>()
+        ownName?.let { declared.add(it) }
+        for (p in parameters) declared.addAll(collectBoundNames(p.name))
+        if (body is Block) cjsUnaryCollectDeclaredNames(body.statements, declared)
+        if (active.keys.none { it in declared }) return active
+        return active.filterKeys { it !in declared }
+    }
+
+    private fun cjsUnaryCollectDeclaredNames(stmts: List<Statement>, out: MutableSet<String>) {
+        for (s in stmts) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) out.addAll(collectBoundNames(d.name))
+            is FunctionDeclaration -> s.name?.let { out.add(it.text) }
+            is ClassDeclaration -> s.name?.let { out.add(it.text) }
+            is Block -> cjsUnaryCollectDeclaredNames(s.statements, out)
+            is IfStatement -> {
+                cjsUnaryCollectDeclaredNames(listOf(s.thenStatement), out)
+                s.elseStatement?.let { cjsUnaryCollectDeclaredNames(listOf(it), out) }
+            }
+            is WhileStatement -> cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            is DoStatement -> cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            is ForStatement -> {
+                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { out.addAll(collectBoundNames(it.name)) }
+                cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            }
+            is ForInStatement -> {
+                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { out.addAll(collectBoundNames(it.name)) }
+                cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            }
+            is ForOfStatement -> {
+                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { out.addAll(collectBoundNames(it.name)) }
+                cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            }
+            is TryStatement -> {
+                cjsUnaryCollectDeclaredNames(s.tryBlock.statements, out)
+                s.catchClause?.let { cc ->
+                    cc.variableDeclaration?.let { out.addAll(collectBoundNames(it.name)) }
+                    cjsUnaryCollectDeclaredNames(cc.block.statements, out)
+                }
+                s.finallyBlock?.let { cjsUnaryCollectDeclaredNames(it.statements, out) }
+            }
+            is SwitchStatement -> for (clause in s.caseBlock) when (clause) {
+                is CaseClause -> cjsUnaryCollectDeclaredNames(clause.statements, out)
+                is DefaultClause -> cjsUnaryCollectDeclaredNames(clause.statements, out)
+                else -> {}
+            }
+            is LabeledStatement -> cjsUnaryCollectDeclaredNames(listOf(s.statement), out)
+            else -> {}
+        }
     }
 
     private fun makeEsModulePreamble(): Statement {
