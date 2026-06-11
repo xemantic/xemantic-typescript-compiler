@@ -925,6 +925,10 @@ data class BinaryExpression(
     val operatorTrailingComments: List<Comment>? = null,
     /** True if the operator token was preceded by a line break in the source (even if no comments). */
     val operatorHasPrecedingLineBreak: Boolean = false,
+    /** B346 (synthetic only, comma operator): emit each comma-chain operand on its own line at
+     *  one extra indent level (tsc's ES-decorators `return _a = class {…}, (() => {…})(), _a;` form).
+     *  Set only on the OUTERMOST comma node of the chain. */
+    val multiLineComma: Boolean = false,
 ) : Expression {
     override val kind: SyntaxKind = SyntaxKind.BinaryExpression
 }

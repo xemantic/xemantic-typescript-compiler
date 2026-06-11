@@ -3120,6 +3120,30 @@ class Emitter(
     }
 
     private fun emitBinaryExpression(node: BinaryExpression) {
+        // B346: synthetic multi-line comma chain (ES-decorators downlevel) — each operand on
+        // its own line at one extra indent level; the bump is active during the FIRST operand
+        // too (its multi-line content indents relative to the bumped level).
+        if (node.multiLineComma && node.operator == SyntaxKind.Comma) {
+            val operands = mutableListOf<Expression>()
+            var c: Expression = node
+            while (c is BinaryExpression && c.operator == SyntaxKind.Comma) {
+                operands.add(c.right)
+                c = c.left
+            }
+            operands.add(c)
+            operands.reverse()
+            indentLevel++
+            for ((i, op) in operands.withIndex()) {
+                if (i > 0) {
+                    write(",")
+                    writeNewLine()
+                    writeIndent()
+                }
+                emitExpression(op)
+            }
+            indentLevel--
+            return
+        }
         // Flatten left-recursive chain of simple binary expressions to avoid StackOverflow.
         // Collect all BinaryExpression nodes along the left spine that use simple same-line
         // formatting (no preceding line break, no ConditionalExpression needing parens).

@@ -233,6 +233,11 @@ class Transformer(
     private var needsEsDecorateHelper = false
     private var needsRunInitializersHelper = false
 
+    // B346: class names emitted via the ES-decorators `let C = (() => {…})();` IIFE form.
+    // The CJS transform must treat these like class-expression initializers (keep the local
+    // let + trailing `exports.C = C;` sync), NOT as direct exports.
+    private val esDecoratedClassNames = mutableSetOf<String>()
+
     // Transiently set in transformVariableDeclaration when the initializer is an anonymous
     // ClassExpression. Consumed by transformClassExpression to emit `__setFunctionName(_a, "X")`
     // in the comma-list capture pattern. Restored after the inner transform returns.
@@ -1725,11 +1730,14 @@ class Transformer(
                                 extractIdentifierName(it.name) == null
                             }
                             // Keep-declaration mode if any initializer is a function/arrow/class
+                            // (or the B345/B346 ES-decorated class IIFE — class semantics).
                             val needsKeepDeclaration = hasComplexPattern ||
                                     stmt.declarationList.declarations.any { decl ->
                                         decl.initializer is FunctionExpression ||
                                                 decl.initializer is ArrowFunction ||
-                                                decl.initializer is ClassExpression
+                                                decl.initializer is ClassExpression ||
+                                                (extractIdentifierName(decl.name) in esDecoratedClassNames &&
+                                                    decl.initializer is CallExpression)
                                     }
                             if (needsKeepDeclaration) {
                                 // Try to flatten ObjectBindingPattern to direct exports.prop = expr.prop
@@ -11019,10 +11027,71 @@ class Transformer(
      * export { C };   // ESM exported classes
      * ```
      */
+    /** B345/B346 shared: `const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;` */
+    private fun esDecorateMetadataConst(): Statement {
+        val metadataInit = ConditionalExpression(
+            condition = BinaryExpression(
+                left = BinaryExpression(
+                    left = TypeOfExpression(expression = syntheticId("Symbol"), pos = -1, end = -1),
+                    operator = SyntaxKind.EqualsEqualsEquals,
+                    right = StringLiteralNode(text = "function", singleQuote = false, rawText = null, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
+                pos = -1, end = -1,
+            ),
+            whenTrue = CallExpression(
+                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("create"), pos = -1, end = -1),
+                arguments = listOf(syntheticId("null")), pos = -1, end = -1,
+            ),
+            whenFalse = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId("_metadata"), initializer = metadataInit, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.ConstKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+    }
+
+    /** B345/B346 shared: `if (_metadata) Object.defineProperty(<target>, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });` */
+    private fun esDecorateDefineMetadataIf(target: Expression): Statement {
+        fun prop(name: String, value: Expression) = PropertyAssignment(
+            name = syntheticId(name), initializer = value, pos = -1, end = -1,
+        )
+        return IfStatement(
+            expression = syntheticId("_metadata"),
+            thenStatement = ExpressionStatement(expression = CallExpression(
+                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("defineProperty"), pos = -1, end = -1),
+                arguments = listOf(
+                    target,
+                    PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
+                    ObjectLiteralExpression(
+                        properties = listOf(
+                            prop("enumerable", syntheticId("true")),
+                            prop("configurable", syntheticId("true")),
+                            prop("writable", syntheticId("true")),
+                            prop("value", syntheticId("_metadata")),
+                        ),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                ),
+                pos = -1, end = -1,
+            ), pos = -1, end = -1),
+            elseStatement = null, pos = -1, end = -1,
+        )
+    }
+
     private fun transformEsDecoratedClassStaticBlockForm(decl: ClassDeclaration): List<Statement> {
         requireHelper("__esDecorate")
         requireHelper("__runInitializers")
         val className = decl.name!!.text
+        esDecoratedClassNames.add(className)
 
         val result = transformClassBody(
             name = decl.name,
@@ -11064,34 +11133,7 @@ class Transformer(
         )
 
         // The decoration static block.
-        val metadataInit = ConditionalExpression(
-            condition = BinaryExpression(
-                left = BinaryExpression(
-                    left = TypeOfExpression(expression = syntheticId("Symbol"), pos = -1, end = -1),
-                    operator = SyntaxKind.EqualsEqualsEquals,
-                    right = StringLiteralNode(text = "function", singleQuote = false, rawText = null, pos = -1, end = -1),
-                    pos = -1, end = -1,
-                ),
-                operator = SyntaxKind.AmpersandAmpersand,
-                right = PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
-                pos = -1, end = -1,
-            ),
-            whenTrue = CallExpression(
-                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("create"), pos = -1, end = -1),
-                arguments = listOf(syntheticId("null")), pos = -1, end = -1,
-            ),
-            whenFalse = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
-            pos = -1, end = -1,
-        )
-        val metadataConst = VariableStatement(
-            declarationList = VariableDeclarationList(
-                declarations = listOf(VariableDeclaration(
-                    name = syntheticId("_metadata"), initializer = metadataInit, pos = -1, end = -1,
-                )),
-                flags = SyntaxKind.ConstKeyword, pos = -1, end = -1,
-            ),
-            modifiers = emptySet(), pos = -1, end = -1,
-        )
+        val metadataConst = esDecorateMetadataConst()
         fun prop(name: String, value: Expression) = PropertyAssignment(
             name = syntheticId(name), initializer = value, pos = -1, end = -1,
         )
@@ -11123,27 +11165,7 @@ class Transformer(
                 expression = syntheticId("_classDescriptor"), name = syntheticId("value"), pos = -1, end = -1,
             )),
         ))
-        val defineMetadata = IfStatement(
-            expression = syntheticId("_metadata"),
-            thenStatement = exprStmt(CallExpression(
-                expression = PropertyAccessExpression(expression = syntheticId("Object"), name = syntheticId("defineProperty"), pos = -1, end = -1),
-                arguments = listOf(
-                    syntheticId("_classThis"),
-                    PropertyAccessExpression(expression = syntheticId("Symbol"), name = syntheticId("metadata"), pos = -1, end = -1),
-                    ObjectLiteralExpression(
-                        properties = listOf(
-                            prop("enumerable", syntheticId("true")),
-                            prop("configurable", syntheticId("true")),
-                            prop("writable", syntheticId("true")),
-                            prop("value", syntheticId("_metadata")),
-                        ),
-                        multiLine = false, pos = -1, end = -1,
-                    ),
-                ),
-                pos = -1, end = -1,
-            )),
-            elseStatement = null, pos = -1, end = -1,
-        )
+        val defineMetadata = esDecorateDefineMetadataIf(syntheticId("_classThis"))
         val runExtras = exprStmt(CallExpression(
             expression = helperExpr("__runInitializers"),
             arguments = listOf(syntheticId("_classThis"), syntheticId("_classExtraInitializers")),
@@ -11227,6 +11249,274 @@ class Transformer(
         return statements
     }
 
+    /**
+     * B346: TC39 ES-decorators downlevel for instance FIELD decorators, comma form (target < ES2022):
+     * ```
+     * let C = (() => {
+     *     var _a;
+     *     let _x_decorators;
+     *     let _x_initializers = [];
+     *     let _x_extraInitializers = [];
+     *     return _a = class C {
+     *             constructor() {
+     *                 this.x = __runInitializers(this, _x_initializers, void 0);
+     *                 __runInitializers(this, _x_extraInitializers);
+     *             }
+     *         },
+     *         (() => {
+     *             const _metadata = …;
+     *             _x_decorators = [dec];
+     *             __esDecorate(null, null, _x_decorators, { kind: "field", name: "x", static: false, private: false, access: {…}, metadata: _metadata }, _x_initializers, _x_extraInitializers);
+     *             if (_metadata) Object.defineProperty(_a, Symbol.metadata, {…});
+     *         })(),
+     *         _a;
+     * })();
+     * ```
+     */
+    private fun transformEsDecoratedClassCommaForm(decl: ClassDeclaration): List<Statement> {
+        requireHelper("__esDecorate")
+        requireHelper("__runInitializers")
+        val className = decl.name!!.text
+        esDecoratedClassNames.add(className)
+
+        fun exprStmt(e: Expression): Statement = ExpressionStatement(expression = e, pos = -1, end = -1)
+        fun assign(left: Expression, right: Expression): Expression =
+            BinaryExpression(left = left, operator = SyntaxKind.Equals, right = right, pos = -1, end = -1)
+        fun letDecl(name: String, init: Expression?): VariableStatement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(name), initializer = init, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.LetKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+        fun prop(name: String, value: Expression) = PropertyAssignment(
+            name = syntheticId(name), initializer = value, pos = -1, end = -1,
+        )
+        fun voidZero() = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+        fun runInits(listVar: String, value: Expression?): Expression = CallExpression(
+            expression = helperExpr("__runInitializers"),
+            arguments = listOfNotNull(syntheticId("this"), syntheticId(listVar), value),
+            pos = -1, end = -1,
+        )
+
+        // Decorated instance fields in member order (the caller's gate guarantees the shape).
+        val decoratedFields = decl.members.filterIsInstance<PropertyDeclaration>()
+            .filter { !it.decorators.isNullOrEmpty() }
+        val fieldNames = decoratedFields.map { (it.name as Identifier).text }
+
+        // Rewrite decorated fields: initializer becomes `__runInitializers(this, _x_initializers, <init|void 0>)`;
+        // a field after another decorated field folds the previous one's extraInitializers in front:
+        // `(__runInitializers(this, _prev_extraInitializers), __runInitializers(this, _x_initializers, …))`.
+        var prevDecorated: String? = null
+        val rewrittenMembers = decl.members.map { m ->
+            if (m is PropertyDeclaration && !m.decorators.isNullOrEmpty()) {
+                val fname = (m.name as Identifier).text
+                var init: Expression = runInits("_${fname}_initializers", m.initializer ?: voidZero())
+                val prev = prevDecorated
+                if (prev != null) {
+                    init = ParenthesizedExpression(
+                        expression = BinaryExpression(
+                            left = runInits("_${prev}_extraInitializers", null),
+                            operator = SyntaxKind.Comma,
+                            right = init, pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                }
+                prevDecorated = fname
+                m.copy(decorators = null, initializer = init, type = null)
+            } else m
+        }
+
+        val result = transformClassBody(
+            name = decl.name,
+            typeParameters = decl.typeParameters,
+            heritageClauses = decl.heritageClauses,
+            members = rewrittenMembers,
+            modifiers = decl.modifiers,
+        )
+
+        // Append `__runInitializers(this, _<last>_extraInitializers);` after the last decorated
+        // field's propInit in the constructor body.
+        val lastField = fieldNames.last()
+        val extrasStmt = exprStmt(runInits("_${lastField}_extraInitializers", null))
+        val patchedMembers = result.members.map { m ->
+            if (m is Constructor && m.body != null) {
+                val stmts = m.body.statements.toMutableList()
+                val lastInitIdx = stmts.indexOfLast { s ->
+                    s is ExpressionStatement && (s.expression as? BinaryExpression)?.let { be ->
+                        be.operator == SyntaxKind.Equals &&
+                            (be.left as? PropertyAccessExpression)?.let { pa ->
+                                (pa.expression as? Identifier)?.text == "this" && pa.name.text == lastField
+                            } == true
+                    } == true
+                }
+                if (lastInitIdx >= 0) {
+                    stmts.add(lastInitIdx + 1, extrasStmt)
+                    m.copy(body = m.body.copy(statements = stmts))
+                } else m
+            } else m
+        }
+
+        // The named class expression: `_a = class C { … }`.
+        val classExpr = ClassExpression(
+            name = decl.name,
+            typeParameters = null,
+            heritageClauses = result.heritageClauses,
+            members = patchedMembers,
+            modifiers = emptySet(),
+            pos = -1, end = -1,
+        )
+
+        // Decoration IIFE statements.
+        val decoStmts = mutableListOf<Statement>()
+        decoStmts.add(esDecorateMetadataConst())
+        for (f in decoratedFields) {
+            val fname = (f.name as Identifier).text
+            decoStmts.add(exprStmt(assign(syntheticId("_${fname}_decorators"), ArrayLiteralExpression(
+                elements = f.decorators!!.map { transformExpression(it.expression) },
+                pos = -1, end = -1,
+            ))))
+        }
+        for (fname in fieldNames) {
+            fun objParam() = Parameter(name = syntheticId("obj"), pos = -1, end = -1)
+            val accessObj = ObjectLiteralExpression(
+                properties = listOf(
+                    prop("has", ArrowFunction(
+                        parameters = listOf(objParam()),
+                        body = BinaryExpression(
+                            left = StringLiteralNode(text = fname, singleQuote = false, rawText = null, pos = -1, end = -1),
+                            operator = SyntaxKind.InKeyword,
+                            right = syntheticId("obj"), pos = -1, end = -1,
+                        ),
+                        hasParenthesizedParameters = false, pos = -1, end = -1,
+                    )),
+                    prop("get", ArrowFunction(
+                        parameters = listOf(objParam()),
+                        body = PropertyAccessExpression(expression = syntheticId("obj"), name = syntheticId(fname), pos = -1, end = -1),
+                        hasParenthesizedParameters = false, pos = -1, end = -1,
+                    )),
+                    prop("set", ArrowFunction(
+                        parameters = listOf(objParam(), Parameter(name = syntheticId("value"), pos = -1, end = -1)),
+                        body = Block(
+                            statements = listOf(exprStmt(assign(
+                                PropertyAccessExpression(expression = syntheticId("obj"), name = syntheticId(fname), pos = -1, end = -1),
+                                syntheticId("value"),
+                            ))),
+                            multiLine = false, pos = -1, end = -1,
+                        ),
+                        hasParenthesizedParameters = true, pos = -1, end = -1,
+                    )),
+                ),
+                multiLine = false, pos = -1, end = -1,
+            )
+            val contextObj = ObjectLiteralExpression(
+                properties = listOf(
+                    prop("kind", StringLiteralNode(text = "field", singleQuote = false, rawText = null, pos = -1, end = -1)),
+                    prop("name", StringLiteralNode(text = fname, singleQuote = false, rawText = null, pos = -1, end = -1)),
+                    prop("static", syntheticId("false")),
+                    prop("private", syntheticId("false")),
+                    prop("access", accessObj),
+                    prop("metadata", syntheticId("_metadata")),
+                ),
+                multiLine = false, pos = -1, end = -1,
+            )
+            decoStmts.add(exprStmt(CallExpression(
+                expression = helperExpr("__esDecorate"),
+                arguments = listOf(
+                    syntheticId("null"), syntheticId("null"), syntheticId("_${fname}_decorators"),
+                    contextObj, syntheticId("_${fname}_initializers"), syntheticId("_${fname}_extraInitializers"),
+                ),
+                pos = -1, end = -1,
+            )))
+        }
+        decoStmts.add(esDecorateDefineMetadataIf(syntheticId("_a")))
+        val decoIife = CallExpression(
+            expression = ParenthesizedExpression(
+                expression = ArrowFunction(
+                    parameters = emptyList(),
+                    body = Block(statements = decoStmts, multiLine = true, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            arguments = emptyList(), pos = -1, end = -1,
+        )
+
+        // return _a = class C {…}, (() => {…})(), _a;
+        val commaChain = BinaryExpression(
+            left = BinaryExpression(
+                left = assign(syntheticId("_a"), classExpr),
+                operator = SyntaxKind.Comma,
+                right = decoIife, pos = -1, end = -1,
+            ),
+            operator = SyntaxKind.Comma,
+            right = syntheticId("_a"), pos = -1, end = -1,
+            multiLineComma = true,
+        )
+
+        val bodyStmts = mutableListOf<Statement>()
+        bodyStmts.add(VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(name = syntheticId("_a"), pos = -1, end = -1)),
+                flags = SyntaxKind.VarKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        ))
+        for (fname in fieldNames) {
+            bodyStmts.add(letDecl("_${fname}_decorators", null))
+            bodyStmts.add(letDecl("_${fname}_initializers", ArrayLiteralExpression(elements = emptyList(), pos = -1, end = -1)))
+            bodyStmts.add(letDecl("_${fname}_extraInitializers", ArrayLiteralExpression(elements = emptyList(), pos = -1, end = -1)))
+        }
+        bodyStmts.addAll(result.leadingStatements)
+        bodyStmts.addAll(result.trailingStatements)
+        bodyStmts.add(ReturnStatement(expression = commaChain, pos = -1, end = -1))
+
+        val iife = CallExpression(
+            expression = ParenthesizedExpression(
+                expression = ArrowFunction(
+                    parameters = emptyList(),
+                    body = Block(statements = bodyStmts, multiLine = true, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            arguments = emptyList(), pos = -1, end = -1,
+        )
+
+        val strippedModifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract
+        val isExported = ModifierFlag.Export in strippedModifiers
+        val isESM = isESModuleFormat(options, currentFileName)
+        val varModifiers = if (isExported && !isESM) setOf(ModifierFlag.Export) else emptySet()
+        val letStatement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(className), initializer = iife, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.LetKeyword, pos = -1, end = -1,
+            ),
+            modifiers = varModifiers, pos = decl.pos, end = decl.end,
+            leadingComments = decl.leadingComments,
+        )
+
+        val statements = mutableListOf<Statement>(letStatement)
+        if (isExported && isESM) {
+            statements.add(ExportDeclaration(
+                exportClause = NamedExports(
+                    elements = listOf(ExportSpecifier(
+                        propertyName = null, name = syntheticId(className),
+                        isTypeOnly = false, pos = -1, end = -1,
+                    )),
+                    pos = -1, end = -1,
+                ),
+                moduleSpecifier = null, pos = -1, end = -1,
+            ))
+        }
+        return statements
+    }
+
     private fun transformClassDeclaration(decl: ClassDeclaration): List<Statement> {
         val hasClassDecorators = options.experimentalDecorators && !decl.decorators.isNullOrEmpty()
         val hasAnyDecorators = options.experimentalDecorators && (
@@ -11243,6 +11533,29 @@ class Transformer(
             options.effectiveTarget >= ScriptTarget.ES2022
         ) {
             return transformEsDecoratedClassStaticBlockForm(decl)
+        }
+
+        // B346: TC39 ES-decorators — instance FIELD decorators under target < ES2022
+        // (no static blocks): the `return _a = class C {…}, (() => {…__esDecorate…})(), _a;`
+        // comma form. Narrow gate: named class, NO class decorators, every decorated member
+        // is an instance non-static PropertyDeclaration with a plain Identifier name.
+        if (!options.experimentalDecorators && decl.decorators.isNullOrEmpty() &&
+            decl.name != null && ModifierFlag.Default !in decl.modifiers &&
+            options.effectiveTarget < ScriptTarget.ES2022 &&
+            decl.members.any { it is PropertyDeclaration && !it.decorators.isNullOrEmpty() } &&
+            decl.members.all { m ->
+                val decs = when (m) {
+                    is PropertyDeclaration -> m.decorators
+                    is MethodDeclaration -> m.decorators
+                    is GetAccessor -> m.decorators
+                    is SetAccessor -> m.decorators
+                    else -> null
+                }
+                decs.isNullOrEmpty() ||
+                    (m is PropertyDeclaration && ModifierFlag.Static !in m.modifiers && m.name is Identifier)
+            }
+        ) {
+            return transformEsDecoratedClassCommaForm(decl)
         }
 
         // Mark decorator helpers needed BEFORE transforming the class body,
