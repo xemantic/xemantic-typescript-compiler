@@ -11605,6 +11605,7 @@ class Transformer(
                 heritageClauses = expr.heritageClauses,
                 members = expr.members,
                 modifiers = expr.modifiers,
+                isClassExpression = true,
             )
             val transformed = expr.copy(
                 typeParameters = null,
@@ -11618,15 +11619,20 @@ class Transformer(
             // `(_b = class …, _a = <captured>, _b)`. Narrow gate: every leading statement is a
             // plain `var` decl and every trailing statement assigns one of those vars —
             // private-field WeakMap statements don't match (their vars hoist elsewhere) and
-            // keep the prior drop behavior.
-            if (result.trailingStatements.isNotEmpty()) {
+            // keep the prior drop behavior. B340: private-state init assignments
+            // (`_x = new WeakMap()`, brand, method functions) splice in right after
+            // `_a = class`, before the computed-name captures.
+            val privateStateExprs = result.privateStateStatements
+                .mapNotNull { (it as? ExpressionStatement)?.expression }
+            if (result.trailingStatements.isNotEmpty() || privateStateExprs.isNotEmpty()) {
                 val leadingNames = result.leadingStatements.flatMap { lead ->
                     (lead as? VariableStatement)?.declarationList?.declarations
                         ?.mapNotNull { (it.name as? Identifier)?.text } ?: return@flatMap emptyList()
                 }
                 val allLeadingAreVars = result.leadingStatements.all { it is VariableStatement }
                 val captureExprs = mutableListOf<Expression>()
-                var allTrailingAreCaptures = allLeadingAreVars && leadingNames.isNotEmpty()
+                var allTrailingAreCaptures = allLeadingAreVars &&
+                    (leadingNames.isNotEmpty() || result.trailingStatements.isEmpty())
                 if (allTrailingAreCaptures) {
                     outer@ for (stmt in result.trailingStatements) {
                         val e = (stmt as? ExpressionStatement)?.expression
@@ -11664,6 +11670,7 @@ class Transformer(
                         right = transformed,
                         pos = -1, end = -1,
                     ))
+                    elements.addAll(privateStateExprs)
                     elements.addAll(captureExprs)
                     elements.add(syntheticId(tempName))
                     return CommaListExpression(elements = elements, pos = expr.pos, end = expr.end)
@@ -11689,6 +11696,10 @@ class Transformer(
             members = expr.members,
             modifiers = expr.modifiers,
             trailingVarName = tempName,
+            isClassExpression = true,
+            // B340: the binding name names the private-state vars on the statics path
+            // (same name __setFunctionName will assign).
+            assignedName = if (expr.name == null) pendingClassExprBindingName else null,
         )
 
         // Replace className references in member bodies (method/accessor bodies reference the class by name)
@@ -11720,6 +11731,11 @@ class Transformer(
             right = transformedExpr,
             pos = -1, end = -1,
         ))
+        // B340: instance private-state init assignments come BEFORE __setFunctionName
+        // (tsc order: WeakMaps/brand/methods, then the name assignment, then statics).
+        for (s in result.privateStateStatements) {
+            (s as? ExpressionStatement)?.expression?.let { elements.add(it) }
+        }
         // __setFunctionName(_a, "X") after the capture, before trailing statements.
         if (funcNameForSetFunctionName != null && result.trailingStatements.isNotEmpty()) {
             requireHelper("__setFunctionName")
@@ -11940,6 +11956,11 @@ class Transformer(
         val members: List<ClassElement>,
         val trailingStatements: List<Statement>,
         val leadingStatements: List<Statement> = emptyList(),
+        /** B340 (class EXPRESSIONS only): instance private-state init assignments
+         *  (`_x = new WeakMap(), _instances = new WeakSet(), _m = function _m() {…}`)
+         *  to splice into the capture comma list right after `_a = class`, BEFORE
+         *  __setFunctionName and the static trailing statements. */
+        val privateStateStatements: List<Statement> = emptyList(),
     )
 
     private fun transformClassBody(
@@ -11949,6 +11970,14 @@ class Transformer(
         members: List<ClassElement>,
         modifiers: Set<ModifierFlag>,
         trailingVarName: String? = null, // override for trailing-statement LHS (class expression temp var)
+        // B340: true when called from transformClassExpression — private state vars route
+        // into hoistedVarScopes (one combined `var` with the temps) and their init
+        // assignments become privateStateStatements (comma-list elements), not standalone.
+        isClassExpression: Boolean = false,
+        // B340: the __setFunctionName binding name (statics-path anonymous class expression) —
+        // used for private-state var naming (`_<assignedName>_<field>`); a no-statics anonymous
+        // class expression gets BARE `_<field>` names (tsc getPrivateIdentifierEnvironment).
+        assignedName: String? = null,
     ): ClassTransformResult {
 
         val isDerived = heritageClauses?.any {
@@ -12085,7 +12114,7 @@ class Transformer(
         val privateFieldTrailingStatements = mutableListOf<Statement>()
         val needsPrivateFieldDownlevel = options.effectiveTarget < ScriptTarget.ES2022
 
-        if (needsPrivateFieldDownlevel) {
+        if (needsPrivateFieldDownlevel && !isClassExpression) {
             val className = name?.text ?: "_anonymous"
             for (prop in instanceProperties) {
                 val nm = prop.name
@@ -12147,6 +12176,102 @@ class Transformer(
             }
         }
 
+        // B340: class-EXPRESSION private state (tsc classPrivateFields, expression form):
+        // state vars (WeakMaps for instance fields, a WeakSet brand + per-method function vars
+        // when private methods exist, `{ value: init }` descriptor vars for static fields)
+        // are allocated into hoistedVarScopes (combined `var` with the temps); their init
+        // assignments become privateStateStatements (instance) / static trailing replacements.
+        // Naming: `_<className-or-assignedName>_<field>`, or BARE `_<field>` for a no-statics
+        // anonymous class (tsc getPrivateIdentifierEnvironment).
+        val privateStaticFieldVars = mutableMapOf<PropertyDeclaration, String>()
+        val privateMethodCaptured = mutableSetOf<ClassElement>()
+        val privateStateStatements = mutableListOf<Statement>()
+        var brandVar: String? = null
+        if (needsPrivateFieldDownlevel && isClassExpression) {
+            val classNameForState = name?.text ?: assignedName
+            fun stateVarName(fieldName: String): String =
+                if (classNameForState != null) "_${classNameForState}_$fieldName" else "_$fieldName"
+            val privateMethods = members.filterIsInstance<MethodDeclaration>().filter { m ->
+                (m.name as? Identifier)?.text?.startsWith("#") == true &&
+                    m.body != null && ModifierFlag.Static !in m.modifiers &&
+                    !m.asteriskToken && ModifierFlag.Async !in m.modifiers
+            }
+            // Allocation order (drives the combined `var` ordering): brand first, then
+            // private fields/methods in MEMBER order.
+            if (privateMethods.isNotEmpty()) {
+                brandVar = stateVarName("instances")
+                hoistedVarScopes.lastOrNull()?.add(brandVar)
+                if (functionScopeDepth == 0) computedPropHoistNames.add(brandVar)
+            }
+            val methodVars = mutableListOf<Pair<MethodDeclaration, String>>()
+            for (m in members) {
+                when {
+                    m is PropertyDeclaration && (m.name as? Identifier)?.text?.startsWith("#") == true &&
+                        ModifierFlag.Declare !in m.modifiers -> {
+                        val fieldName = (m.name as Identifier).text.removePrefix("#")
+                        val sv = stateVarName(fieldName)
+                        hoistedVarScopes.lastOrNull()?.add(sv)
+                        if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
+                        if (ModifierFlag.Static in m.modifiers) {
+                            privateStaticFieldVars[m] = sv
+                        } else {
+                            privateFieldInfos.add(PrivateFieldInfo(
+                                fieldName, sv, m.initializer?.let { transformExpression(it) },
+                            ))
+                        }
+                    }
+                    m is MethodDeclaration && m in privateMethods -> {
+                        val sv = stateVarName((m.name as Identifier).text.removePrefix("#"))
+                        hoistedVarScopes.lastOrNull()?.add(sv)
+                        if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
+                        methodVars.add(m to sv)
+                        privateMethodCaptured.add(m)
+                    }
+                }
+            }
+            // Init-assignment order: instance WeakMaps (member order), the brand WeakSet,
+            // then the method functions.
+            for (info in privateFieldInfos) {
+                privateStateStatements.add(ExpressionStatement(
+                    expression = BinaryExpression(
+                        left = syntheticId(info.weakMapVar),
+                        operator = Equals,
+                        right = NewExpression(expression = syntheticId("WeakMap"), arguments = emptyList(), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            }
+            brandVar?.let { bv ->
+                privateStateStatements.add(ExpressionStatement(
+                    expression = BinaryExpression(
+                        left = syntheticId(bv),
+                        operator = Equals,
+                        right = NewExpression(expression = syntheticId("WeakSet"), arguments = emptyList(), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            }
+            for ((m, sv) in methodVars) {
+                privateStateStatements.add(ExpressionStatement(
+                    expression = BinaryExpression(
+                        left = syntheticId(sv),
+                        operator = Equals,
+                        right = FunctionExpression(
+                            name = syntheticId(sv),
+                            parameters = transformParameters(m.parameters),
+                            body = m.body?.let { transformBlock(it, isFunctionScope = true) }
+                                ?: Block(statements = emptyList(), pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            }
+        }
+
         // B339: push the private-field environment for this class so member-body
         // `expr.#x` reads/writes rewrite to __classPrivateFieldGet/Set against the
         // WeakMap vars. Non-field '#' members map to null (blocks outer-class matches).
@@ -12194,6 +12319,23 @@ class Transformer(
                     pos = -1, end = -1,
                 )
             )
+        }
+
+        // B340: brand-check WeakSet registration (`_instances.add(this)`) precedes the
+        // WeakMap field initializations (tsc classPrivateFields ctor prologue order).
+        brandVar?.let { bv ->
+            propInitStatements.add(ExpressionStatement(
+                expression = CallExpression(
+                    expression = PropertyAccessExpression(
+                        expression = syntheticId(bv),
+                        name = syntheticId("add"),
+                        pos = -1, end = -1,
+                    ),
+                    arguments = listOf(syntheticId("this")),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ))
         }
 
         // Private field WeakMap initialization: _ClassName_field.set(this, void 0)
@@ -12539,6 +12681,10 @@ class Transformer(
                 member is ClassStaticBlockDeclaration && options.effectiveTarget < ScriptTarget.ES2022 -> {
                     // Skip — collected in staticBlocks, emitted as IIFE trailing statements
                 }
+                member in privateMethodCaptured -> {
+                    // B340: private method captured as `_m = function _m() {…}` in the
+                    // class-expression comma list — drop from the class body.
+                }
                 else -> {
                     var transformed = transformClassElement(member)
                     // B323: a kept member hosting pending computed-name captures gets
@@ -12627,6 +12773,29 @@ class Transformer(
             }
 
             for (prop in staticProperties) {
+                // B340: static PRIVATE fields store into the per-class descriptor var:
+                // `_C_staticX = { value: init }` (tsc classPrivateFields static form).
+                val staticStateVar = privateStaticFieldVars[prop]
+                if (staticStateVar != null && prop.initializer != null) {
+                    trailingStatements.add(ExpressionStatement(
+                        expression = BinaryExpression(
+                            left = syntheticId(staticStateVar),
+                            operator = Equals,
+                            right = ObjectLiteralExpression(
+                                properties = listOf(PropertyAssignment(
+                                    name = syntheticId("value"),
+                                    initializer = transformExpression(prop.initializer),
+                                    pos = -1, end = -1,
+                                )),
+                                multiLine = false,
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                    continue
+                }
                 if (prop.initializer != null && options.effectiveTarget < ScriptTarget.ES2022) {
                     val classId = Identifier(text = effectiveName, pos = -1, end = -1)
                     val lhs: Expression? = when (val nm = prop.name) {
@@ -12765,6 +12934,7 @@ class Transformer(
             members = outputMembers,
             trailingStatements = privateFieldTrailingStatements + computedTrailing + trailingStatements,
             leadingStatements = computedLeading + privateFieldLeadingStatements,
+            privateStateStatements = privateStateStatements,
         )
     }
 
