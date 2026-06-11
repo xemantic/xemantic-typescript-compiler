@@ -894,9 +894,9 @@ class TypeScriptCompiler {
             val checker = Checker(options, listOf(binderResult))
             diagnostics.addAll(checker.getDiagnostics())
             // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
-            // like TS2737/TS1203 are suppressed in a file that already has parse diagnostics.
+            // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
             if (parser.getDiagnostics().isNotEmpty()) {
-                diagnostics.removeAll { it.code == 2737 || it.code == 1203 }
+                diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1346,9 +1346,9 @@ class TypeScriptCompiler {
                     .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
                     .associate { it.fileName to it.content })
             diagnostics.addAll(checker.getDiagnostics())
-            // B284: tsc grammarErrorOnNode — TS2737/TS1203 suppressed in parse-errored files.
+            // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
             if (filesWithParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll { (it.code == 2737 || it.code == 1203) && it.fileName in filesWithParseDiagnostics }
+                diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
             }
             // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
             // resolves through an `exports` field that exposes no types entry.

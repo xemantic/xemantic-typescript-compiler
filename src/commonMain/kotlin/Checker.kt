@@ -12954,7 +12954,13 @@ class Checker(
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
-            walkVarFn7006Stmts(result.sourceFile.statements, source, fileName)
+            val savedLocals = currentFileLocals
+            currentFileLocals = result.locals
+            try {
+                walkVarFn7006Stmts(result.sourceFile.statements, source, fileName)
+            } finally {
+                currentFileLocals = savedLocals
+            }
         }
     }
 
@@ -13001,7 +13007,10 @@ class Checker(
                     init?.let { walkVarFn7006Expr(it, source, fileName) }
                 }
             }
-            is ExpressionStatement -> walkVarFn7006Expr(stmt.expression, source, fileName)
+            // A BARE expression-statement arrow/function-expression is never contextually
+            // typed — its own unannotated params fire TS7006 (fatarrowfunctionsOptionalArgs:
+            // bare/parenthesized/ternary-branch/binary-operand/any-rest-call-arg positions).
+            is ExpressionStatement -> walkVarFn7006Expr(stmt.expression, source, fileName, emitOwn = true)
             is ReturnStatement -> stmt.expression?.let { walkVarFn7006Expr(it, source, fileName) }
             is Block -> walkVarFn7006Stmts(stmt.statements, source, fileName)
             is FunctionDeclaration -> stmt.body?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
@@ -13028,19 +13037,77 @@ class Checker(
         }
     }
 
-    private fun walkVarFn7006Expr(expr: Expression, source: String, fileName: String) {
+    private fun walkVarFn7006Expr(expr: Expression, source: String, fileName: String, emitOwn: Boolean = false) {
         when (expr) {
-            is ArrowFunction -> when (val b = expr.body) {
-                is Block -> walkVarFn7006Stmts(b.statements, source, fileName)
-                is Expression -> walkVarFn7006Expr(b, source, fileName)
-                else -> {}
+            is ArrowFunction -> {
+                if (emitOwn) emitVarFn7006Params(expr.parameters, source, fileName)
+                when (val b = expr.body) {
+                    is Block -> walkVarFn7006Stmts(b.statements, source, fileName)
+                    // An EXPRESSION body in an uncontextualized position is itself
+                    // uncontextualized — `(b)=>(c)=>81` fires for both b and c.
+                    is Expression -> walkVarFn7006Expr(b, source, fileName, emitOwn)
+                    else -> {}
+                }
             }
-            is FunctionExpression -> walkVarFn7006Stmts(expr.body.statements, source, fileName)
-            is ParenthesizedExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
+            is FunctionExpression -> {
+                if (emitOwn) emitVarFn7006Params(expr.parameters, source, fileName)
+                walkVarFn7006Stmts(expr.body.statements, source, fileName)
+            }
+            is ParenthesizedExpression -> walkVarFn7006Expr(expr.expression, source, fileName, emitOwn)
             is TypeAssertionExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
+            is ConditionalExpression -> {
+                walkVarFn7006Expr(expr.condition, source, fileName, emitOwn)
+                walkVarFn7006Expr(expr.whenTrue, source, fileName, emitOwn)
+                walkVarFn7006Expr(expr.whenFalse, source, fileName, emitOwn)
+            }
+            is BinaryExpression -> {
+                // Non-assignment operands stay uncontextualized (`((a)=>0) + ''`,
+                // `((a)=>90) instanceof Function`); assignment RHS may pick up a
+                // contextual type from the target — keep the legacy no-emit there.
+                // Iterative LEFT SPINE (binderBinaryExpressionStress — deep a+b+c+…
+                // chains StackOverflow naive left recursion).
+                val spine = ArrayList<BinaryExpression>()
+                var cur: Expression = expr
+                while (cur is BinaryExpression) {
+                    spine.add(cur)
+                    cur = cur.left
+                }
+                walkVarFn7006Expr(cur, source, fileName, emitOwn)
+                for (i in spine.indices.reversed()) {
+                    val node = spine[i]
+                    val isAssign = node.operator == SyntaxKind.Equals ||
+                        (node.operator.name.endsWith("Equals") &&
+                            node.operator != SyntaxKind.EqualsEquals &&
+                            node.operator != SyntaxKind.EqualsEqualsEquals &&
+                            node.operator != SyntaxKind.ExclamationEquals &&
+                            node.operator != SyntaxKind.ExclamationEqualsEquals &&
+                            node.operator != SyntaxKind.LessThanEquals &&
+                            node.operator != SyntaxKind.GreaterThanEquals)
+                    walkVarFn7006Expr(node.right, source, fileName, if (isAssign) false else emitOwn)
+                }
+            }
+            is CallExpression -> {
+                // Call args are contextually typed by the callee's signature — emit only
+                // when the callee is a local FunctionDeclaration whose every parameter is
+                // `any`/`...rest: any[]` (no usable contextual param types, tsc still
+                // reports TS7006 for the callback's params).
+                val calleeName = (expr.expression as? Identifier)?.text
+                val decl = calleeName?.let { currentFileLocals?.get(it) }
+                    ?.declarations?.filterIsInstance<FunctionDeclaration>()?.firstOrNull()
+                val allAny = decl != null && decl.parameters.isNotEmpty() && decl.parameters.all { p ->
+                    val t = p.type
+                    isAnyKeywordType(t) || (p.dotDotDotToken && t is ArrayType && isAnyKeywordType(t.elementType))
+                }
+                if (allAny) {
+                    expr.arguments.forEach { walkVarFn7006Expr(it, source, fileName, emitOwn = true) }
+                }
+            }
             else -> {}
         }
     }
+
+    private fun isAnyKeywordType(t: TypeNode?): Boolean =
+        t is KeywordTypeNode && t.kind == SyntaxKind.AnyKeyword
 
     private fun emitVarFn7006Params(parameters: List<Parameter>, source: String, fileName: String) {
         for (param in parameters) {
@@ -13053,6 +13120,8 @@ class Checker(
             if (name.text.isEmpty() || name.text == "this") continue
             val start = name.pos
             val (line, character) = getLineAndCharacterOfPosition(source, start)
+            // tsc's span covers the name PLUS the optional `?` token when present.
+            val qExtra = if (param.questionToken) 1 else 0
             diagnostics.add(Diagnostic(
                 message = "Parameter '${name.text}' implicitly has an 'any' type.",
                 category = DiagnosticCategory.Error,
@@ -13061,7 +13130,7 @@ class Checker(
                 line = line,
                 character = character,
                 start = start,
-                length = name.text.length,
+                length = name.text.length + qExtra,
             ))
         }
     }
@@ -33644,6 +33713,11 @@ interface DataView {
             is ConditionalExpression -> {
                 if (isAlwaysFalsyExpr(expr.condition)) {
                     emitTS2873(expr.condition, source, fileName)
+                } else if (isAlwaysTruthyForOrExpr(expr.condition)) {
+                    // tsc checkTruthinessOfType covers `?:` conditions too — an
+                    // always-truthy syntactic shape (paren'd arrow/function/object/…)
+                    // fires TS2872 (fatarrowfunctionsOptionalArgs (85,1)).
+                    emitTS2872(expr.condition, source, fileName)
                 }
                 checkEnumReferenceFalsyCondition(expr.condition, source, fileName)
                 checkAlwaysTruthyInExpr(expr.whenTrue, source, fileName)

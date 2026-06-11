@@ -190,9 +190,10 @@ class Parser(
         // numeric/bigint literals (e.g. `2n2` scans as `2n` `2`) to avoid noisy
         // regressions in broader error-recovery paths. Covers patterns like
         // `this.foo: any;` (mis-typed class-field declaration inside a body).
-        if ((token == SyntaxKind.Colon || token == SyntaxKind.NumericLiteral ||
+        if ((token == SyntaxKind.Colon || token == SyntaxKind.Question ||
+                token == SyntaxKind.NumericLiteral ||
                 token == SyntaxKind.BigIntLiteral) && !scanner.hasPrecedingLineBreak()) {
-            val len = if (token == SyntaxKind.Colon) 1
+            val len = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) 1
                 else scanner.getTokenText().length.coerceAtLeast(1)
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = len)
@@ -3987,6 +3988,13 @@ class Parser(
     private fun parseConditionalExpression(): Expression {
         val expr = parseBinaryExpression(0)
         if (token != SyntaxKind.Question) return expr
+        // tsc: an (unparenthesized) arrow function is an ASSIGNMENT-level expression —
+        // it can never be a conditional's condition. `(a) => {} ? b : c` ends the
+        // statement at the arrow (';' expected at the `?`); a PARENTHESIZED arrow
+        // condition still binds normally. An EMPTY error-recovery Identifier condition
+        // bails too — the no-progress statement recovery then skips the `?` and
+        // discards, instead of keeping a garbage ` ? x : y` conditional.
+        if (expr is ArrowFunction || (expr is Identifier && expr.text.isEmpty())) return expr
         nextToken()
         val whenTrue = parseAssignmentExpression()
         parseExpected(SyntaxKind.Colon)
