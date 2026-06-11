@@ -474,6 +474,16 @@ class Parser(
                 reportError("Declaration or statement expected.", code = 1128)
                 break
             }
+            // B327 (tsc parseDeclaration MissingDeclaration): outside class bodies,
+            // `static` followed by a same-line identifier consumes the modifier with
+            // TS1128 at it and re-parses the rest (`static test()` → `test();`).
+            if (classBodyDepth == 0 && token == SyntaxKind.StaticKeyword &&
+                lookAhead { nextToken(); isIdentifier() && !scanner.hasPrecedingLineBreak() }
+            ) {
+                reportError("Declaration or statement expected.", code = 1128)
+                nextToken()
+                continue
+            }
             // B325 (tsc parseStatements/isStartOfStatement): a ',' can never START a
             // statement — TS1128 "Declaration or statement expected." (same-start-deduped
             // against a preceding TS1144 at the same comma) + SKIP, never the comma-
@@ -1236,6 +1246,14 @@ class Parser(
             // tsc parseErrorForMissingSemicolonAfter (generic fallback): a same-line `)`
             // after an expression statement cannot ASI — ';' expected at the `)`. The
             // statement-level recovery that follows is same-start-deduped against this.
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(), overrideLength = 1)
+        } else if (token == SyntaxKind.OpenBrace && !scanner.hasPrecedingLineBreak() &&
+            expr !is Identifier) {
+            // B327 (same generic fallback): a same-line `{` after a NON-bare-identifier
+            // expression statement — ';' expected at the `{` and the block re-parses as
+            // its own statement (`test(name?:any) {}`). Bare identifiers stay silent
+            // (the TS1434 paths own those — `interface Foo.I1 { }`'s recovered `I1`).
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = 1)
         } else {
@@ -5699,6 +5717,11 @@ class Parser(
             // is fine.
             var prev = SyntaxKind.OpenParen
             var invalidParamStart = false
+            // B326: tracks whether the paren interior is a BARE identifier/comma list —
+            // the only shape for which a '{' follow commits to an arrow (tsc validates
+            // via a full speculative signature parse; `(y = z ==== 'fn') {` must stay a
+            // parenthesized expression — parserUnparsedTokenCrash2).
+            var onlyIdentsAndCommas = true
             while (depth > 0 && scanner.getToken() != SyntaxKind.EndOfFile) {
                 val t = scanner.getToken()
                 if (t == SyntaxKind.OpenParen) {
@@ -5707,6 +5730,10 @@ class Parser(
                     }
                     depth++
                 } else if (t == SyntaxKind.CloseParen) depth--
+                if (depth >= 1 && t != SyntaxKind.CloseParen &&
+                    !(depth == 1 && (isIdentifierToken(t) || t == SyntaxKind.Comma || t == SyntaxKind.OpenParen))) {
+                    onlyIdentsAndCommas = false
+                }
                 prev = t
                 if (depth > 0) scanner.scan()
             }
@@ -5715,6 +5742,11 @@ class Parser(
                 scanner.scan() // skip )
                 when (scanner.getToken()) {
                     SyntaxKind.EqualsGreaterThan -> true
+                    // B326 (tsc parseParenthesizedArrowFunctionExpression): a '{' right
+                    // after the close paren commits to an arrow even without '=>' —
+                    // "'=>' expected." and the block parses as the body (`(x) { }`) —
+                    // but only when the interior is a bare identifier/comma list.
+                    SyntaxKind.OpenBrace -> onlyIdentsAndCommas
                     SyntaxKind.Colon -> {
                         // Could be a return-type annotation: (params): Type => body
                         // Skip past the type expression to see if => follows.
@@ -5805,7 +5837,22 @@ class Parser(
         val body: Node = if (lastTokenBeforeArrow == SyntaxKind.EqualsGreaterThan ||
             lastTokenBeforeArrow == SyntaxKind.OpenBrace
         ) {
-            if (token == SyntaxKind.OpenBrace) parseBlock() else parseAssignmentExpression()
+            if (token == SyntaxKind.OpenBrace) parseBlock()
+            else if (token in ARROW_BODY_STATEMENT_KEYWORDS) {
+                // B326 (tsc parseArrowFunctionExpressionBody): a plain STATEMENT start
+                // (a keyword that cannot start an expression; function/class excluded)
+                // after '=>' is a BLOCK with a missing '{' — "'{' expected." at the
+                // keyword, then statements parse until '}' (IgnoreMissingOpenBrace;
+                // the '}' is consumed as the block close): `() => var k = 10;}` →
+                // `() => { var k = 10; }`.
+                reportError("'{' expected.", code = 1005)
+                val bPos = getPos()
+                val stmts = parseStatements()
+                val cbPos = if (token == SyntaxKind.CloseBrace) getPos() else -1
+                parseExpected(SyntaxKind.CloseBrace)
+                Block(statements = stmts, multiLine = false, pos = bPos, end = getEnd(), closeBracePos = cbPos)
+            }
+            else parseAssignmentExpression()
         } else {
             Identifier(text = "", pos = getPos(), end = getPos())
         }
@@ -6427,12 +6474,15 @@ class Parser(
                 args.add(argExpr)
             }
             if (!parseOptional(SyntaxKind.Comma)) {
-                // tsc parseDelimitedList recovery: a same-line `=>` after an argument
-                // reports ',' expected, is skipped (no context owns it — the deduped
-                // TS1135 is omitted), and the list RE-ENTERS: `foo((1)=>{return 0;})`
-                // → arguments `(1)` and the recovered object literal `{ return: 0 }`.
-                if (token == SyntaxKind.EqualsGreaterThan && !scanner.hasPrecedingLineBreak()) {
-                    reportError("',' expected.", code = 1005, overrideLength = 2)
+                // tsc parseDelimitedList recovery: a same-line `=>` (B320) or `:` (B327)
+                // after an argument reports ',' expected, is skipped (no context owns
+                // it — the deduped TS1135 is omitted), and the list RE-ENTERS:
+                // `foo((1)=>{return 0;})` → arguments `(1)` + the recovered object
+                // literal; `test(name:string)` → arguments `name, string`.
+                if ((token == SyntaxKind.EqualsGreaterThan || token == SyntaxKind.Colon) &&
+                    !scanner.hasPrecedingLineBreak()) {
+                    reportError("',' expected.", code = 1005,
+                        overrideLength = if (token == SyntaxKind.EqualsGreaterThan) 2 else 1)
                     nextToken()
                     continue
                 }
@@ -8130,6 +8180,20 @@ class Parser(
     }
 
 }
+
+/**
+ * B326 (tsc parseArrowFunctionExpressionBody gate): statement-START keywords that cannot
+ * start an EXPRESSION — an arrow body beginning with one of these is a block with a
+ * missing '{'. `function`/`class` are deliberately excluded (expression starts), as are
+ * semicolons (tsc's explicit exclusions).
+ */
+private val ARROW_BODY_STATEMENT_KEYWORDS = setOf(
+    SyntaxKind.VarKeyword, SyntaxKind.ConstKeyword,
+    SyntaxKind.IfKeyword, SyntaxKind.WhileKeyword, SyntaxKind.DoKeyword, SyntaxKind.ForKeyword,
+    SyntaxKind.ReturnKeyword, SyntaxKind.SwitchKeyword, SyntaxKind.ThrowKeyword,
+    SyntaxKind.TryKeyword, SyntaxKind.BreakKeyword, SyntaxKind.ContinueKeyword,
+    SyntaxKind.DebuggerKeyword, SyntaxKind.WithKeyword,
+)
 
 private val RESERVED_TYPE_KEYWORD_NAMES = setOf(
     "string", "number", "boolean", "any", "unknown", "never",
