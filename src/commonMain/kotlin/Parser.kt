@@ -108,6 +108,78 @@ class Parser(
         "var", "let", "const", "declare", "interface", "is", "module", "namespace", "type",
     )
 
+    /** tsc parser.ts `viableKeywordSuggestions` — every keyword longer than 2 chars,
+     *  in textToKeywordObj order (the order matters for getSpaceSuggestion's
+     *  first-prefix-wins rule). */
+    private val VIABLE_KEYWORD_SUGGESTIONS = listOf(
+        "abstract", "accessor", "any", "asserts", "assert", "bigint", "boolean", "break",
+        "case", "catch", "class", "continue", "const", "debugger", "declare", "default",
+        "defer", "delete", "else", "enum", "export", "extends", "false", "finally", "for",
+        "from", "function", "get", "implements", "import", "infer", "instanceof",
+        "interface", "intrinsic", "keyof", "let", "module", "namespace", "never", "new",
+        "null", "number", "object", "package", "private", "protected", "public",
+        "override", "out", "readonly", "require", "global", "return", "satisfies", "set",
+        "static", "string", "super", "switch", "symbol", "this", "throw", "true", "try",
+        "type", "typeof", "undefined", "unique", "unknown", "using", "var", "void",
+        "while", "with", "yield", "async", "await",
+    )
+
+    /** tsc core.ts levenshteinWithMax: insert/delete = 1, substitution = 2,
+     *  case-only difference = 0.1. Returns null when the distance exceeds [max]. */
+    private fun levenshteinWithMax(s1: String, s2: String, max: Double): Double? {
+        var previous = DoubleArray(s2.length + 1) { it.toDouble() }
+        var current = DoubleArray(s2.length + 1)
+        val big = max + 0.01
+        for (i in 1..s1.length) {
+            val c1 = s1[i - 1]
+            val minJ = if (i > max) kotlin.math.ceil(i - max).toInt().coerceAtLeast(1) else 1
+            val maxJ = if (s2.length > max + i) (max + i).toInt() else s2.length
+            current[0] = i.toDouble()
+            var colMin = i.toDouble()
+            for (j in 1 until minJ) current[j] = big
+            for (j in minJ..maxJ) {
+                val substitutionDistance =
+                    if (s1[i - 1].lowercaseChar() == s2[j - 1].lowercaseChar()) previous[j - 1] + 0.1
+                    else previous[j - 1] + 2.0
+                val dist = if (c1 == s2[j - 1]) previous[j - 1]
+                else minOf(previous[j] + 1.0, current[j - 1] + 1.0, substitutionDistance)
+                current[j] = dist
+                colMin = minOf(colMin, dist)
+            }
+            for (j in maxJ + 1..s2.length) current[j] = big
+            if (colMin > max) return null
+            val tmp = previous; previous = current; current = tmp
+        }
+        val res = previous[s2.length]
+        return if (res > max) null else res
+    }
+
+    /** tsc core.ts getSpellingSuggestion over the viable keyword pool. */
+    private fun getKeywordSpellingSuggestion(name: String): String? {
+        val maximumLengthDifference = maxOf(2, name.length * 34 / 100)
+        var bestDistance = name.length * 2 / 5 + 1.0 // floor(len * 0.4) + 1
+        var bestCandidate: String? = null
+        for (candidate in VIABLE_KEYWORD_SUGGESTIONS) {
+            if (kotlin.math.abs(candidate.length - name.length) > maximumLengthDifference) continue
+            if (candidate == name) continue
+            if (candidate.length < 3 && candidate.lowercase() != name.lowercase()) continue
+            val distance = levenshteinWithMax(name, candidate, bestDistance - 0.1) ?: continue
+            bestDistance = distance
+            bestCandidate = candidate
+        }
+        return bestCandidate
+    }
+
+    /** tsc parser.ts getSpaceSuggestion: `declareconst` → "declare const". */
+    private fun getSpaceSuggestion(expressionText: String): String? {
+        for (keyword in VIABLE_KEYWORD_SUGGESTIONS) {
+            if (expressionText.length > keyword.length + 2 && expressionText.startsWith(keyword)) {
+                return "$keyword ${expressionText.substring(keyword.length)}"
+            }
+        }
+        return null
+    }
+
     private fun nextToken(): SyntaxKind {
         prevToken = token
         token = scanner.scan()
@@ -565,7 +637,13 @@ class Parser(
             else parseImportDeclaration()
         }
         ExportKeyword -> parseExportDeclaration()
-        InterfaceKeyword -> if (lookAhead { nextToken(); isIdentifier() || isKeyword() }) {
+        // tsc isDeclaration: `interface` starts a declaration iff the next token is an
+        // identifier-capable token ON THE SAME LINE (nextTokenIsIdentifierOnSameLine).
+        // `interface void { }` / `interface { }` are EXPRESSION statements (the
+        // recovery in parseExpressionStatement adds TS2427/TS1438, the checker TS2693);
+        // `interface interface { }` IS a declaration (strict-reserved words are
+        // identifier-capable — the binder/checker owns the strict-mode complaint).
+        InterfaceKeyword -> if (lookAhead { nextToken(); !scanner.hasPrecedingLineBreak() && isIdentifier() }) {
             parseInterfaceDeclaration()
         } else {
             parseExpressionStatement()
@@ -1240,8 +1318,37 @@ class Parser(
                     // `namespace` — tsc parses the construct properly, so no TS1434.
                     !(expr.text == "as" && scanner.getTokenValue() == "namespace")))
         if (missingSemiAsUnexpectedIdent) {
-            reportError("Unexpected keyword or identifier.", code = 1434,
-                overrideStart = (expr as Identifier).pos, overrideLength = expr.text.length.coerceAtLeast(1))
+            // tsc parseErrorForMissingSemicolonAfter: try the keyword spelling/space
+            // suggestion first — TS1435 "Unknown keyword or identifier. Did you mean
+            // '{0}'?" (`asynd` → 'async', `declareconst` → 'declare const') — and fall
+            // back to TS1434 only when no keyword is close (commonMissingSemicolons).
+            val identExpr = expr as Identifier
+            val suggestion = getKeywordSpellingSuggestion(identExpr.text)
+                ?: getSpaceSuggestion(identExpr.text)
+            if (suggestion != null) {
+                reportError("Unknown keyword or identifier. Did you mean '$suggestion'?", code = 1435,
+                    overrideStart = identExpr.pos, overrideLength = identExpr.text.length.coerceAtLeast(1))
+            } else {
+                reportError("Unexpected keyword or identifier.", code = 1434,
+                    overrideStart = identExpr.pos, overrideLength = identExpr.text.length.coerceAtLeast(1))
+            }
+        } else if (expr is Identifier && expr.text == "interface" &&
+            !scanner.hasPrecedingLineBreak() &&
+            token != SyntaxKind.Semicolon && token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
+            // tsc parseErrorForMissingSemicolonAfter "interface" special case
+            // (parseErrorForInvalidName): `interface { }` → TS1438 "Interface must be
+            // given a name." at the `{`; `interface void { }` → TS2427 "Interface name
+            // cannot be 'void'." at the offending token. The statement parses as an
+            // expression statement (checker adds TS2693 for the value-use of
+            // `interface`), and the follow tokens re-parse as their own statement.
+            if (token == SyntaxKind.OpenBrace) {
+                reportError("Interface must be given a name.", code = 1438,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 1)
+            } else {
+                reportError("Interface name cannot be '${scanner.getTokenValue()}'.", code = 2427,
+                    overrideStart = scanner.getTokenPos(),
+                    overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+            }
         } else if (token == SyntaxKind.CloseParen && !scanner.hasPrecedingLineBreak()) {
             // tsc parseErrorForMissingSemicolonAfter (generic fallback): a same-line `)`
             // after an expression statement cannot ASI — ';' expected at the `)`. The
@@ -1256,6 +1363,23 @@ class Parser(
             // (the TS1434 paths own those — `interface Foo.I1 { }`'s recovered `I1`).
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = 1)
+        } else if (token == SyntaxKind.OpenBrace && !scanner.hasPrecedingLineBreak() &&
+            expr is Identifier && expr.text !in MISSING_SEMI_SPECIAL_IDENTS) {
+            // A bare identifier followed by a same-line `{` reaches tsc's
+            // parseErrorForMissingSemicolonAfter too: TS1435 with a keyword suggestion
+            // (`interfaceMyInterface { }` → 'interface MyInterface'), else TS1434 at
+            // the identifier (`clasd MyClass2 {}`'s MyClass2). The recovered-identifier
+            // shapes (interfaceDeclaration4's I1) already carry a TS1434 at the same
+            // start from their own recovery — the global same-start dedup absorbs this
+            // one.
+            val suggestion = getKeywordSpellingSuggestion(expr.text) ?: getSpaceSuggestion(expr.text)
+            if (suggestion != null) {
+                reportError("Unknown keyword or identifier. Did you mean '$suggestion'?", code = 1435,
+                    overrideStart = expr.pos, overrideLength = expr.text.length.coerceAtLeast(1))
+            } else {
+                reportError("Unexpected keyword or identifier.", code = 1434,
+                    overrideStart = expr.pos, overrideLength = expr.text.length.coerceAtLeast(1))
+            }
         } else {
             parseSemicolon()
         }
@@ -1825,6 +1949,19 @@ class Parser(
                 reportError("Identifier expected.", code = 1003,
                     overrideStart = scanner.getTokenPos(), overrideLength = 1)
                 Identifier(text = "", pos = scanner.getTokenPos(), end = scanner.getTokenPos())
+            } else if (ModifierFlag.Default !in modifiers && isKeyword() &&
+                !scanner.hasPrecedingLineBreak()) {
+                // tsc createIdentifier: a RESERVED word in function-name position reports
+                // TS1359 "Identifier expected. '{0}' is a reserved word that cannot be
+                // used here." at the token WITHOUT consuming it (`function function() {}`
+                // — the '(' -expected from the empty param-list parse is same-start-
+                // deduped, and the reserved word re-parses as its own statement).
+                reportError(
+                    "Identifier expected. '${scanner.getTokenValue()}' is a reserved word that cannot be used here.",
+                    code = 1359,
+                    overrideStart = scanner.getTokenPos(),
+                    overrideLength = scanner.getTokenText().length)
+                Identifier(text = "", pos = scanner.getTokenPos(), end = scanner.getTokenPos())
             } else null
         }
         val parsedTypeParams = parseTypeParametersOpt()
@@ -2033,6 +2170,18 @@ class Parser(
                     reportError("Unexpected token. A constructor, method, accessor, or property was expected.", code = 1068)
                     nextToken()
                     continue
+                }
+                // B331 (same tsc recovery, ABORT arm): a bare `{` can't start a member
+                // but CAN start a statement in the outer SourceElements context — TS1068
+                // at the `{` (same-start-deduped against a preceding ';'-expected there)
+                // and the member list ABORTS unconsumed: the class's '}'-expected is
+                // deduped too, `{}` re-parses as a statement-level block, and the class's
+                // own `}` becomes the orphan TS1128 (commonMissingSemicolons classes A-C).
+                // `static { … }` blocks are unaffected — their `{` follows the consumed
+                // modifier inside parseClassMember.
+                if (token == SyntaxKind.OpenBrace) {
+                    reportError("Unexpected token. A constructor, method, accessor, or property was expected.", code = 1068, overrideLength = 1)
+                    break
                 }
                 val member = parseClassMember()
                 if (member != null) {
@@ -2378,6 +2527,15 @@ class Parser(
                     start = name.pos,
                     length = name.text.length,
                 ))
+            } else if (token == SyntaxKind.OpenBrace && !scanner.hasPrecedingLineBreak()) {
+                // tsc parseSemicolonAfterPropertyName generic fallback: a same-line `{`
+                // after a property can't ASI — "';' expected." at the `{`; the member
+                // list then aborts on it (TS1068 same-start-deduped) and the block
+                // re-parses at statement level (commonMissingSemicolons classes D/E:
+                // `['a'] = 0` continues as `0['b']()` and the method's `{` is reached
+                // here as the property's follow token).
+                reportError("';' expected.", code = 1005,
+                    overrideStart = scanner.getTokenPos(), overrideLength = 1)
             } else {
                 parseSemicolon()
             }
@@ -3178,16 +3336,23 @@ class Parser(
         //
         // Leading `|` or `&` in `type X = | A | B` is valid (parseType handles them),
         // so don't flag those tokens as "missing type" — treat them as type-starts.
-        if (token != SyntaxKind.Equals && token != SyntaxKind.Bar && token != SyntaxKind.Ampersand && !isStartOfType(token)) {
-            // Case (a): missing `=`. Emit TS1110 at the position right after the name.
+        val missingTypeBody = token != SyntaxKind.Equals && token != SyntaxKind.Bar &&
+            token != SyntaxKind.Ampersand && !isStartOfType(token)
+        val offendingTokenPos = scanner.getTokenPos()
+        val afterNamePos = scanner.getPrevTokenEnd()
+        val eqConsumed = parseExpected(SyntaxKind.Equals)
+        if (missingTypeBody && !eqConsumed && afterNamePos != offendingTokenPos) {
+            // Case (a): missing `=`. tsc reports TS1005 '=' expected at the offending
+            // token (above) and TS1110 "Type expected." at the position right after the
+            // name — SUPPRESSED when both land on the same position (`type type;` keeps
+            // only the TS1005; `export type test\n…` keeps both — tsc same-start dedup).
             reportError(
                 message = "Type expected.",
                 code = 1110,
-                overrideStart = scanner.getPrevTokenEnd(),
+                overrideStart = afterNamePos,
                 overrideLength = 0,
             )
         }
-        val eqConsumed = parseExpected(SyntaxKind.Equals)
         if (eqConsumed && token != SyntaxKind.Bar && token != SyntaxKind.Ampersand && !isStartOfType(token)) {
             // Case (b): `=` consumed but no type body. Emit TS1110 at the position right
             // after `=` (TypeScript's "expected type after =" position — past trailing

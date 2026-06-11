@@ -87,11 +87,14 @@ class Checker(
         /** Computed enum member values: enum symbol ID → (member name → value). */
         val enumValues: MutableMap<Int, MutableMap<String, ConstantValue>> = mutableMapOf()
         /**
-         * Per-file-per-name count of TS2552 spelling suggestions emitted.
-         * TypeScript limits spelling suggestions to 10 per unique name per file.
-         * Key = "$fileName:$missingName".
+         * PROGRAM-WIDE count of unresolved-name reports (tsc checker.ts `suggestionCount`):
+         * every "cannot find name" report through the fallback path (TS2304/TS2552/
+         * TS2583/TS2584/TS2591/TS2592/TS2593) increments it, and the TS2552 spelling-
+         * suggestion LOOKUP only runs while it is < 10 (tsc `maximumSuggestionCount`) —
+         * the 11th+ unresolved name gets plain TS2304 even when a close candidate exists.
+         * The early specialized reporters (TS2749/TS2662/TS2663/TS2686) do NOT count.
          */
-        val spellingSuggestionCounts: MutableMap<String, Int> = mutableMapOf()
+        var unresolvedNameReportCount: Int = 0
         // Type resolution caches (checker-local — NOT on AST nodes)
         /** Cache of TypeNode → resolved Type. */
         val nodeTypes = HashMap<TypeNode, Type>()
@@ -188,7 +191,6 @@ class Checker(
     @get:JvmName("diagnostics_") private val diagnostics get() = state.diagnostics
     private val referencedAliases get() = state.referencedAliases
     private val enumValues get() = state.enumValues
-    private val spellingSuggestionCounts get() = state.spellingSuggestionCounts
     private val nodeTypes get() = state.nodeTypes
     private val symbolTypes get() = state.symbolTypes
     private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
@@ -20890,6 +20892,7 @@ class Checker(
                 start = start,
                 length = length,
             ))
+            state.unresolvedNameReportCount++
             return
         }
         // B237: TS2584 — console/document under an explicit @lib that excludes dom and
@@ -20920,6 +20923,7 @@ class Checker(
                     start = start,
                     length = length,
                 ))
+                state.unresolvedNameReportCount++
                 return
             }
         }
@@ -21007,6 +21011,7 @@ class Checker(
                 start = start,
                 length = length,
             ))
+            state.unresolvedNameReportCount++
             return
         }
 
@@ -21025,6 +21030,7 @@ class Checker(
                 start = start,
                 length = length,
             ))
+            state.unresolvedNameReportCount++
             return
         }
 
@@ -21042,17 +21048,19 @@ class Checker(
                 start = start,
                 length = length,
             ))
+            state.unresolvedNameReportCount++
             return
         }
 
         // Try to find a spelling suggestion (TS2552)
-        // TypeScript limits to 10 suggestions per unique name per file (max10SpellingSuggestions)
-        val countKey = "$fileName:$name"
-        val currentCount = spellingSuggestionCounts[countKey] ?: 0
-        if (currentCount < 10) {
+        // tsc caps spelling-suggestion LOOKUPS at 10 per program (maximumSuggestionCount):
+        // every unresolved-name report burns one attempt (incremented below for the
+        // TS2304 fallback too), so the 11th+ "cannot find name" is plain TS2304 even
+        // when a close candidate exists (commonMissingSemicolons).
+        if (state.unresolvedNameReportCount < 10) {
             val suggestion = getSpellingSuggestion(name, scope, fileName, forTypePosition = inTypePosition)
             if (suggestion != null) {
-                spellingSuggestionCounts[countKey] = currentCount + 1
+                state.unresolvedNameReportCount++
                 // Try to find the declaration position of the suggestion for TS2728 related info.
                 // TypeScript omits TS2728 when the suggestion is a pure type alias — `findDeclarationRelatedInfo`
                 // returns null for TypeAliasDeclaration.
@@ -21099,6 +21107,7 @@ class Checker(
             start = start,
             length = length,
         ))
+        state.unresolvedNameReportCount++
     }
 
     /**
@@ -55068,10 +55077,14 @@ interface DataView {
             } == true
             // Use effectiveTarget so ES3/ES5 targets also fire TS1212 for binding names
             // (TypeScript fires TS1212 for reserved words in binding positions at all targets)
-            // — EXCEPT when both @strict and @alwaysStrict are EXPLICITLY false: then only
-            // a module or "use strict" prologue makes file-level bindings strict
-            // (convertKeywordsYes alwaysstrict=false expects no binding TS1212s).
-            val isStrict = if (options.alwaysStrict == false && options.strictExplicitlyFalse) {
+            // — EXCEPT when the file is EXPLICITLY non-strict (tsc derives alwaysStrict from
+            // strict, so `@strict: false` alone suffices; an explicit `@alwaysStrict: true`
+            // overrides): then only a module or "use strict" prologue makes file-level
+            // bindings strict (convertKeywordsYes alwaysstrict=false, commonMissingSemicolons).
+            val explicitNonStrict = options.alwaysStrict == false ||
+                (options.alwaysStrict != true && options.strictExplicitlyFalse)
+            strictReservedExplicitNonStrict = explicitNonStrict && !isModule && !hasUseStrict
+            val isStrict = if (explicitNonStrict) {
                 isModule || hasUseStrict
             } else {
                 options.effectiveTarget >= ScriptTarget.ES2015 ||
@@ -55082,8 +55095,8 @@ interface DataView {
             }
             // For expression-position TS1212: fire when explicitly strict, NOT just target >= ES2015.
             // Target alone doesn't make file-level code strict — only classes, modules, and explicit flags do.
-            // When alwaysStrict is explicitly false, suppress the target-based strictness.
-            val isExpressionStrict = if (options.alwaysStrict == false && options.strictExplicitlyFalse) {
+            // When the file is explicitly non-strict, suppress the target-based strictness.
+            val isExpressionStrict = if (explicitNonStrict) {
                 // Explicitly non-strict: only fire if module or has "use strict"
                 isModule || hasUseStrict
             } else {
@@ -55098,6 +55111,11 @@ interface DataView {
         }
     }
 
+    /** True while walking a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
+     *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must not fire
+     *  there (tsc only has TS2480 for `let let` in non-strict code; commonMissingSemicolons). */
+    private var strictReservedExplicitNonStrict = false
+
     private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
         for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
     }
@@ -55108,7 +55126,8 @@ interface DataView {
                 val isLetOrConst = stmt.declarationList.flags == SyntaxKind.LetKeyword || stmt.declarationList.flags == SyntaxKind.ConstKeyword
                 for (decl in stmt.declarationList.declarations) {
                     // TS1212 fires in strict mode OR in let/const declarations (let/const implies strict for reserved words)
-                    if (isStrict || isLetOrConst) checkNodeForStrictReserved(decl.name, source, fileName, inClass, isModule)
+                    // — except in EXPLICITLY non-strict files, where TS2480 alone owns `let let` (tsc).
+                    if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(decl.name, source, fileName, inClass, isModule)
                     // TS2480 fires unconditionally for 'let' in let/const declarations
                     checkLetInLetOrConst(decl.name, stmt.declarationList.flags, source, fileName)
                 }
@@ -55148,15 +55167,19 @@ interface DataView {
                         start = nm.pos, length = (nm.rawText?.length ?: nm.text.length) + 2,
                     ))
                 }
-                if (isStrict) for (member in stmt.members) {
+                // Class INTERIORS are automatically strict too (tsc): member params and
+                // bodies report TS1213 regardless of file strictness — `@strict: false`
+                // does not exempt `constructor (static)` (constructorStaticParamName) or
+                // a method-body `var let` (jsFileCompilationBindStrictModeErrors b.js).
+                for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
                             checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
                         }
                         is Constructor -> {
                             checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule) }
+                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
                         }
                         else -> {}
                     }
@@ -55207,7 +55230,7 @@ interface DataView {
                 if (init is VariableDeclarationList) {
                     val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
                     for (d in init.declarations) {
-                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
+                        if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
@@ -55218,7 +55241,7 @@ interface DataView {
                 if (init is VariableDeclarationList) {
                     val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
                     for (d in init.declarations) {
-                        if (isStrict || isLetOrConst) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
+                        if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
                         checkLetInLetOrConst(d.name, init.flags, source, fileName)
                     }
                 }
