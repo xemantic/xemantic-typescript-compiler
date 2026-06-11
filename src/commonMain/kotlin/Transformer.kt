@@ -233,6 +233,17 @@ class Transformer(
     private var needsEsDecorateHelper = false
     private var needsRunInitializersHelper = false
 
+    // B349: set when a for-await-of statement downlevels to the __asyncValues protocol.
+    private var needsAsyncValuesHelper = false
+
+    // B349: tsc createUniqueName-style named temps (e_1, c_1, c_1_1). Per-file counters.
+    private val uniqueNameCounters = mutableMapOf<String, Int>()
+    private fun uniqueName(base: String): String {
+        val n = (uniqueNameCounters[base] ?: 0) + 1
+        uniqueNameCounters[base] = n
+        return "${base}_$n"
+    }
+
     // B346: class names emitted via the ES-decorators `let C = (() => {…})();` IIFE form.
     // The CJS transform must treat these like class-expression initializers (keep the local
     // let + trailing `exports.C = C;` sync), NOT as direct exports.
@@ -293,6 +304,7 @@ class Transformer(
             "__classPrivateFieldSet" -> if (!needsClassPrivateFieldSetHelper) { needsClassPrivateFieldSetHelper = true; helperUsageOrder.add(name) }
             "__esDecorate" -> if (!needsEsDecorateHelper) { needsEsDecorateHelper = true; helperUsageOrder.add(name) }
             "__runInitializers" -> if (!needsRunInitializersHelper) { needsRunInitializersHelper = true; helperUsageOrder.add(name) }
+            "__asyncValues" -> if (!needsAsyncValuesHelper) { needsAsyncValuesHelper = true; helperUsageOrder.add(name) }
         }
     }
 
@@ -574,11 +586,20 @@ class Transformer(
             // TypeScript emits `__setFunctionName` AFTER `__awaiter` but BEFORE `__asyncGenerator`
             // (which inlines as `__await` + `__asyncGenerator`). If both helpers are needed, move
             // `__setFunctionName` to that position regardless of first-usage order.
-            val orderedHelpers = if (helperUsageOrder.contains("__setFunctionName") && helperUsageOrder.contains("__awaiter")) {
+            var orderedHelpers = if (helperUsageOrder.contains("__setFunctionName") && helperUsageOrder.contains("__awaiter")) {
                 val withoutSetFn = helperUsageOrder.filter { it != "__setFunctionName" }
                 val awaiterIdx = withoutSetFn.indexOf("__awaiter")
                 withoutSetFn.subList(0, awaiterIdx + 1) + "__setFunctionName" + withoutSetFn.subList(awaiterIdx + 1, withoutSetFn.size)
             } else helperUsageOrder
+            // B349: __asyncValues (requested mid-body by the for-await downlevel) sorts AFTER
+            // __awaiter (requested by the enclosing async wrap) — tsc helper-priority order.
+            if (orderedHelpers.contains("__asyncValues") && orderedHelpers.contains("__awaiter") &&
+                orderedHelpers.indexOf("__asyncValues") < orderedHelpers.indexOf("__awaiter")
+            ) {
+                val withoutAv = orderedHelpers.filter { it != "__asyncValues" }
+                val awIdx = withoutAv.indexOf("__awaiter")
+                orderedHelpers = withoutAv.subList(0, awIdx + 1) + "__asyncValues" + withoutAv.subList(awIdx + 1, withoutAv.size)
+            }
             for (helperName in orderedHelpers) {
                 when (helperName) {
                     "__makeTemplateObject" -> helpers.add(RawStatement(code = MAKE_TEMPLATE_OBJECT_HELPER))
@@ -596,6 +617,7 @@ class Transformer(
                     "__classPrivateFieldSet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_SET_HELPER))
                     "__esDecorate" -> helpers.add(RawStatement(code = ES_DECORATE_HELPER))
                     "__runInitializers" -> helpers.add(RawStatement(code = RUN_INITIALIZERS_HELPER))
+                    "__asyncValues" -> helpers.add(RawStatement(code = ASYNC_VALUES_HELPER))
                 }
             }
         }
@@ -679,7 +701,7 @@ class Transformer(
             // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
             val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
                 needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
-                needsEsDecorateHelper || needsRunInitializersHelper
+                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
             // B333: automatic-runtime JSX — `const jsx_runtime_1 = require("react/jsx-runtime");`
             // first among the body statements (lands right after the CJS exports-void0
             // preamble); react-jsxdev adds the `_jsxFileName` const.
@@ -721,7 +743,7 @@ class Transformer(
         ) {
             val needsInlineHelperForPreserveCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
                 needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
-                needsEsDecorateHelper || needsRunInitializersHelper
+                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
             if (needsInlineHelperForPreserveCjs) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
                 return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
@@ -770,6 +792,7 @@ class Transformer(
                     "__param" -> tslibNames.add("__param")
                     "__esDecorate" -> tslibNames.add("__esDecorate")
                     "__runInitializers" -> tslibNames.add("__runInitializers")
+                    "__asyncValues" -> tslibNames.add("__asyncValues")
                 }
             }
             if (tslibNames.isNotEmpty()) {
@@ -10766,7 +10789,168 @@ class Transformer(
         )
     }
 
+    /**
+     * B349: `for await (const s of c) { … }` downlevel inside a downleveled async body
+     * (the __awaiter generator; awaits are yields there) — tsc es2018 visitForOfStatement:
+     * ```
+     * try {
+     *     for (_d = true, c_1 = __asyncValues(c); c_1_1 = yield c_1.next(), _a = c_1_1.done, !_a; _d = true) {
+     *         _c = c_1_1.value;
+     *         _d = false;
+     *         const s = _c;
+     *         <body>
+     *     }
+     * }
+     * catch (e_1_1) { e_1 = { error: e_1_1 }; }
+     * finally {
+     *     try {
+     *         if (!_d && !_a && (_b = c_1.return)) yield _b.call(c_1);
+     *     }
+     *     finally { if (e_1) throw e_1.error; }
+     * }
+     * ```
+     */
+    private fun buildForAwaitDownlevel(
+        stmt: ForOfStatement,
+        initList: VariableDeclarationList,
+        bindingDecl: VariableDeclaration,
+    ): Statement {
+        requireHelper("__asyncValues")
+        fun assign(l: Expression, r: Expression): Expression =
+            BinaryExpression(left = l, operator = SyntaxKind.Equals, right = r, pos = -1, end = -1)
+        fun comma(l: Expression, r: Expression): Expression =
+            BinaryExpression(left = l, operator = SyntaxKind.Comma, right = r, pos = -1, end = -1)
+        fun exprStmt(e: Expression): Statement = ExpressionStatement(expression = e, pos = -1, end = -1)
+        fun propAccess(obj: String, name: String): Expression =
+            PropertyAccessExpression(expression = syntheticId(obj), name = syntheticId(name), pos = -1, end = -1)
+
+        // Hoisted temps, in tsc's allocation order: _a (done), e_1 (error box), _b (return
+        // method), _c (value), _d (first/abrupt flag), c_1 (iterator), c_1_1 (step result).
+        val doneTemp = nextTempVarName()
+        val errTemp = uniqueName("e")
+        val retTemp = nextTempVarName()
+        val valTemp = nextTempVarName()
+        val firstTemp = nextTempVarName()
+        val iterBase = (stmt.expression as? Identifier)?.text
+        val iterTemp = if (iterBase != null) uniqueName(iterBase) else nextTempVarName()
+        val resultTemp = uniqueName(iterTemp)
+        val scope = hoistedVarScopes.lastOrNull()
+        listOf(doneTemp, errTemp, retTemp, valTemp, firstTemp, iterTemp, resultTemp).forEach { scope?.add(it) }
+
+        val exprT = transformExpression(stmt.expression)
+
+        val bodyStmts = mutableListOf<Statement>(
+            exprStmt(assign(syntheticId(valTemp), propAccess(resultTemp, "value"))),
+            exprStmt(assign(syntheticId(firstTemp), syntheticId("false"))),
+            VariableStatement(
+                declarationList = initList.copy(declarations = listOf(
+                    bindingDecl.copy(
+                        name = transformBindingName(bindingDecl.name),
+                        type = null,
+                        initializer = syntheticId(valTemp),
+                    )
+                ), pos = -1, end = -1),
+                modifiers = emptySet(), pos = -1, end = -1,
+            ),
+        )
+        when (val origBody = transformStatementSingle(stmt.statement)) {
+            is Block -> bodyStmts.addAll(origBody.statements)
+            else -> bodyStmts.add(origBody)
+        }
+
+        val forStmt = ForStatement(
+            initializer = comma(
+                assign(syntheticId(firstTemp), syntheticId("true")),
+                assign(syntheticId(iterTemp), CallExpression(
+                    expression = helperExpr("__asyncValues"), arguments = listOf(exprT), pos = -1, end = -1,
+                )),
+            ),
+            condition = comma(
+                comma(
+                    assign(syntheticId(resultTemp), YieldExpression(
+                        expression = CallExpression(
+                            expression = propAccess(iterTemp, "next"), arguments = emptyList(), pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )),
+                    assign(syntheticId(doneTemp), propAccess(resultTemp, "done")),
+                ),
+                PrefixUnaryExpression(operator = SyntaxKind.Exclamation, operand = syntheticId(doneTemp), pos = -1, end = -1),
+            ),
+            incrementor = assign(syntheticId(firstTemp), syntheticId("true")),
+            statement = Block(statements = bodyStmts, multiLine = true, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+
+        val catchParam = uniqueName(errTemp)
+        val catchClause = CatchClause(
+            variableDeclaration = VariableDeclaration(name = syntheticId(catchParam), pos = -1, end = -1),
+            block = Block(
+                statements = listOf(exprStmt(assign(syntheticId(errTemp), ObjectLiteralExpression(
+                    properties = listOf(PropertyAssignment(
+                        name = syntheticId("error"), initializer = syntheticId(catchParam), pos = -1, end = -1,
+                    )),
+                    multiLine = false, pos = -1, end = -1,
+                )))),
+                multiLine = false, pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        val closeIf = IfStatement(
+            expression = BinaryExpression(
+                left = BinaryExpression(
+                    left = PrefixUnaryExpression(operator = SyntaxKind.Exclamation, operand = syntheticId(firstTemp), pos = -1, end = -1),
+                    operator = SyntaxKind.AmpersandAmpersand,
+                    right = PrefixUnaryExpression(operator = SyntaxKind.Exclamation, operand = syntheticId(doneTemp), pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                operator = SyntaxKind.AmpersandAmpersand,
+                right = ParenthesizedExpression(
+                    expression = assign(syntheticId(retTemp), propAccess(iterTemp, "return")),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            thenStatement = exprStmt(YieldExpression(
+                expression = CallExpression(
+                    expression = propAccess(retTemp, "call"),
+                    arguments = listOf(syntheticId(iterTemp)),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )),
+            elseStatement = null, pos = -1, end = -1,
+        )
+        val rethrowIf = IfStatement(
+            expression = syntheticId(errTemp),
+            thenStatement = ThrowStatement(expression = propAccess(errTemp, "error"), pos = -1, end = -1),
+            elseStatement = null, pos = -1, end = -1,
+        )
+        val innerTry = TryStatement(
+            tryBlock = Block(statements = listOf(closeIf), multiLine = true, pos = -1, end = -1),
+            catchClause = null,
+            finallyBlock = Block(statements = listOf(rethrowIf), multiLine = false, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return TryStatement(
+            tryBlock = Block(statements = listOf(forStmt), multiLine = true, pos = -1, end = -1),
+            catchClause = catchClause,
+            finallyBlock = Block(statements = listOf(innerTry), multiLine = true, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+    }
+
     private fun transformForOfStatement(stmt: ForOfStatement): Statement {
+        // B349: for-await-of downlevel — only inside a downleveled async body (the __awaiter
+        // generator form), simple Identifier binding.
+        if (stmt.awaitModifier && inAsyncBody) {
+            val initL = stmt.initializer as? VariableDeclarationList
+            val bindingDecl = initL?.declarations?.singleOrNull()
+            if (bindingDecl != null && bindingDecl.name is Identifier && bindingDecl.initializer == null) {
+                return buildForAwaitDownlevel(stmt, initL, bindingDecl)
+            }
+        }
         val i = stmt.initializer
         // Handle `for (let/const/var { a, ...rest } of expr)` when target < ES2018:
         // Replace the destructuring variable with a temp var and expand inside the loop body.
@@ -17955,6 +18139,16 @@ class Transformer(
         value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
     }
     return useValue ? value : void 0;
+};
+"""
+
+        /** `__asyncValues` helper — the for-await-of async-iteration protocol (B349). */
+        val ASYNC_VALUES_HELPER = """var __asyncValues = (this && this.__asyncValues) || function (o) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var m = o[Symbol.asyncIterator], i;
+    return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+    function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+    function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
 };
 """
 

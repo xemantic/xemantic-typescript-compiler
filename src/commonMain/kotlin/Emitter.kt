@@ -1030,8 +1030,11 @@ class Emitter(
                 write(")")
                 emitInnerComments(node.catchClause.afterCloseParenComments)
             }
-            // Force catch blocks with statements to be multiline (matches TypeScript behavior)
-            val catchBlock = if (!node.catchClause.block.multiLine && node.catchClause.block.statements.isNotEmpty()) {
+            // Force catch blocks with statements to be multiline (matches TypeScript behavior).
+            // SYNTHETIC catch blocks (pos == -1, e.g. the for-await downlevel's
+            // `catch (e_1_1) { e_1 = { error: e_1_1 }; }`) keep their single-line form.
+            val catchBlock = if (!node.catchClause.block.multiLine && node.catchClause.block.statements.isNotEmpty() &&
+                node.catchClause.block.pos != -1) {
                 node.catchClause.block.copy(multiLine = true)
             } else node.catchClause.block
             emitBlockBody(catchBlock, emitOpenBraceComments = true)
