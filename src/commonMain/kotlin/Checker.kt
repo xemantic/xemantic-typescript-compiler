@@ -1012,6 +1012,8 @@ class Checker(
         checkDeclarationEmitNameability()
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
         checkDeclarationEmitComputedSymbolNameability()
+        // 14a''. B314: mapped-type unique-symbol key serialization (TS4118)
+        checkDeclarationEmitMappedUniqueSymbolKey()
         // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
         checkDeclarationEmitHugeInferredType()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
@@ -5137,6 +5139,27 @@ class Checker(
                         ))
                         break // report only the first non-nameable referenced type per declaration
                     }
+                    // B315 (declarationEmitUsingTypeAlias1): an ARROW initializer whose
+                    // single param is annotated with an imported type that RESOLVES
+                    // (through `export type X = import('./inner').Y` chains) into a
+                    // package file NOT reachable through the package's `exports` map
+                    // (nodenext) — the inferred RETURN type references the alias-resolved
+                    // HOME declaration, writable only as a relative node_modules path.
+                    // The reported name comes from the RETURN position: `return p` →
+                    // the alias's home name; `return p.member` → the member's annotation.
+                    if (refs.isEmpty() && options.effectiveModule.isNodeNext) {
+                        val arrowRef = arrowReturnAliasHomeRef(init, f)
+                        if (arrowRef != null && packageExportsBlocksFile(arrowRef.second, f)) {
+                            val rel = relativeModulePathForDisplay(f, arrowRef.second)
+                            val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "The inferred type of '${nameNode.text}' cannot be named without a reference to '${arrowRef.first}' from '$rel'. This is likely not portable. A type annotation is necessary.",
+                                category = DiagnosticCategory.Error, code = 2883,
+                                fileName = f, line = l, character = c,
+                                start = nameNode.pos, length = nameNode.text.length,
+                            ))
+                        }
+                    }
                     // (TS2527 below; B172's ExportAssignment branch lives after this loop)
                     // TS2527: `export const X = importedValue` whose type carries a NESTED
                     // (inaccessible) `unique symbol` cannot be portably emitted.
@@ -5576,6 +5599,32 @@ class Checker(
                 ?: resolveModuleSpecifierStrictRelative(specifier, contextFile)
         }
         return resolveBareViaNodeModules(specifier, contextFile) ?: resolveModuleSpecifier(specifier)
+            ?: resolveBareViaPackageExportsRoot(specifier, contextFile)
+    }
+
+    /** B315: bare-specifier resolution through a package.json `exports` "." entry
+     *  (string form), with declaration-extension substitution. FALLBACK-only — runs
+     *  when the plain index/types steps found nothing. */
+    private fun resolveBareViaPackageExportsRoot(specifier: String, contextFile: String): String? {
+        var dir: String? = contextFile.substringBeforeLast('/', "")
+        while (dir != null) {
+            val base = if (dir.isEmpty()) "node_modules/$specifier" else "$dir/node_modules/$specifier"
+            val pkg = jsonModuleContents["$base/package.json"] ?: jsonModuleContents["/$base/package.json"]
+            if (pkg != null) {
+                val m = Regex("\"\\.\"\\s*:\\s*\"([^\"]+)\"").find(pkg)
+                if (m != null) {
+                    val t = "$base/" + m.groupValues[1].removePrefix("./")
+                    for (cand in listOf(
+                        t, t.removeSuffix(".js") + ".d.ts", "$t.d.ts",
+                        t.removeSuffix(".js") + ".ts", "$t.ts",
+                    )) {
+                        if (cand in fileResults) return cand
+                    }
+                }
+            }
+            dir = if (dir.isEmpty()) null else dir.substringBeforeLast('/', "")
+        }
+        return null
     }
 
     /** Walk up the directory tree from [contextFile] looking for `<dir>/node_modules/<specifier>` package files. */
@@ -5644,6 +5693,95 @@ class Checker(
     }
 
     /** The displayed package path for a non-nameable type file: stripped of the first reachable node_modules prefix. */
+    /** B315: for `(p: TN) => { return p[.member]; }`, resolve TN through named-import +
+     *  `export type X = import("./m").Y` alias chains to its HOME file; returns
+     *  (reportedTypeName, homeFile) per the RETURN expression, or null. */
+    private fun arrowReturnAliasHomeRef(init: Expression, f: String): Pair<String, String>? {
+        var e: Expression = init
+        while (e is ParenthesizedExpression) e = e.expression
+        val arrow = e as? ArrowFunction ?: return null
+        val p = arrow.parameters.singleOrNull() ?: return null
+        val pName = (p.name as? Identifier)?.text ?: return null
+        val tn = ((p.type as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+        val retExpr: Expression = when (val b = arrow.body) {
+            is Block -> b.statements.filterIsInstance<ReturnStatement>().firstOrNull()?.expression
+            is Expression -> b
+            else -> null
+        } ?: return null
+        var resolved = resolveImportedSymbolFile(tn, f) ?: return null
+        var body: TypeNode? = null
+        var hops = 0
+        while (hops++ < 5) {
+            val res = fileResults[resolved.first] ?: return null
+            val alias = res.sourceFile.statements.firstNotNullOfOrNull { s ->
+                (s as? TypeAliasDeclaration)?.takeIf { it.name.text == resolved.second }
+            } ?: return null
+            val t = alias.type
+            if (t is ImportType) {
+                val spec = ((t.argument as? LiteralType)?.literal as? StringLiteralNode)?.text ?: return null
+                val q = t.qualifier as? Identifier ?: return null
+                val g = resolveSpecifierAnywhere(spec, resolved.first) ?: return null
+                resolved = g to q.text
+                continue
+            }
+            body = t
+            break
+        }
+        if (body == null) return null
+        return when {
+            retExpr is Identifier && retExpr.text == pName -> resolved.second to resolved.first
+            retExpr is PropertyAccessExpression && (retExpr.expression as? Identifier)?.text == pName -> {
+                val lit = body as? TypeLiteral ?: return null
+                val member = lit.members.firstNotNullOfOrNull { m ->
+                    (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == retExpr.name.text }
+                } ?: return null
+                val mName = ((member.type as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+                mName to resolved.first
+            }
+            else -> null
+        }
+    }
+
+    /** B315: true when [targetFile] sits inside a node_modules package whose
+     *  package.json declares an `exports` map that exposes NO entry resolving to
+     *  the file (extension-stripped literal match over the map's "./..." strings —
+     *  conservative: any wildcard/match keeps the file reachable → no error). */
+    private fun packageExportsBlocksFile(targetFile: String, importerFile: String): Boolean {
+        val marker = "node_modules/"
+        val nmIdx = targetFile.lastIndexOf(marker)
+        if (nmIdx < 0) return false
+        val afterNm = targetFile.substring(nmIdx + marker.length)
+        val pkgName = if (afterNm.startsWith("@"))
+            afterNm.split('/').take(2).joinToString("/") else afterNm.substringBefore('/')
+        val pkgDir = targetFile.substring(0, nmIdx + marker.length) + pkgName
+        val content = jsonModuleContents["$pkgDir/package.json"]
+            ?: jsonModuleContents["/$pkgDir/package.json"] ?: return false
+        if (!content.contains("\"exports\"")) return false
+        val rel = "." + targetFile.substring(pkgDir.length)
+            .removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".js")
+        if ("*" in content) return false // wildcard subpaths — assume reachable
+        val exportedPaths = Regex("\"(\\./[^\"]*)\"").findAll(content)
+            .map { it.groupValues[1].removeSuffix(".js").removeSuffix(".d.ts").removeSuffix(".ts") }
+            .toSet()
+        return rel !in exportedPaths
+    }
+
+    /** B315 display: relative module path from [importer]'s directory to [target]
+     *  without the declaration extension ('../node_modules/some-dep/dist/inner'). */
+    private fun relativeModulePathForDisplay(importer: String, target: String): String {
+        val impDirParts = importer.substringBeforeLast('/', "").split('/').filter { it.isNotEmpty() }
+        val tgt = target.removeSuffix(".d.ts").removeSuffix(".ts")
+        val tgtParts = tgt.split('/').filter { it.isNotEmpty() }
+        var common = 0
+        while (common < impDirParts.size && common < tgtParts.size - 1 &&
+            impDirParts[common] == tgtParts[common]
+        ) common++
+        val ups = List(impDirParts.size - common) { ".." }
+        val downs = tgtParts.drop(common)
+        val joined = (ups + downs).joinToString("/")
+        return if (ups.isEmpty()) "./$joined" else joined
+    }
+
     private fun nameabilityPackagePath(g: String, f: String): String {
         val marker = "node_modules/"
         val fDir = f.substringBeforeLast('/', "")
@@ -5676,6 +5814,97 @@ class Checker(
     // genuinely not value-accessible in the importing file (a value import /
     // local value / global suppresses).
     // -----------------------------------------------------------------------
+    /**
+     * B314 (declarationEmitMappedTypeTemplateTypeofSymbol, TS4118): an EXPORTED
+     * annotation-less `const X = <call>()` whose callee resolves cross-file (named
+     * import or namespace-import member) to a declared function returning `typeof T`,
+     * where T's annotation is a MAPPED type keyed by `typeof S` and S is a
+     * `unique symbol` const in the declaring file — the computed property `[S]`
+     * cannot be serialized in the declaration output. Squiggle at the const NAME.
+     * Self-contained AST + module resolution (the 14a decl-emit-nameability family).
+     */
+    private fun checkDeclarationEmitMappedUniqueSymbolKey() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        if (binderResults.size < 2) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val statements = result.sourceFile.statements
+            if (!isModuleFile(statements)) continue
+            val source = result.sourceFile.text
+            val namedImportTargets = mutableMapOf<String, String>()
+            val nsImportTargets = mutableMapOf<String, String>()
+            for (stmt in statements) {
+                if (stmt !is ImportDeclaration) continue
+                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val target = resolveModuleSpecifier(spec, stmt) ?: continue
+                val clause = stmt.importClause ?: continue
+                when (val nb = clause.namedBindings) {
+                    is NamespaceImport -> nsImportTargets[nb.name.text] = target
+                    is NamedImports -> for (s in nb.elements) namedImportTargets[s.name.text] = target
+                    else -> {}
+                }
+            }
+            if (namedImportTargets.isEmpty() && nsImportTargets.isEmpty()) continue
+            for (stmt in statements) {
+                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val nameNode = decl.name as? Identifier ?: continue
+                    val call = decl.initializer as? CallExpression ?: continue
+                    val (fnName, targetFile) = when (val callee = call.expression) {
+                        is Identifier -> callee.text to namedImportTargets[callee.text]
+                        is PropertyAccessExpression ->
+                            callee.name.text to (callee.expression as? Identifier)?.text?.let { nsImportTargets[it] }
+                        else -> null to null
+                    }
+                    if (fnName == null || targetFile == null) continue
+                    val symName = mappedUniqueSymbolKeyOfFunctionReturn(fnName, targetFile) ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "The type of this node cannot be serialized because its property '[$symName]' cannot be serialized.",
+                        category = DiagnosticCategory.Error, code = 4118,
+                        fileName = f, line = l, character = c,
+                        start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** B314 helper: in [file], find `declare function <fnName>(): typeof T` where T's
+     *  annotation is `{ [K in typeof S]: ... }` and S is a `unique symbol` const —
+     *  returns S's name, else null. */
+    private fun mappedUniqueSymbolKeyOfFunctionReturn(fnName: String, file: String): String? {
+        val target = binderResults.firstOrNull { it.sourceFile.fileName == file } ?: return null
+        val stmts = target.sourceFile.statements
+        val fn = stmts.filterIsInstance<FunctionDeclaration>().firstOrNull { it.name?.text == fnName }
+            ?: return null
+        val tq = fn.type as? TypeQuery ?: return null
+        val tName = ((tq.exprName as? Identifier) ?: return null).text
+        var mapped: MappedType? = null
+        outer@ for (s in stmts) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == tName) {
+                    mapped = d.type as? MappedType
+                    break@outer
+                }
+            }
+        }
+        val constraint = mapped?.typeParameter?.constraint as? TypeQuery ?: return null
+        val symName = ((constraint.exprName as? Identifier) ?: return null).text
+        for (s in stmts) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text != symName) continue
+                val t = d.type
+                if (t is TypeOperator && t.operator == SyntaxKind.UniqueKeyword) return symName
+            }
+        }
+        return null
+    }
+
     private fun checkDeclarationEmitComputedSymbolNameability() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
         if (binderResults.size < 2) return
