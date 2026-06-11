@@ -12781,7 +12781,20 @@ class Transformer(
                 )
             }
 
-            null -> return emptyList()
+            null -> {
+                // Body-less non-declare `global` (parse-recovery `global x`): tsc still
+                // emits the empty namespace IIFE for the invalid augmentation.
+                return if (moduleName == "global" && ModifierFlag.Declare !in decl.modifiers) {
+                    wrapInNamespaceIife(
+                        moduleName = moduleName,
+                        innerStatements = emptyList(),
+                        outerDecl = decl,
+                        nested = nested,
+                        parentNsName = parentNsName,
+                        useDottedVar = useDottedVar,
+                    )
+                } else emptyList()
+            }
             else -> return emptyList()
         }
 
@@ -13813,7 +13826,12 @@ class Transformer(
      * (interfaces, type aliases, etc.) and thus produces no runtime output.
      */
     private fun isTypeOnlyNamespace(decl: ModuleDeclaration): Boolean {
-        val body = decl.body ?: return true
+        // A body-LESS non-declare `global` augmentation (parse-recovery `global x`
+        // shape) is treated by tsc as an INSTANTIATED module — the namespace IIFE
+        // is still emitted (nestedGlobalNamespaceInClass).
+        val body = decl.body
+            ?: return !((decl.name as? Identifier)?.text == "global" &&
+                ModifierFlag.Declare !in decl.modifiers)
         return when (body) {
             is ModuleBlock -> body.statements.all { isTypeOnlyStatement(it) }
             is ModuleDeclaration -> isTypeOnlyNamespace(body)

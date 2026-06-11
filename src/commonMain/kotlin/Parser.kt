@@ -526,8 +526,15 @@ class Parser(
         EnumKeyword -> parseEnumDeclaration()
         NamespaceKeyword -> parseModuleDeclaration()
         GlobalKeyword -> {
-            // `global { }` is a global augmentation (module declaration)
-            val isGlobalAug = lookAhead { nextToken(); token == SyntaxKind.OpenBrace }
+            // `global { }` / `global <identifier>` / `global export` start a global
+            // augmentation declaration (tsc isStartOfDeclaration's GlobalKeyword case:
+            // OpenBrace | Identifier | ExportKeyword); anything else (`global.x`,
+            // `global = 5`) keeps `global` as an identifier expression.
+            val isGlobalAug = lookAhead {
+                nextToken()
+                token == SyntaxKind.OpenBrace || token == SyntaxKind.Identifier ||
+                    token == SyntaxKind.ExportKeyword
+            }
             if (isGlobalAug) parseModuleDeclaration() else parseExpressionStatement()
         }
         ModuleKeyword -> {
@@ -1892,6 +1899,22 @@ class Parser(
             }
         }
 
+        // tsc isClassMemberStart: `global` followed by a same-line identifier is NOT a
+        // member start — the class-members list aborts (TS1068 at `global`; the class's
+        // following '}'-expected is same-start-deduped) and `global <ident>` re-parses
+        // at the statement level as a global-augmentation declaration.
+        if (token == SyntaxKind.GlobalKeyword) {
+            val nextIsIdentSameLine = lookAhead {
+                nextToken()
+                token == SyntaxKind.Identifier && !scanner.hasPrecedingLineBreak()
+            }
+            if (nextIsIdentSameLine) {
+                reportError("Unexpected token. A constructor, method, accessor, or property was expected.",
+                    code = 1068, overrideLength = "global".length)
+                return null
+            }
+        }
+
         if (token == SyntaxKind.ConstructorKeyword ||
             (isIdentifier() && scanner.getTokenValue() == "constructor")
         ) {
@@ -3048,7 +3071,21 @@ class Parser(
             // nested: namespace A.B { }
             nextToken()
             parseModuleDeclaration(modifiers)
-        } else null
+        } else {
+            // tsc parseAmbientExternalModuleDeclaration: a body-less `global` declaration
+            // takes a semicolon — `global x` reports TS1005 ';' expected at the same-line
+            // follow token (which then re-parses as its own statement).
+            if (isGlobal) {
+                if (token == SyntaxKind.Semicolon) nextToken()
+                else if (!scanner.hasPrecedingLineBreak() && token != SyntaxKind.CloseBrace &&
+                    token != SyntaxKind.EndOfFile) {
+                    reportError("';' expected.", code = 1005,
+                        overrideStart = scanner.getTokenPos(),
+                        overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+                }
+            }
+            null
+        }
         val trailing = trailingComments()
         return ModuleDeclaration(
             name = name,
