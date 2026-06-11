@@ -15525,6 +15525,15 @@ Net effect: `find_candidates.py --fresh` now considers 24 fewer skipped tokens (
 - `longObjectInstantiationChain2_ts` — recursive generic alias display (aliasDisplayMap outer-type gap); round-141.
 - `parseAssertEntriesError_ts` — import-attribute parse recovery in type positions; round-141.
 - `parseImportAttributesError_ts` — same family as parseAssertEntriesError; round-141.
+- `staticFieldWithInterfaceContext_ts` — needs PRINT-time generated-name resolution (fn-local temps avoid ENCLOSING scopes' generated names — `_r` after file `_a.._q` — while sibling fns reuse `_a`; transform-time counters can't do both) + __setFunctionName in destructuring-default binding contexts; round-146.
+- `parameterDecoratorsEmitCrash_ts` — ES-decorators (TC39) downlevel: __esDecorate/__runInitializers + `let C = (() => {…})()` class IIFE; major feature, with esDecoratorsClassFieldsCrash + modulePreserveImportHelpers; round-146.
+- `esDecoratorsClassFieldsCrash_ts` — ES-decorators downlevel family (see parameterDecoratorsEmitCrash); round-146.
+- `operationsAvailableOnPromisedType_ts` — es2015 variant needs the for-await-of downlevel (__asyncValues + try/finally iterator protocol); round-146.
+- `expressionsForbiddenInParameterInitializers_ts` — async param defaults move INTO the __awaiter generator (`__awaiter(this, arguments, void 0, function* ({ foo = yield … }) {…})`) with await→yield in the default; round-146.
+- `es6ExportEqualsInterop_ts` — multi-ambient-module `export =` interop emit + errors (JS+errors halves); round-146.
+- `classFieldSuperAccessibleJs1_ts` — TS2855-in-JS suppression rules + TS2565 for super-access to expando statics (JS definite-assignment flow); round-146.
+- `noParameterReassignmentIIFEAnnotated_ts` — TS8029 @param-name/arguments hint + TS2683 expected IN a .js file (exception to the load-bearing checkImplicitThis JS skip) + IArguments-vs-string[] TS2345; round-146.
+- `noParameterReassignmentJSIIFE_ts` — sibling of noParameterReassignmentIIFEAnnotated (the documented B152/B153 JS-skip trap); round-146.
 ### End of skip log
 
 _Terminator heading for the `find_candidates.py` skip-token region — new skip entries go ABOVE this heading; new archive sections go BELOW it._
