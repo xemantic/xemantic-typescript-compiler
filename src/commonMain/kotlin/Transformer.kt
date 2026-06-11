@@ -234,19 +234,26 @@ class Transformer(
     private var pendingClassExprBindingName: String? = null
 
     // B339: active private-field downlevel environments (innermost last). Maps the cooked
-    // member name (incl. leading '#') to its WeakMap var, or null for a '#' member that is
-    // declared but NOT field-downleveled (private method/accessor — the null blocks an
-    // outer-class field with the same name from being wrongly matched). Pushed per class in
-    // transformClassBody when target < ES2022; consulted by the `expr.#x` read/write rewrites.
-    private val privateFieldEnvStack = mutableListOf<Map<String, String?>>()
+    // member name (incl. leading '#') to its downlevel entry, or null for a '#' member that
+    // is declared but NOT downleveled (the null blocks an outer-class member with the same
+    // name from being wrongly matched). Pushed per class in transformClassBody when
+    // target < ES2022; consulted by the `expr.#x` read/write/call rewrites.
+    // kind 'f' = field (stateVar = WeakMap var); 'm' = method (stateVar = the captured
+    // function var, brandVar = the WeakSet brand).
+    private data class PrivateEnvEntry(val kind: Char, val stateVar: String, val brandVar: String? = null)
 
-    private fun lookupPrivateFieldVar(name: String): String? {
+    private val privateFieldEnvStack = mutableListOf<Map<String, PrivateEnvEntry?>>()
+
+    private fun lookupPrivateEnv(name: String): PrivateEnvEntry? {
         for (i in privateFieldEnvStack.indices.reversed()) {
             val env = privateFieldEnvStack[i]
             if (name in env) return env[name]
         }
         return null
     }
+
+    private fun lookupPrivateFieldVar(name: String): String? =
+        lookupPrivateEnv(name)?.takeIf { it.kind == 'f' }?.stateVar
 
     // Set to true when an `import X = require("mod")` is rewritten under
     // module:node*/nodenext + ESM file (per package.json `type: module`). Causes the
@@ -8910,6 +8917,35 @@ class Transformer(
 
             // Call: strip type arguments, recurse
             is CallExpression -> {
+                // B341: private METHOD call — `recv.#m(args)` →
+                // `__classPrivateFieldGet(recv, _brand, "m", _m).call(recv, args)`.
+                // this/identifier receivers only (the receiver is duplicated into .call).
+                run {
+                    val pCallee = expr.expression as? PropertyAccessExpression ?: return@run
+                    if (!pCallee.name.text.startsWith("#") || pCallee.expression !is Identifier) return@run
+                    val entry = lookupPrivateEnv(pCallee.name.text) ?: return@run
+                    if (entry.kind != 'm' || entry.brandVar == null) return@run
+                    requireHelper("__classPrivateFieldGet")
+                    val recv = transformExpression(pCallee.expression)
+                    return CallExpression(
+                        expression = PropertyAccessExpression(
+                            expression = CallExpression(
+                                expression = helperExpr("__classPrivateFieldGet"),
+                                arguments = listOf(
+                                    recv,
+                                    syntheticId(entry.brandVar),
+                                    StringLiteralNode(text = "m", pos = -1, end = -1),
+                                    syntheticId(entry.stateVar),
+                                ),
+                                pos = -1, end = -1,
+                            ),
+                            name = syntheticId("call"),
+                            pos = -1, end = -1,
+                        ),
+                        arguments = listOf(recv) + expr.arguments.map { transformExpression(it) },
+                        pos = -1, end = -1,
+                    )
+                }
                 val transformedExpr = transformExpression(expr.expression)
                 val transformedArgs = expr.arguments.map { transformExpression(it) }
                 // Downlevel `?.()` optional call for targets below ES2020
@@ -9034,18 +9070,25 @@ class Transformer(
                 }
                 // B339: private-field READ downlevel — `expr.#x` →
                 // `__classPrivateFieldGet(expr', _C_x, "f")` when an enclosing class
-                // downleveled the field to a WeakMap.
+                // downleveled the field to a WeakMap; a captured private METHOD reads as
+                // `__classPrivateFieldGet(expr', _brand, "m", _m)` (B341).
                 if (expr.name.text.startsWith("#")) {
-                    val wmVar = lookupPrivateFieldVar(expr.name.text)
-                    if (wmVar != null) {
+                    val entry = lookupPrivateEnv(expr.name.text)
+                    if (entry != null) {
                         requireHelper("__classPrivateFieldGet")
+                        val args = if (entry.kind == 'm' && entry.brandVar != null) listOf(
+                            transformExpression(expr.expression),
+                            syntheticId(entry.brandVar),
+                            StringLiteralNode(text = "m", pos = -1, end = -1),
+                            syntheticId(entry.stateVar),
+                        ) else listOf(
+                            transformExpression(expr.expression),
+                            syntheticId(entry.stateVar),
+                            StringLiteralNode(text = "f", pos = -1, end = -1),
+                        )
                         return CallExpression(
                             expression = helperExpr("__classPrivateFieldGet"),
-                            arguments = listOf(
-                                transformExpression(expr.expression),
-                                syntheticId(wmVar),
-                                StringLiteralNode(text = "f", pos = -1, end = -1),
-                            ),
+                            arguments = args,
                             pos = -1, end = -1,
                         )
                     }
@@ -12186,16 +12229,17 @@ class Transformer(
         val privateStaticFieldVars = mutableMapOf<PropertyDeclaration, String>()
         val privateMethodCaptured = mutableSetOf<ClassElement>()
         val privateStateStatements = mutableListOf<Statement>()
+        val privateMethodVars = mutableListOf<Pair<MethodDeclaration, String>>()
         var brandVar: String? = null
+        fun isCapturablePrivateMethod(m: MethodDeclaration): Boolean =
+            (m.name as? Identifier)?.text?.startsWith("#") == true &&
+                m.body != null && ModifierFlag.Static !in m.modifiers &&
+                !m.asteriskToken && ModifierFlag.Async !in m.modifiers
         if (needsPrivateFieldDownlevel && isClassExpression) {
             val classNameForState = name?.text ?: assignedName
             fun stateVarName(fieldName: String): String =
                 if (classNameForState != null) "_${classNameForState}_$fieldName" else "_$fieldName"
-            val privateMethods = members.filterIsInstance<MethodDeclaration>().filter { m ->
-                (m.name as? Identifier)?.text?.startsWith("#") == true &&
-                    m.body != null && ModifierFlag.Static !in m.modifiers &&
-                    !m.asteriskToken && ModifierFlag.Async !in m.modifiers
-            }
+            val privateMethods = members.filterIsInstance<MethodDeclaration>().filter { isCapturablePrivateMethod(it) }
             // Allocation order (drives the combined `var` ordering): brand first, then
             // private fields/methods in MEMBER order.
             if (privateMethods.isNotEmpty()) {
@@ -12203,7 +12247,7 @@ class Transformer(
                 hoistedVarScopes.lastOrNull()?.add(brandVar)
                 if (functionScopeDepth == 0) computedPropHoistNames.add(brandVar)
             }
-            val methodVars = mutableListOf<Pair<MethodDeclaration, String>>()
+            val methodVars = privateMethodVars
             for (m in members) {
                 when {
                     m is PropertyDeclaration && (m.name as? Identifier)?.text?.startsWith("#") == true &&
@@ -12270,12 +12314,29 @@ class Transformer(
                     pos = -1, end = -1,
                 ))
             }
+        } else if (needsPrivateFieldDownlevel && name != null) {
+            // B341: class-DECLARATION private METHODS — the brand WeakSet allocates now
+            // (var order: brand, then the class-alias temp, then the method vars — the
+            // method var names are computed here because the member-body call rewrites
+            // need them, but they hoist in the trailing section AFTER the alias temp,
+            // matching tsc's allocation order).
+            val privateMethods = members.filterIsInstance<MethodDeclaration>().filter { isCapturablePrivateMethod(it) }
+            if (privateMethods.isNotEmpty()) {
+                brandVar = "_${name.text}_instances"
+                hoistedVarScopes.lastOrNull()?.add(brandVar)
+                if (functionScopeDepth == 0) computedPropHoistNames.add(brandVar)
+                for (m in privateMethods) {
+                    val sv = "_${name.text}_${(m.name as Identifier).text.removePrefix("#")}"
+                    privateMethodVars.add(m to sv)
+                    privateMethodCaptured.add(m)
+                }
+            }
         }
 
         // B339: push the private-field environment for this class so member-body
-        // `expr.#x` reads/writes rewrite to __classPrivateFieldGet/Set against the
-        // WeakMap vars. Non-field '#' members map to null (blocks outer-class matches).
-        val privateEnv = mutableMapOf<String, String?>()
+        // `expr.#x` reads/writes/calls rewrite to __classPrivateFieldGet/Set against the
+        // WeakMap/brand vars. Undownleveled '#' members map to null (blocks outer-class matches).
+        val privateEnv = mutableMapOf<String, PrivateEnvEntry?>()
         if (needsPrivateFieldDownlevel) {
             for (m in members) {
                 val nm = when (m) {
@@ -12287,7 +12348,13 @@ class Transformer(
                 } as? Identifier ?: continue
                 if (nm.text.startsWith("#")) privateEnv[nm.text] = null
             }
-            for (info in privateFieldInfos) privateEnv["#${info.fieldName}"] = info.weakMapVar
+            for (info in privateFieldInfos) privateEnv["#${info.fieldName}"] = PrivateEnvEntry('f', info.weakMapVar)
+            // B341: captured private methods — calls/reads route through the brand WeakSet.
+            brandVar?.let { bv ->
+                for ((m, sv) in privateMethodVars) {
+                    privateEnv[(m.name as Identifier).text] = PrivateEnvEntry('m', sv, bv)
+                }
+            }
         }
         val pushedPrivateEnv = privateEnv.isNotEmpty()
         if (pushedPrivateEnv) privateFieldEnvStack.add(privateEnv)
@@ -12738,6 +12805,38 @@ class Transformer(
         // Use trailingVarName (class expression temp var) if provided, otherwise use class name.
         // Exception: ES2022+ targets use static { this.prop = val } inside the class body (already added above).
         val effectiveName = trailingVarName ?: name?.text
+        var classTempVar: String? = null
+        val emittedStaticBlocks = mutableListOf<ClassStaticBlockDeclaration>()
+        // B341: the static-block IIFE rewrites `this` (the arrow would capture the OUTER
+        // this) and — for declarations — the class NAME to the alias temp when one exists.
+        fun buildStaticBlockIife(block: ClassStaticBlockDeclaration): Statement {
+            // tsc always prints the downleveled static-block IIFE multi-line,
+            // even when the source block was single-line.
+            var transformedBlock = transformBlock(block.body, isFunctionScope = true).copy(multiLine = true)
+            val tv = classTempVar
+            if (tv != null) {
+                transformedBlock = transformedBlock.copy(statements = transformedBlock.statements.map {
+                    var s = replaceThisInStmt(it, tv)
+                    if (!isClassExpression && name != null) s = replaceIdentifierInStmt(s, name.text, tv)
+                    s
+                })
+            }
+            return ExpressionStatement(
+                expression = CallExpression(
+                    expression = ParenthesizedExpression(
+                        expression = ArrowFunction(
+                            parameters = emptyList(),
+                            body = transformedBlock,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                    arguments = emptyList(),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+        }
         if (!useDefineForClassFields && effectiveName != null) {
             // Check if any static property initializer contains `this` (lexically, across arrow fns).
             // If so, we must capture the class in a temp var before the initializers run.
@@ -12751,28 +12850,82 @@ class Transformer(
                         (prop.initializer is ArrowFunction &&
                             ModifierFlag.Async in prop.initializer.modifiers))
             }
-            val classTempVar: String? = if (staticPropsWithThis.isNotEmpty()) {
+            // B341: a static BLOCK referencing `this` (downleveled to an IIFE arrow that
+            // would otherwise capture the OUTER this) also forces the class-alias capture.
+            val staticBlockNeedsAlias = staticBlocks.any { b ->
+                b.body.statements.any { containsThisInStmt(it) }
+            }
+            classTempVar = if (staticPropsWithThis.isNotEmpty() || staticBlockNeedsAlias) {
                 val tv = nextTempVarName()
                 hoistedVarScopes.lastOrNull()?.add(tv)
                 tv
             } else null
 
-            // If we need a class temp var, emit `_a = ClassName` as the first trailing statement.
-            if (classTempVar != null) {
-                trailingStatements.add(
-                    ExpressionStatement(
-                        expression = BinaryExpression(
-                            left = syntheticId(classTempVar),
-                            operator = Equals,
-                            right = syntheticId(effectiveName),
+            // B341: the class-alias capture and (declaration-path) private brand/method
+            // captures share ONE comma statement: `_a = Foo, _Foo_instances = new WeakSet(),
+            // _Foo_x = function _Foo_x() {…};` — alias first when present. With no private
+            // methods this degenerates to the standalone `_a = Foo;`.
+            val aliasAndPrivate = mutableListOf<Expression>()
+            classTempVar?.let { tv ->
+                aliasAndPrivate.add(BinaryExpression(
+                    left = syntheticId(tv),
+                    operator = Equals,
+                    right = syntheticId(effectiveName),
+                    pos = -1, end = -1,
+                ))
+            }
+            if (!isClassExpression && brandVar != null) {
+                // Method-var names hoist AFTER the alias temp (tsc allocation order:
+                // brand, alias, method vars).
+                for ((_, sv) in privateMethodVars) {
+                    hoistedVarScopes.lastOrNull()?.add(sv)
+                    if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
+                }
+                aliasAndPrivate.add(BinaryExpression(
+                    left = syntheticId(brandVar!!),
+                    operator = Equals,
+                    right = NewExpression(expression = syntheticId("WeakSet"), arguments = emptyList(), pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ))
+                for ((m, sv) in privateMethodVars) {
+                    var fnBody = m.body?.let { transformBlock(it, isFunctionScope = true) }
+                        ?: Block(statements = emptyList(), pos = -1, end = -1)
+                    val tv = classTempVar
+                    if (tv != null && name != null) {
+                        fnBody = fnBody.copy(statements = fnBody.statements.map {
+                            replaceIdentifierInStmt(it, name.text, tv)
+                        })
+                    }
+                    aliasAndPrivate.add(BinaryExpression(
+                        left = syntheticId(sv),
+                        operator = Equals,
+                        right = FunctionExpression(
+                            name = syntheticId(sv),
+                            parameters = transformParameters(m.parameters),
+                            body = fnBody,
                             pos = -1, end = -1,
                         ),
                         pos = -1, end = -1,
-                    )
-                )
+                    ))
+                }
+            }
+            if (aliasAndPrivate.isNotEmpty()) {
+                val combined = aliasAndPrivate.reduce { acc, next ->
+                    BinaryExpression(left = acc, operator = SyntaxKind.Comma, right = next, pos = -1, end = -1)
+                }
+                trailingStatements.add(ExpressionStatement(expression = combined, pos = -1, end = -1))
             }
 
-            for (prop in staticProperties) {
+            for (member in members) {
+                // B341: static blocks interleave with static-prop assignments in MEMBER
+                // order (tsc emits the trailing statements in source order).
+                if (member is ClassStaticBlockDeclaration && staticBlocks.any { it === member }) {
+                    trailingStatements.add(buildStaticBlockIife(member))
+                    emittedStaticBlocks.add(member)
+                    continue
+                }
+                val prop = member as? PropertyDeclaration ?: continue
+                if (!staticProperties.any { it === prop }) continue
                 // B340: static PRIVATE fields store into the per-class descriptor var:
                 // `_C_staticX = { value: init }` (tsc classPrivateFields static form).
                 val staticStateVar = privateStaticFieldVars[prop]
@@ -12826,8 +12979,15 @@ class Transformer(
                     }
                     if (lhs != null) {
                         val transformedInit = transformExpression(prop.initializer)
-                        val finalInit = if (classTempVar != null) replaceThisInExpr(transformedInit, classTempVar)
+                        var finalInit = if (classTempVar != null) replaceThisInExpr(transformedInit, classTempVar!!)
                                         else transformedInit
+                        // B341: class-name references inside static initializers also route
+                        // through the alias (declarations only — class expressions replace
+                        // via transformClassExpression's trailing-RHS pass).
+                        val tvForName = classTempVar
+                        if (tvForName != null && !isClassExpression && name != null) {
+                            finalInit = replaceIdentifierInExpr(finalInit, name.text, tvForName)
+                        }
                         trailingStatements.add(
                             ExpressionStatement(
                                 expression = BinaryExpression(
@@ -12876,25 +13036,11 @@ class Transformer(
         }
 
         // Static blocks below ES2022 target: emit as IIFE trailing statements
+        // (those not already emitted in member order by the B341 loop above —
+        // anonymous/useDefineForClassFields classes skip that loop).
         for (block in staticBlocks) {
-            val transformedBlock = transformBlock(block.body, isFunctionScope = true)
-            trailingStatements.add(
-                ExpressionStatement(
-                    expression = CallExpression(
-                        expression = ParenthesizedExpression(
-                            expression = ArrowFunction(
-                                parameters = emptyList(),
-                                body = transformedBlock,
-                                pos = -1, end = -1,
-                            ),
-                            pos = -1, end = -1,
-                        ),
-                        arguments = emptyList(),
-                        pos = -1, end = -1,
-                    ),
-                    pos = -1, end = -1,
-                )
-            )
+            if (emittedStaticBlocks.any { it === block }) continue
+            trailingStatements.add(buildStaticBlockIife(block))
         }
 
         // Build computed property temp var leading/trailing statements
