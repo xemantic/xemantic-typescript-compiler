@@ -904,7 +904,7 @@ class TypeScriptCompiler {
             // diagnostics. TS files only: plain-JS grammar errors flow through tsc's
             // separate JS syntactic walker, which has no such suppression.
             if (!isPlainJsFile && parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 }
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1370,7 +1370,7 @@ class TypeScriptCompiler {
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll {
                     val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031) &&
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155) &&
                         fn in filesWithRealParseDiagnostics &&
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }

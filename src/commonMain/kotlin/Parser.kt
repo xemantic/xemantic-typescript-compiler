@@ -850,6 +850,20 @@ class Parser(
                     if (token == SyntaxKind.OpenParen && !scanner.hasPrecedingLineBreak()) {
                         reportError("',' expected.", code = 1005, overrideLength = 1)
                     }
+                    // tsc abortParsingListOrMoveToNextToken: a same-line `.` starts
+                    // NOTHING in any enclosing context — skip it and RE-ENTER the list
+                    // (`const {x} = (a: any).props;` — the missing-'=>' arrow ends
+                    // zero-width, the '.' is skipped, `props` becomes a second
+                    // declarator; the ',' expected and TS1134 are same-start-deduped
+                    // by the "'=>' expected." at the same position).
+                    if (token == SyntaxKind.Dot && !scanner.hasPrecedingLineBreak()) {
+                        reportError("',' expected.", code = 1005, overrideLength = 1)
+                        nextToken()
+                        if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
+                            decls.add(parseVariableDeclaration())
+                            continue
+                        }
+                    }
                     break
                 }
             }
@@ -4818,6 +4832,10 @@ class Parser(
             // e.g.: `() => {}\n() => {}` → two statements (TypeScript ASI behavior).
             // Wrapped arrow functions like `(() => {})(x)` are fine (result is Parens).
             if (result is ArrowFunction && token == OpenParen && scanner.hasPrecedingLineBreak()) break
+            // tsc parses arrows at ASSIGNMENT level — a `.` after a BARE (unparenthesized)
+            // arrow node can only arise in error recovery (e.g. the missing-'=>' zero-width
+            // body) and belongs to the ENCLOSING context (`((a) => b).c` needs the parens).
+            if (result is ArrowFunction && token == Dot) break
             result = when (token) {
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
@@ -5448,6 +5466,20 @@ class Parser(
         }
         if (isArrow) return parseArrowFunction(emptySet())
 
+        // tsc isParenthesizedArrowFunctionExpressionWorker: "(identifier :" (or
+        // "(this :") is DEFINITELY an arrow — a type-annotated parameter — even when
+        // the '=>' never appears ("'=>' expected." recovery; the body becomes a
+        // zero-width missing identifier and the tail re-parses in the enclosing
+        // context, e.g. `const {x} = (a: any).props` → declarator `props`).
+        val identColonArrow = scanner.lookAhead {
+            scanner.scan() // skip (
+            val first = scanner.getToken()
+            if (!isIdentifierToken(first) && first != SyntaxKind.ThisKeyword) return@lookAhead false
+            scanner.scan()
+            scanner.getToken() == SyntaxKind.Colon
+        }
+        if (identColonArrow) return parseArrowFunction(emptySet())
+
         // Try complex arrow detection: (params) => body  or  (params): RetType => body
         val maybeArrow = scanner.lookAhead {
             scanner.scan() // skip (
@@ -5554,10 +5586,22 @@ class Parser(
                 code = 1200, overrideLength = 2,
             )
         }
+        val lastTokenBeforeArrow = token
         parseExpected(SyntaxKind.EqualsGreaterThan)
         val savedAsync = inAsyncContext
         inAsyncContext = async
-        val body: Node = if (token == SyntaxKind.OpenBrace) parseBlock() else parseAssignmentExpression()
+        // tsc parseParenthesizedArrowFunctionExpression: the body parses only when
+        // the token after the signature was '=>' or '{'; otherwise the body is a
+        // ZERO-WIDTH missing identifier (the TS1003 would be same-start-deduped by
+        // the "'=>' expected." just reported) and the orphan tail re-parses in the
+        // enclosing context (e.g. the var-decl list's skip recovery).
+        val body: Node = if (lastTokenBeforeArrow == SyntaxKind.EqualsGreaterThan ||
+            lastTokenBeforeArrow == SyntaxKind.OpenBrace
+        ) {
+            if (token == SyntaxKind.OpenBrace) parseBlock() else parseAssignmentExpression()
+        } else {
+            Identifier(text = "", pos = getPos(), end = getPos())
+        }
         inAsyncContext = savedAsync
         return ArrowFunction(
             typeParameters = typeParams, parameters = params, type = returnType,

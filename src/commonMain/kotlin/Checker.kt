@@ -31554,6 +31554,13 @@ class Checker(
             "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
         )
 
+        /** Members every FUNCTION type has (lib Function interface + fn-object own
+         *  properties) — a name in this set EXISTS on a function-typed value, so
+         *  missing-property checks against function types must skip it. */
+        private val FUNCTION_TYPE_PROPERTIES = setOf(
+            "apply", "call", "bind", "prototype", "length", "arguments", "caller", "name",
+        )
+
         /** Names of the built-in primitive wrapper interfaces.
          * Used to keep TS2322 firing for wrapper-to-mismatched-primitive assignments
          * even when the primitive→Object apparent-type fallback would otherwise
@@ -63876,6 +63883,7 @@ interface DataView {
         val name = decl.name
         if (name is ObjectBindingPattern) {
             checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
+            checkDestructuringFromFunctionInitializer(name, decl.initializer, source, fileName)
             checkDestructuringFromObjectSpread(name, decl.initializer, source, fileName)
             checkDestructuringPrivateAccess(name, decl.initializer, source, fileName)
             // B98.r120: `var { a } = { a: 1, b: 2 }` — a destructured object-LITERAL
@@ -65090,6 +65098,71 @@ interface DataView {
                 character = character,
                 start = squiggleStart,
                 length = squiggleLen,
+            ))
+        }
+    }
+
+    /**
+     * destructuringControlFlowNoCrash: `const { date } = (x: any) => 0;` — destructuring
+     * an ARROW-FUNCTION initializer. Each bound name that is not a Function/Object
+     * prototype member is TS2339 at the binding property name, displaying the arrow's
+     * signature ('(inspectedElement: any) => number'). AST-side only: the return display
+     * comes from a literal body (number/string/boolean), a zero-width error-recovery
+     * identifier body ('any' — the missing-'=>' case), or a sync block body ('void');
+     * anything else bails. Params must be plain identifiers (annotation rendered via
+     * formatTypeForDisplay, 'any' when absent); rest/pattern params bail.
+     */
+    private fun checkDestructuringFromFunctionInitializer(
+        pattern: ObjectBindingPattern, initializer: Expression?, source: String, fileName: String,
+    ) {
+        var init = initializer ?: return
+        while (init is ParenthesizedExpression) init = init.expression
+        val arrow = init as? ArrowFunction ?: return
+        val isAsync = ModifierFlag.Async in arrow.modifiers
+        val paramDisplays = mutableListOf<String>()
+        for (p in arrow.parameters) {
+            if (p.dotDotDotToken || p.isCommentPlaceholder) return
+            val pn = p.name as? Identifier ?: return
+            val ann = p.type?.let { formatTypeForDisplay(it) ?: return } ?: "any"
+            paramDisplays.add(pn.text + (if (p.questionToken) "?" else "") + ": " + ann)
+        }
+        val body = arrow.body
+        val retDisplay = when {
+            body is NumericLiteralNode -> "number"
+            body is StringLiteralNode -> "string"
+            body is Identifier && body.text.isEmpty() -> "any"
+            body is Identifier && (body.text == "true" || body.text == "false") -> "boolean"
+            body is Block -> if (isAsync) return else "void"
+            else -> return
+        }
+        val display = "(" + paramDisplays.joinToString(", ") + ") => " + retDisplay
+        for (el in pattern.elements) {
+            if (el !is BindingElement) continue
+            if (el.dotDotDotToken) continue
+            val propNode = el.propertyName ?: el.name
+            val propName = when (propNode) {
+                is Identifier -> propNode.text
+                is StringLiteralNode -> propNode.text
+                else -> continue
+            }
+            if (propName.isEmpty() || propName in OBJECT_PROTOTYPE_PROPERTIES ||
+                propName in FUNCTION_TYPE_PROPERTIES
+            ) continue
+            val len = when (propNode) {
+                is Identifier -> propNode.text.length
+                is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, propNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'.",
+                category = DiagnosticCategory.Error,
+                code = 2339,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = propNode.pos,
+                length = len,
             ))
         }
     }
