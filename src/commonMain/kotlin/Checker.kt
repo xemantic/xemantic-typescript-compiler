@@ -1235,6 +1235,8 @@ class Checker(
         //       only ever READ (never concretized via push/assign/element-write/etc.)
         //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
         checkEvolvingEmptyArrayImplicitAny()
+        // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
+        checkUninitializedLetCapturedReads()
         checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
@@ -47152,6 +47154,178 @@ interface DataView {
             if (propName !in names) someLacks = true
         }
         return someLacks
+    }
+
+    /**
+     * B337 (`controlFlowNoImplicitAny` f9/f10): an UNINITIALIZED, un-annotated `let x;`
+     * has an evolving implicit-any type — same-scope reads are flow-determined (no
+     * error), but tsc does NO control-flow analysis for CAPTURED reads inside nested
+     * function-likes: each such read is TS7005 and the declaration TS7034. Narrow,
+     * suppress-on-unknown gates: requires ≥1 SAME-SCOPE whole-variable assignment
+     * (`x = …`), no captured WRITES, no nested fn shadowing the name with a parameter.
+     */
+    private fun checkUninitializedLetCapturedReads() {
+        if (!(options.noImplicitAny || options.strict) || options.noImplicitAnyExplicitlyFalse) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            currentUlSource = source
+            try { ulProcessScope(result.sourceFile.statements, source, fileName) } catch (_: StackOverflowError) {}
+            finally { currentUlSource = null }
+        }
+    }
+
+    private class UlState {
+        var sameScopeAssignments = 0
+        val capturedReads = mutableListOf<Int>()
+        var suppressed = false
+    }
+
+    private fun ulProcessScope(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            if (stmt is VariableStatement && ModifierFlag.Declare !in stmt.modifiers &&
+                stmt.declarationList.flags == SyntaxKind.LetKeyword) {
+                for (d in stmt.declarationList.declarations) {
+                    val nameNode = d.name as? Identifier ?: continue
+                    if (d.type != null || d.initializer != null || d.exclamationToken) continue
+                    val st = UlState()
+                    for (s in stmts) ulScanStmt(s, nameNode.text, inNested = false, st)
+                    if (st.suppressed || st.sameScopeAssignments == 0 || st.capturedReads.isEmpty()) continue
+                    val (dl, dc) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Variable '${nameNode.text}' implicitly has type 'any' in some locations where its type cannot be determined.",
+                        category = DiagnosticCategory.Error, code = 7034,
+                        fileName = fileName, line = dl, character = dc,
+                        start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                    for (pos in st.capturedReads.distinct().sorted()) {
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Variable '${nameNode.text}' implicitly has an 'any' type.",
+                            category = DiagnosticCategory.Error, code = 7005,
+                            fileName = fileName, line = rl, character = rc,
+                            start = pos, length = nameNode.text.length,
+                        ))
+                    }
+                }
+            }
+            // Recurse into nested function bodies as their own scopes.
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let { ulProcessScope(it.statements, source, fileName) }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> m.body?.let { ulProcessScope(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { ulProcessScope(it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { ulProcessScope(it.statements, source, fileName) }
+                is Block -> ulProcessScope(stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun ulScanStmt(stmt: Statement, name: String, inNested: Boolean, st: UlState) {
+        if (st.suppressed) return
+        when (stmt) {
+            is ExpressionStatement -> ulScanExpr(stmt.expression, name, inNested, st)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { ulScanExpr(it, name, inNested, st) }
+            }
+            is IfStatement -> {
+                ulScanExpr(stmt.expression, name, inNested, st)
+                ulScanStmt(stmt.thenStatement, name, inNested, st)
+                stmt.elseStatement?.let { ulScanStmt(it, name, inNested, st) }
+            }
+            is Block -> stmt.statements.forEach { ulScanStmt(it, name, inNested, st) }
+            is ReturnStatement -> stmt.expression?.let { ulScanExpr(it, name, inNested, st) }
+            is FunctionDeclaration -> {
+                if (stmt.parameters.any { (it.name as? Identifier)?.text == name }) { st.suppressed = true; return }
+                stmt.body?.statements?.forEach { ulScanStmt(it, name, inNested = true, st) }
+            }
+            is WhileStatement -> { ulScanExpr(stmt.expression, name, inNested, st); ulScanStmt(stmt.statement, name, inNested, st) }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { ulScanExpr(it, name, inNested, st) }
+                stmt.condition?.let { ulScanExpr(it, name, inNested, st) }
+                stmt.incrementor?.let { ulScanExpr(it, name, inNested, st) }
+                ulScanStmt(stmt.statement, name, inNested, st)
+            }
+            else -> {
+                // Any unmodeled statement KIND containing the name suppresses (default-
+                // suppress-on-unknown, per the TS7034/TS7005 gotcha).
+                if (stmtMentionsName(stmt, name)) st.suppressed = true
+            }
+        }
+    }
+
+    private fun stmtMentionsName(stmt: Statement, name: String): Boolean {
+        val s = stmt.pos; val e = stmt.end
+        if (s < 0 || e <= s) return false
+        return Regex("""\b${Regex.escape(name)}\b""").containsMatchIn(
+            (currentUlSource ?: return true).substring(s.coerceAtMost(currentUlSource!!.length), e.coerceAtMost(currentUlSource!!.length)))
+    }
+
+    private var currentUlSource: String? = null
+
+    private fun ulScanExpr(expr: Expression?, name: String, inNested: Boolean, st: UlState) {
+        if (expr == null || st.suppressed) return
+        when (expr) {
+            is Identifier -> if (expr.text == name) {
+                if (inNested) st.capturedReads.add(expr.pos) else { /* same-scope read: flow-determined, fine */ }
+            }
+            is BinaryExpression -> {
+                val lhs = expr.left
+                if (expr.operator == SyntaxKind.Equals && lhs is Identifier && lhs.text == name) {
+                    if (inNested) { st.suppressed = true; return }  // captured WRITE → suppress
+                    st.sameScopeAssignments++
+                    ulScanExpr(expr.right, name, inNested, st)
+                } else {
+                    ulScanExpr(expr.left, name, inNested, st)
+                    ulScanExpr(expr.right, name, inNested, st)
+                }
+            }
+            is CallExpression -> { ulScanExpr(expr.expression, name, inNested, st); expr.arguments.forEach { ulScanExpr(it, name, inNested, st) } }
+            is PropertyAccessExpression -> ulScanExpr(expr.expression, name, inNested, st)
+            is ElementAccessExpression -> { ulScanExpr(expr.expression, name, inNested, st); ulScanExpr(expr.argumentExpression, name, inNested, st) }
+            is ParenthesizedExpression -> ulScanExpr(expr.expression, name, inNested, st)
+            is ArrowFunction -> {
+                if (expr.parameters.any { (it.name as? Identifier)?.text == name }) { st.suppressed = true; return }
+                when (val b = expr.body) {
+                    is Block -> b.statements.forEach { ulScanStmt(it, name, inNested = true, st) }
+                    is Expression -> ulScanExpr(b, name, inNested = true, st)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> {
+                if (expr.parameters.any { (it.name as? Identifier)?.text == name }) { st.suppressed = true; return }
+                expr.body?.statements?.forEach { ulScanStmt(it, name, inNested = true, st) }
+            }
+            is ObjectLiteralExpression -> for (p in expr.properties) {
+                when (p) {
+                    is PropertyAssignment -> ulScanExpr(p.initializer, name, inNested, st)
+                    is ShorthandPropertyAssignment -> if (p.name.text == name && inNested) st.capturedReads.add(p.name.pos)
+                    is SpreadAssignment -> ulScanExpr(p.expression, name, inNested, st)
+                    else -> {}
+                }
+            }
+            is ArrayLiteralExpression -> expr.elements.forEach { ulScanExpr(it, name, inNested, st) }
+            is ConditionalExpression -> { ulScanExpr(expr.condition, name, inNested, st); ulScanExpr(expr.whenTrue, name, inNested, st); ulScanExpr(expr.whenFalse, name, inNested, st) }
+            is PrefixUnaryExpression -> {
+                // ++/-- on the variable is a WRITE-ish use → suppress (unmodeled).
+                val op = expr.operand
+                if (op is Identifier && op.text == name) { st.suppressed = true } else ulScanExpr(op, name, inNested, st)
+            }
+            is PostfixUnaryExpression -> {
+                val op = expr.operand
+                if (op is Identifier && op.text == name) { st.suppressed = true } else ulScanExpr(op, name, inNested, st)
+            }
+            is TypeOfExpression -> ulScanExpr(expr.expression, name, inNested, st)
+            is NonNullExpression -> ulScanExpr(expr.expression, name, inNested, st)
+            is AsExpression -> ulScanExpr(expr.expression, name, inNested, st)
+            else -> {}
+        }
     }
 
     private fun checkEvolvingEmptyArrayImplicitAny() {
