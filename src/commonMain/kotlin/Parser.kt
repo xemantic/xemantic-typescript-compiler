@@ -3549,9 +3549,12 @@ class Parser(
                     }
                 }
 
-                AsyncKeyword -> {
+                AsyncKeyword if lookAhead { nextToken(); token == SyntaxKind.FunctionKeyword && !scanner.hasPrecedingLineBreak() } -> {
                     // `export default async function foo()` — parse as FunctionDeclaration with Async modifier
-                    // `export default async function*` — same
+                    // `export default async function*` — same. B329: `async` NOT followed by
+                    // a same-line `function` is an EXPRESSION (`export default async(...)` is
+                    // a CALL of the identifier `async`; bare `export default async;` exports
+                    // the identifier) — falls to the expression arm below.
                     nextToken()
                     parseFunctionDeclarationOrExpression(modifiers + ModifierFlag.Async, comments)
                 }
