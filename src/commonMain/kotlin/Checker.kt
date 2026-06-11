@@ -1246,6 +1246,9 @@ class Checker(
         //       to literal keys (1 ≡ "1") — TS2717 re-declaration mismatch +
         //       TS2322 for assignments between all-computed-key interface vars.
         checkComputedLiteralKeyMembers()
+        // 37a7. B359: TS2636 — `out T` variance annotation invalidated by a
+        //       bare-T parameter in a function-typed property.
+        checkVarianceAnnotations()
         checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
@@ -47450,6 +47453,79 @@ interface DataView {
     }
 
     /**
+     * B359 (varianceAnnotationValidation): TS2636 — an `out T` (covariant) variance
+     * annotation is invalid when T appears as a DIRECT parameter type of a
+     * function-typed property of the same interface (tsc measures variance by
+     * relating Controller<sub-T> to Controller<super-T>; a bare-T parameter makes
+     * the relation fail contravariantly). Emits at the `out T` span with the fixed
+     * 4-line elaboration chain naming the FIRST offending property. Bails on any
+     * unrenderable param/return shape — FN-safe, never FP (a bare-T param under
+     * `out` is always an error in tsc).
+     */
+    private fun checkVarianceAnnotations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (s in result.sourceFile.statements) {
+                val iface = s as? InterfaceDeclaration ?: continue
+                val tps = iface.typeParameters ?: continue
+                for (tp in tps) {
+                    if (ModifierFlag.Out !in tp.modifiers || ModifierFlag.In in tp.modifiers) continue
+                    val tName = tp.name.text
+                    var emitted = false
+                    for (m in iface.members) {
+                        if (emitted) break
+                        val pd = m as? PropertyDeclaration ?: continue
+                        val ft = pd.type as? FunctionType ?: continue
+                        val propName = (pd.name as? Identifier)?.text ?: continue
+                        // A parameter whose type is the bare TP.
+                        var offendingParam: String? = null
+                        fun renderPT(t: TypeNode?, variant: String): String? = when {
+                            t is TypeReference && t.typeArguments == null &&
+                                (t.typeName as? Identifier)?.text == tName -> "$variant-$tName"
+                            else -> oruRenderType(t)
+                        }
+                        fun renderFn(variant: String): String? {
+                            val parts = mutableListOf<String>()
+                            for (p in ft.parameters) {
+                                if (p.isCommentPlaceholder) continue
+                                val pn = (p.name as? Identifier)?.text ?: return null
+                                val pt = renderPT(p.type, variant) ?: return null
+                                if (p.type.let { it is TypeReference && (it.typeName as? Identifier)?.text == tName }) {
+                                    offendingParam = pn
+                                }
+                                parts.add("$pn${if (p.questionToken) "?" else ""}: $pt")
+                            }
+                            val ret = renderPT(ft.type, variant) ?: return null
+                            return "(${parts.joinToString(", ")}) => $ret"
+                        }
+                        val sub = renderFn("sub") ?: continue
+                        val sup = renderFn("super") ?: continue
+                        val pn = offendingParam ?: continue
+                        val start = tp.pos
+                        val len = tp.name.pos + tp.name.text.length - start
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${iface.name.text}<sub-$tName>' is not assignable to type '${iface.name.text}<super-$tName>' as implied by variance annotation.",
+                            category = DiagnosticCategory.Error, code = 2636,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = len,
+                            messageChain = listOf(
+                                "  Types of property '$propName' are incompatible.",
+                                "    Type '$sub' is not assignable to type '$sup'.",
+                                "      Types of parameters '$pn' and '$pn' are incompatible.",
+                                "        Type 'super-$tName' is not assignable to type 'sub-$tName'.",
+                            ),
+                        ))
+                        emitted = true
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * B357 (dynamicNamesErrors): computed property names referencing top-level
      * `const k = <literal>` resolve to literal KEYS — a numeric `1` and a string
      * `"1"` are the SAME key. Two pieces:
@@ -47863,7 +47939,7 @@ interface DataView {
         }
     }
 
-    /** Minimal TypeNode render for the B353 literal rest display — bail (null) on anything fancy. */
+    /** Minimal TypeNode render for the B353/B357/B359 displays — bail (null) on anything fancy. */
     private fun oruRenderType(t: TypeNode?): String? = when (t) {
         is KeywordTypeNode -> when (t.kind) {
             SyntaxKind.StringKeyword -> "string"
@@ -47871,6 +47947,12 @@ interface DataView {
             SyntaxKind.BooleanKeyword -> "boolean"
             SyntaxKind.AnyKeyword -> "any"
             SyntaxKind.UnknownKeyword -> "unknown"
+            SyntaxKind.VoidKeyword -> "void"
+            SyntaxKind.NeverKeyword -> "never"
+            SyntaxKind.UndefinedKeyword -> "undefined"
+            SyntaxKind.SymbolKeyword -> "symbol"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            SyntaxKind.ObjectKeyword -> "object"
             else -> null
         }
         is TypeReference -> if (t.typeArguments == null) (t.typeName as? Identifier)?.text else null
