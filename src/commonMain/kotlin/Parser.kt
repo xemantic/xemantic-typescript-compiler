@@ -50,6 +50,14 @@ class Parser(
     // followed by a redundant TS1005.
     private var interfaceMembersBailedOnKeyword = false
 
+    // B324: set true by parseParameterList when the list ABORTED — either the opening '('
+    // was missing (tsc parseParameters returns an empty missing list, nothing consumed) or
+    // a RESERVED keyword sat in parameter-name position (TS1390 + abort, token unconsumed).
+    // parseFunctionDeclarationOrExpression consults it to give the function a MISSING body
+    // (tsc parseFunctionBlock after a failed '{' — drives TS7010 + the `{ }` emit) instead
+    // of a null body when the same-line follow token isn't '{'.
+    private var paramListAborted = false
+
     // True while parsing the body of a type literal (`{ ... }` in a type position) as opposed
     // to an interface body. Used to pick TS1247 ("A type literal property cannot have an
     // initializer.") vs TS1246 ("An interface property cannot have an initializer.").
@@ -1781,24 +1789,40 @@ class Parser(
             // Function declarations (statement form) require a name unless marked as
             // `export default` (Default modifier). Emit TS1003 "Identifier expected."
             // at the current position with a 1-char squiggle, mirroring TypeScript.
-            if (ModifierFlag.Default !in modifiers && token == SyntaxKind.OpenParen) {
+            // B324: tsc parseBindingIdentifier errors for ')' follows too
+            // (`function ) {}` statement-level recovery), and synthesizes a ZERO-WIDTH
+            // missing-name Identifier (createMissingNode) — the binder binds the empty
+            // name (empty-name TS2567 merges) and TS7010 displays '(Missing)'.
+            if (ModifierFlag.Default !in modifiers &&
+                (token == SyntaxKind.OpenParen || token == SyntaxKind.CloseParen)) {
                 reportError("Identifier expected.", code = 1003,
                     overrideStart = scanner.getTokenPos(), overrideLength = 1)
-            }
-            null
+                Identifier(text = "", pos = scanner.getTokenPos(), end = scanner.getTokenPos())
+            } else null
         }
         val parsedTypeParams = parseTypeParametersOpt()
         // 17.147 / B5.4: in JS-like files, fall back to JSDoc `@template T`
         // when no TS-level `<T>` was parsed. Mirror of B5.3 for ClassDeclaration.
         val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val rawParams = parseParameterList()
+        val paramsAborted = paramListAborted
         // 17.140: in JS-like files, bridge JSDoc `@param {primitive} name` tags
         // to parameter types when the parameter is un-annotated.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
-        val body = if (token == SyntaxKind.OpenBrace) parseBlock() else null
+        val body = if (token == SyntaxKind.OpenBrace) parseBlock()
+            else if (paramsAborted && !canParseSemicolon()) {
+                // B324 (tsc parseFunctionBlock after an aborted signature): the same-line
+                // follow token isn't '{' and ASI can't apply — "'{' expected." (usually
+                // same-start-deduped against the abort diagnostic) and the body is a
+                // MISSING zero-width Block (pos == end, no closeBrace). The checker's
+                // TS7010 bodyless rule treats it as bodyless; the emitter prints `{ }`.
+                reportError("'{' expected.", code = 1005)
+                Block(statements = emptyList(), multiLine = false,
+                    pos = scanner.getTokenPos(), end = scanner.getTokenPos(), closeBracePos = -1)
+            } else null
         inAsyncContext = savedAsync
         if (body == null) parseSemicolon()
         val trailing = trailingComments()
@@ -1853,8 +1877,30 @@ class Parser(
                 leadingComments = comments, trailingComments = trailing,
             )
         }
+        // B324 (tsc parseList HeritageClauses skip-recovery): after heritage clauses, an
+        // Unknown token (invalid character) that can't start another clause or any outer
+        // context is SKIPPED with TS1127 (mirrors parseExpected's Unknown branch — tsc's
+        // context error dedups against the scan-time invalid-character report), letting
+        // the '{' body parse succeed.
+        if (heritage != null) {
+            while (token == SyntaxKind.Unknown) {
+                reportError("Invalid character.", code = 1127)
+                nextToken()
+            }
+        }
         val beforeOpenBrace = scanner.consumeTrailingComments()
-        parseExpected(SyntaxKind.OpenBrace)
+        if (!parseExpected(SyntaxKind.OpenBrace)) {
+            // B324 (tsc parseClassDeclarationOrExpression): a missing '{' yields a MISSING
+            // member list — nothing further is consumed; the offending token stays for the
+            // outer context (`class ) {}` leaves ')' and the block for statement recovery).
+            val trailingM = trailingComments()
+            return ClassDeclaration(
+                name = name, typeParameters = typeParams, heritageClauses = heritage,
+                members = emptyList(), modifiers = modifiers, decorators = decorators,
+                beforeOpenBraceComments = beforeOpenBrace, pos = pos, end = getEnd(),
+                leadingComments = comments, trailingComments = trailingM,
+            )
+        }
         val members = parseClassMembers()
         parseExpected(SyntaxKind.CloseBrace)
         val trailing = trailingComments()
@@ -3126,7 +3172,15 @@ class Parser(
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.EnumKeyword)
         val name = parseIdentifier()
-        parseExpected(SyntaxKind.OpenBrace)
+        if (!parseExpected(SyntaxKind.OpenBrace)) {
+            // B324 (tsc parseEnumDeclaration): a missing '{' yields a MISSING member list —
+            // nothing further is consumed; the offending token stays for the outer context.
+            val trailingM = trailingComments()
+            return EnumDeclaration(
+                name = name, members = emptyList(), modifiers = modifiers,
+                pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailingM,
+            )
+        }
         val members = mutableListOf<EnumMember>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             val mPos = getPos()
@@ -6380,7 +6434,15 @@ class Parser(
     // ── Parameters ──────────────────────────────────────────────────────────
 
     private fun parseParameterList(): List<Parameter> {
-        parseExpected(SyntaxKind.OpenParen)
+        paramListAborted = false
+        if (!parseExpected(SyntaxKind.OpenParen)) {
+            // B324 (tsc parseParameters): a missing '(' yields an EMPTY missing list —
+            // NOTHING is consumed; the caller's body parse and the statement-level
+            // recovery see the raw tokens (`function ) {}` leaves ')' for the outer
+            // context and the function gets a MISSING body).
+            paramListAborted = true
+            return emptyList()
+        }
         // Capture same-line comments between `(` and first token (e.g., `/** nothing */` in empty lists).
         val openParenComments = scanner.getTrailingComments()
         val params = mutableListOf<Parameter>()
@@ -6392,6 +6454,23 @@ class Parser(
         // rest param preceding it) can be suppressed.
         var nextParamFromCommaRecovery = false
         while (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
+            // B324 (tsc parsingContextErrors for ParsingContext.Parameters): a RESERVED
+            // keyword (one that cannot serve as a binding identifier) in parameter-name
+            // position is NOT a parameter start — emit TS1390 and ABORT the list with the
+            // token unconsumed (it can start a statement in the outer context; tsc
+            // abortParsingListOrMoveToNextToken). The following ')'/'{'/';' expected
+            // attempts dedup at the same start. MODIFIER-kind keywords (export/default/
+            // const/in) ARE parameter starts per tsc isStartOfParameter→isModifierKind —
+            // they take the parseParameter path (TS1090 'export' modifier cannot appear
+            // on a parameter, etc.).
+            if (isKeyword() && !isIdentifier() && token != SyntaxKind.ThisKeyword &&
+                token != SyntaxKind.ExportKeyword && token != SyntaxKind.DefaultKeyword &&
+                token != SyntaxKind.ConstKeyword && token != SyntaxKind.InKeyword) {
+                val kwText = source.substring(scanner.getTokenPos(), scanner.getPos())
+                reportError("'$kwText' is not allowed as a parameter name.", code = 1390)
+                paramListAborted = true
+                return params
+            }
             var param = parseParameter()
             if (nextParamFromCommaRecovery) {
                 param = param.copy(commaRecovered = true)

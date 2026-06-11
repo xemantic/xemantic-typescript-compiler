@@ -37669,8 +37669,13 @@ interface DataView {
         for (stmt in statements) {
             when (stmt) {
                 is FunctionDeclaration -> {
-                    if (stmt.body == null && stmt.name != null && stmt.type == null) {
-                        val name = stmt.name!!.text
+                    // B324: a MISSING block body (zero-width, from an aborted signature's
+                    // parse recovery) counts as bodyless — tsc's parseFunctionBlock missing
+                    // list yields a body node the checker treats as absent.
+                    val bodyMissing = stmt.body == null ||
+                        (stmt.body!!.pos == stmt.body!!.end && stmt.body!!.statements.isEmpty())
+                    if (bodyMissing && stmt.name != null && stmt.type == null) {
+                        val name = stmt.name!!.text.ifEmpty { "(Missing)" }
                         // Emit TS7010 for all bodyless function declarations (both declare and overloads)
                         // that lack a return type annotation, regardless of whether an implementation exists.
                         emitTS7010(stmt.name!!, name, source, fileName)
