@@ -7768,14 +7768,46 @@ class Transformer(
                 }
             })
             is ArrowFunction -> when (val body = expr.body) {
-                is Expression -> expr.copy(body = rewriteCjsDynExpr(body, needImportStar))
-                is Block -> expr.copy(body = body.copy(statements = body.statements.map { rewriteCjsDynStmt(it, needImportStar) }))
+                is Expression -> expr.copy(body = rewriteCjsDynExpr(body, needImportStar), parameters = rewriteCjsDynParams(expr.parameters, needImportStar))
+                is Block -> expr.copy(
+                    body = body.copy(statements = body.statements.map { rewriteCjsDynStmt(it, needImportStar) }),
+                    parameters = rewriteCjsDynParams(expr.parameters, needImportStar),
+                )
                 else -> expr
             }
-            is FunctionExpression -> expr.copy(body = expr.body.let { block ->
-                block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
-            })
+            is FunctionExpression -> expr.copy(
+                body = expr.body.let { block ->
+                    block.copy(statements = block.statements.map { rewriteCjsDynStmt(it, needImportStar) })
+                },
+                parameters = rewriteCjsDynParams(expr.parameters, needImportStar),
+            )
             else -> expr
+        }
+    }
+
+    /** B350: rewrites dynamic imports inside parameter defaults (param-level and
+     *  binding-element-level — `function* ({ foo = yield import("./bar") })`). */
+    private fun rewriteCjsDynParams(params: List<Parameter>, needImportStar: BooleanArray): List<Parameter> {
+        fun rewriteName(name: Expression): Expression = when (name) {
+            is ObjectBindingPattern -> name.copy(elements = name.elements.map { el ->
+                el.copy(
+                    initializer = el.initializer?.let { rewriteCjsDynExpr(it, needImportStar) },
+                    name = rewriteName(el.name),
+                )
+            })
+            is ArrayBindingPattern -> name.copy(elements = name.elements.map { node ->
+                if (node is BindingElement) node.copy(
+                    initializer = node.initializer?.let { rewriteCjsDynExpr(it, needImportStar) },
+                    name = rewriteName(node.name),
+                ) else node
+            })
+            else -> name
+        }
+        return params.map { p ->
+            p.copy(
+                initializer = p.initializer?.let { rewriteCjsDynExpr(it, needImportStar) },
+                name = rewriteName(p.name),
+            )
         }
     }
 
@@ -8333,8 +8365,19 @@ class Transformer(
                 // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.
                 // Otherwise keep params in the outer function and pass `void 0`.
                 val hasDefaultParams = decl.parameters.any { it.initializer != null }
+                // B350: a BINDING-ELEMENT default containing `await` must evaluate inside the
+                // generator too — the outer function keeps one `_a`-style placeholder per
+                // param (fn.length preservation) and the generator takes the real params.
+                val hasAwaitInBindingDefaults = !hasDefaultParams &&
+                    decl.parameters.any { paramDefaultsContainAwait(it) }
                 val (outerParams, generatorParams, secondArg) = if (hasDefaultParams) {
                     Triple(emptyList<Parameter>(), transformedParams, syntheticId("arguments") as Expression)
+                } else if (hasAwaitInBindingDefaults) {
+                    Triple(
+                        decl.parameters.map { Parameter(name = syntheticId(nextTempVarName()), pos = -1, end = -1) },
+                        transformedParams,
+                        syntheticId("arguments") as Expression,
+                    )
                 } else {
                     val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
                     Triple(transformedParams, emptyList<Parameter>(), void0 as Expression)
@@ -8414,6 +8457,34 @@ class Transformer(
                 )
             }
         }
+    }
+
+    /** B350: does any binding-element default (or the param's own default) contain `await`? */
+    private fun paramDefaultsContainAwait(p: Parameter): Boolean {
+        fun exprHasAwait(e: Expression?): Boolean {
+            var cur = e
+            // Iterative left-spine for binary chains (stress-test gotcha).
+            while (cur is BinaryExpression) {
+                if (exprHasAwait(cur.right)) return true
+                cur = cur.left
+            }
+            return when (cur) {
+                null -> false
+                is AwaitExpression -> true
+                is CallExpression -> exprHasAwait(cur.expression) || cur.arguments.any { exprHasAwait(it) }
+                is PropertyAccessExpression -> exprHasAwait(cur.expression)
+                is ParenthesizedExpression -> exprHasAwait(cur.expression)
+                is ConditionalExpression -> exprHasAwait(cur.condition) || exprHasAwait(cur.whenTrue) || exprHasAwait(cur.whenFalse)
+                is YieldExpression -> exprHasAwait(cur.expression)
+                else -> false
+            }
+        }
+        fun nameHasAwait(n: Node): Boolean = when (n) {
+            is ObjectBindingPattern -> n.elements.any { exprHasAwait(it.initializer) || nameHasAwait(it.name) }
+            is ArrayBindingPattern -> n.elements.any { it is BindingElement && (exprHasAwait(it.initializer) || nameHasAwait(it.name)) }
+            else -> false
+        }
+        return exprHasAwait(p.initializer) || nameHasAwait(p.name)
     }
 
     /** Builds `__awaiter(thisArg, secondArg, void 0, function* (params...) { body })`. */
