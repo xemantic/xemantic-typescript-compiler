@@ -842,6 +842,14 @@ class Parser(
                     nextToken() // consume the Unknown token (the invalid character)
                     decls.add(parseVariableDeclaration())
                 } else {
+                    // tsc parseDelimitedList: a same-line `(` can't start another
+                    // declaration and isn't a list terminator (canParseSemicolon/in/of)
+                    // — ',' expected before the list aborts (e.g. `var constructor() {}`
+                    // recovered at statement level; the statement's follow-up ';'
+                    // expected is same-start-deduped).
+                    if (token == SyntaxKind.OpenParen && !scanner.hasPrecedingLineBreak()) {
+                        reportError("',' expected.", code = 1005, overrideLength = 1)
+                    }
                     break
                 }
             }
@@ -1920,6 +1928,32 @@ class Parser(
             }
         }
 
+        // tsc isClassMemberStart: a RESERVED keyword in member-name position is a
+        // member start only when followed by (, <, !, :, =, ?, or a semicolon-ish
+        // token (canParseSemicolon: ';', '}', EOF, preceding line break). Otherwise
+        // the class-members list aborts — TS1068 at the keyword, the class's
+        // follow-up '}'-expected is same-start-deduped — and the line re-parses at
+        // statement level (e.g. `var constructor() { }` inside a class body).
+        // Gated to no-decorators/no-modifiers: with consumed modifiers tsc's
+        // lookahead returns true early at any class-member modifier.
+        if (decorators.isNullOrEmpty() && modifiers.isEmpty() && isKeyword() && !isIdentifier() &&
+            token != SyntaxKind.StaticKeyword
+        ) {
+            val kwLen = scanner.getTokenText().length
+            val isMemberStart = lookAhead {
+                nextToken()
+                token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan ||
+                        token == SyntaxKind.Exclamation || token == SyntaxKind.Colon ||
+                        token == SyntaxKind.Equals || token == SyntaxKind.Question ||
+                        canParseSemicolon()
+            }
+            if (!isMemberStart) {
+                reportError("Unexpected token. A constructor, method, accessor, or property was expected.",
+                    code = 1068, overrideLength = kwLen)
+                return null
+            }
+        }
+
         if (token == SyntaxKind.ConstructorKeyword ||
             (isIdentifier() && scanner.getTokenValue() == "constructor")
         ) {
@@ -2150,7 +2184,33 @@ class Parser(
                     code = 1264, overrideStart = exclPos, overrideLength = 1,
                 )
             }
-            parseSemicolon()
+            // tsc parseSemicolonAfterPropertyName → parseErrorForMissingSemicolonAfter:
+            // a property NAMED by the keyword var/let/const with no type, no initializer
+            // and no parseable semicolon reports TS1440 at the NAME span instead of
+            // "';' expected." (e.g. `public const var export foo = 10;` — the member is
+            // the `var`-named property; `export foo = 10` re-parses as the next member).
+            if (type == null && init == null && name is Identifier &&
+                (name.text == "var" || name.text == "let" || name.text == "const") &&
+                !canParseSemicolon()
+            ) {
+                // Direct add bypasses reportError's same-start dedup — the 17.167
+                // TS1248 may already sit at the same name position (the driver's
+                // B310 grammar filter strips it when real parse errors exist,
+                // exactly this scenario).
+                val (lineN, charN) = getLineAndCharacterOfPosition(name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Variable declaration not allowed at this location.",
+                    category = DiagnosticCategory.Error,
+                    code = 1440,
+                    fileName = fileName,
+                    line = lineN,
+                    character = charN,
+                    start = name.pos,
+                    length = name.text.length,
+                ))
+            } else {
+                parseSemicolon()
+            }
             val trailing = trailingComments()
             // 17.58b: in JS-like files, a missing type annotation on a class property
             // can be supplied by a leading `/** @type {T} */` JSDoc comment.
@@ -5377,7 +5437,11 @@ class Parser(
             scanner.scan() // skip (
             if (scanner.getToken() == SyntaxKind.CloseParen) {
                 scanner.scan()
-                scanner.getToken() == SyntaxKind.EqualsGreaterThan || scanner.getToken() == SyntaxKind.Colon
+                // tsc isParenthesizedArrowFunctionExpressionWorker: "() =>", "():"
+                // AND "() {" are all definitely-arrow (the missing `=>` reports
+                // "'=>' expected." and the block parses as the arrow body).
+                scanner.getToken() == SyntaxKind.EqualsGreaterThan || scanner.getToken() == SyntaxKind.Colon ||
+                        scanner.getToken() == SyntaxKind.OpenBrace
             } else {
                 false
             }

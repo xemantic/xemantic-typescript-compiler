@@ -898,6 +898,14 @@ class TypeScriptCompiler {
             if (parser.getDiagnostics().isNotEmpty()) {
                 diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 }
             }
+            // B310: TS1248/TS1031 (tsc checkGrammarModifiers via grammarErrorOnNode) are
+            // suppressed when the file has REAL parse diagnostics. Grammar-class codes our
+            // PARSER emits (tsc emits them from the checker) don't count as parse
+            // diagnostics. TS files only: plain-JS grammar errors flow through tsc's
+            // separate JS syntactic walker, which has no such suppression.
+            if (!isPlainJsFile && parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 }
+            }
 
             if (options.isolatedDeclarations) {
                 diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
@@ -999,6 +1007,10 @@ class TypeScriptCompiler {
             // B284: files whose parser produced diagnostics — tsc suppresses grammar
             // diagnostics (TS2737) in such files (grammarErrorOnNode/hasParseDiagnostics).
             val filesWithParseDiagnostics = mutableSetOf<String>()
+            // B310: files with REAL parse diagnostics (grammar-class parser emissions
+            // excluded — tsc emits those from the checker, so they don't count as
+            // hasParseDiagnostics). Triggers TS1248/TS1031 suppression.
+            val filesWithRealParseDiagnostics = mutableSetOf<String>()
             // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
             // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
             // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
@@ -1221,6 +1233,9 @@ class TypeScriptCompiler {
                 val sourceFile = parser.parse()
                 parsedSourceFiles[file.fileName] = sourceFile
                 if (parser.getDiagnostics().isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
+                if (parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
+                    filesWithRealParseDiagnostics.add(file.fileName)
+                }
 
                 // Collect parser diagnostics from .d.ts files too (e.g. TS1540 for `module X {}`).
                 // Skip node_modules files — they are third-party and never reported on.
@@ -1349,6 +1364,16 @@ class TypeScriptCompiler {
             // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
             if (filesWithParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
+            }
+            // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
+            // (see the single-file path note).
+            if (filesWithRealParseDiagnostics.isNotEmpty()) {
+                diagnostics.removeAll {
+                    val fn = it.fileName
+                    (it.code == 1248 || it.code == 1031) &&
+                        fn in filesWithRealParseDiagnostics &&
+                        !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
+                }
             }
             // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
             // resolves through an `exports` field that exposes no types entry.
@@ -2327,6 +2352,12 @@ private fun topologicalSort(
 
     return result
 }
+
+// B310: grammar-class diagnostic codes our PARSER emits that tsc emits from the
+// CHECKER (checkGrammar* via grammarErrorOnNode). They do NOT count as parse
+// diagnostics for tsc's hasParseDiagnostics suppression rule — a file whose only
+// parser emissions are these is "parse-clean" and keeps its grammar diagnostics.
+internal val GRAMMAR_CLASS_CODES = setOf(1248, 1031, 1183, 1039, 1024, 1042, 1009)
 
 private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
 private val emptyObjectRegex = Regex("\\{\\s+\\}")
