@@ -8605,11 +8605,19 @@ class Transformer(
             name = transformBindingName(decl.name),
             type = null,
             initializer = decl.initializer?.let { init ->
+                // B347: ES-decorated anonymous class EXPRESSION (TC39 decorators on fields /
+                // auto-accessors) — replace the whole initializer with the decorate IIFE.
+                val esDecBinding = if (init is ClassExpression) extractIdentifierName(decl.name) else null
+                if (init is ClassExpression && esDecBinding != null &&
+                    isEsDecoratedClassExprShape(init)
+                ) {
+                    buildEsDecoratedClassExprIife(init, esDecBinding)
+                }
                 // Anonymous class expression assigned to a named binding: set pending binding
                 // name so transformClassExpression can emit `__setFunctionName(_a, "X")` in the
                 // capture comma-list. Pure-Identifier bindings only — destructuring/array patterns
                 // are skipped (binding name isn't well-defined).
-                if (init is ClassExpression && init.name == null) {
+                else if (init is ClassExpression && init.name == null) {
                     val bindingName = extractIdentifierName(decl.name)
                     if (bindingName != null) {
                         val saved = pendingClassExprBindingName
@@ -11515,6 +11523,310 @@ class Transformer(
             ))
         }
         return statements
+    }
+
+    /**
+     * B347 gate: an anonymous class EXPRESSION whose members are ALL decorated
+     * PropertyDeclarations (plain fields or `accessor` auto-accessor fields) with plain
+     * Identifier names, no heritage, no class decorators, under TC39 ES-decorators
+     * (!experimentalDecorators) at target >= ES2022 (static-block form).
+     */
+    private fun isEsDecoratedClassExprShape(init: ClassExpression): Boolean {
+        if (options.experimentalDecorators) return false
+        if (options.effectiveTarget < ScriptTarget.ES2022) return false
+        if (init.name != null || !init.decorators.isNullOrEmpty()) return false
+        if (!init.heritageClauses.isNullOrEmpty()) return false
+        if (init.members.isEmpty()) return false
+        return init.members.all { m ->
+            m is PropertyDeclaration && !m.decorators.isNullOrEmpty() && m.name is Identifier &&
+                !(m.name as Identifier).text.startsWith("#")
+        }
+    }
+
+    /**
+     * B347: TC39 ES-decorators downlevel for an anonymous class EXPRESSION with decorated
+     * fields / auto-accessors (static-block form, tsc esDecorators + classFields):
+     * ```
+     * const Foo = (() => {
+     *     let _static_field_decorators; … let _accessor_extraInitializers = [];
+     *     return class {
+     *         static { __setFunctionName(this, "Foo"); }
+     *         static { _metadata; <decorator evaluation, member order>; <__esDecorate apply:
+     *                  static non-field, instance non-field, static field, instance field>;
+     *                  defineProperty(this, Symbol.metadata) }
+     *         static { this.field = __runInitializers(this, _static_field_initializers, void 0); }
+     *         #accessor_accessor_storage;
+     *         get accessor() { return this.#accessor_accessor_storage; }
+     *         set accessor(value) { this.#accessor_accessor_storage = value; }
+     *         static #accessor_1_accessor_storage = (__runInitializers(this, _static_field_extraInitializers), __runInitializers(this, _static_accessor_initializers, void 0));
+     *         static get accessor() { … }  static set accessor(value) { … }
+     *         constructor() { <instance inits with extras-fold> <last instance extras> }
+     *         static { __runInitializers(this, _static_<last>_extraInitializers); }
+     *     };
+     * })();
+     * ```
+     */
+    private fun buildEsDecoratedClassExprIife(init: ClassExpression, bindingName: String): Expression {
+        requireHelper("__esDecorate")
+        requireHelper("__runInitializers")
+        requireHelper("__setFunctionName")
+
+        fun exprStmt(e: Expression): Statement = ExpressionStatement(expression = e, pos = -1, end = -1)
+        fun assign(left: Expression, right: Expression): Expression =
+            BinaryExpression(left = left, operator = SyntaxKind.Equals, right = right, pos = -1, end = -1)
+        fun letDecl(name: String, initExpr: Expression?): VariableStatement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(
+                    name = syntheticId(name), initializer = initExpr, pos = -1, end = -1,
+                )),
+                flags = SyntaxKind.LetKeyword, pos = -1, end = -1,
+            ),
+            modifiers = emptySet(), pos = -1, end = -1,
+        )
+        fun prop(name: String, value: Expression) = PropertyAssignment(
+            name = syntheticId(name), initializer = value, pos = -1, end = -1,
+        )
+        fun voidZero() = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+        fun runInits(listVar: String, value: Expression?): Expression = CallExpression(
+            expression = helperExpr("__runInitializers"),
+            arguments = listOfNotNull(syntheticId("this"), syntheticId(listVar), value),
+            pos = -1, end = -1,
+        )
+
+        data class DecMember(
+            val propDecl: PropertyDeclaration,
+            val name: String,
+            val isStatic: Boolean,
+            val isAccessor: Boolean,
+            val varBase: String,
+            var storageName: String? = null,
+        )
+        val members = init.members.filterIsInstance<PropertyDeclaration>().map { m ->
+            val name = (m.name as Identifier).text
+            val isStatic = ModifierFlag.Static in m.modifiers
+            DecMember(
+                propDecl = m, name = name, isStatic = isStatic,
+                isAccessor = ModifierFlag.Accessor in m.modifiers,
+                varBase = "_${if (isStatic) "static_" else ""}$name",
+            )
+        }
+
+        // Accessor storage names, deduped in member order: `<name>_accessor_storage`,
+        // collisions insert `_<i>` after the name.
+        val usedStorage = mutableSetOf<String>()
+        for (m in members) {
+            if (!m.isAccessor) continue
+            var candidate = "${m.name}_accessor_storage"
+            var i = 0
+            while (candidate in usedStorage) { i++; candidate = "${m.name}_${i}_accessor_storage" }
+            usedStorage.add(candidate)
+            m.storageName = candidate
+        }
+
+        // Prologue: statics in member order, then instance in member order.
+        val bodyStmts = mutableListOf<Statement>()
+        for (m in members.filter { it.isStatic } + members.filter { !it.isStatic }) {
+            bodyStmts.add(letDecl("${m.varBase}_decorators", null))
+            bodyStmts.add(letDecl("${m.varBase}_initializers", ArrayLiteralExpression(elements = emptyList(), pos = -1, end = -1)))
+            bodyStmts.add(letDecl("${m.varBase}_extraInitializers", ArrayLiteralExpression(elements = emptyList(), pos = -1, end = -1)))
+        }
+
+        // static { __setFunctionName(this, "Foo"); }
+        val setNameBlock = ClassStaticBlockDeclaration(
+            body = Block(
+                statements = listOf(exprStmt(CallExpression(
+                    expression = helperExpr("__setFunctionName"),
+                    arguments = listOf(syntheticId("this"), StringLiteralNode(text = bindingName, singleQuote = false, rawText = null, pos = -1, end = -1)),
+                    pos = -1, end = -1,
+                ))),
+                multiLine = false, pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+        // Decoration static block.
+        val decoStmts = mutableListOf<Statement>()
+        decoStmts.add(esDecorateMetadataConst())
+        for (m in members) {
+            decoStmts.add(exprStmt(assign(syntheticId("${m.varBase}_decorators"), ArrayLiteralExpression(
+                elements = m.propDecl.decorators!!.map { transformExpression(it.expression) },
+                pos = -1, end = -1,
+            ))))
+        }
+        // Application order: static non-field, instance non-field, static field, instance field.
+        val applyOrder =
+            members.filter { it.isStatic && it.isAccessor } +
+            members.filter { !it.isStatic && it.isAccessor } +
+            members.filter { it.isStatic && !it.isAccessor } +
+            members.filter { !it.isStatic && !it.isAccessor }
+        for (m in applyOrder) {
+            val accessTarget: (Expression) -> Expression = { obj ->
+                PropertyAccessExpression(expression = obj, name = syntheticId(m.name), pos = -1, end = -1)
+            }
+            val accessObj = ObjectLiteralExpression(
+                properties = listOf(
+                    prop("has", ArrowFunction(
+                        parameters = listOf(Parameter(name = syntheticId("obj"), pos = -1, end = -1)),
+                        body = BinaryExpression(
+                            left = StringLiteralNode(text = m.name, singleQuote = false, rawText = null, pos = -1, end = -1),
+                            operator = SyntaxKind.InKeyword,
+                            right = syntheticId("obj"), pos = -1, end = -1,
+                        ),
+                        hasParenthesizedParameters = false, pos = -1, end = -1,
+                    )),
+                    prop("get", ArrowFunction(
+                        parameters = listOf(Parameter(name = syntheticId("obj"), pos = -1, end = -1)),
+                        body = accessTarget(syntheticId("obj")),
+                        hasParenthesizedParameters = false, pos = -1, end = -1,
+                    )),
+                    prop("set", ArrowFunction(
+                        parameters = listOf(
+                            Parameter(name = syntheticId("obj"), pos = -1, end = -1),
+                            Parameter(name = syntheticId("value"), pos = -1, end = -1),
+                        ),
+                        body = Block(
+                            statements = listOf(exprStmt(assign(accessTarget(syntheticId("obj")), syntheticId("value")))),
+                            multiLine = false, pos = -1, end = -1,
+                        ),
+                        hasParenthesizedParameters = true, pos = -1, end = -1,
+                    )),
+                ),
+                multiLine = false, pos = -1, end = -1,
+            )
+            val contextObj = ObjectLiteralExpression(
+                properties = listOf(
+                    prop("kind", StringLiteralNode(text = if (m.isAccessor) "accessor" else "field", singleQuote = false, rawText = null, pos = -1, end = -1)),
+                    prop("name", StringLiteralNode(text = m.name, singleQuote = false, rawText = null, pos = -1, end = -1)),
+                    prop("static", syntheticId(if (m.isStatic) "true" else "false")),
+                    prop("private", syntheticId("false")),
+                    prop("access", accessObj),
+                    prop("metadata", syntheticId("_metadata")),
+                ),
+                multiLine = false, pos = -1, end = -1,
+            )
+            decoStmts.add(exprStmt(CallExpression(
+                expression = helperExpr("__esDecorate"),
+                arguments = listOf(
+                    if (m.isAccessor) syntheticId("this") else syntheticId("null"),
+                    syntheticId("null"),
+                    syntheticId("${m.varBase}_decorators"),
+                    contextObj,
+                    syntheticId("${m.varBase}_initializers"),
+                    syntheticId("${m.varBase}_extraInitializers"),
+                ),
+                pos = -1, end = -1,
+            )))
+        }
+        decoStmts.add(esDecorateDefineMetadataIf(syntheticId("this")))
+        val decorationBlock = ClassStaticBlockDeclaration(
+            body = Block(statements = decoStmts, multiLine = true, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+
+        // Member emission in source order, with the extras-fold chain per side (static/instance).
+        val classMembers = mutableListOf<ClassElement>(setNameBlock, decorationBlock)
+        val ctorStmts = mutableListOf<Statement>()
+        var prevStatic: DecMember? = null
+        var prevInstance: DecMember? = null
+        fun foldedInit(m: DecMember): Expression {
+            var e: Expression = runInits("${m.varBase}_initializers", m.propDecl.initializer?.let { transformExpression(it) } ?: voidZero())
+            val prev = if (m.isStatic) prevStatic else prevInstance
+            if (prev != null) {
+                e = ParenthesizedExpression(
+                    expression = BinaryExpression(
+                        left = runInits("${prev.varBase}_extraInitializers", null),
+                        operator = SyntaxKind.Comma,
+                        right = e, pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                )
+            }
+            if (m.isStatic) prevStatic = m else prevInstance = m
+            return e
+        }
+        for (m in members) {
+            if (m.isAccessor) {
+                val storageId = syntheticId("#${m.storageName}")
+                val storageAccess = PropertyAccessExpression(expression = syntheticId("this"), name = syntheticId("#${m.storageName}"), pos = -1, end = -1)
+                val mods = if (m.isStatic) setOf(ModifierFlag.Static) else emptySet()
+                val storageInit: Expression? = if (m.isStatic) foldedInit(m) else null
+                if (!m.isStatic) {
+                    ctorStmts.add(exprStmt(assign(storageAccess, foldedInit(m))))
+                }
+                classMembers.add(PropertyDeclaration(
+                    name = storageId, initializer = storageInit, modifiers = mods, pos = -1, end = -1,
+                ))
+                classMembers.add(GetAccessor(
+                    name = syntheticId(m.name), parameters = emptyList(),
+                    body = Block(
+                        statements = listOf(ReturnStatement(expression = storageAccess, pos = -1, end = -1)),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                    modifiers = mods, pos = -1, end = -1,
+                ))
+                classMembers.add(SetAccessor(
+                    name = syntheticId(m.name),
+                    parameters = listOf(Parameter(name = syntheticId("value"), pos = -1, end = -1)),
+                    body = Block(
+                        statements = listOf(exprStmt(assign(storageAccess, syntheticId("value")))),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                    modifiers = mods, pos = -1, end = -1,
+                ))
+            } else if (m.isStatic) {
+                classMembers.add(ClassStaticBlockDeclaration(
+                    body = Block(
+                        statements = listOf(exprStmt(assign(
+                            PropertyAccessExpression(expression = syntheticId("this"), name = syntheticId(m.name), pos = -1, end = -1),
+                            foldedInit(m),
+                        ))),
+                        multiLine = false, pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            } else {
+                ctorStmts.add(exprStmt(assign(
+                    PropertyAccessExpression(expression = syntheticId("this"), name = syntheticId(m.name), pos = -1, end = -1),
+                    foldedInit(m),
+                )))
+            }
+        }
+        prevInstance?.let { last ->
+            ctorStmts.add(exprStmt(runInits("${last.varBase}_extraInitializers", null)))
+        }
+        if (ctorStmts.isNotEmpty()) {
+            classMembers.add(Constructor(
+                parameters = emptyList(),
+                body = Block(statements = ctorStmts, multiLine = true, pos = -1, end = -1),
+                pos = -1, end = -1,
+            ))
+        }
+        prevStatic?.let { last ->
+            classMembers.add(ClassStaticBlockDeclaration(
+                body = Block(
+                    statements = listOf(exprStmt(runInits("${last.varBase}_extraInitializers", null))),
+                    multiLine = true, pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ))
+        }
+
+        bodyStmts.add(ReturnStatement(
+            expression = ClassExpression(name = null, members = classMembers, pos = -1, end = -1),
+            pos = -1, end = -1,
+        ))
+
+        return CallExpression(
+            expression = ParenthesizedExpression(
+                expression = ArrowFunction(
+                    parameters = emptyList(),
+                    body = Block(statements = bodyStmts, multiLine = true, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            ),
+            arguments = emptyList(), pos = -1, end = -1,
+        )
     }
 
     private fun transformClassDeclaration(decl: ClassDeclaration): List<Statement> {
