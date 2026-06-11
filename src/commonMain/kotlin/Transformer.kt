@@ -319,8 +319,7 @@ class Transformer(
     // `__decorate` → `__decorate_1`). Empty when no collision exists.
     private val helperLocalCollisionMap = mutableMapOf<String, String>()
 
-    private fun nextTempVarName(): String {
-        val n = tempVarCounter++
+    private fun tempNameFor(n: Int): String {
         // TypeScript skips both `_i` and `_n` in temp variable names.
         // The sequence is: _a, _b, ..., _h, _j, _k, _l, _m, _o, _p, ..., _z, _aa, _ab, ... (skipping 'i' and 'n').
         // 24 single-letter names total: a-h (8) + j-m (4) + o-z (12)
@@ -337,11 +336,49 @@ class Transformer(
         }
     }
 
+    private fun nextTempVarName(): String = tempNameFor(tempVarCounter++)
+
+    // B348: destructuring-CHAIN temps (declared inline in a declarator list) are named at
+    // PRINT time by tsc — file-level HOISTED temps (`var _a, _b;` at file top) grab the
+    // first names even when allocated by LATER statements. At top level we allocate chain
+    // temps as placeholders and rename them after the whole file transform (base = the
+    // final tempVarCounter); inside functions the per-function counter names immediately.
+    private var chainTempCounter = 0
+    private var tempScopeDepth = 0
+    private fun nextChainTempName(): String =
+        if (tempScopeDepth > 0 || functionScopeDepth > 0) nextTempVarName()
+        else "${chainTempCounter++}"
+
+    /** Renames B348 chain-temp placeholders to their final print-order names. */
+    private fun renameChainTemps(stmts: List<Statement>): List<Statement> {
+        if (chainTempCounter == 0) return stmts
+        var result = stmts
+        for (i in 0 until chainTempCounter) {
+            val ph = "$i"
+            val real = tempNameFor(tempVarCounter + i)
+            result = result.map { st ->
+                if (st is VariableStatement) {
+                    st.copy(declarationList = st.declarationList.copy(
+                        declarations = st.declarationList.declarations.map { d ->
+                            d.copy(
+                                name = (d.name as? Identifier)?.takeIf { it.text == ph }?.let { syntheticId(real) } ?: d.name,
+                                initializer = d.initializer?.let { replaceIdentifierInExpr(it, ph, real) },
+                            )
+                        }
+                    ))
+                } else st
+            }
+        }
+        chainTempCounter = 0
+        return result
+    }
+
     /** Executes [block] with a fresh temp-var counter (per-function-scope), then restores. */
     private fun <T> withFreshTempVarCounter(block: () -> T): T {
         val saved = tempVarCounter
         tempVarCounter = 0
-        return try { block() } finally { tempVarCounter = saved }
+        tempScopeDepth++
+        return try { block() } finally { tempVarCounter = saved; tempScopeDepth-- }
     }
 
     fun transform(sourceFile: SourceFile): SourceFile {
@@ -523,7 +560,7 @@ class Transformer(
         if (!options.isolatedModules && !options.verbatimModuleSyntax) {
             collectConstEnumValues(sourceFile.statements)
         }
-        val transformed = transformStatements(sourceFile.statements, atTopLevel = true)
+        val transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
 
         // Collect helpers to inject at top of file.
         // Helpers are emitted in the order they were first needed during transformation,
@@ -8226,8 +8263,12 @@ class Transformer(
         if (decl.body == null) return orphanedComments(decl)
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers)
-        val isAsync = ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017
-        val isAsyncGenerator = isAsync && decl.asteriskToken
+        // B348: async GENERATORS are an ES2018 feature — they downlevel at target es2017
+        // too, while plain async functions are native from es2017.
+        val isAsyncGenerator = ModifierFlag.Async in decl.modifiers && decl.asteriskToken &&
+            options.effectiveTarget < ScriptTarget.ES2018
+        val isAsync = (ModifierFlag.Async in decl.modifiers && options.effectiveTarget < ScriptTarget.ES2017) ||
+            isAsyncGenerator
         val prevInAsyncBody = inAsyncBody
         val prevInAsyncGeneratorBody = inAsyncGeneratorBody
         inAsyncBody = isAsync && !isAsyncGenerator
@@ -8434,164 +8475,244 @@ class Transformer(
      * Like transformVariableDeclarationList but also handles object rest patterns.
      * `var { a, ...rest } = expr` → `var { a } = expr, rest = __rest(expr, ["a"])`
      */
-    private fun transformVariableDeclarationListWithRest(
-        list: VariableDeclarationList
-    ): VariableDeclarationList {
-        val newDecls = mutableListOf<VariableDeclaration>()
-        for (decl in list.declarations) {
-            val name = decl.name
-            if (name is ObjectBindingPattern && name.elements.any { it.dotDotDotToken }
-                && options.effectiveTarget < ScriptTarget.ES2018) {
-                val restElement = name.elements.last { it.dotDotDotToken }
-                val nonRestElements = name.elements.filter { !it.dotDotDotToken }
+    /** B348: does this binding target (pattern) contain an OBJECT-rest element at any depth? */
+    private fun containsObjectRestBinding(name: Node): Boolean = when (name) {
+        is ObjectBindingPattern -> name.elements.any { it.dotDotDotToken || containsObjectRestBinding(it.name) }
+        is ArrayBindingPattern -> name.elements.any { it is BindingElement && containsObjectRestBinding(it.name) }
+        else -> false
+    }
 
-                // Collect the property names that are excluded from __rest
-                val excludedKeys = nonRestElements.map { elem ->
-                    val keyName = when {
-                        elem.propertyName is Identifier -> elem.propertyName.text
-                        elem.propertyName is StringLiteralNode -> elem.propertyName.text
-                        elem.propertyName is NumericLiteralNode -> elem.propertyName.text
-                        elem.name is Identifier -> elem.name.text
-                        else -> return@map null
-                    }
-                    StringLiteralNode(text = keyName, singleQuote = false, pos = -1, end = -1)
-                }.filterNotNull()
-
-                val initExpr = decl.initializer?.let { transformExpression(it) }
-
-                // If initializer is complex (not a simple identifier) AND there are
-                // non-rest elements (need to destructure), use a temp var to avoid
-                // evaluating the expression twice.
-                // Also check the ORIGINAL expression: if it was a type assertion (AsExpression
-                // or TypeAssertionExpression), TypeScript caches it even though the cast erases to an identifier.
-                val originalIsTypeAssertion = decl.initializer is AsExpression || decl.initializer is TypeAssertionExpression
-                val sourceExpr: Expression
-                val needsTempVar = initExpr != null && nonRestElements.isNotEmpty() &&
-                    (initExpr !is Identifier || initExpr.text == "this" || originalIsTypeAssertion)
-                if (needsTempVar) {
-                    val tempName = nextTempVarName()
-                    // Don't hoist — the temp var is declared inline in the same declaration list
-                    sourceExpr = syntheticId(tempName)
-                    // Emit: _a = expr, { a } = _a, rest = __rest(_a, ["a"])
-                    newDecls.add(VariableDeclaration(
-                        name = syntheticId(tempName),
-                        initializer = initExpr,
-                        pos = -1, end = -1,
-                    ))
-                    val newPattern = ObjectBindingPattern(
-                        elements = nonRestElements.map { transformBindingElement(it) },
-                        pos = -1, end = -1,
-                    )
-                    newDecls.add(VariableDeclaration(
-                        name = newPattern,
-                        initializer = sourceExpr,
-                        pos = -1, end = -1,
-                    ))
-                } else {
-                    sourceExpr = initExpr ?: syntheticId("undefined")
-                    // Emit non-rest part (if there are non-rest elements)
-                    if (nonRestElements.isNotEmpty()) {
-                        // Promote trailing comment of last non-rest element to VariableDeclaration
-                        // so it appears between the destructuring decl and the __rest decl.
-                        val lastIdx = nonRestElements.size - 1
-                        val lastElem = nonRestElements[lastIdx]
-                        val promotedComments = lastElem.trailingComments
-                        val elementsForPattern = if (promotedComments != null) {
-                            nonRestElements.mapIndexed { i, elem ->
-                                if (i == lastIdx) elem.copy(trailingComments = null) else elem
-                            }
-                        } else {
-                            nonRestElements
-                        }
-                        val newPattern = ObjectBindingPattern(
-                            elements = elementsForPattern.map { transformBindingElement(it) },
-                            pos = -1, end = -1,
-                        )
-                        newDecls.add(VariableDeclaration(
-                            name = newPattern,
-                            initializer = sourceExpr,
-                            pos = -1, end = -1,
-                            leadingComments = decl.leadingComments,
-                            trailingComments = promotedComments,
-                        ))
-                    }
+    /** B348: does this expression contain a destructuring ASSIGNMENT with an object-rest target
+     *  (`{ ...x } = y`)? Iterative worklist (binder stress-test gotcha). */
+    private fun containsObjectRestAssignment(expr: Expression): Boolean {
+        val work = ArrayDeque<Expression>()
+        work.add(expr)
+        while (work.isNotEmpty()) {
+            when (val e = work.removeLast()) {
+                is BinaryExpression -> {
+                    if (e.operator == SyntaxKind.Equals && e.left is ObjectLiteralExpression &&
+                        (e.left as ObjectLiteralExpression).properties.any { it is SpreadAssignment }
+                    ) return true
+                    work.add(e.left); work.add(e.right)
                 }
+                is ParenthesizedExpression -> work.add(e.expression)
+                is ConditionalExpression -> { work.add(e.condition); work.add(e.whenTrue); work.add(e.whenFalse) }
+                is CallExpression -> { work.add(e.expression); e.arguments.forEach { work.add(it) } }
+                else -> {}
+            }
+        }
+        return false
+    }
 
-                // Emit rest part: rest = __rest(source, ["a", "b"])
-                val restName = transformBindingName(restElement.name)
+    /** B348: `typeof _t === "symbol" ? _t : _t + ""` — the __rest exclusion entry for a computed key. */
+    private fun typeofSymbolConditional(tempName: String): Expression = ConditionalExpression(
+        condition = BinaryExpression(
+            left = TypeOfExpression(expression = syntheticId(tempName), pos = -1, end = -1),
+            operator = SyntaxKind.EqualsEqualsEquals,
+            right = StringLiteralNode(text = "symbol", singleQuote = false, rawText = null, pos = -1, end = -1),
+            pos = -1, end = -1,
+        ),
+        whenTrue = syntheticId(tempName),
+        whenFalse = BinaryExpression(
+            left = syntheticId(tempName),
+            operator = SyntaxKind.Plus,
+            right = StringLiteralNode(text = "", singleQuote = false, rawText = null, pos = -1, end = -1),
+            pos = -1, end = -1,
+        ),
+        pos = -1, end = -1,
+    )
+
+    /**
+     * B348: tsc-faithful object-binding flattening (flattenObjectBindingOrAssignmentPattern,
+     * FlattenLevel.ObjectRest) for `let`/`var` declaration lists under target < ES2018.
+     * Simple elements group into pending mini-patterns (`{ a, b } = _t`); an element splits
+     * out of the chain when it has a COMPUTED key (key temp feeds the __rest exclusions as
+     * `typeof _k === "symbol" ? _k : _k + ""`), its TARGET pattern contains an object-rest,
+     * or its DEFAULT contains an object-rest destructuring assignment.
+     */
+    private fun flattenObjectBindingWithRestInto(
+        pattern: ObjectBindingPattern,
+        valueExprIn: Expression,
+        forceValueCapture: Boolean,
+        newDecls: MutableList<VariableDeclaration>,
+        leadingComments: List<Comment>? = null,
+    ) {
+        var value = valueExprIn
+        if (pattern.elements.size != 1 && (value !is Identifier || forceValueCapture)) {
+            val t = nextChainTempName()
+            newDecls.add(VariableDeclaration(
+                name = syntheticId(t), initializer = value, pos = -1, end = -1,
+                leadingComments = leadingComments,
+            ))
+            value = syntheticId(t)
+        }
+        val pending = mutableListOf<BindingElement>()
+        val exclusions = mutableListOf<Expression>()
+        fun flushPending() {
+            if (pending.isEmpty()) return
+            val lastIdx = pending.size - 1
+            val promoted = pending[lastIdx].trailingComments
+            val elems = pending.mapIndexed { i, e ->
+                if (i == lastIdx && promoted != null) e.copy(trailingComments = null) else e
+            }
+            newDecls.add(VariableDeclaration(
+                name = ObjectBindingPattern(
+                    elements = elems.map { transformBindingElement(it) },
+                    pos = -1, end = -1,
+                ),
+                initializer = value, pos = -1, end = -1,
+                trailingComments = promoted,
+            ))
+            pending.clear()
+        }
+        for (elem in pattern.elements) {
+            if (elem.dotDotDotToken) {
+                flushPending()
                 newDecls.add(VariableDeclaration(
-                    name = restName,
+                    name = transformBindingName(elem.name),
                     initializer = CallExpression(
                         expression = helperExpr("__rest"),
                         arguments = listOf(
-                            sourceExpr,
-                            ArrayLiteralExpression(
-                                elements = excludedKeys,
-                                pos = -1, end = -1,
-                            ),
+                            value,
+                            ArrayLiteralExpression(elements = exclusions.toList(), pos = -1, end = -1),
                         ),
                         pos = -1, end = -1,
                     ),
                     pos = -1, end = -1,
                 ))
                 requireHelper("__rest")
-            } else if (name is ObjectBindingPattern && options.effectiveTarget < ScriptTarget.ES2018 &&
-                name.elements.any { elem -> !elem.dotDotDotToken && elem.name is ObjectBindingPattern &&
-                    elem.name.elements.any { it.dotDotDotToken } }) {
-                // Nested object binding with rest: `const { f: { a, ...spread } } = value`
-                // → `const _a = value.f, { a } = _a, spread = __rest(_a, ["a"])`
-                val initExpr = decl.initializer?.let { transformExpression(it) }
-                    ?: syntheticId("undefined")
-                val remainingElements = mutableListOf<BindingElement>()
-                for (elem in name.elements) {
-                    val elemName = elem.name
-                    if (!elem.dotDotDotToken && elemName is ObjectBindingPattern &&
-                        elemName.elements.any { it.dotDotDotToken }) {
-                        // Compute property access: value.f (or value["key"])
-                        val keyStr = when {
-                            elem.propertyName is Identifier -> elem.propertyName.text
-                            elem.propertyName is StringLiteralNode -> null // use bracket access
-                            else -> null
-                        }
-                        val propAccess: Expression = if (elem.propertyName is StringLiteralNode) {
-                            ElementAccessExpression(
-                                expression = initExpr, argumentExpression = transformExpression(elem.propertyName as Expression),
-                                pos = -1, end = -1,
-                            )
-                        } else if (keyStr != null) {
-                            PropertyAccessExpression(expression = initExpr, name = syntheticId(keyStr), pos = -1, end = -1)
-                        } else {
-                            initExpr
-                        }
-                        // Create temp var for the property access
-                        val nestedTempName = nextTempVarName()
-                        newDecls.add(VariableDeclaration(
-                            name = syntheticId(nestedTempName), initializer = propAccess, pos = -1, end = -1,
-                        ))
-                        // Recursively expand the nested binding with rest using the temp var
-                        val subList = transformVariableDeclarationListWithRest(
-                            VariableDeclarationList(
-                                flags = list.flags,
-                                declarations = listOf(VariableDeclaration(
-                                    name = elemName, initializer = syntheticId(nestedTempName), pos = -1, end = -1,
-                                )),
-                                pos = -1, end = -1,
-                            )
-                        )
-                        newDecls.addAll(subList.declarations)
-                    } else {
-                        remainingElements.add(elem)
-                    }
+                continue
+            }
+            val pn = elem.propertyName
+            val isComputed = pn is ComputedPropertyName
+            if (!isComputed) {
+                val keyName = when {
+                    pn is Identifier -> pn.text
+                    pn is StringLiteralNode -> pn.text
+                    pn is NumericLiteralNode -> pn.text
+                    elem.name is Identifier -> (elem.name as Identifier).text
+                    else -> null
                 }
-                // If there are remaining (non-nested-rest) elements, emit them
-                if (remainingElements.isNotEmpty()) {
+                keyName?.let {
+                    exclusions.add(StringLiteralNode(text = it, singleQuote = false, pos = -1, end = -1))
+                }
+            }
+            val targetHasRest = containsObjectRestBinding(elem.name)
+            val defaultHasRestAssign = elem.initializer?.let { containsObjectRestAssignment(it) } == true
+            if (!isComputed && !targetHasRest && !defaultHasRestAssign) {
+                pending.add(elem)
+                continue
+            }
+            flushPending()
+            var rhs: Expression = when {
+                isComputed -> {
+                    val keyTemp = nextChainTempName()
                     newDecls.add(VariableDeclaration(
-                        name = ObjectBindingPattern(
-                            elements = remainingElements.map { transformBindingElement(it) }, pos = -1, end = -1,
-                        ),
-                        initializer = initExpr,
+                        name = syntheticId(keyTemp),
+                        initializer = transformExpression((pn as ComputedPropertyName).expression),
                         pos = -1, end = -1,
                     ))
+                    exclusions.add(typeofSymbolConditional(keyTemp))
+                    ElementAccessExpression(
+                        expression = value, argumentExpression = syntheticId(keyTemp), pos = -1, end = -1,
+                    )
+                }
+                pn is Identifier -> PropertyAccessExpression(expression = value, name = syntheticId(pn.text), pos = -1, end = -1)
+                pn is StringLiteralNode -> ElementAccessExpression(
+                    expression = value,
+                    argumentExpression = StringLiteralNode(text = pn.text, singleQuote = pn.singleQuote, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                )
+                pn is NumericLiteralNode -> ElementAccessExpression(
+                    expression = value,
+                    argumentExpression = NumericLiteralNode(text = pn.text, pos = -1, end = -1),
+                    pos = -1, end = -1,
+                )
+                elem.name is Identifier -> PropertyAccessExpression(
+                    expression = value, name = syntheticId((elem.name as Identifier).text), pos = -1, end = -1,
+                )
+                else -> value
+            }
+            if (elem.initializer != null) {
+                val readTemp = nextChainTempName()
+                newDecls.add(VariableDeclaration(name = syntheticId(readTemp), initializer = rhs, pos = -1, end = -1))
+                // A default that is itself an object-rest destructuring assignment transforms
+                // in VALUE position (captures its RHS and yields it as the result).
+                val defaultRaw = elem.initializer!!
+                val defaultExpr: Expression = if (
+                    defaultRaw is BinaryExpression && defaultRaw.operator == SyntaxKind.Equals &&
+                    defaultRaw.left is ObjectLiteralExpression &&
+                    (defaultRaw.left as ObjectLiteralExpression).properties.any { it is SpreadAssignment } &&
+                    options.effectiveTarget < ScriptTarget.ES2018
+                ) {
+                    ParenthesizedExpression(
+                        expression = transformObjectRestDestructuringAssignment(
+                            defaultRaw, defaultRaw.left as ObjectLiteralExpression, needsValue = true,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                } else transformExpression(defaultRaw)
+                rhs = ConditionalExpression(
+                    condition = BinaryExpression(
+                        left = syntheticId(readTemp),
+                        operator = SyntaxKind.EqualsEqualsEquals,
+                        right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                        pos = -1, end = -1,
+                    ),
+                    whenTrue = defaultExpr,
+                    whenFalse = syntheticId(readTemp),
+                    pos = -1, end = -1,
+                )
+            }
+            when (val target = elem.name) {
+                is Identifier -> newDecls.add(VariableDeclaration(
+                    name = syntheticId(target.text), initializer = rhs, pos = -1, end = -1,
+                ))
+                is ObjectBindingPattern -> {
+                    // tsc captures the default-checked value before destructuring a pattern
+                    // target (flattenBindingOrAssignmentElement's ensureIdentifier).
+                    var inner: Expression = rhs
+                    if (inner !is Identifier) {
+                        val t = nextChainTempName()
+                        newDecls.add(VariableDeclaration(name = syntheticId(t), initializer = inner, pos = -1, end = -1))
+                        inner = syntheticId(t)
+                    }
+                    flattenObjectBindingWithRestInto(target, inner, forceValueCapture = false, newDecls = newDecls)
+                }
+                else -> {
+                    // Array-pattern target (rare): capture and emit a standard declarator.
+                    val t = nextChainTempName()
+                    newDecls.add(VariableDeclaration(name = syntheticId(t), initializer = rhs, pos = -1, end = -1))
+                    newDecls.add(VariableDeclaration(
+                        name = transformBindingName(target), initializer = syntheticId(t), pos = -1, end = -1,
+                    ))
+                }
+            }
+        }
+        flushPending()
+    }
+
+    private fun transformVariableDeclarationListWithRest(
+        list: VariableDeclarationList
+    ): VariableDeclarationList {
+        val newDecls = mutableListOf<VariableDeclaration>()
+        for (decl in list.declarations) {
+            val name = decl.name
+            if (name is ObjectBindingPattern && containsObjectRestBinding(name)
+                && options.effectiveTarget < ScriptTarget.ES2018) {
+                // B348: tsc-faithful element-by-element flattening (covers top-level rest,
+                // nested-pattern rest, computed keys, and rest-assignment defaults).
+                val initExpr = decl.initializer?.let { transformExpression(it) } ?: syntheticId("undefined")
+                val originalIsTypeAssertion = decl.initializer is AsExpression || decl.initializer is TypeAssertionExpression
+                val force = initExpr is Identifier && (initExpr.text == "this" || originalIsTypeAssertion)
+                val before = newDecls.size
+                flattenObjectBindingWithRestInto(name, initExpr, force, newDecls)
+                // Preserve declaration-level leading comments on the first emitted declarator.
+                if (decl.leadingComments != null && newDecls.size > before) {
+                    val first = newDecls[before]
+                    if (first.leadingComments == null) {
+                        newDecls[before] = first.copy(leadingComments = decl.leadingComments)
+                    }
                 }
             } else {
                 newDecls.add(transformVariableDeclaration(decl))
@@ -8674,31 +8795,19 @@ class Transformer(
     private fun transformObjectRestDestructuringAssignment(
         root: BinaryExpression,
         objLit: ObjectLiteralExpression,
+        needsValue: Boolean = false,
     ): Expression {
         val rhs = transformExpression(root.right)
         val spreadProp = objLit.properties.filterIsInstance<SpreadAssignment>().lastOrNull()
             ?: return root.copy(left = transformExpression(root.left), right = rhs)
         val nonSpreadProps = objLit.properties.filter { it !is SpreadAssignment }
 
-        // Collect excluded keys for __rest(expr, ["a", "b"])
-        val excludedKeys = nonSpreadProps.mapNotNull { prop ->
-            val keyName = when (prop) {
-                is ShorthandPropertyAssignment -> prop.name.text
-                is PropertyAssignment -> when (val n = prop.name) {
-                    is Identifier -> n.text
-                    is StringLiteralNode -> n.text
-                    is NumericLiteralNode -> n.text
-                    else -> null
-                }
-                else -> null
-            }
-            keyName?.let { StringLiteralNode(text = it, singleQuote = false, pos = -1, end = -1) }
-        }
-
         val restTarget = transformExpression(spreadProp.expression)
 
-        // Determine source expression (use temp var if rhs is complex and there are non-rest props)
-        val needsTempVar = nonSpreadProps.isNotEmpty() && rhs !is Identifier
+        // Determine source expression (use temp var if rhs is complex and there are non-rest
+        // props, or when the assignment's VALUE is consumed — tsc appends the temp as the
+        // final comma operand then).
+        val needsTempVar = needsValue || (nonSpreadProps.isNotEmpty() && rhs !is Identifier)
         val sourceExpr: Expression
         val parts = mutableListOf<Expression>()
 
@@ -8712,34 +8821,97 @@ class Transformer(
             sourceExpr = rhs
         }
 
-        // Emit non-rest destructuring: { a, b } = source
-        if (nonSpreadProps.isNotEmpty()) {
-            val nonSpreadObjLit = ObjectLiteralExpression(
-                properties = nonSpreadProps.map { prop ->
-                    when (prop) {
-                        is ShorthandPropertyAssignment -> prop.copy(
-                            objectAssignmentInitializer = prop.objectAssignmentInitializer?.let { transformExpression(it) }
-                        )
-                        is PropertyAssignment -> prop.copy(initializer = transformExpression(prop.initializer))
-                        else -> prop
-                    }
-                },
-                pos = -1, end = -1,
-            )
-            parts.add(BinaryExpression(left = nonSpreadObjLit, operator = Equals, right = sourceExpr, pos = -1, end = -1))
+        // B348: walk properties in order with a pending buffer — computed-key properties
+        // split out (`_c = key, _d = source[_c], target = _d === void 0 ? default : _d`)
+        // and their key temps join the __rest exclusions as typeof-symbol conditionals.
+        val exclusions = mutableListOf<Expression>()
+        val pendingProps = mutableListOf<Node>()
+        fun flushPendingProps() {
+            if (pendingProps.isEmpty()) return
+            parts.add(BinaryExpression(
+                left = ObjectLiteralExpression(properties = pendingProps.toList(), pos = -1, end = -1),
+                operator = Equals, right = sourceExpr, pos = -1, end = -1,
+            ))
+            pendingProps.clear()
         }
+        for (prop in nonSpreadProps) {
+            val computedName = (prop as? PropertyAssignment)?.name as? ComputedPropertyName
+            if (computedName == null) {
+                val keyName = when (prop) {
+                    is ShorthandPropertyAssignment -> prop.name.text
+                    is PropertyAssignment -> when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> null
+                    }
+                    else -> null
+                }
+                keyName?.let { exclusions.add(StringLiteralNode(text = it, singleQuote = false, pos = -1, end = -1)) }
+                pendingProps.add(when (prop) {
+                    is ShorthandPropertyAssignment -> prop.copy(
+                        objectAssignmentInitializer = prop.objectAssignmentInitializer?.let { transformExpression(it) }
+                    )
+                    is PropertyAssignment -> prop.copy(initializer = transformExpression(prop.initializer))
+                    else -> prop
+                })
+                continue
+            }
+            flushPendingProps()
+            val keyTemp = nextTempVarName()
+            hoistedVarScopes.lastOrNull()?.add(keyTemp)
+            parts.add(BinaryExpression(
+                left = syntheticId(keyTemp), operator = Equals,
+                right = transformExpression(computedName.expression), pos = -1, end = -1,
+            ))
+            exclusions.add(typeofSymbolConditional(keyTemp))
+            val readExpr = ElementAccessExpression(
+                expression = sourceExpr, argumentExpression = syntheticId(keyTemp), pos = -1, end = -1,
+            )
+            val valueExpr = (prop as PropertyAssignment).initializer
+            if (valueExpr is BinaryExpression && valueExpr.operator == Equals) {
+                // `[key]: target = default` — read temp + default check.
+                val readTemp = nextTempVarName()
+                hoistedVarScopes.lastOrNull()?.add(readTemp)
+                parts.add(BinaryExpression(
+                    left = syntheticId(readTemp), operator = Equals, right = readExpr, pos = -1, end = -1,
+                ))
+                parts.add(BinaryExpression(
+                    left = transformExpression(valueExpr.left), operator = Equals,
+                    right = ConditionalExpression(
+                        condition = BinaryExpression(
+                            left = syntheticId(readTemp), operator = EqualsEqualsEquals,
+                            right = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),
+                            pos = -1, end = -1,
+                        ),
+                        whenTrue = transformExpression(valueExpr.right),
+                        whenFalse = syntheticId(readTemp),
+                        pos = -1, end = -1,
+                    ),
+                    pos = -1, end = -1,
+                ))
+            } else {
+                parts.add(BinaryExpression(
+                    left = transformExpression(valueExpr), operator = Equals, right = readExpr, pos = -1, end = -1,
+                ))
+            }
+        }
+        flushPendingProps()
 
         // Emit rest: rest = __rest(source, ["a", "b"])
         val restCall = CallExpression(
             expression = helperExpr("__rest"),
             arguments = listOf(
                 sourceExpr,
-                ArrayLiteralExpression(elements = excludedKeys, pos = -1, end = -1),
+                ArrayLiteralExpression(elements = exclusions, pos = -1, end = -1),
             ),
             pos = -1, end = -1,
         )
         parts.add(BinaryExpression(left = restTarget, operator = Equals, right = restCall, pos = -1, end = -1))
         requireHelper("__rest")
+
+        // When the assignment's value is consumed, the captured source temp is the result.
+        if (needsValue) parts.add(sourceExpr)
 
         return when {
             parts.size == 1 -> parts[0]
@@ -9447,8 +9619,10 @@ class Transformer(
             // Function expression: strip types (and downlevel async if target < ES2017)
             is FunctionExpression -> withFreshTempVarCounter {
                 val strippedModifiers = stripTypeScriptModifiers(expr.modifiers)
-                val isAsync = ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017
-                val isAsyncGenerator = isAsync && expr.asteriskToken
+                val isAsyncGenerator = ModifierFlag.Async in expr.modifiers && expr.asteriskToken &&
+                    options.effectiveTarget < ScriptTarget.ES2018
+                val isAsync = (ModifierFlag.Async in expr.modifiers && options.effectiveTarget < ScriptTarget.ES2017) ||
+                    isAsyncGenerator
                 val prevInAsyncBody = inAsyncBody
                 val prevInAsyncGenBody = inAsyncGeneratorBody
                 inAsyncBody = isAsync && !isAsyncGenerator
@@ -9460,12 +9634,14 @@ class Transformer(
                     requireHelper("__asyncGenerator")
                     val innerName = expr.name?.text?.let { "${it}_1" }
                     val transformedParams = transformParameters(expr.parameters)
+                    // The wrapper inherits the SOURCE body's single/multi-line form (tsc keeps
+                    // `async function* () { }` expressions inline).
                     val asyncGenBody = Block(
                         statements = listOf(ReturnStatement(expression = makeAsyncGeneratorCall(
                             syntheticId("this"), syntheticId("arguments"),
                             innerName, transformedParams, transformedBody
                         ))),
-                        multiLine = true,
+                        multiLine = transformedBody.multiLine,
                     )
                     expr.copy(
                         typeParameters = null,
@@ -10166,8 +10342,10 @@ class Transformer(
 
     private fun transformMethodDeclarationElement(method: MethodDeclaration): MethodDeclaration {
         val strippedModifiers = stripMemberModifiers(method.modifiers)
-        val isAsync = ModifierFlag.Async in method.modifiers && options.effectiveTarget < ScriptTarget.ES2017
-        val isAsyncGenerator = isAsync && method.asteriskToken
+        val isAsyncGenerator = ModifierFlag.Async in method.modifiers && method.asteriskToken &&
+            options.effectiveTarget < ScriptTarget.ES2018
+        val isAsync = (ModifierFlag.Async in method.modifiers && options.effectiveTarget < ScriptTarget.ES2017) ||
+            isAsyncGenerator
         val prevInAsyncBody = inAsyncBody
         val prevInAsyncGenBody = inAsyncGeneratorBody
         inAsyncBody = isAsync && !isAsyncGenerator
@@ -12853,6 +13031,8 @@ class Transformer(
         )
         is SpreadElement -> expr.copy(expression = replaceIdentifierInExpr(expr.expression, from, to))
         is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { replaceIdentifierInExpr(it, from, to) })
+        is TypeOfExpression -> expr.copy(expression = replaceIdentifierInExpr(expr.expression, from, to))
+        is VoidExpression -> expr.copy(expression = replaceIdentifierInExpr(expr.expression, from, to))
         is ObjectLiteralExpression -> expr // skip for now
         else -> expr
     }
