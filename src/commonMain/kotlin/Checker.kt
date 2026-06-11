@@ -42704,6 +42704,8 @@ interface DataView {
                 emitTS1503And1532ForNamedGroups(expr, source, fileName)
                 emitTS1499ForRegexFlags(expr, source, fileName)
                 emitTS1517ForCharClassRanges(expr, source, fileName)
+                emitTS1501ForFlagTargetAvailability(expr, source, fileName)
+                emitTS1005ForVModeUnterminatedClass(expr, source, fileName)
             }
             else -> {}
         }
@@ -42971,6 +42973,70 @@ interface DataView {
                 relatedInformation = related,
             ))
         }
+    }
+
+    /**
+     * TS1501 "This regular expression flag is only available when targeting '<v>' or
+     * later." — per-flag minimum targets (tsc regExpFlagToFirstAvailableLanguageVersion):
+     * u/y → ES2015 (displayed 'es6'), s → ES2018, d → ES2022, v → ES2024. One per flag
+     * char, at the flag position. FP-safe: a below-target flag is a hard error in tsc.
+     */
+    private fun emitTS1501ForFlagTargetAvailability(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+        for (i in lastSlash + 1 until text.length) {
+            val (minTarget, display) = when (text[i]) {
+                'u', 'y' -> ScriptTarget.ES2015 to "es6"
+                's' -> ScriptTarget.ES2018 to "es2018"
+                'd' -> ScriptTarget.ES2022 to "es2022"
+                'v' -> ScriptTarget.ES2024 to "es2024"
+                else -> continue
+            }
+            if (options.target >= minTarget) continue
+            val absPos = node.pos + i
+            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+            diagnostics.add(Diagnostic(
+                message = "This regular expression flag is only available when targeting '$display' or later.",
+                category = DiagnosticCategory.Error, code = 1501, fileName = fileName,
+                line = line, character = character, start = absPos, length = 1,
+            ))
+        }
+    }
+
+    /**
+     * TS1005 "']' expected." for a `v`-flag regex whose character class never closes:
+     * in UnicodeSets mode an unescaped `[` INSIDE a class opens a NESTED class, so
+     * `/[[]/v` ends scanning with the outer class still open — tsc reports at the
+     * terminating `/` with a ZERO-width span. Non-v regexes treat `[` in a class as a
+     * literal (no nesting). FP-safe: only fires when the v-flagged body's bracket
+     * depth is still positive at the closing slash.
+     */
+    private fun emitTS1005ForVModeUnterminatedClass(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val text = node.text
+        if (text.length < 2 || text[0] != '/') return
+        val lastSlash = text.lastIndexOf('/')
+        if (lastSlash <= 0) return
+        if (!text.substring(lastSlash + 1).contains('v')) return
+        var depth = 0
+        var i = 1
+        while (i < lastSlash) {
+            when (text[i]) {
+                '\\' -> i++
+                '[' -> depth++
+                ']' -> if (depth > 0) depth--
+            }
+            i++
+        }
+        if (depth <= 0) return
+        val absPos = node.pos + lastSlash
+        val (line, character) = getLineAndCharacterOfPosition(source, absPos)
+        diagnostics.add(Diagnostic(
+            message = "']' expected.",
+            category = DiagnosticCategory.Error, code = 1005, fileName = fileName,
+            line = line, character = character, start = absPos, length = 0,
+        ))
     }
 
     /**
