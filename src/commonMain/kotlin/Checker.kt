@@ -54442,11 +54442,18 @@ interface DataView {
             } == true
             // Use effectiveTarget so ES3/ES5 targets also fire TS1212 for binding names
             // (TypeScript fires TS1212 for reserved words in binding positions at all targets)
-            val isStrict = options.effectiveTarget >= ScriptTarget.ES2015 ||
-                options.strict == true ||
-                options.alwaysStrict == true ||
-                isModule ||
-                hasUseStrict
+            // — EXCEPT when both @strict and @alwaysStrict are EXPLICITLY false: then only
+            // a module or "use strict" prologue makes file-level bindings strict
+            // (convertKeywordsYes alwaysstrict=false expects no binding TS1212s).
+            val isStrict = if (options.alwaysStrict == false && options.strictExplicitlyFalse) {
+                isModule || hasUseStrict
+            } else {
+                options.effectiveTarget >= ScriptTarget.ES2015 ||
+                    options.strict == true ||
+                    options.alwaysStrict == true ||
+                    isModule ||
+                    hasUseStrict
+            }
             // For expression-position TS1212: fire when explicitly strict, NOT just target >= ES2015.
             // Target alone doesn't make file-level code strict — only classes, modules, and explicit flags do.
             // When alwaysStrict is explicitly false, suppress the target-based strictness.
@@ -54484,12 +54491,38 @@ interface DataView {
                 val name = stmt.name
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
                 checkParamsForStrictReserved(stmt.parameters, source, fileName, inClass, isModule)
+                // TYPE-PARAMETER names and bare TYPE-REFERENCE param annotations are
+                // identifier positions too — `function f<implements>(i: implements)`
+                // reports TS1212 at both (convertKeywordsYes bigGeneric).
+                stmt.typeParameters?.forEach { tp ->
+                    checkIdentForStrictReserved(tp.name, source, fileName, inClass, isModule)
+                }
+                for (p in stmt.parameters) {
+                    val tr = p.type as? TypeReference ?: continue
+                    val tn = tr.typeName as? Identifier ?: continue
+                    if (tr.typeArguments.isNullOrEmpty()) {
+                        checkIdentForStrictReserved(tn, source, fileName, inClass, isModule)
+                    }
+                }
                 stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
             }
-            is ClassDeclaration -> if (isStrict) {
-                val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
+            is ClassDeclaration -> {
+                // Class definitions are AUTOMATICALLY strict (tsc): the class NAME
+                // reports TS1213 regardless of file strictness, and a STRING-named
+                // "constructor" field is TS18006 (both convertKeywordsYes variants).
+                stmt.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass = true, isModule = false) }
                 for (member in stmt.members) {
+                    val nm = (member as? PropertyDeclaration)?.name as? StringLiteralNode ?: continue
+                    if (nm.text != "constructor") continue
+                    val (l18, c18) = getLineAndCharacterOfPosition(source, nm.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Classes may not have a field named 'constructor'.",
+                        category = DiagnosticCategory.Error, code = 18006,
+                        fileName = fileName, line = l18, character = c18,
+                        start = nm.pos, length = (nm.rawText?.length ?: nm.text.length) + 2,
+                    ))
+                }
+                if (isStrict) for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
                             checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
@@ -54531,11 +54564,13 @@ interface DataView {
                     }
                 }
             }
-            is ModuleDeclaration -> if (isStrict) {
-                val name = stmt.name
-                checkExprForStrictReservedIdents(name, source, fileName, inClass)
-                val body = stmt.body
-                when (body) {
+            is ModuleDeclaration -> {
+                // The namespace's own name is an identifier position only under
+                // strictness, but the BODY must be walked regardless — class
+                // definitions inside are automatically strict (TS1213 on reserved
+                // class names fires even in a fully non-strict file).
+                if (isStrict) checkExprForStrictReservedIdents(stmt.name, source, fileName, inClass)
+                when (val body = stmt.body) {
                     is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
                     is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
                     else -> {}

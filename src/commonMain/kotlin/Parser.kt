@@ -1766,8 +1766,14 @@ class Parser(
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.ClassKeyword)
-        // `implements` and `extends` always start heritage clauses, never class names
-        val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
+        // `implements`/`extends` start heritage clauses ONLY when followed by an
+        // identifier-or-keyword (tsc isImplementsClause); `class implements { }` takes
+        // `implements` as the class NAME (the checker reports TS1213 on it).
+        val heritageKeywordIsName = (token == SyntaxKind.ImplementsKeyword || token == SyntaxKind.ExtendsKeyword) &&
+            !lookAhead { nextToken(); isIdentifier() || isKeyword() }
+        val name = if (isIdentifier() && (heritageKeywordIsName ||
+                (token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword))
+        ) parseIdentifier() else null
         val ltPos = if (token == SyntaxKind.LessThan) getPos() else -1
         val parsedTypeParams = parseTypeParametersOpt()
         if (parsedTypeParams != null && parsedTypeParams.isEmpty() && ltPos >= 0) {
@@ -1917,11 +1923,15 @@ class Parser(
         // Only fire if the NEXT token after the 2nd 'static' is on the SAME LINE (no line break),
         // which indicates the 2nd 'static' is part of a member declaration (not standalone).
         if (token == SyntaxKind.StaticKeyword) {
-            val nextHasLineBreak = lookAhead {
-                scanner.scan() // skip the second 'static'
-                scanner.hasPrecedingLineBreak()
+            // tsc parseErrorForMissingSemicolonAfter: fires only when the member NAMED
+            // 'static' is followed by another same-line identifier/keyword (the
+            // missing-semicolon shape, `static static foo`). A follow token like
+            // `=`/`:`/`(` makes `static` a legal member name (`public static = 0;`).
+            val nextIsIdentSameLine = lookAhead {
+                nextToken() // skip the second 'static'
+                (isIdentifier() || isKeyword()) && !scanner.hasPrecedingLineBreak()
             }
-            if (!nextHasLineBreak) {
+            if (nextIsIdentSameLine) {
                 reportError("Unexpected keyword or identifier.", code = 1434, overrideLength = "static".length)
             }
         }
@@ -2661,7 +2671,12 @@ class Parser(
             )
         }
 
-        if (token == SyntaxKind.NewKeyword) {
+        // `new` starts a CONSTRUCT SIGNATURE only when followed by `(` or `<`
+        // (tsc isStartOfConstructSignature lookahead); otherwise it's a PROPERTY
+        // named `new` (`interface I { new; }` — no error).
+        if (token == SyntaxKind.NewKeyword &&
+            lookAhead { nextToken(); token == SyntaxKind.OpenParen || token == SyntaxKind.LessThan }
+        ) {
             nextToken()
             val typeParams = parseTypeParametersOpt()
             val params = parseParameterList()
@@ -5940,8 +5955,14 @@ class Parser(
     private fun parseClassExpression(): ClassExpression {
         val pos = getPos()
         parseExpected(SyntaxKind.ClassKeyword)
-        // `implements` and `extends` always start heritage clauses, never class names
-        val name = if (isIdentifier() && token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword) parseIdentifier() else null
+        // `implements`/`extends` start heritage clauses ONLY when followed by an
+        // identifier-or-keyword (tsc isImplementsClause); `class implements { }` takes
+        // `implements` as the class NAME (the checker reports TS1213 on it).
+        val heritageKeywordIsName = (token == SyntaxKind.ImplementsKeyword || token == SyntaxKind.ExtendsKeyword) &&
+            !lookAhead { nextToken(); isIdentifier() || isKeyword() }
+        val name = if (isIdentifier() && (heritageKeywordIsName ||
+                (token != SyntaxKind.ImplementsKeyword && token != SyntaxKind.ExtendsKeyword))
+        ) parseIdentifier() else null
         val ltPos = if (token == SyntaxKind.LessThan) getPos() else -1
         val typeParams = parseTypeParametersOpt()
         if (typeParams != null && typeParams.isEmpty() && ltPos >= 0) {
