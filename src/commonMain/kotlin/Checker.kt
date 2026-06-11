@@ -993,6 +993,8 @@ class Checker(
         // 10b. B332: TS2300 '(Missing)' for the file-level empty-name group (parse
         // recovery — reservedWords2).
         checkEmptyNameDeclarationConflicts()
+        // 10c. B335: object-literal this-circular members (TS7023 + TS2339).
+        checkObjectLiteralThisCircularMembers()
         // 40c. TS2395 export-consistency for merges inside string-named ambient
         // modules in .d.ts files (the general path skips .d.ts files).
         checkDtsAmbientModuleExportConsistency()
@@ -24212,6 +24214,145 @@ class Checker(
             // B98.r93: TS2300 for a clodule (class + namespace merge) whose combined
             // STATIC value space has a name declared with ≥2 distinct merge-kinds.
             checkCloduleValueSpaceConflicts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /**
+     * B335: object-literal method/get-accessor whose RETURN references the containing
+     * literal through `this` (directly or via a `var _this = this` alias) — under
+     * strict/noImplicitThis tsc types `this` as the OBJECT LITERAL and the member's
+     * return inference goes circular: TS7023 at the member name + TS2339 for the
+     * missing member access with the literal's shape display
+     * (accessorInferredReturnTypeErrorInReturnStatement / checkingObjectWithThisInNamePositionNoCrash).
+     * Narrow gates: .ts files, strict on, TOP-LEVEL `var/const X = { … }` literals,
+     * un-annotated members, and ≥1 this-rooted access naming a MISSING member.
+     */
+    private fun checkObjectLiteralThisCircularMembers() {
+        if (!(options.strict == true || options.noImplicitThis)) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val vs = stmt as? VariableStatement ?: continue
+                if (ModifierFlag.Declare in vs.modifiers) continue
+                for (decl in vs.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val lit = decl.initializer as? ObjectLiteralExpression ?: continue
+                    checkObjectLiteralThisMembers(lit, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun checkObjectLiteralThisMembers(lit: ObjectLiteralExpression, source: String, fileName: String) {
+        val memberNames = lit.properties.mapNotNull { p ->
+            when (p) {
+                is PropertyAssignment -> (p.name as? Identifier)?.text
+                is MethodDeclaration -> (p.name as? Identifier)?.text
+                is GetAccessor -> (p.name as? Identifier)?.text
+                is SetAccessor -> (p.name as? Identifier)?.text
+                is ShorthandPropertyAssignment -> p.name.text
+                else -> null
+            }
+        }.toSet()
+        for (p in lit.properties) {
+            val nameId: Identifier
+            val body: Block
+            val isAccessor: Boolean
+            when {
+                p is MethodDeclaration && p.type == null && p.body != null && p.name is Identifier &&
+                    ModifierFlag.Async !in p.modifiers && !p.asteriskToken -> {
+                    nameId = p.name; body = p.body!!; isAccessor = false
+                }
+                p is GetAccessor && p.type == null && p.body != null && p.name is Identifier -> {
+                    nameId = p.name as Identifier; body = p.body!!; isAccessor = true
+                }
+                else -> continue
+            }
+            // this-aliases declared in the body: `var _this = this;`
+            val aliases = mutableSetOf("this")
+            for (s in body.statements) {
+                val v = s as? VariableStatement ?: continue
+                for (d in v.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    val init = d.initializer
+                    if (init is Identifier && init.text == "this") aliases.add(n.text)
+                }
+            }
+            // this-rooted first-level accesses inside RETURN expressions (incl. computed
+            // names of returned object literals).
+            data class Hit(val propName: Identifier, val returnedLiteral: ObjectLiteralExpression?)
+            val hits = mutableListOf<Hit>()
+            fun scanExpr(e: Expression?, returnedLit: ObjectLiteralExpression?) {
+                when (e) {
+                    null -> {}
+                    is PropertyAccessExpression -> {
+                        val root = e.expression
+                        if (root is Identifier && root.text in aliases) {
+                            hits.add(Hit(e.name, returnedLit))
+                        } else scanExpr(root, returnedLit)
+                    }
+                    is ObjectLiteralExpression -> for (prop in e.properties) {
+                        when (prop) {
+                            is PropertyAssignment -> {
+                                (prop.name as? ComputedPropertyName)?.let { scanExpr(it.expression, e) }
+                                scanExpr(prop.initializer, e)
+                            }
+                            else -> {}
+                        }
+                    }
+                    is CallExpression -> { scanExpr(e.expression, returnedLit); e.arguments.forEach { scanExpr(it, returnedLit) } }
+                    is ParenthesizedExpression -> scanExpr(e.expression, returnedLit)
+                    is ElementAccessExpression -> { scanExpr(e.expression, returnedLit); scanExpr(e.argumentExpression, returnedLit) }
+                    else -> {}
+                }
+            }
+            for (s in body.statements) {
+                if (s is ReturnStatement) scanExpr(s.expression, null)
+            }
+            val missing = hits.filter { it.propName.text !in memberNames && it.propName.text !in OBJECT_PROTOTYPE_PROPERTIES }
+            if (missing.isEmpty()) continue
+            // Display of the containing literal: the circular member renders `readonly N: any`
+            // (accessor) / `N(): <returned-literal display>` (method; a this-keyed computed
+            // name renders as a number index signature — tsc's any-key inference).
+            val memberDisplays = lit.properties.mapNotNull { q ->
+                when {
+                    q is GetAccessor && (q.name as? Identifier) != null ->
+                        "readonly ${(q.name as Identifier).text}: any;"
+                    q is MethodDeclaration && q.name is Identifier -> {
+                        val retLit = (q.body?.statements?.firstOrNull { it is ReturnStatement } as? ReturnStatement)
+                            ?.expression as? ObjectLiteralExpression
+                        val retDisplay = if (retLit != null && retLit.properties.all {
+                                it is PropertyAssignment && it.name is ComputedPropertyName }) {
+                            val valType = (retLit.properties.firstOrNull() as? PropertyAssignment)?.initializer
+                                ?.let { typeToString(getWidenedLiteralType(getTypeOfExpression(it))) } ?: "any"
+                            "{ [x: number]: $valType; }"
+                        } else "any"
+                        "${q.name.text}(): $retDisplay;"
+                    }
+                    q is PropertyAssignment && q.name is Identifier ->
+                        "${(q.name as Identifier).text}: ${typeToString(getWidenedLiteralType(getTypeOfExpression(q.initializer)))};"
+                    else -> null
+                }
+            }
+            val litDisplay = "{ ${memberDisplays.joinToString(" ")} }"
+            val (l7, c7) = getLineAndCharacterOfPosition(source, nameId.pos)
+            diagnostics.add(Diagnostic(
+                message = "'${nameId.text}' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+                category = DiagnosticCategory.Error, code = 7023,
+                fileName = fileName, line = l7, character = c7,
+                start = nameId.pos, length = nameId.text.length,
+            ))
+            for (hit in missing) {
+                val (l2, c2) = getLineAndCharacterOfPosition(source, hit.propName.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${hit.propName.text}' does not exist on type '$litDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = l2, character = c2,
+                    start = hit.propName.pos, length = hit.propName.text.length,
+                ))
+            }
         }
     }
 
