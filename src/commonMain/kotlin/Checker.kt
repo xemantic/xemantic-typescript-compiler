@@ -101797,7 +101797,15 @@ interface DataView {
                 .filter { fn.startsWith("$it/") }
                 .maxByOrNull { it.length }
             if (root == null) {
-                declaredElsewhere.addAll(result.locals.keys)
+                // B308: a file under /node_modules/<entry>/ for an UNRESOLVED `types`
+                // entry is not part of tsc's program (the entry failed typeRoots
+                // resolution; typeReferenceDirectiveWithFailedFromTypeRoot) — its
+                // names are strip candidates, not "declared elsewhere".
+                if (unresolved.any { e -> "/node_modules/$e/" in fn }) {
+                    candidates.addAll(result.locals.keys)
+                } else {
+                    declaredElsewhere.addAll(result.locals.keys)
+                }
                 continue
             }
             val segs = fn.removePrefix("$root/").split("/")
