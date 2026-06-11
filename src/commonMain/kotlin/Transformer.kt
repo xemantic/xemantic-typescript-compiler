@@ -8230,12 +8230,58 @@ class Transformer(
                 // Transform parameters inside the function scope so async arrows in
                 // default parameters see the correct functionScopeDepth for `this` binding.
                 functionScopeDepth++
-                val (params, finalBody) = flattenRestParameters(decl.parameters, transformedBody)
+                // B342: param defaults transform under a SCRATCH hoist scope. When a
+                // default's transform allocates temps (class-expression captures — the
+                // `var _a;` must live in the function BODY), tsc converts ALL parameter
+                // defaults of the function to `if (p === void 0) { p = init; }` body
+                // statements (the param scope can't see body-hoisted vars).
+                val scratchScope = mutableListOf<String>()
+                hoistedVarScopes.add(scratchScope)
+                val (params, flatBody) = flattenRestParameters(decl.parameters, transformedBody)
+                hoistedVarScopes.removeLast()
                 functionScopeDepth--
+                var finalParams = params
+                var finalBody = flatBody
+                val defaulted = params.filter { it.initializer != null }
+                if (scratchScope.isNotEmpty() && defaulted.isNotEmpty() &&
+                    defaulted.all { it.name is Identifier }) {
+                    val void0 = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1)
+                    val ifStmts = defaulted.map { p ->
+                        val pid = (p.name as Identifier).copy(pos = -1, end = -1, leadingComments = null, trailingComments = null)
+                        IfStatement(
+                            expression = BinaryExpression(left = pid, operator = EqualsEqualsEquals, right = void0, pos = -1, end = -1),
+                            thenStatement = Block(
+                                statements = listOf(ExpressionStatement(
+                                    expression = BinaryExpression(left = pid, operator = Equals, right = p.initializer!!, pos = -1, end = -1),
+                                    pos = -1, end = -1,
+                                )),
+                                multiLine = false,
+                                pos = -1, end = -1,
+                            ),
+                            pos = -1, end = -1,
+                        )
+                    }
+                    val varStmt = VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = scratchScope.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
+                            flags = VarKeyword,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                    finalParams = params.map { it.copy(initializer = null) }
+                    finalBody = flatBody.copy(
+                        statements = listOf(varStmt) + ifStmts + flatBody.statements,
+                        multiLine = true,
+                    )
+                } else {
+                    // No conversion — temps keep the prior outer-scope hoisting.
+                    hoistedVarScopes.lastOrNull()?.addAll(scratchScope)
+                }
                 listOf(
                     decl.copy(
                         typeParameters = null,
-                        parameters = params,
+                        parameters = finalParams,
                         type = null,
                         body = finalBody,
                         modifiers = strippedModifiers,
@@ -10375,21 +10421,26 @@ class Transformer(
                 newParams.add(param.copy(
                     name = transformBindingName(name),
                     type = null,
-                    initializer = param.initializer?.let { transformExpression(it) },
+                    initializer = param.initializer?.let {
+                        // B342: an anonymous class expression defaulting a parameter gets
+                        // __setFunctionName with the PARAM name (same rule as var bindings).
+                        val prevPending = pendingClassExprBindingName
+                        if (it is ClassExpression && it.name == null && name is Identifier) {
+                            pendingClassExprBindingName = name.text
+                        }
+                        val r = transformExpression(it)
+                        pendingClassExprBindingName = prevPending
+                        r
+                    },
                     questionToken = false,
                     modifiers = emptySet(),
                 ))
             }
         }
-        if (restStmts.isEmpty()) return Pair(params.map { param ->
-            param.copy(
-                name = transformBindingName(param.name),
-                type = null,
-                initializer = param.initializer?.let { transformExpression(it) },
-                questionToken = false,
-                modifiers = emptySet(),
-            )
-        }, body)
+        // B342: newParams already carries the transformed non-rest params — re-mapping the
+        // raw list here transformed every initializer a SECOND time (duplicate temp-var
+        // allocations for class-capture defaults).
+        if (restStmts.isEmpty()) return Pair(newParams, body)
         // Insert after prologue directives
         val bodyStmts = body.statements.toMutableList()
         val insertAt = bodyStmts.indexOfFirst { stmt ->
@@ -11779,6 +11830,38 @@ class Transformer(
         for (s in result.privateStateStatements) {
             (s as? ExpressionStatement)?.expression?.let { elements.add(it) }
         }
+        // B342: computed-name capture temps (`var _c;` + `_c = ex`) hoist into the
+        // enclosing scope, and the capture assignments splice BEFORE __setFunctionName
+        // (tsc pendingExpressions order: captures, the name assignment, then statics).
+        val captureLeadingNames = result.leadingStatements.flatMap { lead ->
+            (lead as? VariableStatement)?.declarationList?.declarations
+                ?.mapNotNull { (it.name as? Identifier)?.text } ?: emptyList()
+        }
+        for (n in captureLeadingNames) {
+            hoistedVarScopes.lastOrNull()?.add(n)
+            if (functionScopeDepth == 0) computedPropHoistNames.add(n)
+        }
+        fun flattenCommaChain(e: Expression, out: MutableList<Expression>) {
+            if (e is BinaryExpression && e.operator == Comma) {
+                flattenCommaChain(e.left, out); flattenCommaChain(e.right, out)
+            } else out.add(e)
+        }
+        val remainingTrailing = mutableListOf<Statement>()
+        for (stmt in result.trailingStatements) {
+            val e = (stmt as? ExpressionStatement)?.expression
+            if (e != null && captureLeadingNames.isNotEmpty()) {
+                val flat = mutableListOf<Expression>()
+                flattenCommaChain(e, flat)
+                if (flat.all { x ->
+                        (x as? BinaryExpression)?.operator == Equals &&
+                            ((x as BinaryExpression).left as? Identifier)?.text in captureLeadingNames
+                    }) {
+                    elements.addAll(flat)
+                    continue
+                }
+            }
+            remainingTrailing.add(stmt)
+        }
         // __setFunctionName(_a, "X") after the capture, before trailing statements.
         if (funcNameForSetFunctionName != null && result.trailingStatements.isNotEmpty()) {
             requireHelper("__setFunctionName")
@@ -11791,7 +11874,7 @@ class Transformer(
                 pos = -1, end = -1,
             ))
         }
-        for (stmt in result.trailingStatements) {
+        for (stmt in remainingTrailing) {
             val exprStmt = stmt as? ExpressionStatement ?: continue
             // The LHS is already tempName (from trailingVarName). Replace class name in RHS.
             val replaceExpr = if (className != null) {

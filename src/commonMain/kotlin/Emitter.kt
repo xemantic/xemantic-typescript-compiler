@@ -603,6 +603,12 @@ class Emitter(
                 emitExpression(stmt.expression)
                 write(";")
                 writeNewLine()
+            } else if (node.pos == -1 && stmt is Block && !stmt.multiLine && stmt.statements.isNotEmpty()) {
+                // B342: synthetic single-line then-blocks keep tsc's parameter-default
+                // downlevel format: `if (y === void 0) { y = init; }` (a multi-line
+                // initializer flows inside the inline braces).
+                emitBlockBody(stmt)
+                writeNewLine()
             } else {
                 emitEmbeddedStatement(node.thenStatement)
             }
