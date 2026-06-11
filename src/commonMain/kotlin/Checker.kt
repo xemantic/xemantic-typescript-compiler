@@ -1618,6 +1618,8 @@ class Checker(
         checkRecursiveLiteralVariables()
         // 82a. B147: TS7022+TS7024 circular generic-callback initializer `const X = f(() => X)`.
         checkCircularGenericCallbackVariables()
+        // B336: curried-generic self-reference (TS7022 + member TS7023).
+        checkCurriedGenericSelfRefVariables()
         // 82a'. B193: TS2345 for optional-member reads of an annotated destructured param
         // passed where only `undefined` fails (`function f({skills}: Robot) { log(skills.primary) }`).
         checkDestructuredParamOptionalMemberArgs()
@@ -78854,6 +78856,105 @@ interface DataView {
                 else -> return // control flow may narrow — stop entirely
             }
         }
+    }
+
+    /**
+     * B336: CURRIED-generic self-reference (`circularReferenceInReturnType2`):
+     * `const A = object<Something>()({ …, fields: () => ({ … A … }) })` — the outer
+     * call's type-parameter inference consumes the argument object, whose closure
+     * member references A → the whole initializer is circular. TS7022 at A's name +
+     * TS7023 at EACH closure member's name (tsc's "referenced … in one of its return
+     * expressions"). Narrow gates: un-annotated top-level const, callee is a CALL of a
+     * call WITH EXPLICIT TYPE ARGUMENTS (the curried generic-instantiation shape), and
+     * the self-reference sits inside an un-annotated arrow/function-expression member
+     * of an object-literal argument.
+     */
+    private fun checkCurriedGenericSelfRefVariables() {
+        if (options.strictExplicitlyFalse) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val vs = stmt as? VariableStatement ?: continue
+                if (ModifierFlag.Declare in vs.modifiers) continue
+                for (decl in vs.declarationList.declarations) {
+                    if (decl.type != null) continue
+                    val name = (decl.name as? Identifier)?.text ?: continue
+                    val outer = decl.initializer as? CallExpression ?: continue
+                    val inner = outer.expression as? CallExpression ?: continue
+                    if (inner.expression !is Identifier) continue
+                    if (inner.typeArguments.isNullOrEmpty()) continue
+                    var emitted7022 = false
+                    for (arg in outer.arguments) {
+                        val lit = arg as? ObjectLiteralExpression ?: continue
+                        for (p in lit.properties) {
+                            val pa = p as? PropertyAssignment ?: continue
+                            val pn = pa.name as? Identifier ?: continue
+                            val closure = pa.initializer
+                            val closureBody: Node = when (closure) {
+                                is ArrowFunction -> if (closure.type == null) closure.body ?: continue else continue
+                                is FunctionExpression -> if (closure.type == null) closure.body ?: continue else continue
+                                else -> continue
+                            }
+                            if (!nodeSubtreeReferencesName(closureBody, name)) continue
+                            if (!emitted7022) {
+                                emitted7022 = true
+                                val (l1, c1) = getLineAndCharacterOfPosition(source, decl.name.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "'$name' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.",
+                                    category = DiagnosticCategory.Error, code = 7022, fileName = fileName,
+                                    line = l1, character = c1, start = decl.name.pos, length = name.length,
+                                ))
+                            }
+                            val (l2, c2) = getLineAndCharacterOfPosition(source, pn.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'${pn.text}' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+                                category = DiagnosticCategory.Error, code = 7023, fileName = fileName,
+                                line = l2, character = c2, start = pn.pos, length = pn.text.length,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Recursive scan: does [node]'s expression subtree contain a bare Identifier [name]?
+     *  (Iterative worklist; BinaryExpression-safe per the stress-test gotcha.) */
+    private fun nodeSubtreeReferencesName(node: Node, name: String): Boolean {
+        val work = ArrayDeque<Node>()
+        work.add(node)
+        var steps = 0
+        while (work.isNotEmpty() && steps < 50_000) {
+            steps++
+            when (val n = work.removeLast()) {
+                is Identifier -> if (n.text == name) return true
+                is PropertyAccessExpression -> work.add(n.expression) // NOT the member name
+                is BinaryExpression -> { work.add(n.left); work.add(n.right) }
+                is CallExpression -> { work.add(n.expression); n.arguments.forEach { work.add(it) } }
+                is NewExpression -> { work.add(n.expression); n.arguments?.forEach { work.add(it) } }
+                is ParenthesizedExpression -> work.add(n.expression)
+                is ObjectLiteralExpression -> n.properties.forEach { work.add(it) }
+                is PropertyAssignment -> { work.add(n.initializer); (n.name as? ComputedPropertyName)?.let { work.add(it.expression) } }
+                is ShorthandPropertyAssignment -> if (n.name.text == name) return true
+                is SpreadAssignment -> work.add(n.expression)
+                is ArrayLiteralExpression -> n.elements.forEach { work.add(it) }
+                is ArrowFunction -> n.body?.let { work.add(it) }
+                is FunctionExpression -> n.body?.let { work.add(it) }
+                is MethodDeclaration -> n.body?.let { work.add(it) }
+                is Block -> n.statements.forEach { work.add(it) }
+                is ReturnStatement -> n.expression?.let { work.add(it) }
+                is ExpressionStatement -> work.add(n.expression)
+                is ConditionalExpression -> { work.add(n.condition); work.add(n.whenTrue); work.add(n.whenFalse) }
+                is ElementAccessExpression -> { work.add(n.expression); n.argumentExpression?.let { work.add(it) } }
+                is TemplateExpression -> n.templateSpans.forEach { work.add(it.expression) }
+                is AsExpression -> work.add(n.expression)
+                is NonNullExpression -> work.add(n.expression)
+                else -> {}
+            }
+        }
+        return false
     }
 
     private fun checkCircularGenericCallbackVariables() {
