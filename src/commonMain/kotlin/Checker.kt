@@ -43055,6 +43055,50 @@ interface DataView {
         }
     }
 
+    private fun regexLevenshteinWithMax(s1: String, s2: String, max: Double): Double? {
+        var previous = DoubleArray(s2.length + 1) { it.toDouble() }
+        var current = DoubleArray(s2.length + 1)
+        val big = max + 0.01
+        for (i in 1..s1.length) {
+            val c1 = s1[i - 1]
+            val minJ = if (i > max) kotlin.math.ceil(i - max).toInt().coerceAtLeast(1) else 1
+            val maxJ = if (s2.length > max + i) (max + i).toInt() else s2.length
+            current[0] = i.toDouble()
+            var colMin = i.toDouble()
+            for (j in 1 until minJ) current[j] = big
+            for (j in minJ..maxJ) {
+                val substitutionDistance =
+                    if (s1[i - 1].lowercaseChar() == s2[j - 1].lowercaseChar()) previous[j - 1] + 0.1
+                    else previous[j - 1] + 2.0
+                val dist = if (c1 == s2[j - 1]) previous[j - 1]
+                else minOf(previous[j] + 1.0, current[j - 1] + 1.0, substitutionDistance)
+                current[j] = dist
+                colMin = minOf(colMin, dist)
+            }
+            for (j in maxJ + 1..s2.length) current[j] = big
+            if (colMin > max) return null
+            val tmp = previous; previous = current; current = tmp
+        }
+        val res = previous[s2.length]
+        return if (res > max) null else res
+    }
+
+    /** tsc core.ts getSpellingSuggestion over an ordered candidate pool. */
+    private fun regexSpellingSuggestion(name: String, candidates: Iterable<String>): String? {
+        val maximumLengthDifference = maxOf(2, name.length * 34 / 100)
+        var bestDistance = name.length * 2 / 5 + 1.0
+        var bestCandidate: String? = null
+        for (candidate in candidates) {
+            if (kotlin.math.abs(candidate.length - name.length) > maximumLengthDifference) continue
+            if (candidate == name) continue
+            if (candidate.length < 3 && candidate.lowercase() != name.lowercase()) continue
+            val distance = regexLevenshteinWithMax(name, candidate, bestDistance - 0.1) ?: continue
+            bestDistance = distance
+            bestCandidate = candidate
+        }
+        return bestCandidate
+    }
+
     /**
      * B361: scoped port of tsc's scanRegularExpressionWorker (annexB=true, scanner.ts
      * 2613–3609) covering the term/quantifier grammar and atom/class escapes —
@@ -43096,12 +43140,13 @@ interface DataView {
         }
 
         var bailed = false
-        val pending = mutableListOf<Triple<Int, Int, Pair<Int, String>>>()
+        class RegexErr(val offset: Int, val len: Int, val code: Int, val msg: String, val suggestion: String?)
+        val pending = mutableListOf<RegexErr>()
         var lastStart = -1
-        fun err(offset: Int, len: Int, code: Int, msg: String) {
+        fun err(offset: Int, len: Int, code: Int, msg: String, suggestion: String? = null) {
             if (offset == lastStart) return
             lastStart = offset
-            pending.add(Triple(offset, len, code to msg))
+            pending.add(RegexErr(offset, len, code, msg, suggestion))
         }
         var pos = 1
         fun chAt(i: Int): Char = if (i in 1 until end) text[i] else ' '
@@ -43171,9 +43216,43 @@ interface DataView {
                 'p', 'P' -> {
                     pos++
                     if (!atEnd() && text[pos] == '{') {
-                        // Braced property bodies (and their non-u availability error)
-                        // are out of subset.
-                        bailed = true
+                        // B362: full \p{...} property validation (u-mode only; the
+                        // non-u availability error stays out of subset).
+                        if (!strict) { bailed = true; return true }
+                        pos++
+                        fun isWordChar(ch2: Char) = ch2 in 'a'..'z' || ch2 in 'A'..'Z' || ch2 in '0'..'9' || ch2 == '_'
+                        val nameStart = pos
+                        while (!atEnd() && isWordChar(text[pos])) pos++
+                        val nameOrValue = text.substring(nameStart, pos)
+                        if (!atEnd() && text[pos] == '=') {
+                            if (pos == nameStart) { bailed = true; return true }
+                            val propertyName = REGEX_NONBINARY_PROPS[nameOrValue]
+                            if (propertyName == null) {
+                                err(nameStart, pos - nameStart, 1524, "Unknown Unicode property name.",
+                                    regexSpellingSuggestion(nameOrValue, REGEX_NONBINARY_PROPS.keys))
+                            }
+                            pos++
+                            val valueStart = pos
+                            while (!atEnd() && isWordChar(text[pos])) pos++
+                            val value = text.substring(valueStart, pos)
+                            if (pos == valueStart) { bailed = true; return true }
+                            if (propertyName != null) {
+                                val values = if (propertyName == "General_Category") REGEX_GC_VALUES else REGEX_SCRIPT_VALUES
+                                if (value !in values) {
+                                    err(valueStart, pos - valueStart, 1526, "Unknown Unicode property value.",
+                                        regexSpellingSuggestion(value, values))
+                                }
+                            }
+                        } else {
+                            if (pos == nameStart) { bailed = true; return true }
+                            if (nameOrValue in REGEX_BINARY_PROPS_OF_STRINGS) { bailed = true; return true }
+                            if (nameOrValue !in REGEX_GC_VALUES && nameOrValue !in REGEX_BINARY_PROPS) {
+                                err(nameStart, pos - nameStart, 1529, "Unknown Unicode property name or value.",
+                                    regexSpellingSuggestion(nameOrValue,
+                                        REGEX_GC_VALUES.asSequence().plus(REGEX_BINARY_PROPS).plus(REGEX_BINARY_PROPS_OF_STRINGS).asIterable()))
+                            }
+                        }
+                        if (!atEnd() && text[pos] == '}') pos++ else bailed = true
                         return true
                     } else if (strict) {
                         err(pos - 2, 2, 1531, "'\\$c' must be followed by a Unicode property value expression enclosed in braces.")
@@ -43328,12 +43407,16 @@ interface DataView {
             }
         }
         if (bailed) return
-        for ((off, len, cm) in pending) {
-            val absPos = node.pos + off
+        for (e in pending) {
+            val absPos = node.pos + e.offset
             val (l, c2) = getLineAndCharacterOfPosition(source, absPos)
             diagnostics.add(Diagnostic(
-                message = cm.second, category = DiagnosticCategory.Error, code = cm.first,
-                fileName = fileName, line = l, character = c2, start = absPos, length = len,
+                message = e.msg, category = DiagnosticCategory.Error, code = e.code,
+                fileName = fileName, line = l, character = c2, start = absPos, length = e.len,
+                relatedInformation = if (e.suggestion != null) listOf(Diagnostic(
+                    message = "Did you mean '${e.suggestion}'?",
+                    category = DiagnosticCategory.Message, code = 1369,
+                )) else emptyList(),
             ))
         }
     }
@@ -114459,3 +114542,27 @@ interface DataView {
         ))
     }
 }
+
+// --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
+// are initialized before the Checker's init block runs (the init-order gotcha). ---
+private val REGEX_NONBINARY_PROPS = linkedMapOf(
+        "General_Category" to "General_Category", "gc" to "General_Category",
+        "Script" to "Script", "sc" to "Script",
+        "Script_Extensions" to "Script_Extensions", "scx" to "Script_Extensions",
+    )
+
+private val REGEX_BINARY_PROPS_OF_STRINGS = setOf(
+        "Basic_Emoji", "Emoji_Keycap_Sequence", "RGI_Emoji_Modifier_Sequence",
+        "RGI_Emoji_Flag_Sequence", "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence", "RGI_Emoji",
+    )
+
+private val REGEX_GC_VALUES = setOf(
+        "C", "Other", "Cc", "Control", "cntrl", "Cf", "Format", "Cn", "Unassigned", "Co", "Private_Use", "Cs", "Surrogate", "L", "Letter", "LC", "Cased_Letter", "Ll", "Lowercase_Letter", "Lm", "Modifier_Letter", "Lo", "Other_Letter", "Lt", "Titlecase_Letter", "Lu", "Uppercase_Letter", "M", "Mark", "Combining_Mark", "Mc", "Spacing_Mark", "Me", "Enclosing_Mark", "Mn", "Nonspacing_Mark", "N", "Number", "Nd", "Decimal_Number", "digit", "Nl", "Letter_Number", "No", "Other_Number", "P", "Punctuation", "punct", "Pc", "Connector_Punctuation", "Pd", "Dash_Punctuation", "Pe", "Close_Punctuation", "Pf", "Final_Punctuation", "Pi", "Initial_Punctuation", "Po", "Other_Punctuation", "Ps", "Open_Punctuation", "S", "Symbol", "Sc", "Currency_Symbol", "Sk", "Modifier_Symbol", "Sm", "Math_Symbol", "So", "Other_Symbol", "Z", "Separator", "Zl", "Line_Separator", "Zp", "Paragraph_Separator", "Zs", "Space_Separator",
+    )
+private val REGEX_SCRIPT_VALUES = setOf(
+        "Adlm", "Adlam", "Aghb", "Caucasian_Albanian", "Ahom", "Arab", "Arabic", "Armi", "Imperial_Aramaic", "Armn", "Armenian", "Avst", "Avestan", "Bali", "Balinese", "Bamu", "Bamum", "Bass", "Bassa_Vah", "Batk", "Batak", "Beng", "Bengali", "Bhks", "Bhaiksuki", "Bopo", "Bopomofo", "Brah", "Brahmi", "Brai", "Braille", "Bugi", "Buginese", "Buhd", "Buhid", "Cakm", "Chakma", "Cans", "Canadian_Aboriginal", "Cari", "Carian", "Cham", "Cher", "Cherokee", "Chrs", "Chorasmian", "Copt", "Coptic", "Qaac", "Cpmn", "Cypro_Minoan", "Cprt", "Cypriot", "Cyrl", "Cyrillic", "Deva", "Devanagari", "Diak", "Dives_Akuru", "Dogr", "Dogra", "Dsrt", "Deseret", "Dupl", "Duployan", "Egyp", "Egyptian_Hieroglyphs", "Elba", "Elbasan", "Elym", "Elymaic", "Ethi", "Ethiopic", "Geor", "Georgian", "Glag", "Glagolitic", "Gong", "Gunjala_Gondi", "Gonm", "Masaram_Gondi", "Goth", "Gothic", "Gran", "Grantha", "Grek", "Greek", "Gujr", "Gujarati", "Guru", "Gurmukhi", "Hang", "Hangul", "Hani", "Han", "Hano", "Hanunoo", "Hatr", "Hatran", "Hebr", "Hebrew", "Hira", "Hiragana", "Hluw", "Anatolian_Hieroglyphs", "Hmng", "Pahawh_Hmong", "Hmnp", "Nyiakeng_Puachue_Hmong", "Hrkt", "Katakana_Or_Hiragana", "Hung", "Old_Hungarian", "Ital", "Old_Italic", "Java", "Javanese", "Kali", "Kayah_Li", "Kana", "Katakana", "Kawi", "Khar", "Kharoshthi", "Khmr", "Khmer", "Khoj", "Khojki", "Kits", "Khitan_Small_Script", "Knda", "Kannada", "Kthi", "Kaithi", "Lana", "Tai_Tham", "Laoo", "Lao", "Latn", "Latin", "Lepc", "Lepcha", "Limb", "Limbu", "Lina", "Linear_A", "Linb", "Linear_B", "Lisu", "Lyci", "Lycian", "Lydi", "Lydian", "Mahj", "Mahajani", "Maka", "Makasar", "Mand", "Mandaic", "Mani", "Manichaean", "Marc", "Marchen", "Medf", "Medefaidrin", "Mend", "Mende_Kikakui", "Merc", "Meroitic_Cursive", "Mero", "Meroitic_Hieroglyphs", "Mlym", "Malayalam", "Modi", "Mong", "Mongolian", "Mroo", "Mro", "Mtei", "Meetei_Mayek", "Mult", "Multani", "Mymr", "Myanmar", "Nagm", "Nag_Mundari", "Nand", "Nandinagari", "Narb", "Old_North_Arabian", "Nbat", "Nabataean", "Newa", "Nkoo", "Nko", "Nshu", "Nushu", "Ogam", "Ogham", "Olck", "Ol_Chiki", "Orkh", "Old_Turkic", "Orya", "Oriya", "Osge", "Osage", "Osma", "Osmanya", "Ougr", "Old_Uyghur", "Palm", "Palmyrene", "Pauc", "Pau_Cin_Hau", "Perm", "Old_Permic", "Phag", "Phags_Pa", "Phli", "Inscriptional_Pahlavi", "Phlp", "Psalter_Pahlavi", "Phnx", "Phoenician", "Plrd", "Miao", "Prti", "Inscriptional_Parthian", "Rjng", "Rejang", "Rohg", "Hanifi_Rohingya", "Runr", "Runic", "Samr", "Samaritan", "Sarb", "Old_South_Arabian", "Saur", "Saurashtra", "Sgnw", "SignWriting", "Shaw", "Shavian", "Shrd", "Sharada", "Sidd", "Siddham", "Sind", "Khudawadi", "Sinh", "Sinhala", "Sogd", "Sogdian", "Sogo", "Old_Sogdian", "Sora", "Sora_Sompeng", "Soyo", "Soyombo", "Sund", "Sundanese", "Sylo", "Syloti_Nagri", "Syrc", "Syriac", "Tagb", "Tagbanwa", "Takr", "Takri", "Tale", "Tai_Le", "Talu", "New_Tai_Lue", "Taml", "Tamil", "Tang", "Tangut", "Tavt", "Tai_Viet", "Telu", "Telugu", "Tfng", "Tifinagh", "Tglg", "Tagalog", "Thaa", "Thaana", "Thai", "Tibt", "Tibetan", "Tirh", "Tirhuta", "Tnsa", "Tangsa", "Toto", "Ugar", "Ugaritic", "Vaii", "Vai", "Vith", "Vithkuqi", "Wara", "Warang_Citi", "Wcho", "Wancho", "Xpeo", "Old_Persian", "Xsux", "Cuneiform", "Yezi", "Yezidi", "Yiii", "Yi", "Zanb", "Zanabazar_Square", "Zinh", "Inherited", "Qaai", "Zyyy", "Common", "Zzzz", "Unknown",
+    )
+private val REGEX_BINARY_PROPS = setOf(
+        "ASCII", "ASCII_Hex_Digit", "AHex", "Alphabetic", "Alpha", "Any", "Assigned", "Bidi_Control", "Bidi_C", "Bidi_Mirrored", "Bidi_M", "Case_Ignorable", "CI", "Cased", "Changes_When_Casefolded", "CWCF", "Changes_When_Casemapped", "CWCM", "Changes_When_Lowercased", "CWL", "Changes_When_NFKC_Casefolded", "CWKCF", "Changes_When_Titlecased", "CWT", "Changes_When_Uppercased", "CWU", "Dash", "Default_Ignorable_Code_Point", "DI", "Deprecated", "Dep", "Diacritic", "Dia", "Emoji", "Emoji_Component", "EComp", "Emoji_Modifier", "EMod", "Emoji_Modifier_Base", "EBase", "Emoji_Presentation", "EPres", "Extended_Pictographic", "ExtPict", "Extender", "Ext", "Grapheme_Base", "Gr_Base", "Grapheme_Extend", "Gr_Ext", "Hex_Digit", "Hex", "IDS_Binary_Operator", "IDSB", "IDS_Trinary_Operator", "IDST", "ID_Continue", "IDC", "ID_Start", "IDS", "Ideographic", "Ideo", "Join_Control", "Join_C", "Logical_Order_Exception", "LOE", "Lowercase", "Lower", "Math", "Noncharacter_Code_Point", "NChar", "Pattern_Syntax", "Pat_Syn", "Pattern_White_Space", "Pat_WS", "Quotation_Mark", "QMark", "Radical", "Regional_Indicator", "RI", "Sentence_Terminal", "STerm", "Soft_Dotted", "SD", "Terminal_Punctuation", "Term", "Unified_Ideograph", "UIdeo", "Uppercase", "Upper", "Variation_Selector", "VS", "White_Space", "space", "XID_Continue", "XIDC", "XID_Start", "XIDS",
+    )
+
