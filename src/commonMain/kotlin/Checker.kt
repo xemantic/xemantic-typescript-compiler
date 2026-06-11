@@ -5220,7 +5220,95 @@ class Checker(
                     }
                 }
             }
+            // B316 (declarationEmitPrivatePromiseLikeInterface): a class-property arrow
+            // `abc = () => this.<m>.<method>()` where <m>'s annotation is an IMPORTED
+            // class whose <method> returns a NON-EXPORTED SELF-REFERENTIAL type alias —
+            // declaration emit can't name the alias (not exported) and structural
+            // expansion of the self-reference recurses past the serialization cap.
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ClassDeclaration || ModifierFlag.Export !in stmt.modifiers) continue
+                val memberClassAnnotations = mutableMapOf<String, String>()
+                for (m in stmt.members) {
+                    when (m) {
+                        is Constructor -> for (p in m.parameters) {
+                            if (p.modifiers.isEmpty()) continue // parameter properties only
+                            val pn = (p.name as? Identifier)?.text ?: continue
+                            val tn = ((p.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                            memberClassAnnotations[pn] = tn
+                        }
+                        is PropertyDeclaration -> {
+                            val pn = (m.name as? Identifier)?.text ?: continue
+                            val tn = ((m.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                            memberClassAnnotations[pn] = tn
+                        }
+                        else -> {}
+                    }
+                }
+                if (memberClassAnnotations.isEmpty()) continue
+                for (m in stmt.members) {
+                    if (m !is PropertyDeclaration || m.type != null) continue
+                    val nameNode = m.name as? Identifier ?: continue
+                    var init: Expression = m.initializer ?: continue
+                    while (init is ParenthesizedExpression) init = init.expression
+                    val arrow = init as? ArrowFunction ?: continue
+                    val call = arrow.body as? CallExpression ?: continue
+                    val callee = call.expression as? PropertyAccessExpression ?: continue
+                    val recv = callee.expression as? PropertyAccessExpression ?: continue
+                    if ((recv.expression as? Identifier)?.text != "this") continue
+                    val clsName = memberClassAnnotations[recv.name.text] ?: continue
+                    val resolved = resolveImportedSymbolFile(clsName, f) ?: continue
+                    if (!methodReturnsPrivateSelfReferentialAlias(resolved.first, resolved.second, callee.name.text)) continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.",
+                        category = DiagnosticCategory.Error, code = 7056,
+                        fileName = f, line = l, character = c,
+                        start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                }
+            }
         }
+    }
+
+    /** B316: in [file], class [clsName]'s member [method] (method or arrow-property)
+     *  returns a TypeReference to a NON-EXPORTED type alias whose body references its
+     *  own name (self-referential) — declaration emit can't name it and structural
+     *  expansion recurses past the serialization cap. */
+    private fun methodReturnsPrivateSelfReferentialAlias(file: String, clsName: String, method: String): Boolean {
+        val res = fileResults[file] ?: return false
+        val stmts = res.sourceFile.statements
+        val cls = stmts.firstNotNullOfOrNull {
+            (it as? ClassDeclaration)?.takeIf { c -> c.name?.text == clsName }
+        } ?: return false
+        var retName: String? = null
+        for (m in cls.members) {
+            val nm = when (m) {
+                is MethodDeclaration -> (m.name as? Identifier)?.text
+                is PropertyDeclaration -> (m.name as? Identifier)?.text
+                else -> null
+            }
+            if (nm != method) continue
+            val rt: TypeNode? = when (m) {
+                is MethodDeclaration -> m.type
+                is PropertyDeclaration -> {
+                    var i = m.initializer
+                    while (i is ParenthesizedExpression) i = i.expression
+                    (i as? ArrowFunction)?.type
+                }
+                else -> null
+            }
+            retName = ((rt as? TypeReference)?.typeName as? Identifier)?.text
+            break
+        }
+        if (retName == null) return false
+        val alias = stmts.firstNotNullOfOrNull {
+            (it as? TypeAliasDeclaration)?.takeIf { a -> a.name.text == retName }
+        } ?: return false
+        if (ModifierFlag.Export in alias.modifiers) return false
+        val src = res.sourceFile.text
+        val from = alias.type.pos.coerceIn(0, src.length)
+        val to = alias.type.end.coerceIn(from, src.length)
+        return Regex("\\b${Regex.escape(retName)}\\b").containsMatchIn(src.substring(from, to))
     }
 
     private fun collectAsCastTypes(e: Expression, out: MutableList<TypeNode>, depth: Int) {
