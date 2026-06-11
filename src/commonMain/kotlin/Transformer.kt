@@ -11997,6 +11997,80 @@ class Transformer(
     private fun replaceIdentifierInBlock(block: Block, from: String, to: String): Block =
         block.copy(statements = block.statements.map { replaceIdentifierInStmt(it, from, to) })
 
+    /** B344: rewrites `super.X` READS to `Reflect.get(<heritageTemp>, "X", <classAlias>)`
+     *  inside downleveled static-block bodies (tsc classStaticBlock super semantics). */
+    private fun replaceSuperReadsInExpr(expr: Expression, heritageTemp: String, classAlias: String): Expression = when (expr) {
+        is PropertyAccessExpression -> {
+            if ((expr.expression as? Identifier)?.text == "super") {
+                CallExpression(
+                    expression = PropertyAccessExpression(
+                        expression = syntheticId("Reflect"),
+                        name = syntheticId("get"),
+                        pos = -1, end = -1,
+                    ),
+                    arguments = listOf(
+                        syntheticId(heritageTemp),
+                        StringLiteralNode(text = expr.name.text, pos = -1, end = -1),
+                        syntheticId(classAlias),
+                    ),
+                    pos = -1, end = -1,
+                )
+            } else expr.copy(expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias))
+        }
+        is ElementAccessExpression -> expr.copy(
+            expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias),
+            argumentExpression = replaceSuperReadsInExpr(expr.argumentExpression, heritageTemp, classAlias),
+        )
+        is CallExpression -> expr.copy(
+            expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias),
+            arguments = expr.arguments.map { replaceSuperReadsInExpr(it, heritageTemp, classAlias) },
+        )
+        is NewExpression -> expr.copy(
+            expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias),
+            arguments = expr.arguments?.map { replaceSuperReadsInExpr(it, heritageTemp, classAlias) },
+        )
+        is BinaryExpression -> expr.copy(
+            left = replaceSuperReadsInExpr(expr.left, heritageTemp, classAlias),
+            right = replaceSuperReadsInExpr(expr.right, heritageTemp, classAlias),
+        )
+        is PrefixUnaryExpression -> expr.copy(operand = replaceSuperReadsInExpr(expr.operand, heritageTemp, classAlias))
+        is PostfixUnaryExpression -> expr.copy(operand = replaceSuperReadsInExpr(expr.operand, heritageTemp, classAlias))
+        is ConditionalExpression -> expr.copy(
+            condition = replaceSuperReadsInExpr(expr.condition, heritageTemp, classAlias),
+            whenTrue = replaceSuperReadsInExpr(expr.whenTrue, heritageTemp, classAlias),
+            whenFalse = replaceSuperReadsInExpr(expr.whenFalse, heritageTemp, classAlias),
+        )
+        is ParenthesizedExpression -> expr.copy(expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias))
+        is ArrowFunction -> when (val b = expr.body) {
+            is Expression -> expr.copy(body = replaceSuperReadsInExpr(b, heritageTemp, classAlias))
+            is Block -> expr.copy(body = b.copy(statements = b.statements.map { replaceSuperReadsInStmt(it, heritageTemp, classAlias) }))
+            else -> expr
+        }
+        is SpreadElement -> expr.copy(expression = replaceSuperReadsInExpr(expr.expression, heritageTemp, classAlias))
+        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { replaceSuperReadsInExpr(it, heritageTemp, classAlias) })
+        is ObjectLiteralExpression -> expr.copy(properties = expr.properties.map { p ->
+            if (p is PropertyAssignment) p.copy(initializer = replaceSuperReadsInExpr(p.initializer, heritageTemp, classAlias)) else p
+        })
+        else -> expr
+    }
+
+    private fun replaceSuperReadsInStmt(stmt: Statement, heritageTemp: String, classAlias: String): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = replaceSuperReadsInExpr(stmt.expression, heritageTemp, classAlias))
+        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { replaceSuperReadsInExpr(it, heritageTemp, classAlias) })
+        is VariableStatement -> stmt.copy(declarationList = stmt.declarationList.copy(
+            declarations = stmt.declarationList.declarations.map { d ->
+                d.copy(initializer = d.initializer?.let { replaceSuperReadsInExpr(it, heritageTemp, classAlias) })
+            }
+        ))
+        is IfStatement -> stmt.copy(
+            expression = replaceSuperReadsInExpr(stmt.expression, heritageTemp, classAlias),
+            thenStatement = replaceSuperReadsInStmt(stmt.thenStatement, heritageTemp, classAlias),
+            elseStatement = stmt.elseStatement?.let { replaceSuperReadsInStmt(it, heritageTemp, classAlias) },
+        )
+        is Block -> stmt.copy(statements = stmt.statements.map { replaceSuperReadsInStmt(it, heritageTemp, classAlias) })
+        else -> stmt
+    }
+
     private fun replaceIdentifierInClassElement(element: ClassElement, from: String, to: String): ClassElement =
         when (element) {
             is MethodDeclaration -> element.copy(body = element.body?.let { replaceIdentifierInBlock(it, from, to) })
@@ -12929,6 +13003,11 @@ class Transformer(
         // Exception: ES2022+ targets use static { this.prop = val } inside the class body (already added above).
         val effectiveName = trailingVarName ?: name?.text
         var classTempVar: String? = null
+        // B344: when a downleveled static block reads `super.X`, the heritage expression
+        // captures into a temp (`extends (_c = Base)`) and the read becomes
+        // `Reflect.get(_c, "X", <classAlias>)`.
+        var heritageTempVar: String? = null
+        var finalHeritage = transformedHeritage
         val emittedStaticBlocks = mutableListOf<ClassStaticBlockDeclaration>()
         // B341: the static-block IIFE rewrites `this` (the arrow would capture the OUTER
         // this) and — for declarations — the class NAME to the alias temp when one exists.
@@ -12941,6 +13020,8 @@ class Transformer(
                 transformedBlock = transformedBlock.copy(statements = transformedBlock.statements.map {
                     var s = replaceThisInStmt(it, tv)
                     if (!isClassExpression && name != null) s = replaceIdentifierInStmt(s, name.text, tv)
+                    val ht = heritageTempVar
+                    if (ht != null) s = replaceSuperReadsInStmt(s, ht, tv)
                     s
                 })
             }
@@ -12975,14 +13056,42 @@ class Transformer(
             }
             // B341: a static BLOCK referencing `this` (downleveled to an IIFE arrow that
             // would otherwise capture the OUTER this) also forces the class-alias capture.
+            // B344: so does a `super.X` read (Reflect.get needs the class as its 3rd arg).
+            val staticBlocksWithSuper = staticBlocks.filter { b ->
+                b.body.pos in 0..<b.body.end && b.body.end <= sourceText.length &&
+                    Regex("\\bsuper\\b").containsMatchIn(sourceText.substring(b.body.pos, b.body.end))
+            }
             val staticBlockNeedsAlias = staticBlocks.any { b ->
                 b.body.statements.any { containsThisInStmt(it) }
-            }
+            } || staticBlocksWithSuper.isNotEmpty()
             classTempVar = if (staticPropsWithThis.isNotEmpty() || staticBlockNeedsAlias) {
                 val tv = nextTempVarName()
                 hoistedVarScopes.lastOrNull()?.add(tv)
                 tv
             } else null
+
+            // B344: heritage capture for super-in-static-block — single extends base,
+            // declarations only.
+            val extendsTypes = finalHeritage?.firstOrNull()?.types
+            if (staticBlocksWithSuper.isNotEmpty() && classTempVar != null && !isClassExpression &&
+                finalHeritage?.size == 1 && extendsTypes?.size == 1) {
+                val ht = nextTempVarName()
+                hoistedVarScopes.lastOrNull()?.add(ht)
+                if (functionScopeDepth == 0) computedPropHoistNames.add(ht)
+                heritageTempVar = ht
+                val ewta = extendsTypes[0]
+                finalHeritage = listOf(finalHeritage!![0].copy(types = listOf(ewta.copy(
+                    expression = ParenthesizedExpression(
+                        expression = BinaryExpression(
+                            left = syntheticId(ht),
+                            operator = Equals,
+                            right = ewta.expression,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ),
+                ))))
+            }
 
             // B341: the class-alias capture and (declaration-path) private brand/method
             // captures share ONE comma statement: `_a = Foo, _Foo_instances = new WeakSet(),
@@ -13199,7 +13308,7 @@ class Transformer(
         if (pushedPrivateEnv) privateFieldEnvStack.removeLast()
 
         return ClassTransformResult(
-            heritageClauses = transformedHeritage,
+            heritageClauses = finalHeritage,
             members = outputMembers,
             trailingStatements = privateFieldTrailingStatements + computedTrailing + trailingStatements,
             leadingStatements = computedLeading + privateFieldLeadingStatements,
