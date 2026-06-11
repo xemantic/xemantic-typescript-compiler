@@ -13918,6 +13918,9 @@ class Checker(
         if (!expr.leadingTypeArguments.isNullOrEmpty()) return
         val callee = expr.expression
         if (callee !is Identifier) return
+        // `new <` misparse recovery: the callee is a zero-width MISSING identifier
+        // (B319) — TS1109/TS2365/TS2693 own this shape, never TS7009.
+        if (callee.text.isEmpty()) return
         val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
         // Only a pure plain-function target lacks a construct signature. Classes
         // (construct sig), interfaces/vars with `new()` types, and `any` casts are

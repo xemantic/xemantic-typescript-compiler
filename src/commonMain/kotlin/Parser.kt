@@ -5247,9 +5247,18 @@ class Parser(
             }
             return MetaProperty(keywordToken = NewKeyword, name = name, pos = pos, end = getEnd())
         }
-        // `new <T>Expr` — TypeScript parses `<T>` as leading type arguments (not a type assertion)
-        // and keeps them in JS output. Try to parse them before the constructor expression.
-        val leadingTypeArgs = if (token == LessThan) tryParseTypeArguments() else null
+        // tsc: `new <` in EXPRESSION position is NOT leading type arguments — the callee
+        // primary parse at `<` yields a MISSING identifier (TS1109 "Expression expected."
+        // at the `<`, not consumed) and the NewExpression(new, missing) becomes the LEFT
+        // operand of the following comparison chain: `new <any>Test2()` misparses as
+        // `(new <missing> < any) > Test2()` (newExpressionWithCast).
+        if (token == LessThan) {
+            reportError("Expression expected.", code = 1109, overrideLength = 1)
+            val missing = Identifier(text = "", pos = getPos(), end = getPos())
+            return NewExpression(expression = missing, typeArguments = null,
+                leadingTypeArguments = null, arguments = null, pos = pos, end = getPos())
+        }
+        val leadingTypeArgs: List<TypeNode>? = null
         // For `new`, the constructor expression allows member access (. and []) and nested `new`,
         // but NOT function calls. parseCallAndAccess would greedily consume `()` and turn
         // `new Foo()` into `new (Foo())` — use parseMemberAccessOnly instead.
