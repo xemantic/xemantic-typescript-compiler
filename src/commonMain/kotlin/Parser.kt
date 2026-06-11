@@ -474,6 +474,15 @@ class Parser(
                 reportError("Declaration or statement expected.", code = 1128)
                 break
             }
+            // B325 (tsc parseStatements/isStartOfStatement): a ',' can never START a
+            // statement — TS1128 "Declaration or statement expected." (same-start-deduped
+            // against a preceding TS1144 at the same comma) + SKIP, never the comma-
+            // expression path (which would swallow following declarations as operands).
+            if (token == SyntaxKind.Comma) {
+                reportError("Declaration or statement expected.", code = 1128)
+                nextToken()
+                continue
+            }
             val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
             // Safety: if no progress was made, skip the current token to avoid infinite loop.
@@ -1805,7 +1814,6 @@ class Parser(
         // when no TS-level `<T>` was parsed. Mirror of B5.3 for ClassDeclaration.
         val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val rawParams = parseParameterList()
-        val paramsAborted = paramListAborted
         // 17.140: in JS-like files, bridge JSDoc `@param {primitive} name` tags
         // to parameter types when the parameter is un-annotated.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
@@ -1813,14 +1821,19 @@ class Parser(
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
         val body = if (token == SyntaxKind.OpenBrace) parseBlock()
-            else if (paramsAborted && !canParseSemicolon()) {
-                // B324 (tsc parseFunctionBlock after an aborted signature): the same-line
-                // follow token isn't '{' and ASI can't apply — "'{' expected." (usually
-                // same-start-deduped against the abort diagnostic) and the body is a
-                // MISSING zero-width Block (pos == end, no closeBrace). The checker's
-                // TS7010 bodyless rule treats it as bodyless; the emitter prints `{ }`.
-                reportError("'{' expected.", code = 1005)
-                Block(statements = emptyList(), multiLine = false,
+            else if (!canParseSemicolon()) {
+                // B324/B325 (tsc parseFunctionBlockOrSemicolon with Diagnostics.or_expected):
+                // the same-line follow token isn't '{' and ASI can't apply — TS1144
+                // "'{' or ';' expected." (same-start-deduped after an aborted signature)
+                // and the body is a MISSING zero-width Block (pos == end, no closeBrace).
+                // The checker's TS7010/TS2391 bodyless rules treat it as bodyless; the
+                // emitter prints `{ }`. EXCEPTION (empirical, dottedModuleName): a '=>'
+                // follow keeps a NULL body — tsc ERASES `function f(x)=>…;` from the
+                // emit, while other recovered shapes print `function f() { }`; the
+                // parseSemicolon below same-start-dedups its TS1005 against the TS1144.
+                reportError("'{' or ';' expected.", code = 1144)
+                if (token == SyntaxKind.EqualsGreaterThan) null
+                else Block(statements = emptyList(), multiLine = false,
                     pos = scanner.getTokenPos(), end = scanner.getTokenPos(), closeBracePos = -1)
             } else null
         inAsyncContext = savedAsync
@@ -1991,6 +2004,15 @@ class Parser(
             while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
                 if (token == SyntaxKind.Semicolon) {
                     members.add(SemicolonClassElement(pos = getPos(), end = getEnd()))
+                    nextToken()
+                    continue
+                }
+                // B325 (tsc parseList ClassMembers skip-recovery): a ',' can't start a
+                // member and can't start/terminate any outer context — TS1068 (same-start
+                // deduped against a preceding TS1144 at the same comma) + SKIP + continue
+                // the member list (`m1(), m1();` keeps parsing m1's second declaration).
+                if (token == SyntaxKind.Comma) {
+                    reportError("Unexpected token. A constructor, method, accessor, or property was expected.", code = 1068)
                     nextToken()
                     continue
                 }
@@ -2282,9 +2304,18 @@ class Parser(
             val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val savedAsync = inAsyncContext
             inAsyncContext = ModifierFlag.Async in modifiers
-            val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-                parseSemicolon(); null
-            }
+            // B325 (tsc parseFunctionBlockOrSemicolon with Diagnostics.or_expected): a
+            // same-line non-'{' follow (no ASI) gets TS1144 "'{' or ';' expected." and a
+            // MISSING zero-width Block body — the checker treats it as bodyless and the
+            // emitter prints `{ }` (`m1(), m1();` keeps m1's first declaration emitted).
+            val body = if (token == SyntaxKind.OpenBrace) parseBlock()
+                else if (!canParseSemicolon() && ModifierFlag.Abstract !in modifiers) {
+                    reportError("'{' or ';' expected.", code = 1144)
+                    Block(statements = emptyList(), multiLine = false,
+                        pos = scanner.getTokenPos(), end = scanner.getTokenPos(), closeBracePos = -1)
+                } else {
+                    parseSemicolon(); null
+                }
             inAsyncContext = savedAsync
             val methodTrailing = trailingComments()
             MethodDeclaration(

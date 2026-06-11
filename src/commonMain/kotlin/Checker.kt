@@ -25655,7 +25655,7 @@ class Checker(
                     val funcDecls = group.filter { it.kind == "function" }
                     val funcBodies = funcDecls.filter { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
-                        funcStmt.body != null
+                        hasPresentBody(funcStmt.body)
                     }
                     if (funcBodies.size >= 2) {
                         for (decl in funcBodies) {
@@ -37446,6 +37446,27 @@ interface DataView {
             val stmt = statements[i]
             when (stmt) {
                 is FunctionDeclaration -> {
+                    // B325 pair-gap rule (tsc checkFunctionOrConstructorSymbolWorker:
+                    // previousDeclaration.end !== node.pos): consecutive same-name
+                    // declarations separated by skipped junk get TS2391 on the FIRST —
+                    // unless both have present bodies (the duplicate-impl path owns that).
+                    // Anchored at the first decl's body (missing-block pos or closeBrace);
+                    // bodyless ';' declarations are assumed adjacent (no anchor).
+                    run {
+                        val next = statements.getOrNull(i + 1) as? FunctionDeclaration ?: return@run
+                        val nm = stmt.name?.text ?: return@run
+                        if (nm.isEmpty() || next.name?.text != nm) return@run
+                        val body = stmt.body ?: return@run
+                        val anchor = if (body.pos == body.end && body.statements.isEmpty()) body.pos
+                            else if (body.closeBracePos >= 0) body.closeBracePos + 1
+                            else return@run
+                        if (onlyTriviaBetween(source, anchor, next.pos)) return@run
+                        if (hasPresentBody(stmt.body) && hasPresentBody(next.body)) return@run
+                        emitTS2391(stmt.name!!, source, fileName)
+                    }
+                    // tsc's FINAL missing-impl rule keys on body-node EXISTENCE (!node.body):
+                    // a MISSING-block body (parse recovery) suppresses it — only the pair-gap
+                    // rule above uses nodeIsPresent semantics.
                     if (stmt.body == null && ModifierFlag.Declare !in stmt.modifiers) {
                         val name = stmt.name?.text ?: continue
                         // Check what follows this overload signature
@@ -37491,6 +37512,30 @@ interface DataView {
         data object Missing : ImplResult()
     }
 
+    /** B325 (tsc nodeIsPresent): a zero-width MISSING Block (aborted-signature parse recovery) is NOT a present body. */
+    private fun hasPresentBody(body: Block?): Boolean =
+        body != null && !(body.pos == body.end && body.statements.isEmpty())
+
+    /** B325: true when only whitespace and comments separate [from] (inclusive) and [to] (exclusive). */
+    private fun onlyTriviaBetween(source: String, from: Int, to: Int): Boolean {
+        var i = from
+        while (i < to && i < source.length) {
+            val c = source[i]
+            if (c.isWhitespace()) { i++; continue }
+            if (c == '/' && i + 1 < to) {
+                if (source[i + 1] == '/') { while (i < to && source[i] != '\n') i++; continue }
+                if (source[i + 1] == '*') {
+                    val end = source.indexOf("*/", i + 2)
+                    if (end < 0 || end + 2 > to) return false
+                    i = end + 2
+                    continue
+                }
+            }
+            return false
+        }
+        return true
+    }
+
     private fun findImplementation(
         statements: List<Statement>,
         fromIdx: Int,
@@ -37503,8 +37548,8 @@ interface DataView {
                 if (next.name?.text == name) {
                     return ImplResult.Found // Same name follows
                 }
-                // Different name with body → TS2389
-                if (next.body != null && next.name != null) {
+                // Different name with PRESENT body → TS2389 (missing blocks are signatures)
+                if (hasPresentBody(next.body) && next.name != null) {
                     return ImplResult.WrongName(next.name!!)
                 }
             }
@@ -37548,7 +37593,20 @@ interface DataView {
                 val isStatic = ModifierFlag.Static in member.modifiers
                 val key = if (isStatic) "static:$name" else name
 
-                if (member.body != null) {
+                // B325 pair-gap rule for class members (mirrors the file-level rule).
+                run {
+                    val next = members.getOrNull(i + 1) as? MethodDeclaration ?: return@run
+                    val nextName = (next.name as? Identifier)?.text ?: return@run
+                    if (name.isEmpty() || nextName != name) return@run
+                    val body = member.body ?: return@run
+                    val anchor = if (body.pos == body.end && body.statements.isEmpty()) body.pos
+                        else if (body.closeBracePos >= 0) body.closeBracePos + 1
+                        else return@run
+                    if (onlyTriviaBetween(source, anchor, next.pos)) return@run
+                    if (hasPresentBody(member.body) && hasPresentBody(next.body)) return@run
+                    emitTS2391(member.name, source, fileName)
+                }
+                if (hasPresentBody(member.body)) {
                     val prev = methodsWithBody[key]
                     if (prev != null) {
                         // Duplicate implementation — TS2393 on both
@@ -37557,8 +37615,9 @@ interface DataView {
                     } else {
                         methodsWithBody[key] = member
                     }
-                } else if (ModifierFlag.Abstract !in member.modifiers) {
-                    // Overload without body — check for missing implementation
+                } else if (member.body == null && ModifierFlag.Abstract !in member.modifiers) {
+                    // Overload without body (node EXISTENCE — a missing-block body suppresses
+                    // the final rule, same as the file-level walker) — check for missing impl
                     val displayName = when (member.name) {
                         is StringLiteralNode -> "\"$name\""
                         else -> name
@@ -37624,8 +37683,8 @@ interface DataView {
                 if (nextName == name) {
                     return ImplResult.Found
                 }
-                // Different name with body → TS2389
-                if (next.body != null && nextName != null) {
+                // Different name with PRESENT body → TS2389 (missing blocks are signatures)
+                if (hasPresentBody(next.body) && nextName != null) {
                     return ImplResult.WrongName(next.name)
                 }
             }
