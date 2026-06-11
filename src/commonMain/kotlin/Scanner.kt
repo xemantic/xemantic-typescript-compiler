@@ -1455,7 +1455,15 @@ class Scanner(private val text: String) {
                 tokenValue = "@"; SyntaxKind.At
             }
 
-            '#' -> {
+            '#' -> if (tokenPos != 0 && pos < end && text[pos] == '!') {
+                // tsc scanner: a mid-file `#!` is TS18026 ("'#!' can only be used at the
+                // start of a file.") spanning BOTH chars, but only the `#` is consumed —
+                // it becomes ONE Unknown token and the `!` rescans as a regular token.
+                // (A pos-0 shebang was already skipped as trivia before tokens scan.)
+                hashBangErrorPos = tokenPos
+                tokenValue = "#"
+                SyntaxKind.Unknown
+            } else {
                 // # can start a private identifier
                 val nextCh = if (pos < end) text[pos] else '\u0000'
                 val nextIsIdentStart = isIdentifierStart(nextCh) ||
@@ -1776,6 +1784,12 @@ class Scanner(private val text: String) {
 
     /** Token start of the binary-file marker token (the U+FFFD-to-EOF Unknown token), or -1. */
     var binaryMarkerTokenPos: Int = -1
+        private set
+
+    /** Token start of the most recent mid-file `#!` (TS18026 — reported by the parser's
+     *  nextToken flag-flush, once per position), or -1. The `#` alone became an Unknown
+     *  token; the error span is 2 chars. */
+    var hashBangErrorPos: Int = -1
         private set
 
     // -- Character classification utilities -----------------------------------

@@ -91,6 +91,14 @@ class Parser(
 
     /** True once the binary-file TS1490 has been reported (the scanner's U+FFFD marker). */
     private var binaryMarkerReported = false
+    private val reportedHashBangs = mutableSetOf<Int>()
+
+    /** Identifier texts tsc's parseErrorForMissingSemicolonAfter special-cases away
+     *  from the generic TS1434 (they get TS1440/TS1435/keyword-specific messages or
+     *  silence instead). */
+    private val MISSING_SEMI_SPECIAL_IDENTS = setOf(
+        "var", "let", "const", "declare", "interface", "is", "module", "namespace", "type",
+    )
 
     private fun nextToken(): SyntaxKind {
         prevToken = token
@@ -103,6 +111,14 @@ class Parser(
             binaryMarkerReported = true
             reportError("File appears to be binary.", code = 1490,
                 overrideStart = 0, overrideLength = 0)
+        }
+        // Mid-file `#!` (scanner flag-flush): TS18026 spanning both chars, once per
+        // position (re-scans through lookAhead must not double-report).
+        val hashBang = scanner.hashBangErrorPos
+        if (hashBang >= 0 && hashBang !in reportedHashBangs) {
+            reportedHashBangs.add(hashBang)
+            reportError("'#!' can only be used at the start of a file.", code = 18026,
+                overrideStart = hashBang, overrideLength = 2)
         }
         return token
     }
@@ -864,6 +880,27 @@ class Parser(
                             continue
                         }
                     }
+                    // Same recovery for same-line Unknown junk (`const a =!@#!@$` — the
+                    // `#!`-produced Unknown): ',' expected + TS1134 at the junk (both
+                    // usually same-start-deduped by the scanner's TS18026), consume it;
+                    // an identifier re-enters the list, a non-statement-start token gets
+                    // its own TS1134 before the list aborts (tsc emits one per junk token
+                    // until isInSomeParsingContext accepts).
+                    if (token == SyntaxKind.Unknown && !scanner.hasPrecedingLineBreak()) {
+                        reportError("',' expected.", code = 1005, overrideLength = 1)
+                        reportError("Variable declaration expected.", code = 1134, overrideLength = 1)
+                        nextToken()
+                        if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
+                            decls.add(parseVariableDeclaration())
+                            continue
+                        }
+                        if (!canParseSemicolon() && token != SyntaxKind.InKeyword &&
+                            !(isIdentifier() && scanner.getTokenValue() == "of")
+                        ) {
+                            reportError("Variable declaration expected.", code = 1134,
+                                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+                        }
+                    }
                     break
                 }
             }
@@ -1157,10 +1194,22 @@ class Parser(
         // The At-token arm mirrors tsc's parseErrorForMissingSemicolonAfter fallthrough:
         // a bare identifier followed on the same line by `@` (e.g. binary garbage `G@...`)
         // is TS1434 at the identifier, not a silent ASI.
+        // The identifier/string-follow arm is the parseErrorForMissingSemicolonAfter
+        // MAIN path: a bare-identifier statement followed same-line by another
+        // identifier/keyword or a string literal (`GOTTA GO`, `HERE's ...`) is TS1434
+        // at the identifier. tsc's special-cased identifier texts (var/let/const/
+        // declare/interface/is/module/namespace/type) take other diagnostics there —
+        // excluded; spelling/space suggestions (TS1435) are not modeled.
         val missingSemiAsUnexpectedIdent = expr is Identifier && !scanner.hasPrecedingLineBreak() &&
             ((token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) &&
                 scanner.getTokenText().startsWith(".") ||
-                token == SyntaxKind.At)
+                token == SyntaxKind.At ||
+                ((isIdentifier() || isKeyword() || token == SyntaxKind.StringLiteral) &&
+                    expr.text !in MISSING_SEMI_SPECIAL_IDENTS &&
+                    // `export as namespace X` has no AST node (documented misparse):
+                    // the `as` re-parses as a bare-identifier statement followed by
+                    // `namespace` — tsc parses the construct properly, so no TS1434.
+                    !(expr.text == "as" && scanner.getTokenValue() == "namespace")))
         if (missingSemiAsUnexpectedIdent) {
             reportError("Unexpected keyword or identifier.", code = 1434,
                 overrideStart = (expr as Identifier).pos, overrideLength = expr.text.length.coerceAtLeast(1))
@@ -5371,7 +5420,14 @@ class Parser(
                         overrideStart = atPos, overrideLength = 1)
                     parseClassExpression().copy(decorators = decorators)
                 } else {
-                    parseIdentifier()
+                    // tsc parseDecoratedExpression: a non-class decorated expression is a
+                    // MissingDeclaration — TS1109 "Expression expected." ZERO-WIDTH at the
+                    // current token's FULL START (right after the decorator expression);
+                    // the offending token is NOT consumed and the decorated garbage emits
+                    // nothing (the recovered node is a zero-width empty identifier).
+                    reportError("Expression expected.", code = 1109,
+                        overrideStart = scanner.getPrevTokenEnd(), overrideLength = 0)
+                    Identifier(text = "", pos = pos, end = pos)
                 }
             }
             TrueKeyword -> {
