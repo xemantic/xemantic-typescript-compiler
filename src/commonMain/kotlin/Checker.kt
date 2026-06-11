@@ -1017,6 +1017,8 @@ class Checker(
         // 14a'''b. B317: exported anonymous-class-typed mixin results with
         // private/protected members (TS4094)
         checkDeclarationEmitMixinPrivateProtected()
+        // 14a'''c. B318: expando property typed by a private-module name (TS4032)
+        checkDeclarationEmitExpandoPrivateName()
         // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
         checkDeclarationEmitHugeInferredType()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
@@ -6060,6 +6062,77 @@ class Checker(
                     }
                     else -> {}
                 }
+            }
+        }
+    }
+
+    /**
+     * B318 (declarationEmitExpandoPropertyPrivateName, TS4032): an EXPANDO property
+     * `q.val = f()` on an exported local function, where f is a named import whose
+     * declared return type names a NON-exported interface/alias/class in the target
+     * module — the expando member's declaration type uses a private-module name.
+     * Span covers `q.val`; module display is the specifier without './'.
+     */
+    private fun checkDeclarationEmitExpandoPrivateName() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val statements = result.sourceFile.statements
+            if (!isModuleFile(statements)) continue
+            val source = result.sourceFile.text
+            val exportedFns = statements.filterIsInstance<FunctionDeclaration>()
+                .filter { ModifierFlag.Export in it.modifiers }
+                .mapNotNull { it.name?.text }.toSet()
+            if (exportedFns.isEmpty()) continue
+            for (stmt in statements) {
+                val es = stmt as? ExpressionStatement ?: continue
+                val bin = es.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                val recv = (lhs.expression as? Identifier)?.text ?: continue
+                if (recv !in exportedFns) continue
+                val call = bin.right as? CallExpression ?: continue
+                val calleeName = (call.expression as? Identifier)?.text ?: continue
+                var spec: String? = null
+                var targetFile: String? = null
+                var orig: String? = null
+                for (imp in statements) {
+                    if (imp !is ImportDeclaration) continue
+                    val s = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val named = imp.importClause?.namedBindings as? NamedImports ?: continue
+                    for (el in named.elements) {
+                        if (el.name.text == calleeName) {
+                            spec = s
+                            orig = el.propertyName?.text ?: el.name.text
+                            targetFile = resolveSpecifierAnywhere(s, f)
+                        }
+                    }
+                }
+                val tf = targetFile ?: continue
+                val res = fileResults[tf] ?: continue
+                val fd = res.sourceFile.statements.filterIsInstance<FunctionDeclaration>()
+                    .firstOrNull { it.name?.text == orig } ?: continue
+                val rtName = ((fd.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val privateDecl = res.sourceFile.statements.any { s2 ->
+                    when (s2) {
+                        is InterfaceDeclaration -> s2.name.text == rtName && ModifierFlag.Export !in s2.modifiers
+                        is TypeAliasDeclaration -> s2.name.text == rtName && ModifierFlag.Export !in s2.modifiers
+                        is ClassDeclaration -> s2.name?.text == rtName && ModifierFlag.Export !in s2.modifiers
+                        else -> false
+                    }
+                }
+                if (!privateDecl) continue
+                val moduleName = (spec ?: continue).removePrefix("./")
+                val start = lhs.pos
+                val len = lhs.name.pos + lhs.name.text.length - start
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${lhs.name.text}' of exported interface has or is using name '$rtName' from private module '\"$moduleName\"'.",
+                    category = DiagnosticCategory.Error, code = 4032,
+                    fileName = f, line = l, character = c,
+                    start = start, length = len,
+                ))
             }
         }
     }
