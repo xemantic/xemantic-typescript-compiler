@@ -88,6 +88,9 @@ Add entries as ` - \`name_ts\` — reason `.
 
 - `keyofDoesntContainSymbols_ts` — tests the removed `keyofStringsOnly` keyof behaviour (tsgo: `keyof` always includes symbol/number keys).
 - `noStrictGenericChecks_ts` — tests the removed `noStrictGenericChecks` (bivariant generic parameter) option.
+- `systemModule17_ts` — explicit `@module: system` JS-emit test (System module emit removed in TS7/tsgo).
+- `dynamicImportWithNestedThis_es2015_ts` — explicit `@module: umd` JS-emit test (UMD module emit removed in TS7/tsgo).
+- `dynamicImportWithNestedThis_es5_ts` — explicit `@module: umd` JS-emit test (UMD module emit removed in TS7/tsgo).
 
 ## Curated DIVERGES
 

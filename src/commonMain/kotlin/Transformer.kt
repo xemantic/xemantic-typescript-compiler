@@ -1182,6 +1182,9 @@ class Transformer(
         // Track require statements originating from ImportDeclaration (not import=require).
         // Used to distinguish regular imports from ImportEqualsDeclaration for reference directive preservation.
         val regularImportRequires = mutableSetOf<VariableStatement>()
+        // B343: require consts created from NAMESPACE imports (`import * as x`) — under
+        // isolatedModules these survive the unused-require elision.
+        val namespaceImportRequires = mutableSetOf<VariableStatement>()
         // Track: imported local name → the import const statement (for re-export positioning)
         val importStmtForLocalName = mutableMapOf<String, Statement>()
         // Track: declared local name → the declaration statement (for export positioning)
@@ -2163,6 +2166,21 @@ class Transformer(
                                 result.add(makeRequireConst(localName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                             }
                             importStmtForLocalName[localName] = result.last()
+                            // B343: under isolatedModules a namespace import survives the
+                            // unused-require elision when the name is referenced ANYWHERE in
+                            // the ORIGINAL source (type positions erase before this pass, but
+                            // per-file emit can't prove the module's exports are type-only).
+                            // A completely unreferenced namespace import still elides (tsc:
+                            // isolatedModules_resolveJsonModule keeps nothing for unused json).
+                            if (options.isolatedModules) {
+                                val src = originalSourceFile.text
+                                val referencedInSource = Regex("\\b${Regex.escape(localName)}\\b")
+                                    .findAll(src)
+                                    .any { it.range.first < stmt.pos || it.range.first >= stmt.end }
+                                if (referencedInSource) {
+                                    (result.last() as? VariableStatement)?.let { namespaceImportRequires.add(it) }
+                                }
+                            }
                             // Namespace keeps its name, no rename needed
                         } else if (clause.name != null && bindings is NamedImports) {
                             // Combined default + named: import c, { x, y } from "m"
@@ -2956,7 +2974,11 @@ class Transformer(
                         // the require side-effect — matches `enumWithNonLiteralStringInitializer_ts`.
                         val boundNames = importStmtBoundNames[stmt] ?: emptySet()
                         val keepForEnumInline = boundNames.any { it in enumInlinedCrossFileImports }
-                        if (!keepForShadow && !keepForEnumInline) toElide.add(stmt)
+                        // B343: under isolatedModules a namespace import is kept even when
+                        // only type positions referenced it (per-file emit can't prove the
+                        // module's exports are type-only — mirrors the ESM-side B15.3 rule).
+                        val keepForIsolatedNs = options.isolatedModules && stmt in namespaceImportRequires
+                        if (!keepForShadow && !keepForEnumInline && !keepForIsolatedNs) toElide.add(stmt)
                     }
                 } else {
                     // Internal alias: erase only if eligible (namespace root known) and unused
@@ -3068,12 +3090,15 @@ class Transformer(
             needsRestHelper || needsAwaiterHelper || needsAsyncGeneratorHelper ||
             needsMakeTemplateObjectHelper
         )
+        var leadingHelpersHandled = false
         if (needsAnyImportHelper && !options.importHelpers && !options.noEmitHelpers) {
-            val helpers = buildString {
+            val depsHelpers = buildString {
                 // __createBinding is needed by both __importStar and __exportStar
                 if (needsImportStar || needsExportStar) append(CREATE_BINDING_HELPER)
                 // __setModuleDefault needed for __importStar
                 if (needsImportStar) append(SET_MODULE_DEFAULT_HELPER)
+            }
+            val starHelpers = buildString {
                 // TypeScript orders __importStar/__exportStar by first usage in the output
                 if (importStarUsedFirst) {
                     if (needsImportStar) append(IMPORT_STAR_FUNC_HELPER)
@@ -3084,7 +3109,22 @@ class Transformer(
                 }
                 if (needsImportDefault) append(IMPORT_DEFAULT_HELPER)
             }
-            result.add(0, RawStatement(code = helpers))
+            // B343: tsc emits helpers PRIORITY-sorted — __decorate (priority 2, requested by
+            // the earlier ts transform) lands BETWEEN __setModuleDefault (priority 1) and
+            // __importStar (priority 2, module transform — stable-sort tie goes to the
+            // earlier request), while __metadata (3) and the rest follow __importStar.
+            val decorateStmt = leadingHelpers.firstOrNull { (it as? RawStatement)?.code == DECORATE_HELPER }
+            if (decorateStmt != null) {
+                val block = mutableListOf<Statement>()
+                if (depsHelpers.isNotEmpty()) block.add(RawStatement(code = depsHelpers))
+                block.add(decorateStmt)
+                if (starHelpers.isNotEmpty()) block.add(RawStatement(code = starHelpers))
+                block.addAll(leadingHelpers.filter { it !== decorateStmt })
+                result.addAll(0, block)
+                leadingHelpersHandled = true
+            } else {
+                result.add(0, RawStatement(code = depsHelpers + starHelpers))
+            }
         } else if ((needsAnyImportHelper || needsAnyInlineHelper) && options.importHelpers) {
             // importHelpers: true → add tslib require AFTER preamble+void0 hoists+function stubs,
             // BEFORE actual require statements (if not already present from __awaiter).
@@ -3109,7 +3149,7 @@ class Transformer(
         // Insert passed-in leading helpers (e.g. __awaiter, __rest) after CJS import helpers.
         // TypeScript's ordering: "use strict" → CJS helpers (__createBinding/__importStar) →
         // other helpers (__awaiter, __await, __asyncGenerator) → preamble → statements.
-        if (leadingHelpers.isNotEmpty()) {
+        if (leadingHelpers.isNotEmpty() && !leadingHelpersHandled) {
             val insertPos = if (needsAnyImportHelper) 1 else 0
             result.addAll(insertPos, leadingHelpers)
         }
