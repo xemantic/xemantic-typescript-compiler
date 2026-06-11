@@ -88316,6 +88316,10 @@ interface DataView {
                 if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
                 if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
                     !identSymbol.flags.hasAny(SymbolFlags.Variable)) {
+                    // B360: a UMD global (`export as namespace X`) — the parser misparses
+                    // the construct into a bogus `namespace X` whose exports do NOT
+                    // reflect the real module's exports. Member access is unknowable — bail.
+                    if (identName in umdGlobalNames) return
                     // B63.34: Skip the namespace path when the symbol ALSO carries Variable
                     // flag — typically caused by `mergeSymbolTable` polluting an unrelated
                     // module symbol with a same-named `let`/`const` declaration. In that
