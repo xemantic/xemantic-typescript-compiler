@@ -11427,12 +11427,70 @@ class Transformer(
                 members = expr.members,
                 modifiers = expr.modifiers,
             )
-            return expr.copy(
+            val transformed = expr.copy(
                 typeParameters = null,
                 heritageClauses = result.heritageClauses,
                 members = result.members,
                 modifiers = stripTypeScriptModifiers(expr.modifiers) - ModifierFlag.Abstract,
             )
+            // B338 (tsc classProperties pendingExpressions, class-EXPRESSION form): moved
+            // instance fields captured their computed names into temps; for a class expression
+            // the `var _a;` hoists to the enclosing function scope and the class wraps in
+            // `(_b = class …, _a = <captured>, _b)`. Narrow gate: every leading statement is a
+            // plain `var` decl and every trailing statement assigns one of those vars —
+            // private-field WeakMap statements don't match (their vars hoist elsewhere) and
+            // keep the prior drop behavior.
+            if (result.trailingStatements.isNotEmpty()) {
+                val leadingNames = result.leadingStatements.flatMap { lead ->
+                    (lead as? VariableStatement)?.declarationList?.declarations
+                        ?.mapNotNull { (it.name as? Identifier)?.text } ?: return@flatMap emptyList()
+                }
+                val allLeadingAreVars = result.leadingStatements.all { it is VariableStatement }
+                val captureExprs = mutableListOf<Expression>()
+                var allTrailingAreCaptures = allLeadingAreVars && leadingNames.isNotEmpty()
+                if (allTrailingAreCaptures) {
+                    outer@ for (stmt in result.trailingStatements) {
+                        val e = (stmt as? ExpressionStatement)?.expression
+                        if (e == null) { allTrailingAreCaptures = false; break }
+                        // flatten `_a = x, _b = y` comma chains into separate elements
+                        val flat = ArrayDeque<Expression>().apply { add(e) }
+                        while (flat.isNotEmpty()) {
+                            val cur = flat.removeFirst()
+                            if (cur is BinaryExpression && cur.operator == Comma) {
+                                flat.addFirst(cur.right)
+                                flat.addFirst(cur.left)
+                                continue
+                            }
+                            val assign = cur as? BinaryExpression
+                            val lhs = (assign?.left as? Identifier)?.text
+                            if (assign?.operator != Equals || lhs == null || lhs !in leadingNames) {
+                                allTrailingAreCaptures = false; break@outer
+                            }
+                            captureExprs.add(cur)
+                        }
+                    }
+                }
+                if (allTrailingAreCaptures) {
+                    for (n in leadingNames) {
+                        hoistedVarScopes.lastOrNull()?.add(n)
+                        if (functionScopeDepth == 0) computedPropHoistNames.add(n)
+                    }
+                    val tempName = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(tempName)
+                    if (functionScopeDepth == 0) computedPropHoistNames.add(tempName)
+                    val elements = mutableListOf<Expression>()
+                    elements.add(BinaryExpression(
+                        left = syntheticId(tempName),
+                        operator = Equals,
+                        right = transformed,
+                        pos = -1, end = -1,
+                    ))
+                    elements.addAll(captureExprs)
+                    elements.add(syntheticId(tempName))
+                    return CommaListExpression(elements = elements, pos = expr.pos, end = expr.end)
+                }
+            }
+            return transformed
         }
 
         // Allocate a temp var upfront so we can pass it to transformClassBody for use in
