@@ -6032,12 +6032,57 @@ class Checker(
                     if (privs.isNotEmpty()) mixinMembers[nm] = privs
                 }
             }
-            if (mixinMembers.isEmpty() || identityFns.isEmpty()) continue
+            // B356: mixin FUNCTIONS — `export function WithTags<T extends Constructor<X>>(Base: T) {
+            // return class extends Base {...} }` with NO return annotation: the inferred return is an
+            // anonymous class type inheriting X's private/protected members → TS4094 at the fn name,
+            // and again at the name of any exported class extending a CALL of the function.
+            fun classPrivs(cd: ClassDeclaration): List<String> = cd.members.mapNotNull { m ->
+                val mods = when (m) {
+                    is MethodDeclaration -> m.modifiers
+                    is PropertyDeclaration -> m.modifiers
+                    else -> return@mapNotNull null
+                }
+                if (ModifierFlag.Private !in mods && ModifierFlag.Protected !in mods) return@mapNotNull null
+                when (m) {
+                    is MethodDeclaration -> (m.name as? Identifier)?.text
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text
+                    else -> null
+                }
+            }.sorted()
+            val ctorAliases = statements.filterIsInstance<TypeAliasDeclaration>()
+                .filter { it.type is ConstructorType }.mapNotNull { it.name?.text }.toSet()
+            val fileClasses = statements.filterIsInstance<ClassDeclaration>()
+                .mapNotNull { c -> c.name?.text?.let { it to c } }.toMap()
+            val mixinFns = mutableMapOf<String, Pair<FunctionDeclaration, List<String>>>()
+            for (stmt in statements) {
+                val fn = stmt as? FunctionDeclaration ?: continue
+                if (ModifierFlag.Export !in fn.modifiers || fn.type != null) continue
+                val fnName = fn.name?.text ?: continue
+                val tp = fn.typeParameters?.singleOrNull() ?: continue
+                val cons = tp.constraint as? TypeReference ?: continue
+                if ((cons.typeName as? Identifier)?.text !in ctorAliases) continue
+                val argClass = ((cons.typeArguments?.singleOrNull() as? TypeReference)
+                    ?.typeName as? Identifier)?.text?.let { fileClasses[it] } ?: continue
+                val p = fn.parameters.singleOrNull() ?: continue
+                if (((p.type as? TypeReference)?.typeName as? Identifier)?.text != tp.name.text) continue
+                val pName = (p.name as? Identifier)?.text ?: continue
+                val returnsClassExtendingParam = fn.body?.statements?.any { s ->
+                    val ce = (s as? ReturnStatement)?.expression as? ClassExpression ?: return@any false
+                    val ext = ce.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.types?.firstOrNull()?.expression as? Identifier ?: return@any false
+                    ext.text == pName
+                } == true
+                if (!returnsClassExtendingParam) continue
+                val privs = classPrivs(argClass)
+                if (privs.isNotEmpty()) mixinFns[fnName] = fn to privs
+            }
+            if (mixinMembers.isEmpty() && mixinFns.isEmpty()) continue
             fun mixinCallMembers(e: Expression?): List<String>? {
                 var x = e ?: return null
                 while (x is ParenthesizedExpression) x = x.expression
                 val call = x as? CallExpression ?: return null
                 val callee = (call.expression as? Identifier)?.text ?: return null
+                if (callee in mixinFns && call.arguments.size == 1) return mixinFns[callee]!!.second
                 if (callee !in identityFns) return null
                 val arg = (call.arguments.singleOrNull() as? Identifier)?.text ?: return null
                 return mixinMembers[arg]
@@ -6052,6 +6097,11 @@ class Checker(
                         start = start, length = length,
                     ))
                 }
+            }
+            for ((_, fnAndPrivs) in mixinFns) {
+                val (fn, privs) = fnAndPrivs
+                val nameNode = fn.name ?: continue
+                emit(privs, nameNode.pos, nameNode.text.length)
             }
             for (stmt in statements) {
                 when (stmt) {
