@@ -36178,6 +36178,22 @@ interface DataView {
                     checkNullUndefinedInStatement(stmt.statement, source, fileName)
                 }
                 is ForOfStatement -> {
+                    // A bare `null`/`undefined` as the for-of iterable cannot be
+                    // iterated → TS18050 ("The value 'undefined' cannot be used here.").
+                    // Gated on strictNullChecks (mirrors the arithmetic-operand path).
+                    if (strictNullChecks) checkNullUndefinedLiteral(stmt.expression, source, fileName)
+                    // For-of array-destructuring an EMPTY array literal `[]` (element type
+                    // `never` under noImplicitAny) with an array binding pattern → TS2488 at
+                    // the pattern. FP-safe by exact shape; a contextually-typed iterable
+                    // (`[] as T[]`) is an AsExpression, not a bare ArrayLiteralExpression.
+                    if (options.noImplicitAny || options.strict) {
+                        val iter = stmt.expression
+                        if (iter is ArrayLiteralExpression && iter.elements.isEmpty()) {
+                            val abp = (stmt.initializer as? VariableDeclarationList)
+                                ?.declarations?.singleOrNull()?.name as? ArrayBindingPattern
+                            if (abp != null) emitNeverIteratorAt(abp.pos, source, fileName)
+                        }
+                    }
                     checkNullUndefinedInExpr(stmt.expression, source, fileName)
                     checkNullUndefinedInStatement(stmt.statement, source, fileName)
                 }
