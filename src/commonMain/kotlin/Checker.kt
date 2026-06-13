@@ -1289,6 +1289,8 @@ class Checker(
         checkConstructSigOnlyCalls()
         // 45b''''. B366: `switch (x.disc) { case x: }` param-discriminant comparability (TS2678)
         checkSwitchParamDiscriminantComparable()
+        // 45b5. B368: `if (typeof x === 'object') x.m` where x:unknown → TS18047 possibly null
+        checkUnknownTypeofObjectPossiblyNull()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -93861,6 +93863,103 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /**
+     * B368: TS18047 — `if (typeof x === 'object') { x.member }` where `x` is `unknown`-typed.
+     * `typeof null === "object"`, so narrowing `unknown` by `typeof === 'object'` yields
+     * `object | null` (NOT just `object`) — accessing a member is then "possibly null".
+     * FP-safe by exact shape: the whole if-condition must be the BARE `typeof x === 'object'`
+     * binary (the `&&`-chained truthiness variants `typeof x === 'object' && x` / `x && …`
+     * have an `&&` root operator and so don't match — and those correctly DO narrow null
+     * away). Reassignment of x in the then-block suppresses. strictNullChecks-gated.
+     */
+    private fun checkUnknownTypeofObjectPossiblyNull() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            scanUnknownTypeofObject(result.sourceFile.statements, result.sourceFile.text, fileName, emptySet())
+        }
+    }
+
+    private fun unknownTypedParamNames(parameters: List<Parameter>): Set<String> {
+        val s = HashSet<String>()
+        for (p in parameters) {
+            val n = p.name as? Identifier ?: continue
+            val t = p.type
+            if (t is KeywordTypeNode && t.kind == SyntaxKind.UnknownKeyword) s.add(n.text)
+        }
+        return s
+    }
+
+    /** If [cond] is exactly `typeof IDENT === 'object'` (either operand order), return IDENT's name. */
+    private fun typeofObjectCheckName(cond: Expression): String? {
+        if (cond !is BinaryExpression || cond.operator != SyntaxKind.EqualsEqualsEquals) return null
+        val typeofExpr = (cond.left as? TypeOfExpression) ?: (cond.right as? TypeOfExpression) ?: return null
+        val lit = (cond.right as? StringLiteralNode) ?: (cond.left as? StringLiteralNode) ?: return null
+        if (lit.text != "object") return null
+        return (typeofExpr.expression as? Identifier)?.text
+    }
+
+    private fun scanUnknownTypeofObject(
+        stmts: List<Statement>, source: String, fileName: String, unknownNames: Set<String>,
+    ) {
+        for (s in stmts) {
+            when (s) {
+                is FunctionDeclaration -> s.body?.let {
+                    scanUnknownTypeofObject(it.statements, source, fileName, unknownNames + unknownTypedParamNames(s.parameters))
+                }
+                is IfStatement -> {
+                    val name = typeofObjectCheckName(s.expression)
+                    val thenBlock = s.thenStatement as? Block
+                    if (name != null && name in unknownNames && thenBlock != null &&
+                        !blockAssignsName(thenBlock.statements, name)) {
+                        for (recv in directMemberAccessReceivers(thenBlock.statements, name)) {
+                            val (line, ch) = getLineAndCharacterOfPosition(source, recv.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'$name' is possibly 'null'.",
+                                category = DiagnosticCategory.Error, code = 18047,
+                                fileName = fileName, line = line, character = ch,
+                                start = recv.pos, length = name.length,
+                            ))
+                        }
+                    }
+                    thenBlock?.let { scanUnknownTypeofObject(it.statements, source, fileName, unknownNames) }
+                    (s.elseStatement as? Block)?.let { scanUnknownTypeofObject(it.statements, source, fileName, unknownNames) }
+                }
+                is Block -> scanUnknownTypeofObject(s.statements, source, fileName, unknownNames)
+                is ForStatement -> (s.statement as? Block)?.let { scanUnknownTypeofObject(it.statements, source, fileName, unknownNames) }
+                is WhileStatement -> (s.statement as? Block)?.let { scanUnknownTypeofObject(it.statements, source, fileName, unknownNames) }
+                else -> {}
+            }
+        }
+    }
+
+    /** Does any DIRECT statement in [stmts] assign to [name] (`name = ...`)? */
+    private fun blockAssignsName(stmts: List<Statement>, name: String): Boolean {
+        for (s in stmts) {
+            val e = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (e.operator == SyntaxKind.Equals && (e.left as? Identifier)?.text == name) return true
+        }
+        return false
+    }
+
+    /** Receiver Identifiers of DIRECT `name.prop` accesses (top-level statements only). */
+    private fun directMemberAccessReceivers(stmts: List<Statement>, name: String): List<Identifier> {
+        val out = mutableListOf<Identifier>()
+        fun fromExpr(e: Expression?) {
+            val pa = when (e) {
+                is PropertyAccessExpression -> e
+                is CallExpression -> e.expression as? PropertyAccessExpression
+                is ElementAccessExpression -> { (e.expression as? Identifier)?.let { if (it.text == name) out.add(it) }; null }
+                else -> null
+            }
+            if (pa != null) (pa.expression as? Identifier)?.let { if (it.text == name) out.add(it) }
+        }
+        for (s in stmts) if (s is ExpressionStatement) fromExpr(s.expression)
+        return out
     }
 
     /**
