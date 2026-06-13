@@ -65784,7 +65784,7 @@ interface DataView {
             }
         }
 
-        class Constituent(val display: String, val names: Set<String>)
+        class Constituent(val display: String, val names: Set<String>, val anns: Map<String, List<TypeNode?>>)
         val kept = mutableListOf<Constituent>()
         for (m0 in unionNode.types) {
             var m = m0
@@ -65818,9 +65818,42 @@ interface DataView {
                     typeToString(rt)
                 }
             }
-            kept.add(Constituent(display, names))
+            kept.add(Constituent(display, names, anns))
         }
         if (kept.isEmpty()) return false
+        // B372: discriminant-MATCH then property-TYPE mismatch. When exactly ONE
+        // constituent survives discriminant filtering (uniquely discriminated, e.g.
+        // `type:'a'` picks member A out of A|B|C), a source property whose VALUE is a
+        // bare `null`/`undefined` against a NON-nullish member annotation is a definite
+        // mismatch under strictNullChecks → TS2322 at the property name
+        // (unionErrorMessageOnMatchingDiscriminant). FP-safe: gated to literal nullish
+        // values + a checkTypeRelatedTo(null, target) "not assignable" verdict.
+        if (strictNullChecks && kept.size == 1) {
+            val k = kept[0]
+            for (sp in srcProps) {
+                if (sp.name !in k.names) continue
+                val v = sp.valueExpr
+                val nullish = (v as? Identifier)?.text?.takeIf { it == "null" || it == "undefined" } ?: continue
+                val annNode = k.anns[sp.name]?.singleOrNull() ?: continue
+                val targetT = try { getTypeFromTypeNode(annNode) } catch (_: StackOverflowError) { continue }
+                if (targetT === anyType || targetT === errorType) continue
+                val srcT = if (nullish == "null") nullType else undefinedType
+                if (checkTypeRelatedTo(srcT, targetT, assignableRelation)) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, sp.nameNode.pos)
+                val len = when (val nn = sp.nameNode) {
+                    is Identifier -> nn.text.length
+                    is StringLiteralNode -> (nn.rawText?.length ?: nn.text.length) + 2
+                    else -> 1
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '$nullish' is not assignable to type '${typeToString(targetT)}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = character,
+                    start = sp.nameNode.pos, length = len,
+                ))
+                return true
+            }
+        }
         val known = mutableSetOf<String>()
         kept.forEach { known.addAll(it.names) }
         val excess = srcProps.firstOrNull { it.name !in known && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
