@@ -1283,6 +1283,8 @@ class Checker(
         checkInterfacePropertyInitializers()
         // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
         checkComputedPropertyNameLiteral()
+        // 45b''. B364: function-local call-arg discriminated-union element mismatch (TS2820/2322)
+        checkLocalCallDiscriminantArgs()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -66756,6 +66758,13 @@ interface DataView {
             if (init is ObjectLiteralExpression && targetType is Type.Interface) {
                 checkComputedSymbolKeyValues(init, targetType, source, fileName)
             }
+            // B364: TS2820/TS2322 — array literal of object elements assigned to a
+            // discriminated-union `T[]` whose element discriminant value mismatches.
+            if (init is ArrayLiteralExpression) {
+                arrayElementUnionAlias(typeAnnotation, fileName)?.let { (u, alias) ->
+                    checkArrayElementsDiscriminantMismatch(init, u, alias, source, fileName)
+                }
+            }
             // B138: NON-LITERAL object source (a variable/expression) vs an index-sig-only
             // target — `var z: {[k:string]:T} = x`. Gated to `isAssignable` (relation passes)
             // so it never double-emits with the relation-failure block.
@@ -93639,6 +93648,209 @@ interface DataView {
         return false
     }
 
+    /**
+     * B364: TS2820 / TS2322 — discriminant-property mismatch for an OBJECT-LITERAL ELEMENT
+     * of an array literal assigned to `T[]` where `T` is a literal-discriminated union alias
+     * (`type Disc = {kind:"a"} | {kind:"b"}; const ds: Disc[] = [{kind:"x"}]`). The relation
+     * engine passes such element shapes trivially (incomplete discriminated-union modeling),
+     * so this is the sole emitter. When the bad string-literal value is a close spelling of
+     * one of the discriminant literals, tsc upgrades TS2322 → TS2820 with a "Did you mean"
+     * hint. Uses `literalTypeOfExpression` so NO global literal-widening change is needed.
+     */
+    private fun checkArrayElementsDiscriminantMismatch(
+        arrLit: ArrayLiteralExpression, elementUnion: Type.Union, aliasName: String,
+        source: String, fileName: String,
+    ) {
+        val constituents = elementUnion.types
+        if (constituents.size < 2) return
+        for (c in constituents) {
+            if (c !is Type.Object || c is Type.Interface || c is Type.Reference) return
+            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return }
+        }
+        for (elem in arrLit.elements) {
+            val obj = elem as? ObjectLiteralExpression ?: continue
+            emitObjectDiscriminantMismatch(obj, constituents, aliasName, source, fileName)
+        }
+    }
+
+    /** Per-object core of [checkArrayElementsDiscriminantMismatch]; emits at most one error. */
+    private fun emitObjectDiscriminantMismatch(
+        arg: ObjectLiteralExpression, constituents: List<Type>, aliasName: String,
+        source: String, fileName: String,
+    ): Boolean {
+        for (prop in arg.properties) {
+            val pa = prop as? PropertyAssignment ?: continue
+            val nameNode = pa.name as? Identifier ?: continue
+            val pName = nameNode.text
+            val discTypes = mutableListOf<Type>()
+            var allHave = true
+            var firstDeclPos = -1
+            for (c in constituents) {
+                val sym = (c as Type.Object).members?.get(pName)
+                if (sym == null || isOptionalProperty(sym)) { allHave = false; break }
+                val t = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                if (t !is Type.StringLiteral && t !is Type.NumberLiteral) { allHave = false; break }
+                discTypes.add(t)
+                if (firstDeclPos < 0) {
+                    val dn = ((sym.valueDeclaration ?: sym.declarations.firstOrNull())
+                        as? PropertyDeclaration)?.name as? Identifier
+                    if (dn != null && dn.pos + pName.length <= source.length &&
+                        source.regionMatches(dn.pos, pName, 0, pName.length)) firstDeclPos = dn.pos
+                }
+            }
+            if (!allHave || discTypes.isEmpty()) continue
+            val valueType = literalTypeOfExpression(pa.initializer) ?: continue
+            if (valueType !is Type.StringLiteral && valueType !is Type.NumberLiteral) continue
+            val anyPass = discTypes.any { dt ->
+                try { checkTypeRelatedTo(valueType, dt, assignableRelation) } catch (_: StackOverflowError) { true }
+            }
+            if (anyPass) continue
+            val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
+            var suggestion: String? = null
+            if (valueType is Type.StringLiteral) {
+                val cands = discTypes.filterIsInstance<Type.StringLiteral>().map { it.value }.toSet()
+                suggestion = getSpellingSuggestionFromNames(valueType.value, cands)
+            }
+            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            val related = mutableListOf<Diagnostic>()
+            if (firstDeclPos >= 0) {
+                val (rl, rc) = getLineAndCharacterOfPosition(source, firstDeclPos)
+                related.add(Diagnostic(
+                    message = "The expected type comes from property '$pName' which is declared here on type '$aliasName'",
+                    category = DiagnosticCategory.Message, code = 6500,
+                    fileName = fileName, line = rl, character = rc,
+                    start = firstDeclPos, length = pName.length,
+                ))
+            }
+            if (suggestion != null) {
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(valueType)}' is not assignable to type '$discDisplay'. Did you mean '\"$suggestion\"'?",
+                    category = DiagnosticCategory.Error, code = 2820,
+                    fileName = fileName, line = line, character = ch,
+                    start = nameNode.pos, length = pName.length,
+                    relatedInformation = related,
+                ))
+            } else {
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(valueType)}' is not assignable to type '$discDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = nameNode.pos, length = pName.length,
+                    relatedInformation = related,
+                ))
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Extract `(elementUnion, aliasName)` from a `T[]` / `Array<T>` annotation where the
+     * element `T` is a bare TypeReference resolving to a union — used by the array-element
+     * discriminant check (B364). Returns null for any other shape.
+     */
+    private fun arrayElementUnionAlias(annotation: TypeNode?, fileName: String): Pair<Type.Union, String>? {
+        val elemNode: TypeNode = when (annotation) {
+            is ArrayType -> annotation.elementType
+            is TypeReference -> if ((annotation.typeName as? Identifier)?.text == "Array")
+                annotation.typeArguments?.singleOrNull() ?: return null else return null
+            else -> return null
+        }
+        val ref = elemNode as? TypeReference ?: return null
+        if (ref.typeArguments != null) return null
+        val aliasName = (ref.typeName as? Identifier)?.text ?: return null
+        // Top-level alias: direct resolution works.
+        val direct = try { getTypeFromTypeNode(ref) } catch (_: StackOverflowError) { null }
+        if (direct is Type.Union) return direct to aliasName
+        // Function/block-local alias: NOT bound (Binder block-scope gotcha), so the named
+        // reference resolves to errorType. Find the `type X = A | B` declaration and resolve
+        // its UnionType body directly — the constituent TypeLiterals resolve without a name
+        // lookup, so the union materializes even for an unbound alias.
+        val aliasDecl = findLocalTypeAlias(aliasName, fileName) ?: return null
+        val body = aliasDecl.type as? UnionType ?: return null
+        val u = (try { getTypeFromTypeNode(body) } catch (_: StackOverflowError) { return null })
+            as? Type.Union ?: return null
+        return u to aliasName
+    }
+
+    /**
+     * B364: function-local call-arg discriminant check. The main arg path resolves the
+     * callee via globals/locals — a function-LOCAL `function foo(x: Disc[])` is bound in
+     * neither (Binder block-scope gotcha), so `foo([{disc:"x"}])` is never arg-checked.
+     * This DFS resolves a callee to a SIBLING function declaration in the same statement
+     * list (precise scoping, no cross-scope confusion) and runs the array-element
+     * discriminant check. Top-level calls are skipped (the integrated arg path owns them).
+     */
+    private fun checkLocalCallDiscriminantArgs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            scanLocalCallsForDiscriminant(result.sourceFile.statements, source, fileName, topLevel = true)
+        }
+    }
+
+    private fun scanLocalCallsForDiscriminant(
+        stmts: List<Statement>, source: String, fileName: String, topLevel: Boolean,
+    ) {
+        val localFns = HashMap<String, FunctionDeclaration>()
+        for (s in stmts) if (s is FunctionDeclaration) s.name?.let { localFns[it.text] = s }
+        for (s in stmts) {
+            when (s) {
+                is ExpressionStatement -> if (!topLevel) {
+                    val call = s.expression as? CallExpression ?: continue
+                    val callee = call.expression as? Identifier ?: continue
+                    val fn = localFns[callee.text] ?: continue
+                    for ((idx, arg) in call.arguments.withIndex()) {
+                        if (arg !is ArrayLiteralExpression) continue
+                        val param = fn.parameters.getOrNull(idx) ?: continue
+                        arrayElementUnionAlias(param.type, fileName)?.let { (u, alias) ->
+                            checkArrayElementsDiscriminantMismatch(arg, u, alias, source, fileName)
+                        }
+                    }
+                }
+                is FunctionDeclaration -> s.body?.let { scanLocalCallsForDiscriminant(it.statements, source, fileName, false) }
+                is Block -> scanLocalCallsForDiscriminant(s.statements, source, fileName, false)
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scanLocalCallsForDiscriminant(it.statements, source, fileName, false) }
+                is IfStatement -> {
+                    (s.thenStatement as? Block)?.let { scanLocalCallsForDiscriminant(it.statements, source, fileName, false) }
+                    (s.elseStatement as? Block)?.let { scanLocalCallsForDiscriminant(it.statements, source, fileName, false) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * DFS the file's statements (including function / module / block bodies) for a
+     * `type <name> = ...` declaration. Used by [arrayElementUnionAlias] to resolve a
+     * function-local discriminated-union alias that the binder never bound. First match
+     * (innermost-DFS) wins — FP-safe because the consuming check requires the alias body
+     * to be a literal-discriminated union with a matching array-literal assignment.
+     */
+    private fun findLocalTypeAlias(name: String, fileName: String): TypeAliasDeclaration? {
+        val r = fileResults[fileName] ?: return null
+        var found: TypeAliasDeclaration? = null
+        fun scan(stmts: List<Statement>) {
+            for (s in stmts) {
+                if (found != null) return
+                when (s) {
+                    is TypeAliasDeclaration -> if (s.name.text == name) { found = s; return }
+                    is FunctionDeclaration -> s.body?.let { scan(it.statements) }
+                    is Block -> scan(s.statements)
+                    is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                    is IfStatement -> {
+                        (s.thenStatement as? Block)?.let { scan(it.statements) }
+                        (s.elseStatement as? Block)?.let { scan(it.statements) }
+                    }
+                    else -> {}
+                }
+            }
+        }
+        scan(r.sourceFile.statements)
+        return found
+    }
+
     private fun tryEmitContraAliasUnionSigPropertyMismatch(
         sigIn: Signature, args: List<Expression>, source: String, fileName: String,
     ): Boolean {
@@ -93903,6 +94115,11 @@ interface DataView {
             if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
                 paramType.target?.symbol?.name == "Array") {
                 checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
+                // B364: discriminated-union element mismatch (TS2820/TS2322) for a
+                // `foo([{disc:"x"}])` arg against a `T[]` literal-union param.
+                arrayElementUnionAlias((params[i].valueDeclaration as? Parameter)?.type, fileName)?.let { (u, alias) ->
+                    checkArrayElementsDiscriminantMismatch(arg, u, alias, source, fileName)
+                }
             }
             // 16.0a: excess property check for object literal arguments passed
             // to typed object parameters. Emits TS2353 and stops further arg checks.
