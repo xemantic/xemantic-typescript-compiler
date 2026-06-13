@@ -1130,6 +1130,9 @@ class Checker(
         if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
             checkImplicitThis()
         }
+        // 21b''. B374: TS2341 for `this.<privateMember>` in a FREE function whose `this`
+        // is typed (own `this:` param OR a contextual function-type annotation) as a class.
+        checkPrivateThisAccessInThisParamFunctions()
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
@@ -40137,6 +40140,151 @@ interface DataView {
         }
     }
 
+    /**
+     * B374: TS2341 for `this.<privateMember>` accessed inside a FREE function whose `this`
+     * is typed as a class — either via the function's own `this:` parameter
+     * (`function f(this: Foo) { this.priv }`) or via a contextual function-type annotation
+     * (`const f: (this: Foo) => void = function() { this.priv }`). Private members are
+     * class-body-only, so reaching one through a this-typed free function (outside the class
+     * body) always errors. PROTECTED is deliberately allowed — tsc treats a this-typed
+     * function as method-like for protected access (protectedAccessThroughContextualThis).
+     * FP-safe and additive: fires only for a `this.<name>` whose name is a declared PRIVATE
+     * member of the resolved class. Skips JS-like / .d.ts files.
+     */
+    private fun checkPrivateThisAccessInThisParamFunctions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            ptpScanStmts(result.sourceFile.statements, result.sourceFile.text, fileName, result.locals)
+        }
+    }
+
+    /** Resolve a `this:` TypeNode to (className, private-member-names) or null. */
+    private fun ptpThisClassPrivates(thisType: TypeNode?, locals: SymbolTable?): Pair<String, Set<String>>? {
+        val tr = thisType as? TypeReference ?: return null
+        if (tr.typeArguments != null) return null
+        val name = (tr.typeName as? Identifier)?.text ?: return null
+        val sym = locals?.get(name) ?: globals[name] ?: return null
+        val cls = sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return null
+        val privates = cls.members.mapNotNull { m ->
+            val (mods, mn) = when (m) {
+                is PropertyDeclaration -> m.modifiers to (m.name as? Identifier)?.text
+                is MethodDeclaration -> m.modifiers to (m.name as? Identifier)?.text
+                is GetAccessor -> m.modifiers to (m.name as? Identifier)?.text
+                is SetAccessor -> m.modifiers to (m.name as? Identifier)?.text
+                else -> return@mapNotNull null
+            }
+            if (ModifierFlag.Private !in mods) null else mn
+        }.toSet()
+        if (privates.isEmpty()) return null
+        return name to privates
+    }
+
+    /** The `this:` type of a function's first parameter, or null. */
+    private fun ptpOwnThisType(params: List<Parameter>): TypeNode? {
+        val p0 = params.firstOrNull() ?: return null
+        if ((p0.name as? Identifier)?.text != "this") return null
+        return p0.type
+    }
+
+    /** A contextual `this:` type from a function-type annotation (direct or via a type alias). */
+    private fun ptpContextualThisType(annot: TypeNode?, locals: SymbolTable?): TypeNode? {
+        var t = annot ?: return null
+        if (t is TypeReference && t.typeArguments == null) {
+            val n = (t.typeName as? Identifier)?.text
+            val alias = (n?.let { locals?.get(it) ?: globals[it] })
+                ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+            if (alias != null) t = alias.type
+        }
+        return ptpOwnThisType((t as? FunctionType)?.parameters ?: return null)
+    }
+
+    private fun ptpScanStmts(stmts: List<Statement>, source: String, fileName: String, locals: SymbolTable?) {
+        for (s in stmts) ptpScanStmt(s, source, fileName, locals)
+    }
+
+    private fun ptpScanStmt(s: Statement, source: String, fileName: String, locals: SymbolTable?) {
+        when (s) {
+            is FunctionDeclaration -> {
+                val priv = ptpThisClassPrivates(ptpOwnThisType(s.parameters), locals)
+                s.body?.let { body ->
+                    if (priv != null) for (st in body.statements) ptpWalkBodyStmt(st, priv.second, priv.first, source, fileName)
+                    ptpScanStmts(body.statements, source, fileName, locals)
+                }
+            }
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                val init = d.initializer as? FunctionExpression ?: continue
+                val thisT = ptpOwnThisType(init.parameters) ?: ptpContextualThisType(d.type, locals)
+                val priv = ptpThisClassPrivates(thisT, locals) ?: continue
+                init.body?.statements?.forEach { ptpWalkBodyStmt(it, priv.second, priv.first, source, fileName) }
+            }
+            is Block -> ptpScanStmts(s.statements, source, fileName, locals)
+            is IfStatement -> { ptpScanStmt(s.thenStatement, source, fileName, locals); s.elseStatement?.let { ptpScanStmt(it, source, fileName, locals) } }
+            is ForStatement -> ptpScanStmt(s.statement, source, fileName, locals)
+            is ForOfStatement -> ptpScanStmt(s.statement, source, fileName, locals)
+            is ForInStatement -> ptpScanStmt(s.statement, source, fileName, locals)
+            is WhileStatement -> ptpScanStmt(s.statement, source, fileName, locals)
+            is DoStatement -> ptpScanStmt(s.statement, source, fileName, locals)
+            is TryStatement -> {
+                ptpScanStmts(s.tryBlock.statements, source, fileName, locals)
+                s.catchClause?.block?.statements?.let { ptpScanStmts(it, source, fileName, locals) }
+                s.finallyBlock?.statements?.let { ptpScanStmts(it, source, fileName, locals) }
+            }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { ptpScanStmts(it.statements, source, fileName, locals) }
+            is ClassDeclaration -> for (m in s.members) when (m) {
+                is MethodDeclaration -> m.body?.let { ptpScanStmts(it.statements, source, fileName, locals) }
+                is Constructor -> m.body?.let { ptpScanStmts(it.statements, source, fileName, locals) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    /** Walk a statement of a this-typed function body, emitting TS2341 at `this.<private>`.
+     *  Recurses into arrow bodies (which inherit `this`) but NOT nested functions/methods. */
+    private fun ptpWalkBodyStmt(s: Statement, privates: Set<String>, className: String, source: String, fileName: String) {
+        when (s) {
+            is ExpressionStatement -> ptpWalkExpr(s.expression, privates, className, source, fileName)
+            is ReturnStatement -> s.expression?.let { ptpWalkExpr(it, privates, className, source, fileName) }
+            is ThrowStatement -> s.expression?.let { ptpWalkExpr(it, privates, className, source, fileName) }
+            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { ptpWalkExpr(it, privates, className, source, fileName) }
+            is IfStatement -> { ptpWalkExpr(s.expression, privates, className, source, fileName); ptpWalkBodyStmt(s.thenStatement, privates, className, source, fileName); s.elseStatement?.let { ptpWalkBodyStmt(it, privates, className, source, fileName) } }
+            is Block -> for (st in s.statements) ptpWalkBodyStmt(st, privates, className, source, fileName)
+            is ForStatement -> { s.condition?.let { ptpWalkExpr(it, privates, className, source, fileName) }; ptpWalkBodyStmt(s.statement, privates, className, source, fileName) }
+            is WhileStatement -> { ptpWalkExpr(s.expression, privates, className, source, fileName); ptpWalkBodyStmt(s.statement, privates, className, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun ptpWalkExpr(e: Expression, privates: Set<String>, className: String, source: String, fileName: String) {
+        when (e) {
+            is PropertyAccessExpression -> {
+                if ((e.expression as? Identifier)?.text == "this" && e.name.text in privates) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, e.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${e.name.text}' is private and only accessible within class '$className'.",
+                        category = DiagnosticCategory.Error, code = 2341,
+                        fileName = fileName, line = line, character = ch,
+                        start = e.name.pos, length = e.name.text.length,
+                    ))
+                } else ptpWalkExpr(e.expression, privates, className, source, fileName)
+            }
+            is BinaryExpression -> { ptpWalkExpr(e.left, privates, className, source, fileName); ptpWalkExpr(e.right, privates, className, source, fileName) }
+            is CallExpression -> { ptpWalkExpr(e.expression, privates, className, source, fileName); for (a in e.arguments) ptpWalkExpr(a, privates, className, source, fileName) }
+            is ElementAccessExpression -> { ptpWalkExpr(e.expression, privates, className, source, fileName); ptpWalkExpr(e.argumentExpression, privates, className, source, fileName) }
+            is ParenthesizedExpression -> ptpWalkExpr(e.expression, privates, className, source, fileName)
+            is PrefixUnaryExpression -> ptpWalkExpr(e.operand, privates, className, source, fileName)
+            is PostfixUnaryExpression -> ptpWalkExpr(e.operand, privates, className, source, fileName)
+            is ConditionalExpression -> { ptpWalkExpr(e.condition, privates, className, source, fileName); ptpWalkExpr(e.whenTrue, privates, className, source, fileName); ptpWalkExpr(e.whenFalse, privates, className, source, fileName) }
+            is ArrowFunction -> (e.body as? Expression)?.let { ptpWalkExpr(it, privates, className, source, fileName) } ?: (e.body as? Block)?.statements?.forEach { ptpWalkBodyStmt(it, privates, className, source, fileName) }
+            is AwaitExpression -> ptpWalkExpr(e.expression, privates, className, source, fileName)
+            is NonNullExpression -> ptpWalkExpr(e.expression, privates, className, source, fileName)
+            is AsExpression -> ptpWalkExpr(e.expression, privates, className, source, fileName)
+            is TemplateExpression -> for (sp in e.templateSpans) ptpWalkExpr(sp.expression, privates, className, source, fileName)
+            else -> {}
+        }
+    }
+
     private fun checkImplicitThis() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -40222,7 +40370,13 @@ interface DataView {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
-                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                        // B374: a function-expression initializer of a variable annotated with
+                        // a function type carrying a `this:` parameter (direct or via a type
+                        // alias) has a contextually-typed `this` → suppress TS2683 inside its
+                        // body (`const f: (this: Foo) => void = function() { this.x }`).
+                        val ctxThis = it is FunctionExpression &&
+                            ptpContextualThisType(decl.type, null) != null
+                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction, contextualThisTyped = ctxThis)
                     }
                 }
             }
