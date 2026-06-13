@@ -66751,6 +66751,11 @@ interface DataView {
                 (isAssignable || targetType.members.isNullOrEmpty())) {
                 checkLiteralValuesAgainstIndexSignatures(init, targetType, source, fileName)
             }
+            // B363: TS2418 — computed unique-symbol-keyed property value vs the interface's
+            // matching symbol member (the member is invisible to the structural table).
+            if (init is ObjectLiteralExpression && targetType is Type.Interface) {
+                checkComputedSymbolKeyValues(init, targetType, source, fileName)
+            }
             // B138: NON-LITERAL object source (a variable/expression) vs an index-sig-only
             // target — `var z: {[k:string]:T} = x`. Gated to `isAssignable` (relation passes)
             // so it never double-emits with the relation-failure block.
@@ -95855,6 +95860,94 @@ interface DataView {
                 }
             }
             else -> {}
+        }
+    }
+
+    /**
+     * B363: TS2418 — a computed property name `[SYM]` (where `SYM` is a unique-symbol
+     * const) in an object literal assigned to an interface that declares a member keyed
+     * by the SAME unique symbol, where the property's VALUE type is not assignable to the
+     * declared member type. `getMemberName` cannot key unique-symbol members (only
+     * well-known `[Symbol.X]`), so the member never enters the structural table and the
+     * relation engine sees only the (passing) string index signature — this AST-level
+     * walker resolves the key→const and matches the interface member declaration directly.
+     * Squiggle at the `[SYM]` computed name; related TS6500 at the interface member.
+     */
+    private fun checkComputedSymbolKeyValues(
+        objLit: ObjectLiteralExpression,
+        targetType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        if (targetType !is Type.Interface) return
+        val targetSym = targetType.symbol ?: return
+        val targetDisplay = typeToString(targetType)
+        for (prop in objLit.properties) {
+            if (prop !is PropertyAssignment) continue
+            val nameNode = prop.name
+            if (nameNode !is ComputedPropertyName) continue
+            val keyExpr = nameNode.expression as? Identifier ?: continue
+            val keyName = keyExpr.text
+            // Resolve to a unique-symbol const declared in the key's home file.
+            val declFile = resolveValueNameDeclaringFile(keyName, fileName) ?: continue
+            val keyIsUniqueSymbol = (fileResults[declFile]?.sourceFile?.statements ?: emptyList()).any { stmt ->
+                stmt is VariableStatement && stmt.declarationList.declarations.any {
+                    (it.name as? Identifier)?.text == keyName && varDeclIsSymbol(it)
+                }
+            }
+            if (!keyIsUniqueSymbol) continue
+            // Find the interface member declared with the SAME computed symbol key.
+            var memberDecl: PropertyDeclaration? = null
+            run {
+                for (decl in targetSym.declarations) {
+                    val members = (decl as? InterfaceDeclaration)?.members ?: continue
+                    for (m in members) {
+                        if (m is PropertyDeclaration) {
+                            val mn = m.name
+                            if (mn is ComputedPropertyName && (mn.expression as? Identifier)?.text == keyName) {
+                                memberDecl = m; return@run
+                            }
+                        }
+                    }
+                }
+            }
+            val md = memberDecl ?: continue
+            val memberTypeNode = md.type ?: continue
+            val value = prop.initializer ?: continue
+            val memberType = try { getTypeFromTypeNode(memberTypeNode) } catch (_: StackOverflowError) { continue }
+            if (memberType === anyType || memberType === errorType || memberType === unknownType) continue
+            val valueType = (literalTypeOfExpression(value)
+                ?: try { getTypeOfExpression(value) } catch (_: StackOverflowError) { continue })
+            if (valueType === anyType || valueType === errorType || valueType === unknownType) continue
+            val ok = try { checkTypeRelatedTo(valueType, memberType, assignableRelation) }
+                catch (_: StackOverflowError) { true }
+            if (ok) continue
+            val pos = nameNode.pos
+            val len = keyName.length + 2
+            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+            val related = mutableListOf<Diagnostic>()
+            val memberNamePos = md.name.pos
+            if (memberNamePos >= 0) {
+                val (declF, declS) = resolveDeclarationSourceFile(memberNamePos)
+                if (declF != null && declS != null) {
+                    val isLib = isLibFileName(declF)
+                    val (rl, rc) = if (isLib) Pair<Int?, Int?>(null, null)
+                        else getLineAndCharacterOfPosition(declS, memberNamePos).let { Pair<Int?, Int?>(it.first, it.second) }
+                    related.add(Diagnostic(
+                        message = "The expected type comes from property 'unique symbol' which is declared here on type '$targetDisplay'",
+                        category = DiagnosticCategory.Message, code = 6500,
+                        fileName = declF, line = rl, character = rc,
+                        start = memberNamePos, length = keyName.length + 2,
+                    ))
+                }
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type of computed property's value is '${typeToString(valueType)}', which is not assignable to type '${typeToString(memberType)}'.",
+                category = DiagnosticCategory.Error, code = 2418,
+                fileName = fileName, line = line, character = character,
+                start = pos, length = len,
+                relatedInformation = related,
+            ))
         }
     }
 
