@@ -18059,9 +18059,29 @@ class Checker(
                 // Build namespace scope that includes merged exports from all declarations
                 val nsScope = buildNamespaceScope(stmt, scope, fileName)
                 if (ModifierFlag.Declare in stmt.modifiers) {
-                    // In declare namespaces, skip TS2304 checks (ambient types expected)
-                    // but still check heritage clauses for TS2314 (type argument count)
+                    // In declare namespaces heritage TS2314 IS checked, but the body was
+                    // historically skipped for TS2304 (ambient types expected). B367: run the
+                    // body check too — `globals` now carries cross-file ambient types — but
+                    // keep ONLY bare-name TS2304 from it. Qualified-name resolution
+                    // (TS2694/TS2503/TS2833) and body-position generic arg-count (TS2314)
+                    // are still incomplete in ambient cross-namespace scope (Blocker #3) and
+                    // FP-prone, so a post-filter drops everything except TS2304.
                     checkHeritageClausesInDeclareNamespace(stmt, nsScope, source, fileName)
+                    val before = diagnostics.size
+                    when (val body = stmt.body) {
+                        is ModuleBlock -> checkUnresolvedInStatements(body.statements, nsScope, source, fileName)
+                        is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
+                        else -> {}
+                    }
+                    if (diagnostics.size > before) {
+                        // Keep only the bare-NAME unresolved family: TS2304 ("cannot find
+                        // name") and its spelling variant TS2552 ("did you mean"). Drop the
+                        // namespace family (TS2503/TS2833/TS2694) and arg-count (TS2314).
+                        val kept = diagnostics.subList(before, diagnostics.size)
+                            .filter { it.code == 2304 || it.code == 2552 }.toList()
+                        while (diagnostics.size > before) diagnostics.removeAt(diagnostics.size - 1)
+                        diagnostics.addAll(kept)
+                    }
                     return
                 }
                 when (val body = stmt.body) {
