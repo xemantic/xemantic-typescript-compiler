@@ -1133,6 +1133,10 @@ class Checker(
         // 21b''. B374: TS2341 for `this.<privateMember>` in a FREE function whose `this`
         // is typed (own `this:` param OR a contextual function-type annotation) as a class.
         checkPrivateThisAccessInThisParamFunctions()
+        // 21b'''. B377: TS2445 for `obj.protectedMember = …` in a free function whose `this:`
+        // param types `this` as a class T, when the member's declaring class is not in T's
+        // hierarchy (the protected-write companion to B374's private check).
+        checkProtectedWriteViaThisParam()
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
@@ -40283,6 +40287,151 @@ interface DataView {
             is TemplateExpression -> for (sp in e.templateSpans) ptpWalkExpr(sp.expression, privates, className, source, fileName)
             else -> {}
         }
+    }
+
+    /**
+     * B377: TS2445 for a write `obj.member = …` to a PROTECTED member from inside a FREE
+     * function whose `this` is typed (via its `this:` parameter) as a class T, where the
+     * protected member's declaring class D is NOT in T's hierarchy
+     * (publicGetterProtectedSetterFromThisParameter — `bar(this: A) { b.q = 0 }`, `q`
+     * protected in B, A doesn't derive from B → error; `this.x = 0` / `a.x = 0` where x is
+     * protected in A stay legal because A derives from A). tsc's protected-accessibility
+     * rule first tries `getEnclosingClassFromThisParameter` — a `this: T` param makes T the
+     * enclosing-class-for-protected-access. Scoped to top-level / namespace-level free
+     * functions (no lexical enclosing class — methods already use the standard path); only
+     * WRITE targets (the setter governs writes); obj is `this` (→ T) or a class-typed
+     * parameter (→ its class). FP-safe by exact shape; .d.ts / JS skipped.
+     */
+    private fun checkProtectedWriteViaThisParam() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            for (s in result.sourceFile.statements) pwScanStmt(s, result.sourceFile.text, fileName, result.locals)
+        }
+    }
+
+    private fun pwResolveClass(typeNode: TypeNode?, locals: SymbolTable?): ClassDeclaration? {
+        val tr = typeNode as? TypeReference ?: return null
+        if (tr.typeArguments != null) return null
+        val name = (tr.typeName as? Identifier)?.text ?: return null
+        val sym = locals?.get(name) ?: globals[name] ?: return null
+        return sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+    }
+
+    /** True if `t` is `d` or transitively extends `d`. */
+    private fun pwClassDerivesFrom(t: ClassDeclaration, d: ClassDeclaration, locals: SymbolTable?, depth: Int = 0): Boolean {
+        if (t === d) return true
+        if (depth > 12) return false
+        for (h in t.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pwResolveClass(TypeReference(typeName = baseName), locals) ?: continue
+                if (pwClassDerivesFrom(base, d, locals, depth + 1)) return true
+            }
+        }
+        return false
+    }
+
+    /** The class declaring the protected member that governs a WRITE to `member` on `cls`
+     *  (the setter for an accessor pair, else the property), searching superclasses; null if
+     *  no such member, or the write is public. */
+    private fun pwFindProtectedWriteDeclaringClass(cls: ClassDeclaration, member: String, locals: SymbolTable?, depth: Int = 0): ClassDeclaration? {
+        if (depth > 12) return null
+        var setter: SetAccessor? = null
+        var prop: PropertyDeclaration? = null
+        var hasAnyNamed = false
+        for (m in cls.members) {
+            val mn = when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text
+                is SetAccessor -> (m.name as? Identifier)?.text
+                is GetAccessor -> (m.name as? Identifier)?.text
+                is MethodDeclaration -> (m.name as? Identifier)?.text
+                else -> null
+            }
+            if (mn != member) continue
+            hasAnyNamed = true
+            when (m) {
+                is SetAccessor -> setter = m
+                is PropertyDeclaration -> prop = m
+                else -> {}
+            }
+        }
+        if (hasAnyNamed) {
+            val st = setter
+            val pr = prop
+            return when {
+                st != null -> if (ModifierFlag.Protected in st.modifiers) cls else null
+                pr != null -> if (ModifierFlag.Protected in pr.modifiers) cls else null
+                else -> null // only getter/method named member → not a protected write we flag
+            }
+        }
+        for (h in cls.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pwResolveClass(TypeReference(typeName = baseName), locals) ?: continue
+                pwFindProtectedWriteDeclaringClass(base, member, locals, depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun pwScanStmt(s: Statement, source: String, fileName: String, locals: SymbolTable?) {
+        when (s) {
+            is FunctionDeclaration -> pwProcessFreeFn(s.parameters, s.body?.statements, source, fileName, locals)
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                val init = d.initializer as? FunctionExpression ?: continue
+                pwProcessFreeFn(init.parameters, init.body?.statements, source, fileName, locals)
+            }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { for (st in it.statements) pwScanStmt(st, source, fileName, locals) }
+            else -> {}
+        }
+    }
+
+    private fun pwProcessFreeFn(params: List<Parameter>, body: List<Statement>?, source: String, fileName: String, locals: SymbolTable?) {
+        if (body == null) return
+        val thisType = ptpOwnThisType(params) ?: return
+        val thisClass = pwResolveClass(thisType, locals) ?: return
+        val paramClasses = HashMap<String, ClassDeclaration>()
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if (pn == "this") continue
+            pwResolveClass(p.type, locals)?.let { paramClasses[pn] = it }
+        }
+        for (st in body) pwWalkStmt(st, thisClass, paramClasses, source, fileName, locals)
+    }
+
+    private fun pwWalkStmt(s: Statement, thisClass: ClassDeclaration, paramClasses: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        when (s) {
+            is ExpressionStatement -> pwCheckWrite(s.expression, thisClass, paramClasses, source, fileName, locals)
+            is Block -> for (st in s.statements) pwWalkStmt(st, thisClass, paramClasses, source, fileName, locals)
+            is IfStatement -> { pwWalkStmt(s.thenStatement, thisClass, paramClasses, source, fileName, locals); s.elseStatement?.let { pwWalkStmt(it, thisClass, paramClasses, source, fileName, locals) } }
+            is ForStatement -> pwWalkStmt(s.statement, thisClass, paramClasses, source, fileName, locals)
+            is WhileStatement -> pwWalkStmt(s.statement, thisClass, paramClasses, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    private fun pwCheckWrite(e: Expression, thisClass: ClassDeclaration, paramClasses: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        if (e !is BinaryExpression || e.operator != SyntaxKind.Equals) return
+        val lhs = e.left as? PropertyAccessExpression ?: return
+        val objExpr = lhs.expression
+        val objClass = when {
+            objExpr is Identifier && objExpr.text == "this" -> thisClass
+            objExpr is Identifier -> paramClasses[objExpr.text]
+            else -> null
+        } ?: return
+        val member = lhs.name.text
+        val declaring = pwFindProtectedWriteDeclaringClass(objClass, member, locals) ?: return
+        if (pwClassDerivesFrom(thisClass, declaring, locals)) return
+        val (line, ch) = getLineAndCharacterOfPosition(source, lhs.name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Property '$member' is protected and only accessible within class '${declaring.name?.text}' and its subclasses.",
+            category = DiagnosticCategory.Error, code = 2445,
+            fileName = fileName, line = line, character = ch,
+            start = lhs.name.pos, length = member.length,
+        ))
     }
 
     private fun checkImplicitThis() {
@@ -86088,6 +86237,18 @@ interface DataView {
         }
         val savedStatic = inStaticClassMethod
         if (isStatic && !hasExplicitThisParam) inStaticClassMethod = true
+        // Method-`this:T`-param override: a method declared `m(this: T, …)` types `this`
+        // as T (NOT the enclosing class) for member access in its body — e.g. `this.x`
+        // inside `class B { foo(this: A) { this.x } }` must resolve against A, not B
+        // (publicGetterProtectedSetterFromThisParameter). Resolve the this-param's
+        // annotation and use it as the effective enclosing-`this` type; fall back to the
+        // enclosing classType when there is no `this:` annotation. An any/error resolution
+        // simply yields no `this.member` check (safe — the enclosing class is definitively
+        // not `this`'s type when a `this:` param is present).
+        val effectiveClassType: Type? = if (member is MethodDeclaration && hasExplicitThisParam) {
+            val ann = member.parameters.firstOrNull()?.type
+            if (ann != null) try { getTypeFromTypeNode(ann) } catch (_: StackOverflowError) { classType } else classType
+        } else classType
         when (member) {
             is MethodDeclaration -> {
                 member.body?.let { body ->
@@ -86097,7 +86258,7 @@ interface DataView {
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     try {
                         populateParameterLocalTypes(member.parameters)
-                        checkPropertyAccessInStatements(body.statements, source, fileName, classType)
+                        checkPropertyAccessInStatements(body.statements, source, fileName, effectiveClassType)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
