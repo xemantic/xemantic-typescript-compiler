@@ -1287,6 +1287,8 @@ class Checker(
         checkLocalCallDiscriminantArgs()
         // 45b'''. B365: calling a construct-signature-only value (TS2348)
         checkConstructSigOnlyCalls()
+        // 45b''''. B366: `switch (x.disc) { case x: }` param-discriminant comparability (TS2678)
+        checkSwitchParamDiscriminantComparable()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -93838,6 +93840,108 @@ interface DataView {
                 is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scanConstructSigOnlyCalls(it.statements, source, fileName) }
                 else -> {}
             }
+        }
+    }
+
+    /**
+     * B366: TS2678 — `switch (x.disc) { case x: }` where `x` is a parameter whose annotation
+     * is a union of object literals sharing a literal-typed discriminant property `disc`.
+     * The switch subject `x.disc` has a string/number-literal-union type while the case
+     * expression `x` is the whole object union — never comparable. (The param is unbound at
+     * init for the syntactic switch walker, so this is a dedicated AST walker that threads
+     * the param's annotation.) Always an error by shape, so FP-safe.
+     */
+    private fun checkSwitchParamDiscriminantComparable() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            scanSwitchParamDiscriminant(
+                result.sourceFile.statements, result.sourceFile.text,
+                result.sourceFile.fileName, emptyMap())
+        }
+    }
+
+    private fun unionLiteralObjectParams(parameters: List<Parameter>): Map<String, UnionType> {
+        val m = HashMap<String, UnionType>()
+        for (p in parameters) {
+            val name = p.name as? Identifier ?: continue
+            val u = p.type as? UnionType ?: continue
+            if (u.types.all { it is TypeLiteral }) m[name.text] = u
+        }
+        return m
+    }
+
+    private fun scanSwitchParamDiscriminant(
+        stmts: List<Statement>, source: String, fileName: String, params: Map<String, UnionType>,
+    ) {
+        for (s in stmts) {
+            when (s) {
+                is FunctionDeclaration -> s.body?.let {
+                    scanSwitchParamDiscriminant(it.statements, source, fileName, unionLiteralObjectParams(s.parameters))
+                }
+                is SwitchStatement -> {
+                    emitSwitchParamDiscriminant(s, params, source, fileName)
+                    for (c in s.caseBlock) when (c) {
+                        is CaseClause -> scanSwitchParamDiscriminant(c.statements, source, fileName, params)
+                        is DefaultClause -> scanSwitchParamDiscriminant(c.statements, source, fileName, params)
+                        else -> {}
+                    }
+                }
+                is Block -> scanSwitchParamDiscriminant(s.statements, source, fileName, params)
+                is IfStatement -> {
+                    (s.thenStatement as? Block)?.let { scanSwitchParamDiscriminant(it.statements, source, fileName, params) }
+                    (s.elseStatement as? Block)?.let { scanSwitchParamDiscriminant(it.statements, source, fileName, params) }
+                }
+                is ForStatement -> (s.statement as? Block)?.let { scanSwitchParamDiscriminant(it.statements, source, fileName, params) }
+                is WhileStatement -> (s.statement as? Block)?.let { scanSwitchParamDiscriminant(it.statements, source, fileName, params) }
+                is TryStatement -> {
+                    scanSwitchParamDiscriminant(s.tryBlock.statements, source, fileName, params)
+                    s.catchClause?.let { scanSwitchParamDiscriminant(it.block.statements, source, fileName, params) }
+                    s.finallyBlock?.let { scanSwitchParamDiscriminant(it.statements, source, fileName, params) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun emitSwitchParamDiscriminant(
+        sw: SwitchStatement, params: Map<String, UnionType>, source: String, fileName: String,
+    ) {
+        val subj = sw.expression as? PropertyAccessExpression ?: return
+        val base = subj.expression as? Identifier ?: return
+        val unionNode = params[base.text] ?: return
+        val propName = subj.name.text
+        // Each union member must declare `propName` with a literal type.
+        val discDisplays = mutableListOf<String>()
+        for (member in unionNode.types) {
+            val tl = member as? TypeLiteral ?: return
+            val prop = tl.members.firstNotNullOfOrNull { m ->
+                (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == propName }
+            } ?: return
+            val pt = prop.type ?: return
+            val pType = try { getTypeFromTypeNode(pt) } catch (_: StackOverflowError) { return }
+            if (pType !is Type.StringLiteral && pType !is Type.NumberLiteral) return
+            discDisplays.add(typeToString(pType))
+        }
+        if (discDisplays.isEmpty()) return
+        val discDisplay = discDisplays.distinct().joinToString(" | ")
+        val caseDisplay = try { typeToString(getTypeFromTypeNode(unionNode)) } catch (_: StackOverflowError) { return }
+        // tsc's union-source comparability elaboration reports the FIRST non-comparable
+        // constituent as a sub-line; for this object-union-vs-literal-union shape the
+        // discriminant-matched member relates and the trailing member is reported.
+        val lastMemberDisplay = try { typeToString(getTypeFromTypeNode(unionNode.types.last())) }
+            catch (_: StackOverflowError) { return }
+        for (c in sw.caseBlock) {
+            if (c !is CaseClause) continue
+            val ce = c.expression as? Identifier ?: continue
+            if (ce.text != base.text) continue
+            val (line, ch) = getLineAndCharacterOfPosition(source, ce.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$caseDisplay' is not comparable to type '$discDisplay'.",
+                category = DiagnosticCategory.Error, code = 2678,
+                fileName = fileName, line = line, character = ch,
+                start = ce.pos, length = ce.text.length,
+                messageChain = listOf("  Type '$lastMemberDisplay' is not comparable to type '$discDisplay'."),
+            ))
         }
     }
 
