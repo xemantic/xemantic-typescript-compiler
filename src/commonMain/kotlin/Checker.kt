@@ -67895,11 +67895,35 @@ interface DataView {
                     }
                 }
                 // Also the case `return { excess }` where expr is directly a literal
-                if (expr is ObjectLiteralExpression && canUseTypeEngine(sourceType, targetType)) {
-                    val displayTarget = excessPropDisplayTarget(targetType, returnTypeNode)
-                    if (checkExcessProperties(expr, sourceType, targetType, displayTarget, source, fileName)) {
+                // For an ASYNC object-literal return, the effective target for excess /
+                // nested-property checks is the AWAITED type (`Promise<Foo>` → `Foo`): a
+                // property like `bar` is a member of Foo, NOT of the Promise wrapper, so
+                // checking against the raw `Promise<Foo>` FP'd TS2353 "bar does not exist
+                // in type 'Promise<Foo>'" (asyncFunctionReturnExpressionErrorSpans).
+                val effObjTarget: Type = if (inAsyncFunctionBody && targetType is Type.Reference &&
+                    targetType.target.symbol?.name == "Promise")
+                    (targetType.resolvedTypeArguments?.singleOrNull() ?: targetType)
+                else targetType
+                if (expr is ObjectLiteralExpression && canUseTypeEngine(sourceType, effObjTarget)) {
+                    val displayTarget = if (effObjTarget === targetType)
+                        excessPropDisplayTarget(targetType, returnTypeNode) else typeToString(effObjTarget)
+                    if (checkExcessProperties(expr, sourceType, effObjTarget, displayTarget, source, fileName)) {
                         return // TS2353 emitted
                     }
+                }
+                // B373: nested per-property TYPE mismatch for an object-literal return —
+                // the relation path compares against the whole return type and never descends
+                // to the innermost property, so a deep mismatch (`return {bar:{baz:{inner:
+                // {thing: 1}}}}` vs `Promise<{...thing: string}>`) was silent. Reuse
+                // `checkNestedObjLitPropTypes` (the var-decl wiring): it recurses nested object
+                // literals and emits TS2322 at the innermost mismatching key + the TS6500
+                // "expected type comes from property" related info. (asyncFunctionReturn-
+                // ExpressionErrorSpans.) Additive; runs against the async-unwrapped target.
+                if (expr is ObjectLiteralExpression && effObjTarget !== targetType &&
+                    effObjTarget is Type.Object &&
+                    !(effObjTarget is Type.Reference && effObjTarget.target?.symbol?.name == "Array") &&
+                    checkNestedObjLitPropTypes(expr, effObjTarget, source, fileName)) {
+                    return
                 }
                 // B96: deep per-property disambiguation of `return { ... }` against a
                 // UNION return type with a single clear object-like constituent. When it
