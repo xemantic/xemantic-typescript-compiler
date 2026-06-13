@@ -66011,7 +66011,29 @@ interface DataView {
         val known = mutableSetOf<String>()
         kept.forEach { known.addAll(it.names) }
         val excess = srcProps.firstOrNull { it.name !in known && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
-            ?: return false
+        if (excess == null) {
+            // No globally-excess property (every source prop lives in some kept
+            // constituent — the discriminated-union excess rule). If the object literal
+            // is also FULLY assignable to at least one kept constituent (all of that
+            // constituent's declared props are present in source AND every source prop
+            // the constituent declares POSITIVELY matches its annotation), the literal is
+            // a valid union member → return true to SUPPRESS the spurious WIDENED TS2322
+            // the general var-decl path would otherwise emit (`{ str: "a", num: 0 }`
+            // widens to `{ str: string; num: number; }` and fails member-1 comparison —
+            // missingDiscriminants thing1/2/3). Conservative: a non-literal/unknown match
+            // (litMatchesNode == null) or a missing required prop falls through (return
+            // false) so genuine missing-property / value-mismatch errors still fire.
+            val srcNames = srcProps.mapTo(mutableSetOf()) { it.name }
+            for (k in kept) {
+                if (!k.names.all { it in srcNames }) continue
+                val allDeclaredMatch = srcProps.all { sp ->
+                    val annsForName = k.anns[sp.name] ?: return@all true // extra prop — fine structurally
+                    annsForName.all { litMatchesNode(sp.valueExpr, it) == true }
+                }
+                if (allDeclaredMatch) return true
+            }
+            return false
+        }
         val display = kept.joinToString(" | ") { it.display }
         val start = excess.nameNode.pos
         val length = when (val nn = excess.nameNode) {
