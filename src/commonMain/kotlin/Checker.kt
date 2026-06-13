@@ -1291,6 +1291,8 @@ class Checker(
         checkSwitchParamDiscriminantComparable()
         // 45b5. B368: `if (typeof x === 'object') x.m` where x:unknown → TS18047 possibly null
         checkUnknownTypeofObjectPossiblyNull()
+        // 45b6. B369: array-destructuring a never (`const b:null; …else{ [p]=b }`) → TS2488
+        checkNeverArrayDestructureFromNullElse()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -93863,6 +93865,86 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /**
+     * B369: TS2488 — array-destructuring a value narrowed to `never`. Shape:
+     * `const b: null; if (b === null) {} else { [pat] = b }`. The else of `b === null` on a
+     * `null`-typed `b` is `never`, and array-destructuring a `never` source has no iterator.
+     * FP-safe by exact shape (null-typed var + `=== null` if/else + array-destructure of the
+     * SAME var in the else). strictNullChecks-gated (the never narrowing is strict-mode).
+     */
+    private fun checkNeverArrayDestructureFromNullElse() {
+        if (!strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            scanNeverDestructure(result.sourceFile.statements, result.sourceFile.text, fileName, emptySet())
+        }
+    }
+
+    private fun nullTypedVarNames(stmts: List<Statement>): Set<String> {
+        val s = HashSet<String>()
+        for (st in stmts) if (st is VariableStatement) for (d in st.declarationList.declarations) {
+            val n = d.name as? Identifier ?: continue
+            val t = d.type ?: continue
+            val isNull = (t is KeywordTypeNode && t.kind == SyntaxKind.NullKeyword) ||
+                (t is LiteralType && t.literal.kind == SyntaxKind.NullKeyword)
+            if (isNull) s.add(n.text)
+        }
+        return s
+    }
+
+    private fun scanNeverDestructure(
+        stmts: List<Statement>, source: String, fileName: String, nullVars: Set<String>,
+    ) {
+        val locals = nullVars + nullTypedVarNames(stmts)
+        for (s in stmts) {
+            when (s) {
+                is IfStatement -> {
+                    val cond = s.expression
+                    val elseBlock = s.elseStatement as? Block
+                    if (elseBlock != null && cond is BinaryExpression &&
+                        cond.operator == SyntaxKind.EqualsEqualsEquals &&
+                        ((cond.right as? Identifier)?.text == "null" || cond.right.kind == SyntaxKind.NullKeyword)) {
+                        val name = (cond.left as? Identifier)?.text
+                        if (name != null && name in locals) {
+                            for (st in elseBlock.statements) {
+                                val be = (st as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                                if (be.operator != SyntaxKind.Equals) continue
+                                val lhs = be.left as? ArrayLiteralExpression ?: continue
+                                if ((be.right as? Identifier)?.text != name) continue
+                                val len = arrayPatternSpanLen(lhs.pos, source)
+                                val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type 'never' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                                    category = DiagnosticCategory.Error, code = 2488,
+                                    fileName = fileName, line = line, character = ch,
+                                    start = lhs.pos, length = len,
+                                ))
+                            }
+                        }
+                    }
+                    (s.thenStatement as? Block)?.let { scanNeverDestructure(it.statements, source, fileName, locals) }
+                    elseBlock?.let { scanNeverDestructure(it.statements, source, fileName, locals) }
+                }
+                is FunctionDeclaration -> s.body?.let { scanNeverDestructure(it.statements, source, fileName, locals) }
+                is Block -> scanNeverDestructure(s.statements, source, fileName, locals)
+                else -> {}
+            }
+        }
+    }
+
+    /** Length of a `[...]` array pattern starting at [start] (bracket-balanced). */
+    private fun arrayPatternSpanLen(start: Int, source: String): Int {
+        var i = start; var depth = 0
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '[') depth++
+            else if (c == ']') { depth--; if (depth == 0) { i++; break } }
+            i++
+        }
+        return (i - start).coerceAtLeast(1)
     }
 
     /**
