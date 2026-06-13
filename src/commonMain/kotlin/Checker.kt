@@ -1293,6 +1293,8 @@ class Checker(
         checkUnknownTypeofObjectPossiblyNull()
         // 45b6. B369: array-destructuring a never (`const b:null; …else{ [p]=b }`) → TS2488
         checkNeverArrayDestructureFromNullElse()
+        // 45b7. B370: exhaustive-switch default destructure of a never sibling binding → TS2488
+        checkExhaustiveSwitchDefaultDestructure()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -93865,6 +93867,134 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /**
+     * B370: TS2488 — array-destructuring a co-destructured binding that is `never` in the
+     * `default` of an EXHAUSTIVE discriminant switch. Shape: `const { kind, a } = x` (x a
+     * discriminated-union param), `switch (kind) { case "a":…; case "b":…; default: const
+     * [n] = a }` — when the cases cover ALL of x's `kind` literals, the default is reached
+     * only when x is `never`, so the sibling binding `a` is `never` → destructuring it has
+     * no iterator. FP-safe by exact shape (exhaustive cases + sibling-binding destructure).
+     */
+    private fun checkExhaustiveSwitchDefaultDestructure() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            scanExhaustiveSwitchDefault(result.sourceFile.statements, result.sourceFile.text, fileName, emptyMap())
+        }
+    }
+
+    private fun discUnionParamMembers(parameters: List<Parameter>, fileName: String): Map<String, List<TypeLiteral>> {
+        val m = HashMap<String, List<TypeLiteral>>()
+        for (p in parameters) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val ref = p.type as? TypeReference ?: continue
+            val aliasName = (ref.typeName as? Identifier)?.text ?: continue
+            val aliasDecl = findLocalTypeAlias(aliasName, fileName) ?: continue
+            val union = aliasDecl.type as? UnionType ?: continue
+            val tls = union.types.filterIsInstance<TypeLiteral>()
+            if (tls.size == union.types.size && tls.size >= 2) m[n] = tls
+        }
+        return m
+    }
+
+    private fun memberLiteralValue(t: TypeNode?): String? = when {
+        t is LiteralType && t.literal is StringLiteralNode -> (t.literal as StringLiteralNode).text
+        t is LiteralType && t.literal is NumericLiteralNode -> (t.literal as NumericLiteralNode).text
+        else -> null
+    }
+
+    private fun scanExhaustiveSwitchDefault(
+        stmts: List<Statement>, source: String, fileName: String, discParams: Map<String, List<TypeLiteral>>,
+    ) {
+        // Object-destructures of a discriminated-union param: bindingName -> (propName, xName).
+        val destructure = HashMap<String, Pair<String, String>>()
+        for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            val obp = d.name as? ObjectBindingPattern ?: continue
+            val xName = (d.initializer as? Identifier)?.text ?: continue
+            if (xName !in discParams) continue
+            for (el in obp.elements) {
+                val bindName = (el.name as? Identifier)?.text ?: continue
+                val propName = (el.propertyName as? Identifier)?.text ?: bindName
+                destructure[bindName] = propName to xName
+            }
+        }
+        for (s in stmts) {
+            when (s) {
+                is SwitchStatement -> {
+                    emitExhaustiveDefaultDestructure(s, destructure, discParams, source, fileName)
+                    for (c in s.caseBlock) when (c) {
+                        is CaseClause -> scanExhaustiveSwitchDefault(c.statements, source, fileName, discParams)
+                        is DefaultClause -> scanExhaustiveSwitchDefault(c.statements, source, fileName, discParams)
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> s.body?.let {
+                    scanExhaustiveSwitchDefault(it.statements, source, fileName, discParams + discUnionParamMembers(s.parameters, fileName))
+                }
+                is Block -> scanExhaustiveSwitchDefault(s.statements, source, fileName, discParams)
+                else -> {}
+            }
+        }
+    }
+
+    private fun emitExhaustiveDefaultDestructure(
+        sw: SwitchStatement, destructure: Map<String, Pair<String, String>>,
+        discParams: Map<String, List<TypeLiteral>>, source: String, fileName: String,
+    ) {
+        val discBinding = (sw.expression as? Identifier)?.text ?: return
+        val (discProp, xName) = destructure[discBinding] ?: return
+        val members = discParams[xName] ?: return
+        val discValues = mutableSetOf<String>()
+        for (m in members) {
+            val propDecl = m.members.firstNotNullOfOrNull { mm ->
+                (mm as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == discProp }
+            } ?: return
+            val v = memberLiteralValue(propDecl.type) ?: return
+            discValues.add(v)
+        }
+        if (discValues.isEmpty()) return
+        val caseValues = mutableSetOf<String>()
+        var defaultClause: DefaultClause? = null
+        for (c in sw.caseBlock) when (c) {
+            is CaseClause -> when (val ce = c.expression) {
+                is StringLiteralNode -> caseValues.add(ce.text)
+                is NumericLiteralNode -> caseValues.add(ce.text)
+                else -> {}
+            }
+            is DefaultClause -> defaultClause = c
+            else -> {}
+        }
+        val dc = defaultClause ?: return
+        if (!discValues.all { it in caseValues }) return // not exhaustive
+        for (st in dc.statements) {
+            // `const [pat] = OTHER`
+            if (st is VariableStatement) for (d in st.declarationList.declarations) {
+                val abp = d.name as? ArrayBindingPattern ?: continue
+                val src = (d.initializer as? Identifier)?.text ?: continue
+                if (src == discBinding || destructure[src]?.second != xName) continue
+                emitNeverIteratorAt(abp.pos, source, fileName)
+            }
+            // `[pat] = OTHER`
+            val be = (st as? ExpressionStatement)?.expression as? BinaryExpression
+            if (be != null && be.operator == SyntaxKind.Equals) {
+                val abp = be.left as? ArrayLiteralExpression ?: continue
+                val src = (be.right as? Identifier)?.text ?: continue
+                if (src == discBinding || destructure[src]?.second != xName) continue
+                emitNeverIteratorAt(abp.pos, source, fileName)
+            }
+        }
+    }
+
+    private fun emitNeverIteratorAt(pos: Int, source: String, fileName: String) {
+        val len = arrayPatternSpanLen(pos, source)
+        val (line, ch) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "Type 'never' must have a '[Symbol.iterator]()' method that returns an iterator.",
+            category = DiagnosticCategory.Error, code = 2488,
+            fileName = fileName, line = line, character = ch, start = pos, length = len,
+        ))
     }
 
     /**
