@@ -1285,6 +1285,8 @@ class Checker(
         checkComputedPropertyNameLiteral()
         // 45b''. B364: function-local call-arg discriminated-union element mismatch (TS2820/2322)
         checkLocalCallDiscriminantArgs()
+        // 45b'''. B365: calling a construct-signature-only value (TS2348)
+        checkConstructSigOnlyCalls()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -93771,6 +93773,138 @@ interface DataView {
         val u = (try { getTypeFromTypeNode(body) } catch (_: StackOverflowError) { return null })
             as? Type.Union ?: return null
         return u to aliasName
+    }
+
+    /**
+     * B365: TS2348 — calling a value typed as a construct-signature-ONLY type (a
+     * `new (...) => X` ConstructorType, or an interface with only construct signatures).
+     * Shape: `var v1!: { [index: string]: new (arg: T) => Date }; var v2 = v1['k']; v2(args);`.
+     * `v2`'s inferred type (the index-sig value) has only construct signatures, so a plain
+     * call is invalid → "Value of type 'new (arg: T) => Date' is not callable. Did you mean
+     * to include 'new'?". The display preserves the generic `T` (the type engine would
+     * resolve the function-local `T` to errorType → 'any'), so it is taken from the SOURCE
+     * slice of the value-type node. `new v2(args)` (NewExpression) is correctly NOT flagged.
+     */
+    private fun checkConstructSigOnlyCalls() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            scanConstructSigOnlyCalls(result.sourceFile.statements, result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun scanConstructSigOnlyCalls(stmts: List<Statement>, source: String, fileName: String) {
+        // 1. local var annotations (TypeLiteral with a string index sig).
+        val annotatedVars = HashMap<String, TypeNode>()
+        for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            val n = d.name as? Identifier ?: continue
+            d.type?.let { annotatedVars[n.text] = it }
+        }
+        // 2. `var V2 = V1[...]` where V1's index-sig value is construct-sig-only → (display).
+        val ctorOnlyVars = HashMap<String, String>()
+        for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            val n = d.name as? Identifier ?: continue
+            val init = d.initializer as? ElementAccessExpression ?: continue
+            val recv = init.expression as? Identifier ?: continue
+            val tl = annotatedVars[recv.text] as? TypeLiteral ?: continue
+            val idxSig = tl.members.firstOrNull { it is IndexSignature } as? IndexSignature ?: continue
+            val valueNode = idxSig.type ?: continue
+            if (!isConstructSigOnlyNode(valueNode, fileName)) continue
+            ctorOnlyVars[n.text] = indexSigValueTypeText(valueNode.pos, source)
+        }
+        // 3. emit TS2348 for plain CALLS of those vars (NewExpression is fine).
+        fun checkCall(call: CallExpression) {
+            val callee = call.expression as? Identifier ?: return
+            val disp = ctorOnlyVars[callee.text] ?: return
+            val start = callee.pos
+            val len = callExprSpanLen(call, source)
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Value of type '$disp' is not callable. Did you mean to include 'new'?",
+                category = DiagnosticCategory.Error, code = 2348,
+                fileName = fileName, line = line, character = ch,
+                start = start, length = len,
+            ))
+        }
+        for (s in stmts) {
+            when (s) {
+                is ExpressionStatement -> (s.expression as? CallExpression)?.let { checkCall(it) }
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    (d.initializer as? CallExpression)?.let { checkCall(it) }
+                }
+                is ReturnStatement -> (s.expression as? CallExpression)?.let { checkCall(it) }
+                is FunctionDeclaration -> s.body?.let { scanConstructSigOnlyCalls(it.statements, source, fileName) }
+                is Block -> scanConstructSigOnlyCalls(s.statements, source, fileName)
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scanConstructSigOnlyCalls(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    /** A construct-signature-ONLY type node: a `new(...)=>X` or an interface with only `new` members. */
+    private fun isConstructSigOnlyNode(node: TypeNode, fileName: String): Boolean {
+        if (node is ConstructorType) return true
+        if (node is TypeReference) {
+            val name = (node.typeName as? Identifier)?.text ?: return false
+            val iface = findInterfaceDecl(name, fileName) ?: return false
+            if (iface.members.isEmpty()) return false
+            return iface.members.all { it is MethodDeclaration && (it.name as? Identifier)?.text == "new" }
+        }
+        return false
+    }
+
+    /** Source text of a type node beginning at [start], extracted by `(){}[]<>`-balanced scan. */
+    private fun indexSigValueTypeText(start: Int, source: String): String {
+        var i = start
+        while (i < source.length && source[i].isWhitespace()) i++
+        val s = i
+        var depth = 0
+        while (i < source.length) {
+            when (val c = source[i]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (c == '}' && depth == 0) break else depth--
+                '<' -> depth++
+                '>' -> if (i > 0 && source[i - 1] == '=') { /* `=>` arrow, not a generic close */ } else depth--
+                ';', ',' -> if (depth == 0) break
+            }
+            i++
+        }
+        return source.substring(s, i).trimEnd()
+    }
+
+    /** Span length of a call expression `callee(args)` from the callee start to past the `)`. */
+    private fun callExprSpanLen(call: CallExpression, source: String): Int {
+        val start = call.expression.pos
+        var i = start
+        while (i < source.length && source[i] != '(') i++
+        var depth = 0
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '(') depth++
+            else if (c == ')') { depth--; if (depth == 0) { i++; break } }
+            i++
+        }
+        return (i - start).coerceAtLeast(1)
+    }
+
+    /** DFS the file for an `interface <name>` declaration (top-level or function/block-local). */
+    private fun findInterfaceDecl(name: String, fileName: String): InterfaceDeclaration? {
+        val r = fileResults[fileName] ?: return null
+        var found: InterfaceDeclaration? = null
+        fun scan(stmts: List<Statement>) {
+            for (s in stmts) {
+                if (found != null) return
+                when (s) {
+                    is InterfaceDeclaration -> if (s.name.text == name) { found = s; return }
+                    is FunctionDeclaration -> s.body?.let { scan(it.statements) }
+                    is Block -> scan(s.statements)
+                    is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                    else -> {}
+                }
+            }
+        }
+        scan(r.sourceFile.statements)
+        return found
     }
 
     /**
