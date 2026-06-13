@@ -34498,6 +34498,7 @@ interface DataView {
                 }
                 // Also scan nested `!x` (always-falsy operand) inside the condition.
                 scanForNotFalsy(stmt.expression, source, fileName)
+                checkVoidConditionTruthiness(stmt.expression, source, fileName)
                 checkEnumReferenceFalsyCondition(stmt.expression, source, fileName)
                 // Walk the if-else chain: only flag always-truthy conditions that are
                 // UNREACHABLE because a preceding branch was always-truthy
@@ -34509,6 +34510,7 @@ interface DataView {
                         emitTS2873(elseStmt.expression, source, fileName)
                     }
                     scanForNotFalsy(elseStmt.expression, source, fileName)
+                    checkVoidConditionTruthiness(elseStmt.expression, source, fileName)
                     if (prevTruthy) {
                         checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
                     }
@@ -34533,17 +34535,19 @@ interface DataView {
                 }
             }
             is ForStatement -> {
-                stmt.condition?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+                stmt.condition?.let { checkAlwaysTruthyInExpr(it, source, fileName); checkVoidConditionTruthiness(it, source, fileName) }
                 checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             }
             is ForInStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is ForOfStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             is WhileStatement -> {
                 scanForNotFalsy(stmt.expression, source, fileName)
+                checkVoidConditionTruthiness(stmt.expression, source, fileName)
                 checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             }
             is DoStatement -> {
                 scanForNotFalsy(stmt.expression, source, fileName)
+                checkVoidConditionTruthiness(stmt.expression, source, fileName)
                 checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
             }
             is SwitchStatement -> for (c in stmt.caseBlock) {
@@ -34561,6 +34565,29 @@ interface DataView {
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             else -> {}
         }
+    }
+
+    /** B378: TS1345 — a condition expression of type `void` (a void-returning CALL used in a
+     *  truthiness position) cannot be tested for truthiness (typePredicateInLoop:
+     *  `if (otherFunc(...))` where otherFunc returns void). Gated to CALL expressions whose
+     *  resolved type is exactly the `void` intrinsic, so our incomplete inference (which
+     *  defaults un-analysable returns to `any`, not `void`) cannot FP. `void x` unary
+     *  conditions are owned by the TS2873 always-falsy path — no overlap (a call isn't falsy). */
+    private fun checkVoidConditionTruthiness(cond: Expression, source: String, fileName: String) {
+        val e = unwrapParensExpr(cond)
+        if (e !is CallExpression) return
+        val t = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { return }
+        if (t !== voidType) return
+        val start = e.pos
+        val length = expressionTrueEnd(e) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "An expression of type 'void' cannot be tested for truthiness.",
+            category = DiagnosticCategory.Error, code = 1345,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
     }
 
     private fun checkAlwaysTruthyInExpr(expr: Expression, source: String, fileName: String) {
@@ -90870,6 +90897,56 @@ interface DataView {
         }
     }
 
+    /**
+     * B378: if [cond] is a user-defined type-guard call `G(…X…)` — G's return type is a
+     * non-asserts `p is U` predicate and the call argument at the narrowed parameter's
+     * position is a bare identifier X — returns (X, U-TypeNode). Used by the IfStatement
+     * branch to narrow X to U inside the then-branch so the call-arg checker stops FP'ing on
+     * the narrowed value (typePredicateInLoop: `if (guard(arg)) { … otherFunc(ITEM, arg) }`
+     * where `guard: (arg: Type) => arg is TypeExt` and `otherFunc`'s 2nd param wants TypeExt).
+     * FP-safe: narrowing X to the guard's (sub)type only ever makes MORE arg checks pass.
+     */
+    private fun resolveUserTypeGuardNarrowing(cond: Expression): Pair<String, TypeNode>? {
+        val call = unwrapParensExpr(cond) as? CallExpression ?: return null
+        val calleeName = (unwrapParensExpr(call.expression) as? Identifier)?.text ?: return null
+        val sym = currentFileLocals?.get(calleeName) ?: globals[calleeName] ?: return null
+        var predicate: TypePredicate? = null
+        var params: List<Parameter>? = null
+        for (d in sym.declarations) {
+            when (d) {
+                is FunctionDeclaration -> (d.type as? TypePredicate)?.let { predicate = it; params = d.parameters }
+                is VariableDeclaration -> {
+                    val init = d.initializer
+                    val (ty, ps) = when (init) {
+                        is ArrowFunction -> init.type to init.parameters
+                        is FunctionExpression -> init.type to init.parameters
+                        else -> null to null
+                    }
+                    (ty as? TypePredicate)?.let { predicate = it; params = ps }
+                }
+                else -> {}
+            }
+            if (predicate != null) break
+        }
+        val pred = predicate ?: return null
+        if (pred.assertsModifier) return null
+        val uNode = pred.type ?: return null
+        // The parser stores a predicate's parameter name as a TypeReference wrapping the
+        // identifier (e.g. `arg is TypeExt` → parameterName = TypeReference(arg)), not a bare
+        // Identifier.
+        val pName = when (val pn = pred.parameterName) {
+            is Identifier -> pn.text
+            is TypeReference -> (pn.typeName as? Identifier)?.text
+            else -> null
+        } ?: return null
+        val ps = params ?: return null
+        val idx = ps.indexOfFirst { (it.name as? Identifier)?.text == pName }
+        if (idx < 0) return null
+        val argAtIdx = call.arguments.getOrNull(idx) ?: return null
+        val varName = (unwrapParensExpr(argAtIdx) as? Identifier)?.text ?: return null
+        return varName to uNode
+    }
+
     private fun checkCallTypesInStatement(stmt: Statement, source: String, fileName: String) {
         if (++callTypeCheckDepth > maxCheckDepth) { callTypeCheckDepth--; return }
         try {
@@ -90916,7 +90993,22 @@ interface DataView {
             is ReturnStatement -> stmt.expression?.let { checkCallTypesInExpr(it, source, fileName) }
             is IfStatement -> {
                 checkCallTypesInExpr(stmt.expression, source, fileName)
-                checkCallTypesInStatement(stmt.thenStatement, source, fileName)
+                // B378: narrow X to U inside the then-branch when the condition is a
+                // user-defined type-guard `G(X)` (G: … => X is U) — so the call-arg checker
+                // sees the narrowed type and doesn't FP (typePredicateInLoop).
+                val narrow = resolveUserTypeGuardNarrowing(stmt.expression)
+                val uType = narrow?.let { (_, uNode) ->
+                    try { getTypeFromTypeNode(uNode) } catch (_: StackOverflowError) { null }
+                }
+                if (narrow != null && uType != null && uType !== anyType && uType !== errorType) {
+                    val vn = narrow.first
+                    val saved = currentLocalTypes[vn]
+                    currentLocalTypes[vn] = uType
+                    try { checkCallTypesInStatement(stmt.thenStatement, source, fileName) }
+                    finally { if (saved != null) currentLocalTypes[vn] = saved else currentLocalTypes.remove(vn) }
+                } else {
+                    checkCallTypesInStatement(stmt.thenStatement, source, fileName)
+                }
                 stmt.elseStatement?.let { checkCallTypesInStatement(it, source, fileName) }
             }
             is Block -> checkCallTypesInStatements(stmt.statements, source, fileName)
