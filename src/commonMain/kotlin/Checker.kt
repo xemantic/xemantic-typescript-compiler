@@ -74045,7 +74045,19 @@ interface DataView {
      * switch subject doesn't match [name] or no usable case literals are found.
      */
     private fun narrowBySwitchClause(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
-        val subjectPath = getReferencePath(flowNode.switchStatement.expression) ?: return null
+        val switchExpr = flowNode.switchStatement.expression
+        // B411: `switch (true) { case <cond>: ... }` — each case expression is a
+        // CONDITION (not a discriminant literal). The matched clause narrows [name]
+        // positively by its case expression; every CASE clause tested before it
+        // narrows [name] negatively (those cases evaluated false to reach here). A
+        // `default` clause matches iff NO case matched → narrow negatively by every
+        // case clause. Mirrors tsc's narrowTypeBySwitchOnTrue. Fallthrough between
+        // clause bodies is already modeled by the FlowGraphBuilder's BranchLabel
+        // merges, so this only needs the per-clause direct-match narrowing.
+        if (switchExpr is Identifier && switchExpr.text == "true") {
+            return narrowBySwitchOnTrue(t, flowNode, name)
+        }
+        val subjectPath = getReferencePath(switchExpr) ?: return null
         // round 43 iter10: discriminant-parent narrowing — `switch (x.kind) { case "a": ... }`
         // narrows x (the receiver) by filtering union members whose `kind` property is
         // assignable from the case literal.
@@ -74100,6 +74112,41 @@ interface DataView {
             filtered.size == t.types.size -> null
             else -> getUnionType(filtered)
         }
+    }
+
+    /**
+     * B411: narrowing for a single `switch (true)` clause. [flowNode] represents
+     * a DIRECT match of the clause at index [flowNode.clauseStart]. To reach it via
+     * direct match, all earlier CASE clauses evaluated false; a `default` clause is
+     * reached iff every case clause evaluated false. Each clause expression is fed
+     * to [applyConditionNarrowing] (handles `===`/`!==` discriminants, `instanceof`,
+     * `in`, truthiness, `&&`/`||`). Returns null when nothing narrowed.
+     */
+    private fun narrowBySwitchOnTrue(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
+        val clauses = flowNode.switchStatement.caseBlock
+        val matched = clauses.getOrNull(flowNode.clauseStart) ?: return null
+        var narrowed = t
+        // Every CASE clause appearing before the matched clause must be false.
+        for (i in 0 until flowNode.clauseStart) {
+            val prior = clauses[i] as? CaseClause ?: continue
+            narrowed = applyConditionNarrowing(narrowed, prior.expression, isTrue = false, name)
+        }
+        when (matched) {
+            is CaseClause -> {
+                narrowed = applyConditionNarrowing(narrowed, matched.expression, isTrue = true, name)
+            }
+            is DefaultClause -> {
+                // `default` matches iff no case matched — narrow negatively by EVERY
+                // case clause (including any declared after the default in source order).
+                for ((i, c) in clauses.withIndex()) {
+                    if (i == flowNode.clauseStart) continue
+                    val cc = c as? CaseClause ?: continue
+                    narrowed = applyConditionNarrowing(narrowed, cc.expression, isTrue = false, name)
+                }
+            }
+            else -> return null
+        }
+        return if (narrowed === t) null else narrowed
     }
 
     /**
