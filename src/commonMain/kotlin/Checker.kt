@@ -91401,6 +91401,14 @@ interface DataView {
                     }
                     val baseSig = baseResolution.first
                     val baseInstanceType = baseResolution.second
+                    // Walk each heritage base EXPRESSION for call/new arg checking — a base like
+                    // `class C extends getLocalClass<LocalInterface>(undefined)` is itself a call
+                    // expression whose argument must be checked against the (explicit-type-arg-
+                    // instantiated) signature (declarationEmitExpressionInExtends3 → TS2345). The
+                    // class type-param scope is already active here.
+                    stmt.heritageClauses?.forEach { hc ->
+                        for (type in hc.types) checkCallTypesInExpr(type.expression, source, fileName)
+                    }
                     for (member in stmt.members) {
                         when (member) {
                             is MethodDeclaration -> {
