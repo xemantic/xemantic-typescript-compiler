@@ -499,6 +499,14 @@ class Checker(
      *  [typeToStringInProgress] guards against recursive alias chains (e.g.
      *  `FindConditions<T[P]>` self-reference) when rendering args. */
     private val aliasDisplayMap = mutableMapOf<Int, Pair<String, List<Type>>>()
+    /** B416: STRUCTURAL union-alias display — keyed by the SORTED member-id list of a
+     *  NON-generic union type alias's resolved union, mapping to the alias name. A
+     *  freshly-CONSTRUCTED union (e.g. flow narrowing / switch fallthrough reconstructing
+     *  the full alias union) has a different `Type.id` than the alias's union, so the
+     *  id-keyed [aliasDisplayMap] misses; this matches by member set so the reconstructed
+     *  FULL union still displays as the alias (`MyType`, not `A | B | C`). A strict SUBSET
+     *  (`A | B`) has a different member set → no match → unfolds, matching tsc. */
+    private val unionAliasStructural = mutableMapOf<List<Int>, String>()
     private val typeToStringInProgress = mutableSetOf<Int>()
 
     /** B65.1: Source-text display for `TemplateLiteralType` resolutions. Each
@@ -72398,6 +72406,27 @@ interface DataView {
                     }
                     aliasDisplayMap[resolved.id] = segments.joinToString(".") to emptyList()
                 }
+                // B416: register a NON-generic union alias structurally (by member-id set)
+                // so a reconstructed full union (flow narrowing / switch fallthrough)
+                // displays as the alias name. First-write-wins (don't clobber a prior alias
+                // for the same member set). Skip if any member is a shared singleton id.
+                if (decl != null && decl.typeParameters.isNullOrEmpty() && resolved is Type.Union) {
+                    val key = resolved.types.map { it.id }.sorted()
+                    // FP firewall: only register when EVERY member is a NAMED object type
+                    // (interface/class — stable id, a real declared shape). Primitive /
+                    // literal / anonymous members (`string | number`, `"a" | "b"`) share
+                    // singleton-ish ids across the corpus and would over-match inline unions.
+                    val allNamed = resolved.types.all { it is Type.Object && it.symbol != null }
+                    if (allNamed && key.size >= 2 && key !in unionAliasStructural) {
+                        val segments = mutableListOf(symbol.name)
+                        var cur = symbol.parent
+                        while (cur != null && cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+                            segments.add(0, cur.name)
+                            cur = cur.parent
+                        }
+                        unionAliasStructural[key] = segments.joinToString(".")
+                    }
+                }
                 resolved
             }
             flags.hasAny(SymbolFlags.Enum) -> {
@@ -74528,7 +74557,17 @@ interface DataView {
     private fun narrowByDiscriminantProperty(
         t: Type, expr: BinaryExpression, equal: Boolean, name: String,
     ): Type? {
-        if (t !is Type.Union) return null
+        // B416: a SINGLE discriminated member (non-Union) can still narrow to `never`
+        // when its own literal discriminant contradicts the comparison — this is what
+        // lets sequential negative narrowing reach the exhaustive `never` once a union
+        // has collapsed to one member (the `switch(true) { default: const n: never = x }`
+        // exhaustiveness case + the fallthrough cascade). tsc narrows a single object
+        // whose `kind` literal can't match the tested literal to never.
+        val members: List<Type> = when (t) {
+            is Type.Union -> t.types
+            is Type.Object -> listOf(t)
+            else -> return null
+        }
         val propAccess: PropertyAccessExpression
         val literalSide: Expression
         when {
@@ -74545,7 +74584,12 @@ interface DataView {
         val propName = (propAccess.name as? Identifier)?.text ?: return null
         if (propName.isEmpty()) return null
         val literalType = literalTypeOfExpression(literalSide) ?: return null
-        val filtered = t.types.filter { member ->
+        // For the single-member case, only narrow-to-never when the member GENUINELY
+        // carried the discriminant as a literal — otherwise fall through (return null)
+        // so we don't short-circuit narrowByEquality's direct-literal path or invent
+        // narrowing on objects that don't model the discriminant.
+        var singleHadDiscriminant = false
+        val filtered = members.filter { member ->
             val apparent = try { getApparentType(member) } catch (_: StackOverflowError) { return@filter true }
             if (apparent !is Type.Object) return@filter true
             val propSym = try { getPropertyOfType(apparent, propName) } catch (_: StackOverflowError) { return@filter true }
@@ -74553,10 +74597,18 @@ interface DataView {
             val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return@filter true }
             if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
             if (!isLiteralKindForDiscriminant(propType)) return@filter true
+            singleHadDiscriminant = true
             val matches = literalsEqualForDiscriminant(propType, literalType)
             if (equal) matches else !matches
         }
-        return getUnionType(filtered)
+        return when (t) {
+            is Type.Union -> getUnionType(filtered)
+            else -> when {
+                !singleHadDiscriminant -> null
+                filtered.isEmpty() -> neverType
+                else -> t
+            }
+        }
     }
 
     private fun isDiscriminantAccessOf(expr: Expression, name: String): Boolean {
@@ -77919,6 +77971,11 @@ interface DataView {
                 }
             }
             is Type.Union -> {
+                // B416: a reconstructed full union that matches a non-generic union alias's
+                // member set displays as the alias name (`MyType`, not `A | B | C`).
+                if (type.id !in typeToStringInProgress) {
+                    unionAliasStructural[type.types.map { it.id }.sorted()]?.let { return it }
+                }
                 // TypeScript convention: nullish (null/undefined/void) members render LAST,
                 // function/constructor-typed members render parenthesized so the `|` is unambiguous.
                 fun nullishRank(t: Type): Int = when {

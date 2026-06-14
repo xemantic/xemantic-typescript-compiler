@@ -535,6 +535,13 @@ class FlowGraphBuilder {
         for ((i, clause) in clauses.withIndex()) {
             when (clause) {
                 is CaseClause -> {
+                    // A switch's case EXPRESSIONS are all evaluated at the switch head
+                    // (before any body runs), so bind the expression at `preSwitch` —
+                    // NOT at `currentFlow`, which after a prior clause body that ended in
+                    // return/break is unreachable (`never`). Binding a discriminant read
+                    // (`switch (true) { case x.kind === "b": }`) at that unreachable flow
+                    // FP-emits TS2339-on-never on the case expression.
+                    currentFlow = preSwitch
                     bindExpression(clause.expression)
                     // Entry flow into this clause: previous fallthrough OR
                     // a switch-clause flow predicated on the case expression
