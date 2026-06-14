@@ -109657,7 +109657,11 @@ interface DataView {
         // Skip when either side is a non-wrapper Object type (class, interface, etc.)
         // TypeScript handles these via other checks (TS2629 etc.), not arithmetic checks.
         // Only wrapper types (Number, Boolean, String) get arithmetic errors.
-        if (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType)) return
+        // EXCEPTION: relational comparison (`<`/`>`/`<=`/`>=`) of a non-comparable
+        // object/function/typeof-class operand IS a TS2365 in tsc (e.g. the
+        // `f(g < A, B > 7)` grammar-ambiguity parse where the args are comparisons).
+        val objComparison = isComparison && (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType))
+        if (!isComparison && (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType))) return
 
         val leftOk = isValidArithmeticOperand(leftType, isPlus || isPlusEquals)
         val rightOk = isValidArithmeticOperand(rightType, isPlus || isPlusEquals)
@@ -109765,7 +109769,16 @@ interface DataView {
             val leftComparable = isComparableType(leftType)
             val rightComparable = isComparableType(rightType)
             if (!leftComparable || !rightComparable) {
-                emitTs2365(expr, op, leftType, rightType, source, fileName)
+                if (objComparison) {
+                    // For an object/function operand, display the operands via
+                    // typeToString (no literal-text override) — tsc widens a bare
+                    // literal operand here (`B > 7` shows 'typeof B' and 'number').
+                    emitTs2365(expr, op, leftType, rightType, source, fileName,
+                        objComparisonOperandDisplay(expr.left, leftType),
+                        objComparisonOperandDisplay(expr.right, rightType))
+                } else {
+                    emitTs2365(expr, op, leftType, rightType, source, fileName)
+                }
                 return
             }
             // Both individually comparable — but `<`/`<=`/`>`/`>=` additionally
@@ -109969,6 +109982,18 @@ interface DataView {
 
     /** Check if type is valid for comparison operators. */
     /** Check if type is a non-wrapper Object type (user class/interface, not Number/Boolean/String). */
+    /** TS2365 operand display for a relational comparison involving an object/function
+     *  operand. A bare class identifier used in value position is `typeof X` (its
+     *  constructor type) — getTypeOfExpression yields the instance type, so render the
+     *  `typeof` form explicitly. All other operands display via typeToString (which
+     *  already widens a bare literal to its base, e.g. `7` → `number`). */
+    private fun objComparisonOperandDisplay(operand: Expression, type: Type): String {
+        if (operand is Identifier && (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Class) == true) {
+            return "typeof ${operand.text}"
+        }
+        return typeToString(type)
+    }
+
     private fun isNonWrapperObjectType(type: Type): Boolean {
         if (type !is Type.Object) return false
         val name = type.symbol?.name ?: return true // anonymous objects are non-wrapper
