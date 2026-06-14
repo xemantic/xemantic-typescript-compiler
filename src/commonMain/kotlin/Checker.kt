@@ -111576,8 +111576,54 @@ interface DataView {
             is IntersectionType -> t.types.forEach { typeAsNsTypeNode(it, nsChain, result, source, fileName) }
             is ArrayType -> typeAsNsTypeNode(t.elementType, nsChain, result, source, fileName)
             is ParenthesizedType -> typeAsNsTypeNode(t.type, nsChain, result, source, fileName)
+            is IndexedAccessType -> {
+                // `Enum["Member"]` / `AliasToEnum["Member"]` in TYPE position → TS2339: an
+                // enum member NAME is never a property of the enum VALUE type (members live on
+                // the `typeof Enum` object side). FP-safe: a member-name index of an enum is
+                // always a tsc error; `type C = typeof Enum` aliases are excluded (their body is
+                // a TypeQuery, not a TypeReference, so they keep the member properties).
+                val objName = ((t.objectType as? TypeReference)?.typeName as? Identifier)?.text
+                val idxLit = (t.indexType as? LiteralType)?.literal as? StringLiteralNode
+                if (objName != null && idxLit != null) {
+                    val enumSym = resolveTypeRefToEnum(objName, nsChain, result)
+                    if (enumSym != null && enumSym.exports?.containsKey(idxLit.text) == true) {
+                        val (line, ch) = getLineAndCharacterOfPosition(source, idxLit.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '${idxLit.text}' does not exist on type '${enumSym.name}'.",
+                            category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                            line = line, character = ch, start = idxLit.pos, length = idxLit.text.length + 2,
+                        ))
+                    }
+                }
+                typeAsNsTypeNode(t.objectType, nsChain, result, source, fileName)
+                typeAsNsTypeNode(t.indexType, nsChain, result, source, fileName)
+            }
             else -> {}
         }
+    }
+
+    /** Resolve a bare name through the enclosing-namespace chain, then globals/file-locals. */
+    private fun lookupTypeAsNsName(name: String, nsChain: List<Symbol>, result: BinderResult): Symbol? {
+        for (ns in nsChain) ns.exports?.get(name)?.let { return it }
+        return globals[name] ?: result.locals[name]
+    }
+
+    /** Resolve a type-name to an enum symbol, following one level of `type X = Enum` alias. */
+    private fun resolveTypeRefToEnum(name: String, nsChain: List<Symbol>, result: BinderResult): Symbol? {
+        fun lookup(n: String): Symbol? = lookupTypeAsNsName(n, nsChain, result)
+        val s = lookup(name) ?: return null
+        if (s.declarations.any { it is EnumDeclaration }) return s
+        if (s.flags.hasAny(SymbolFlags.TypeAlias)) {
+            // Only a plain `type C = Enum` (TypeReference body) aliases the enum value type;
+            // `type C = typeof Enum` (TypeQuery body) is the object side and keeps the members.
+            val decl = s.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+            val bn = ((decl?.type as? TypeReference)?.typeName as? Identifier)?.text
+            if (bn != null) {
+                val t = lookup(bn)
+                if (t != null && t.declarations.any { it is EnumDeclaration }) return t
+            }
+        }
+        return null
     }
 
     private fun isPureTypeSymbol(sym: Symbol): Boolean =
@@ -111601,6 +111647,23 @@ interface DataView {
         for (ns in nsChain) { ns.exports?.get(segs[0].text)?.let { sym = it; fromNsChain = true } ?: continue; break }
         if (sym == null) sym = globals[segs[0].text] ?: result.locals[segs[0].text]
         var s = sym ?: return
+        // `Enum.Member.X` (3+ segments) in TYPE position → TS2749: `Enum.Member` is a VALUE
+        // (the enum member literal), so accessing a further `.X` on it and using the result as a
+        // type is a value-used-as-type. `Enum.Member` alone (2 segs) is a legal literal type.
+        if (s.declarations.any { it is EnumDeclaration } && segs.size >= 3 &&
+            s.exports?.containsKey(segs[1].text) == true
+        ) {
+            val dotted = segs.joinToString(".") { it.text }
+            val start = segs[0].pos
+            val end = segs.last().let { it.pos + it.text.length }
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'$dotted' refers to a value, but is being used as a type here. Did you mean 'typeof $dotted'?",
+                category = DiagnosticCategory.Error, code = 2749, fileName = fileName,
+                line = line, character = ch, start = start, length = (end - start).coerceAtLeast(1),
+            ))
+            return
+        }
         for (i in 1 until segs.size) {
             if (isPureTypeSymbol(s)) {
                 val typeName = segs[i - 1].text
@@ -111609,9 +111672,25 @@ interface DataView {
                     // Leftmost is the type — gated to namespace-local leftmosts so we never
                     // double-emit with checkTypeNameResolved's top-level TS2702 path.
                     if (!fromNsChain) return
-                    val declType = try { getDeclaredTypeOfSymbol(s) } catch (_: Throwable) { return }
-                    if (declType === errorType) return
-                    val hasMember = try { getPropertyOfType(declType, member) != null } catch (_: Throwable) { return }
+                    val hasMember: Boolean = run {
+                        // `type C = typeof Enum` — the enum's members ARE properties of the object
+                        // side (the typeof resolver returns anyType for a namespace-local enum, so
+                        // getPropertyOfType would wrongly miss them and emit TS2702 not TS2713).
+                        if (s.flags.hasAny(SymbolFlags.TypeAlias)) {
+                            val aliasBody = (s.declarations.firstOrNull { it is TypeAliasDeclaration }
+                                as? TypeAliasDeclaration)?.type
+                            if (aliasBody is TypeQuery) {
+                                val en = (aliasBody.exprName as? Identifier)?.text
+                                val enumSym = en?.let { lookupTypeAsNsName(it, nsChain, result) }
+                                if (enumSym != null && enumSym.declarations.any { it is EnumDeclaration }) {
+                                    return@run enumSym.exports?.containsKey(member) == true
+                                }
+                            }
+                        }
+                        val declType = try { getDeclaredTypeOfSymbol(s) } catch (_: Throwable) { return }
+                        if (declType === errorType) return
+                        try { getPropertyOfType(declType, member) != null } catch (_: Throwable) { return }
+                    }
                     if (hasMember) {
                         emitTs2713(segs[0].pos, segs[i].pos + member.length, typeName, member, source, fileName)
                     } else {
