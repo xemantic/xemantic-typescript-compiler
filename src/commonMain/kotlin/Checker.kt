@@ -67157,9 +67157,10 @@ interface DataView {
             // ARRAY-literal property value (`b: [ {…} ]` vs `B[]`). Walk ONLY those
             // (arrayPropsOnly) so deep literal chains like a.b[0].c.d[0]… are checked
             // without double-emitting on the simple-prop paths.
+            var nestedMissingEmitted = false
             if (init is ObjectLiteralExpression && targetType is Type.Object &&
                 !(targetType is Type.Reference && targetType.target?.symbol?.name == "Array")) {
-                checkNestedObjLitPropTypes(init, targetType, source, fileName, arrayPropsOnly = true)
+                nestedMissingEmitted = checkNestedObjLitPropTypes(init, targetType, source, fileName, arrayPropsOnly = true)
             }
             // Class-Identifier-as-value with construct-sig target — `const foo: { new(): Foo } = Foo`.
             // canUseTypeEngine skips class-instance-vs-constructor comparisons, so this case
@@ -67556,7 +67557,10 @@ interface DataView {
             ) {
                 checkArrayLiteralElementsAgainstType(init, targetType, source, fileName, literalElementsOnly = true)
             }
-            if (canUse && !isAssignable) {
+            // B395: a nested object-literal value missing required props already emitted the
+            // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
+            // chain that would otherwise double-report the same `something.a.b.thing` failure.
+            if (canUse && !isAssignable && !nestedMissingEmitted) {
                 // B69.7: Widen literal source for display when target type doesn't
                 // contain literal members (mirrors B69.5 in checkAssignmentExpression).
                 // `var b: Boolean = true` displays as `Type 'boolean' is not
@@ -98704,10 +98708,26 @@ interface DataView {
             }
             val tgtMemberType = getTargetPropertyType(targetObj, propName) ?: continue
             if (tgtMemberType === anyType || tgtMemberType === errorType) continue
-            if (arrayPropsOnly && value !is ArrayLiteralExpression) continue
+            // B395: under arrayPropsOnly (direct object-literal init) skip only SIMPLE values
+            // (those are owned by emitPerPropertyMismatches); object-literal values are now
+            // descended for the nested missing-required-property check (TS2741/2739/2740).
+            if (arrayPropsOnly && value !is ArrayLiteralExpression && value !is ObjectLiteralExpression) continue
             if (value is ObjectLiteralExpression) {
                 val tgtObj = selectObjectConstituentForObjectLiteral(tgtMemberType) ?: continue
-                if (checkNestedObjLitPropTypes(value, tgtObj, source, fileName, viaUnion || tgtMemberType is Type.Union)) emitted = true
+                val childViaUnion = viaUnion || tgtMemberType is Type.Union
+                if (checkNestedObjLitPropTypes(value, tgtObj, source, fileName, childViaUnion, arrayPropsOnly)) emitted = true
+                // B395 (deeplyNestedAssignabilityIssue): a nested object-literal value missing
+                // a required property of its (non-union) target → TS2741/2739/2740 squiggling
+                // the property KEY, with TS2728 ('X is declared here') + TS6500 ('the expected
+                // type comes from property <key>…'). Only on a direct (non-union) path; the
+                // union-disambiguated case is owned by the union-excess walker.
+                if (!childViaUnion) {
+                    val keyLen = when (nameNode) {
+                        is StringLiteralNode -> (nameNode.rawText?.length ?: nameNode.text.length) + 2
+                        else -> propName.length
+                    }
+                    if (emitNestedMissingRequiredProps(value, tgtObj, source, fileName, nameNode.pos, keyLen, propName, targetObj)) emitted = true
+                }
             } else if (value is ArrayLiteralExpression) {
                 // B231: recurse into ARRAY-literal property values — `b: [ {…}, … ]` vs
                 // `B[]` checks each object-literal element against the array ELEMENT type,
@@ -98817,6 +98837,8 @@ interface DataView {
      *  [collectMissingProperties] (statics/prototype/optional-aware). */
     private fun emitNestedMissingRequiredProps(
         objLit: ObjectLiteralExpression, target: Type.Object, source: String, fileName: String,
+        keyPos: Int? = null, keyLen: Int = 0,
+        enclosingPropName: String? = null, enclosingTarget: Type.Object? = null,
     ): Boolean {
         if (objLit.properties.any { it is SpreadAssignment }) return false
         val srcType = try { getTypeOfObjectLiteral(objLit) } catch (_: StackOverflowError) { return false }
@@ -98825,19 +98847,36 @@ interface DataView {
         if (missing.isEmpty()) return false
         val displaySource = typeToString(srcType)
         val displayTarget = typeToString(target)
-        val end = if (objLit.closeBracePos > objLit.pos) objLit.closeBracePos + 1 else objLit.end
-        val length = (end - objLit.pos).coerceAtLeast(1)
-        val (line, character) = getLineAndCharacterOfPosition(source, objLit.pos)
+        // B395: squiggle the property KEY when provided (object-literal value missing props
+        // in a var-decl context: `thing: {}` → squiggle `thing`); otherwise the whole value
+        // object literal (the B231 array-element case).
+        val (start, length) = if (keyPos != null && keyLen > 0) {
+            keyPos to keyLen
+        } else {
+            val end = if (objLit.closeBracePos > objLit.pos) objLit.closeBracePos + 1 else objLit.end
+            objLit.pos to (end - objLit.pos).coerceAtLeast(1)
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
         val message = if (missing.size == 1) {
             "Property '${missing[0]}' is missing in type '$displaySource' but required in type '$displayTarget'."
         } else {
             formatTs2740Message(displaySource, displayTarget, missing)
         }
-        // TS2728 "'i' is declared here." related info for the single-missing case.
-        val related = if (missing.size == 1) {
-            target.members?.get(missing[0])?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                ?.let { listOf(it) } ?: emptyList()
-        } else emptyList()
+        // TS2728 "'i' is declared here." (single-missing) + B395 TS6500 "the expected type
+        // comes from property '<enclosingProp>'…" when the enclosing-property context is given.
+        val related = buildList {
+            if (missing.size == 1) {
+                target.members?.get(missing[0])?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { add(it) }
+            }
+            if (enclosingPropName != null && enclosingTarget != null) {
+                enclosingTarget.members?.get(enclosingPropName)?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { d ->
+                    add(d.copy(
+                        message = "The expected type comes from property '$enclosingPropName' which is declared here on type '${typeToString(enclosingTarget)}'",
+                        code = 6500,
+                    ))
+                }
+            }
+        }
         diagnostics.add(Diagnostic(
             message = message,
             category = DiagnosticCategory.Error,
@@ -98845,7 +98884,7 @@ interface DataView {
             fileName = fileName,
             line = line,
             character = character,
-            start = objLit.pos,
+            start = start,
             length = length,
             relatedInformation = related,
         ))
