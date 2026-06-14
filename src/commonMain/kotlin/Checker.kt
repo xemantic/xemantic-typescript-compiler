@@ -97928,10 +97928,52 @@ interface DataView {
         ))
     }
 
+    /** Resolve a bare value-position class name to its [ClassDeclaration], or null. */
+    private fun resolveClassDeclByName(name: String): ClassDeclaration? =
+        (currentFileLocals?.get(name) ?: globals[name])
+            ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+
+    /** Does [cls] declare a `private` instance member (nominal-brand)? */
+    private fun classHasPrivateMember(cls: ClassDeclaration): Boolean = cls.members.any { m ->
+        when (m) {
+            is PropertyDeclaration -> ModifierFlag.Private in m.modifiers
+            is MethodDeclaration -> ModifierFlag.Private in m.modifiers
+            else -> false
+        }
+    }
+
+    /**
+     * typeMatch1: `C == D` comparing two distinct class VALUES (their `typeof` static sides) where
+     * both classes carry a `private` instance member → nominal brands make the constructor return
+     * types non-comparable, so `typeof C` and `typeof D` have no overlap → TS2367. AST-gated and
+     * FP-safe: requires two distinct class identifiers each with a private member (`C == C` and
+     * structurally-overlapping classes are excluded).
+     */
+    private fun tryEmitClassValueNoOverlap(expr: BinaryExpression, source: String, fileName: String): Boolean {
+        val left = expr.left as? Identifier ?: return false
+        val right = expr.right as? Identifier ?: return false
+        val leftCls = resolveClassDeclByName(left.text) ?: return false
+        val rightCls = resolveClassDeclByName(right.text) ?: return false
+        if (leftCls === rightCls) return false
+        if (!classHasPrivateMember(leftCls) || !classHasPrivateMember(rightCls)) return false
+        val start = expr.pos
+        val length = expressionTrueEnd(expr.right) - start
+        if (length <= 0) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This comparison appears to be unintentional because the types " +
+                "'typeof ${left.text}' and 'typeof ${right.text}' have no overlap.",
+            category = DiagnosticCategory.Error, code = 2367,
+            fileName = fileName, line = line, character = character, start = start, length = length,
+        ))
+        return true
+    }
+
     private fun checkEqualityComparisonNoOverlap(
         expr: BinaryExpression, source: String, fileName: String,
     ) {
         try {
+            if (tryEmitClassValueNoOverlap(expr, source, fileName)) return
             val leftType = getTypeOfExpression(expr.left)
             val rightType = getTypeOfExpression(expr.right)
             if (leftType === anyType || leftType === errorType) return
@@ -101268,16 +101310,27 @@ interface DataView {
                         // Construct signature: MethodDeclaration with name "new"
                         constructSignatures.add(sig)
                     } else {
-                        // Named method member
-                        val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
-                        sym.declarations.add(member)
-                        sym.valueDeclaration = member
-                        members[name] = sym
-                        properties.add(sym)
-                        val methodType = Type.Object()
-                        methodType.callSignatures = listOf(sig)
-                        methodType.properties = emptyList()
-                        symbolTypes[sym.id] = methodType
+                        // Named method member. A repeated name is an OVERLOAD (`f(n):string; f(s):number;`):
+                        // APPEND the signature to the existing method's callSignatures instead of
+                        // overwriting — otherwise only the LAST overload survives and assignability
+                        // against a multi-call-signature target FP's TS2322 (typeMatch1).
+                        val existing = members[name]
+                        val existingType = existing?.let { symbolTypes[it.id] }
+                        if (existing != null && existingType is Type.Object &&
+                            !existingType.callSignatures.isNullOrEmpty() && existingType.properties.isNullOrEmpty()) {
+                            existing.declarations.add(member)
+                            existingType.callSignatures = existingType.callSignatures!! + sig
+                        } else {
+                            val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)
+                            sym.declarations.add(member)
+                            sym.valueDeclaration = member
+                            members[name] = sym
+                            properties.add(sym)
+                            val methodType = Type.Object()
+                            methodType.callSignatures = listOf(sig)
+                            methodType.properties = emptyList()
+                            symbolTypes[sym.id] = methodType
+                        }
                     }
                 }
                 is IndexSignature -> {
