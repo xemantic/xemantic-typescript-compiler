@@ -70187,6 +70187,10 @@ interface DataView {
                                     val constStr = typeToString(lastFailing)
                                     chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                                 }
+                            } else if (sourceType is Type.Intersection && ttForDisplay is Type.Intersection) {
+                                // B413: discriminated intersection → intersection elaboration.
+                                lastChainMissingPropSymbol = null
+                                getPropertyElaborationChain(sourceType, ttForDisplay)?.let { chain.addAll(it) }
                             } else {
                                 // Object→Object: property-level elaboration (16.1)
                                 // B86.7b: use the (possibly stripped) ttForDisplay so when target
@@ -100857,6 +100861,16 @@ interface DataView {
         if (source is Type.Intersection && target is Type.Object) {
             return getIntersectionPropertyElaborationChain(source, target, path)
         }
+        // B413: Intersection → Intersection elaboration for discriminated intersections
+        // (errorMessageOnIntersectionsWithDiscriminants01). For `A = Common & {foo:1}` vs
+        // `B = Common & {bar:1}` where Common is a discriminated union, tsc distributes the
+        // source intersection-of-union into constituents, reports the first failing
+        // constituent against the target alias, then drills into the discriminant-matched
+        // target constituent and its missing required property. Purely additive: returns
+        // null (no behavior change) for any shape it doesn't recognize.
+        if (source is Type.Intersection && target is Type.Intersection) {
+            getDiscriminatedIntersectionElaboration(source, target)?.let { return it }
+        }
         // B50.4: Object → Union elaboration — emit the per-level "Type X vs '<union>'"
         // line, then drill into the best-matching constituent with "Type X vs '<best>'"
         // + nested chain. Resets `path` so the constituent's per-property chain
@@ -101327,6 +101341,91 @@ interface DataView {
         } finally {
             state.elaborationStack.remove(pairKey)
         }
+    }
+
+    /**
+     * B413: Distribute `(U1 | U2) & Obj…` into [`U1 & Obj…`, `U2 & Obj…`]. Returns the
+     * single-element list `[self]` when there is no union member, and null when more than
+     * one constituent is a union (we only model the single-discriminant-union shape).
+     */
+    private fun distributeIntersectionConstituents(intersection: Type.Intersection): List<Type.Intersection>? {
+        val unionIdx = intersection.types.indexOfFirst { it is Type.Union }
+        if (unionIdx < 0) return listOf(intersection)
+        if (intersection.types.count { it is Type.Union } != 1) return null
+        val union = intersection.types[unionIdx] as Type.Union
+        return union.types.map { member ->
+            Type.Intersection(intersection.types.mapIndexed { i, t -> if (i == unionIdx) member else t })
+        }
+    }
+
+    /** B413: literal-typed (discriminant) members merged from an intersection's object constituents. */
+    private fun intersectionDiscriminants(t: Type.Intersection): Map<String, Type> {
+        val m = mutableMapOf<String, Type>()
+        for (c in t.types) {
+            if (c is Type.Object) {
+                resolveStructuredTypeMembers(c)
+                c.members?.forEach { (n, s) ->
+                    val ty = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { return@forEach }
+                    if (ty.flags.hasAny(TypeFlags.StringLiteral or TypeFlags.NumberLiteral or TypeFlags.BooleanLiteral)) m[n] = ty
+                }
+            }
+        }
+        return m
+    }
+
+    /**
+     * B413: discriminated-union intersection elaboration. Produces the three sub-lines
+     * tsc emits for `A = Common & {foo}` vs `B = Common & {bar}`:
+     *   Type '<srcConstituent>' is not assignable to type '<B>'.
+     *     Type '<srcConstituent>' is not assignable to type '<matched tgtConstituent>'.
+     *       Property 'X' is missing in type '<srcConstituent>' but required in type '<tgt sub-object>'.
+     * Returns null for any shape that doesn't distribute into a discriminated constituent
+     * with a single missing required property (so the caller falls back to no elaboration).
+     */
+    private fun getDiscriminatedIntersectionElaboration(
+        source: Type.Intersection,
+        target: Type.Intersection,
+    ): List<String>? {
+        val srcConstituents = distributeIntersectionConstituents(source) ?: return null
+        val tgtConstituents = distributeIntersectionConstituents(target) ?: return null
+        // Require an actual distribution on at least one side (mirrors tsc's discriminated display).
+        if (srcConstituents.size <= 1 && tgtConstituents.size <= 1) return null
+        for (srcC in srcConstituents) {
+            if (checkTypeRelatedTo(srcC, target, assignableRelation)) continue
+            // Match a target constituent by shared discriminant literal values.
+            val srcDisc = intersectionDiscriminants(srcC)
+            val tgtC = tgtConstituents.firstOrNull { tc ->
+                val td = intersectionDiscriminants(tc)
+                srcDisc.isNotEmpty() && srcDisc.all { (k, v) -> td[k]?.let { it === v || typeToString(it) == typeToString(v) } ?: false }
+            } ?: tgtConstituents.firstOrNull { !checkTypeRelatedTo(srcC, it, assignableRelation) } ?: continue
+            // Merge the source constituent's object members for missing-property detection.
+            val srcMembers = mutableMapOf<String, Symbol>()
+            for (c in srcC.types) if (c is Type.Object) {
+                resolveStructuredTypeMembers(c); c.members?.forEach { (n, s) -> srcMembers[n] = s }
+            }
+            // Find the first required property of a target sub-object that the source lacks.
+            var missingSym: Symbol? = null
+            var requiredInType: Type.Object? = null
+            outer@ for (c in tgtC.types) {
+                if (c !is Type.Object) continue
+                resolveStructuredTypeMembers(c)
+                for (p in c.properties ?: emptyList()) {
+                    if (p.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+                    if (isOptionalProperty(p)) continue
+                    if (srcMembers.containsKey(p.name)) continue
+                    missingSym = p; requiredInType = c; break@outer
+                }
+            }
+            val ms = missingSym ?: return null
+            val rt = requiredInType ?: return null
+            lastChainMissingPropSymbol = ms
+            return listOf(
+                "  Type '${typeToString(srcC)}' is not assignable to type '${typeToString(target)}'.",
+                "    Type '${typeToString(srcC)}' is not assignable to type '${typeToString(tgtC)}'.",
+                "      Property '${ms.name}' is missing in type '${typeToString(srcC)}' but required in type '${typeToString(rt)}'.",
+            )
+        }
+        return null
     }
 
     /**
