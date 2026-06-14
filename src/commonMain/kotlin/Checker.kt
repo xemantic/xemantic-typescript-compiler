@@ -66680,6 +66680,95 @@ interface DataView {
         return false
     }
 
+    /** Resolve a type-alias name to its underlying body TypeNode (local scope or global). */
+    private fun resolveTypeAliasBodyNode(name: String): TypeNode? {
+        val localAlias = currentScopeStatements
+            ?.filterIsInstance<TypeAliasDeclaration>()
+            ?.firstOrNull { it.name.text == name }
+        val alias = localAlias ?: (globals[name]?.declarations
+            ?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)
+        return alias?.type
+    }
+
+    /** Ordered string-literal values of a [UnionType], or null if any member isn't a string literal. */
+    private fun orderedStringLiteralsOfUnion(union: UnionType): List<String>? {
+        val out = mutableListOf<String>()
+        for (m in union.types) {
+            val lit = (m as? LiteralType)?.literal as? StringLiteralNode ?: return null
+            out.add(lit.text)
+        }
+        return if (out.isEmpty()) null else out
+    }
+
+    /** Resolve a constituent (union, paren-wrapped union, or alias-to-union) to its ordered
+     *  string-literal value list; null if it is not a string-literal union. */
+    private fun constituentStringLiteralList(node: TypeNode): List<String>? {
+        var t = node
+        while (t is ParenthesizedType) t = t.type
+        return when (t) {
+            is UnionType -> orderedStringLiteralsOfUnion(t)
+            is TypeReference -> {
+                if (t.typeArguments != null) return null
+                val nm = (t.typeName as? Identifier)?.text ?: return null
+                var b = resolveTypeAliasBodyNode(nm) ?: return null
+                while (b is ParenthesizedType) b = b.type
+                (b as? UnionType)?.let { orderedStringLiteralsOfUnion(it) }
+            }
+            else -> null
+        }
+    }
+
+    /** Resolve a var annotation to (ordered literal values, aliasDisplayName?) for the literal-union
+     *  did-you-mean check. A union / alias-to-union shows the ALIAS name; an intersection of literal
+     *  unions shows the reduced (set-intersected, first-constituent-ordered) union. Null otherwise. */
+    private fun resolveLiteralUnionSet(annotation: TypeNode): Pair<List<String>, String?>? {
+        var ann = annotation
+        while (ann is ParenthesizedType) ann = ann.type
+        when (ann) {
+            is UnionType -> return (orderedStringLiteralsOfUnion(ann) ?: return null) to null
+            is TypeReference -> {
+                if (ann.typeArguments != null) return null
+                val aliasName = (ann.typeName as? Identifier)?.text ?: return null
+                var body = resolveTypeAliasBodyNode(aliasName) ?: return null
+                while (body is ParenthesizedType) body = body.type
+                return when (body) {
+                    is UnionType -> (orderedStringLiteralsOfUnion(body) ?: return null) to aliasName
+                    is IntersectionType -> {
+                        val sets = body.types.map { constituentStringLiteralList(it) ?: return null }
+                        if (sets.isEmpty()) return null
+                        sets.reduce { a, b -> a.filter { it in b } } to null
+                    }
+                    else -> null
+                }
+            }
+            else -> return null
+        }
+    }
+
+    /** TS2820/TS2322 for a string-literal initializer against a literal-union annotation. Returns
+     *  true (and emits) when the literal is NOT a member; false (no emit) when it is assignable. */
+    private fun tryEmitLiteralUnionDidYouMean(
+        init: Expression, annotation: TypeNode, name: Identifier, source: String, fileName: String
+    ): Boolean {
+        val v = (init as? StringLiteralNode)?.text ?: return false
+        val (ordered, aliasName) = resolveLiteralUnionSet(annotation) ?: return false
+        if (ordered.isEmpty() || v in ordered) return false
+        val targetDisplay = aliasName ?: ordered.joinToString(" | ") { "\"$it\"" }
+        val suggestion = getSpellingSuggestionFromNames(v, ordered.toSet())
+        val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+        val msg = if (suggestion != null)
+            "Type '\"$v\"' is not assignable to type '$targetDisplay'. Did you mean '\"$suggestion\"'?"
+        else
+            "Type '\"$v\"' is not assignable to type '$targetDisplay'."
+        diagnostics.add(Diagnostic(
+            message = msg, category = DiagnosticCategory.Error,
+            code = if (suggestion != null) 2820 else 2322,
+            fileName = fileName, line = line, character = ch,
+            start = name.pos, length = name.text.length,
+        ))
+        return true
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -66699,6 +66788,16 @@ interface DataView {
             }
         }
         if (name !is Identifier) return
+
+        // TS2820/TS2322: a string-literal initializer assigned to a literal-union-typed var
+        // (`const t1: T1 = "strong"` where `type T1 = "string" | "number" | "boolean"`).
+        // When the literal isn't a member of the union, emit TS2820 with a "Did you mean" spelling
+        // suggestion (or plain TS2322 if no close match), preserving the source literal and the
+        // proper target display (alias name for a union alias; the reduced union for an
+        // intersection alias). didYouMeanStringLiteral.
+        decl.initializer?.let { init -> decl.type?.let { ann ->
+            if (tryEmitLiteralUnionDidYouMean(init, ann, name, source, fileName)) return
+        } }
 
         // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
