@@ -83543,6 +83543,18 @@ interface DataView {
         return "($params) => $ret"
     }
 
+    /** Render a method signature WITH its own type parameters: `<T extends C>(p: P) => R`. */
+    private fun genericMethodSig(md: MethodDeclaration): String {
+        val tps = md.typeParameters?.takeIf { it.isNotEmpty() }?.let { list ->
+            "<" + list.joinToString(", ") { p ->
+                val nm = p.name.text
+                val c = p.constraint?.let { formatTypeForDisplay(it) }
+                if (c != null) "$nm extends $c" else nm
+            } + ">"
+        } ?: ""
+        return tps + methodSigDisplay(md)
+    }
+
     /**
      * Like [methodSigDisplay] but for derived members that may lack a return type annotation —
      * derives a display from the body's return shape (return literal → string/number/boolean,
@@ -84489,20 +84501,51 @@ interface DataView {
                         derivedMethodDecl != null &&
                         derivedPredicate == null
 
-                    val baseDisplayForChain = if (isPredicateMismatch && baseMethodDecl != null) {
-                        methodSigDisplay(baseMethodDecl)
-                    } else {
-                        typeToString(basePropType)
+                    // B401 (TS2416): generic-method-override constraint mismatch. A base method
+                    // `f<Tb extends A>(): Tb` overridden by `f<Td extends B>(): Td` where the base
+                    // constraint A is NOT assignable to the derived constraint B — the derived
+                    // demands a NARROWER type parameter than the base provides, so the override is
+                    // unsafe ("'T' could be instantiated with an arbitrary type unrelated to 'B'").
+                    // Narrow, FP-safe gate: BOTH methods have exactly one type parameter, BOTH
+                    // return their own bare type parameter, the derived IS constrained, and the
+                    // base constraint (or `unknown` when absent) is not assignable to the derived
+                    // constraint. Fires regardless of the structural `assignable` result, which
+                    // passes trivially for our generic signatures (both returns are bare TPs).
+                    val baseTp = baseMethodDecl?.typeParameters?.singleOrNull()
+                    val derivedTp = derivedMethodDecl?.typeParameters?.singleOrNull()
+                    val genericConstraintInfo: Pair<String, String>? = run {
+                        if (baseMethodDecl == null || derivedMethodDecl == null) return@run null
+                        if (baseTp == null || derivedTp == null) return@run null
+                        val dCon = derivedTp.constraint ?: return@run null
+                        val bRet = (baseMethodDecl.type as? TypeReference)?.typeName as? Identifier
+                        val dRet = (derivedMethodDecl.type as? TypeReference)?.typeName as? Identifier
+                        if (bRet?.text != baseTp.name.text || dRet?.text != derivedTp.name.text) return@run null
+                        val dConType = try { getTypeFromTypeNode(dCon) } catch (_: Throwable) { return@run null }
+                        if (dConType === anyType || dConType === errorType) return@run null
+                        val bConType = baseTp.constraint?.let {
+                            try { getTypeFromTypeNode(it) } catch (_: Throwable) { return@run null }
+                        } ?: unknownType
+                        if (checkTypeRelatedTo(bConType, dConType, assignableRelation)) return@run null
+                        val dConDisp = formatTypeForDisplay(dCon).orEmpty()
+                        if (dConDisp.isEmpty()) return@run null
+                        dConDisp to baseTp.name.text
                     }
-                    val derivedDisplayForChain = if (isPredicateMismatch && derivedMethodDecl != null) {
-                        methodSigDisplayWithBodyReturn(derivedMethodDecl)
-                    } else {
-                        typeToString(derivedType)
+                    val isGenericConstraintMismatch = genericConstraintInfo != null
+
+                    val baseDisplayForChain = when {
+                        isGenericConstraintMismatch && baseMethodDecl != null -> genericMethodSig(baseMethodDecl)
+                        isPredicateMismatch && baseMethodDecl != null -> methodSigDisplay(baseMethodDecl)
+                        else -> typeToString(basePropType)
+                    }
+                    val derivedDisplayForChain = when {
+                        isGenericConstraintMismatch && derivedMethodDecl != null -> genericMethodSig(derivedMethodDecl)
+                        isPredicateMismatch && derivedMethodDecl != null -> methodSigDisplayWithBodyReturn(derivedMethodDecl)
+                        else -> typeToString(derivedType)
                     }
 
                     val assignable = checkTypeRelatedTo(derivedType, basePropType, assignableRelation)
 
-                    if (!assignable || isPredicateMismatch) {
+                    if (!assignable || isPredicateMismatch || isGenericConstraintMismatch) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         val message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'."
                         val chain = mutableListOf<String>()
@@ -84511,7 +84554,11 @@ interface DataView {
                         // TS2208 related info: when derived is an unconstrained TypeParam declared
                         // on this class, hint that adding `extends {}` might resolve the mismatch.
                         val relatedInfo = mutableListOf<Diagnostic>()
-                        if (isPredicateMismatch && derivedMethodDecl != null) {
+                        if (isGenericConstraintMismatch && genericConstraintInfo != null) {
+                            val (dConDisp, bTpName) = genericConstraintInfo
+                            chain.add("    Type '$dConDisp' is not assignable to type '$bTpName'.")
+                            chain.add("      '$bTpName' could be instantiated with an arbitrary type which could be unrelated to '$dConDisp'.")
+                        } else if (isPredicateMismatch && derivedMethodDecl != null) {
                             val sigColon = methodSigColonDisplay(derivedMethodDecl)
                             chain.add("    Signature '$sigColon' must be a type predicate.")
                         } else {
