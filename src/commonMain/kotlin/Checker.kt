@@ -1111,6 +1111,9 @@ class Checker(
         // 14b''''b. B404: TS2322 for an object-destructuring default value incompatible with the
         // destructured property's type from a TUPLE annotation (e.g. `{length = {a:1}}: [number]`).
         checkTupleDestructuringDefaultTypes()
+        // 14b''''c. B405: TS2345 for a lambda argument passed where the parameter is an interface
+        // that `extends Function` and adds extra required properties (a lambda lacks them).
+        checkLambdaToFunctionSubtypeArgs()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -83616,6 +83619,90 @@ interface DataView {
         }
         val ret = md.type?.let { formatTypeForDisplay(it) } ?: "any"
         return "($params) => $ret"
+    }
+
+    /**
+     * B405 (TS2345): a lambda (arrow / function-expression) argument passed where the parameter is
+     * an interface that `extends Function` AND declares its own required property — `interface I
+     * extends Function { x: number }; function fn(cb: I){}; fn((a,b)=>true)`. The lambda is a
+     * Function but lacks `x`, so it is not assignable. Display: the lambda's inferred signature
+     * `(a: any, b: any) => boolean` vs the interface name. tsc squiggles the WHOLE arrow but only the
+     * `function` keyword for a function-expression arg. FP-safe: a bare lambda can never carry the
+     * interface's extra required member, so the assignment always fails.
+     */
+    private fun checkLambdaToFunctionSubtypeArgs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val fnFirstParamType = HashMap<String, TypeNode>()
+            val interfaces = HashMap<String, InterfaceDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is FunctionDeclaration -> {
+                        val nm = stmt.name?.text
+                        val p0t = stmt.parameters.firstOrNull()?.type
+                        if (nm != null && p0t != null && stmt.parameters.size == 1) fnFirstParamType[nm] = p0t
+                    }
+                    is InterfaceDeclaration -> interfaces[stmt.name.text] = stmt
+                    else -> {}
+                }
+            }
+            if (fnFirstParamType.isEmpty() || interfaces.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val calleeName = (call.expression as? Identifier)?.text ?: continue
+                val paramRef = fnFirstParamType[calleeName] as? TypeReference ?: continue
+                val iface = (paramRef.typeName as? Identifier)?.text?.let { interfaces[it] } ?: continue
+                val extendsFunction = iface.heritageClauses?.any { hc ->
+                    hc.token == SyntaxKind.ExtendsKeyword &&
+                        hc.types.any { (it.expression as? Identifier)?.text == "Function" }
+                } == true
+                if (!extendsFunction) continue
+                // Need >=1 own REQUIRED data property the lambda cannot provide.
+                val hasOwnRequiredProp = iface.members.any { m -> m is PropertyDeclaration && !m.questionToken }
+                if (!hasOwnRequiredProp) continue
+                val arg = call.arguments.firstOrNull() ?: continue
+                if (arg !is ArrowFunction && arg !is FunctionExpression) continue
+                val sig = lambdaSigDisplay(arg) ?: continue
+                val (start, length) = if (arg is FunctionExpression) arg.pos to 8
+                    else arg.pos to (expressionTrueEnd(arg) - arg.pos).coerceAtLeast(1)
+                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$sig' is not assignable to parameter of type '${(paramRef.typeName as Identifier).text}'.",
+                    category = DiagnosticCategory.Error, code = 2345,
+                    fileName = fileName, line = line, character = ch,
+                    start = start, length = length,
+                ))
+            }
+        }
+    }
+
+    /** Render a lambda's inferred signature `(a: any, b: any) => boolean` for diagnostics. */
+    private fun lambdaSigDisplay(arg: Expression): String? {
+        val (params, body) = when (arg) {
+            is ArrowFunction -> arg.parameters to arg.body
+            is FunctionExpression -> arg.parameters to (arg.body as Node)
+            else -> return null
+        }
+        val paramStr = params.joinToString(", ") { p ->
+            val nm = (p.name as? Identifier)?.text ?: "_"
+            val t = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$nm: $t"
+        }
+        val retExpr: Expression? = when (body) {
+            is Block -> body.statements.filterIsInstance<ReturnStatement>().firstOrNull()?.expression
+            is Expression -> body
+            else -> null
+        }
+        val ret = when (retExpr) {
+            is StringLiteralNode -> "string"
+            is NumericLiteralNode -> "number"
+            is Identifier -> if (retExpr.text == "true" || retExpr.text == "false") "boolean" else "any"
+            null -> "void"
+            else -> "any"
+        }
+        return "($paramStr) => $ret"
     }
 
     /**
