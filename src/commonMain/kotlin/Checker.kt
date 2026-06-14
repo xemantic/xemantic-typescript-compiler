@@ -24260,7 +24260,10 @@ class Checker(
             if (bodies.size < 2) continue
             val classByName = mutableMapOf<String, MutableList<ClassDeclaration>>()
             val interfaceByName = mutableMapOf<String, MutableList<InterfaceDeclaration>>()
-            for (body in bodies) {
+            // funcByName: same-named function declarations across blocks, paired with their
+            // owning block index — to detect implementations spanning 2+ merged blocks (TS2393).
+            val funcByName = mutableMapOf<String, MutableList<Pair<FunctionDeclaration, Int>>>()
+            for ((bi, body) in bodies.withIndex()) {
                 for (s in body.statements) {
                     when (s) {
                         is ClassDeclaration -> (s.name as? Identifier)?.let {
@@ -24268,8 +24271,24 @@ class Checker(
                         }
                         is InterfaceDeclaration ->
                             interfaceByName.getOrPut(s.name.text) { mutableListOf() }.add(s)
+                        is FunctionDeclaration -> (s.name as? Identifier)?.let {
+                            funcByName.getOrPut(it.text) { mutableListOf() }.add(s to bi)
+                        }
                         else -> {}
                     }
+                }
+            }
+            // TS2393: a function whose implementation BODY appears in 2+ distinct merged-namespace
+            // blocks is a duplicate implementation; tsc fires TS2393 on EVERY declaration of that
+            // name (signatures included). The distinct-block gate keeps this disjoint from the
+            // single-block overload path (checkDuplicateIdentifiers ~26055), which fires only when
+            // one block already holds >=2 bodies (missingFunctionImplementation N12).
+            for ((_, decls) in funcByName) {
+                if (decls.size < 2) continue
+                val implBlocks = decls.filter { hasPresentBody(it.first.body) }.map { it.second }.toSet()
+                if (implBlocks.size < 2) continue
+                for ((fn, _) in decls) {
+                    (fn.name as? Identifier)?.let { emitTS2393(it, source, fileName) }
                 }
             }
             for ((name, classes) in classByName) {
