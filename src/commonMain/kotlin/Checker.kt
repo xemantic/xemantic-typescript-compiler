@@ -70191,6 +70191,31 @@ interface DataView {
                                 // B413: discriminated intersection → intersection elaboration.
                                 lastChainMissingPropSymbol = null
                                 getPropertyElaborationChain(sourceType, ttForDisplay)?.let { chain.addAll(it) }
+                            } else if (sourceType is Type.Object && ttForDisplay is Type.Union) {
+                                // B414: generic → union elaboration (unionTypeErrorMessageTypeRefs01).
+                                // `A<Foo>` vs `A<Bar> | B<Baz> | C<Kwah>` drills into the same-generic
+                                // constituent (`A<Bar>` — same interface target OR same type-alias name)
+                                // and reports the failing type-ARG mismatch directly. Gated to a
+                                // SAME-GENERIC best constituent with an actual deeper chain (FP-safe —
+                                // the assignment path emits no chain otherwise).
+                                val best = findBestUnionConstituent(sourceType, ttForDisplay)
+                                val sg = genericIdentityAndArgs(sourceType)
+                                val bg = if (best is Type.Object) genericIdentityAndArgs(best) else null
+                                if (best is Type.Object && sg != null && bg != null &&
+                                    sg.first == bg.first && sg.second.size == bg.second.size) {
+                                    var deeper: List<String>? = null
+                                    for (i in sg.second.indices) {
+                                        if (!checkTypeRelatedTo(sg.second[i], bg.second[i], assignableRelation)) {
+                                            lastChainMissingPropSymbol = null
+                                            deeper = getPropertyElaborationChain(sg.second[i], bg.second[i])
+                                            break
+                                        }
+                                    }
+                                    if (deeper != null) {
+                                        chain.add("  Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(best)}'.")
+                                        deeper.forEach { chain.add("  $it") }
+                                    }
+                                }
                             } else {
                                 // Object→Object: property-level elaboration (16.1)
                                 // B86.7b: use the (possibly stripped) ttForDisplay so when target
@@ -71745,6 +71770,23 @@ interface DataView {
      *  `source` for source-vs-union elaboration. Returns null if no Object-shaped
      *  constituent shares any properties (e.g. `string | number` target). For ties,
      *  the first matching constituent wins. */
+    /**
+     * B414: the generic identity + type arguments of a type for same-generic elaboration.
+     * A `Type.Reference` keys on its target interface (identity) with `resolvedTypeArguments`;
+     * an alias-displayed `Type.Object` (e.g. `type X<T> = {...}` → `X<Foo>`) keys on its alias
+     * NAME with the registered alias args. Returns null when the type carries neither (so the
+     * caller's same-generic gate simply doesn't fire).
+     */
+    private fun genericIdentityAndArgs(t: Type): Pair<Any, List<Type>>? {
+        if (t is Type.Reference) {
+            val args = t.resolvedTypeArguments ?: return null
+            if (args.isEmpty()) return null
+            return t.target to args
+        }
+        aliasDisplayMap[t.id]?.let { (name, args) -> if (args.isNotEmpty()) return name to args }
+        return null
+    }
+
     private fun findBestUnionConstituent(source: Type.Object, target: Type.Union): Type? {
         resolveStructuredTypeMembers(source)
         val sourcePropNames = source.properties?.map { it.name }?.toSet() ?: return null
