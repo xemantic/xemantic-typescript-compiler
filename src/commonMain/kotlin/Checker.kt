@@ -1674,6 +1674,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileModuleAugmentationDuplicates()
         }
+        // 73h2 (B412). A name declared in a `declare module "X"` augmentation that is ALSO
+        //      re-exported into X via `export {N} from './other'` → TS2300 (type) / TS2451 (value).
+        if (binderResults.size > 1) {
+            checkModuleAugmentationReexportDuplicates()
+        }
         // 73j. UMD global (`export as namespace X`) redeclared as a `declare global`
         //      const/let X (TS2451 + TS6203). The parser misparses `export as namespace`
         //      (no AST node), so the UMD side is found by regex; the const side via AST.
@@ -114762,6 +114767,123 @@ interface DataView {
             emit2451(hub, others)
             for (o in others) emit2451(o, listOf(hub))
         }
+    }
+
+    /**
+     * B412: TS2300/TS2451 for a name declared in a `declare module "X"` AUGMENTATION that
+     * is ALSO re-exported into module X via `export {N} from './other'`. Both contribute N
+     * to module X's shape → duplicate. tsc reports at BOTH the augmentation declaration and
+     * the re-export specifier, each with a TS6203 "was also declared here" pointing at the
+     * other.
+     *
+     * Code by augmentation-decl kind: a TYPE-ALIAS augmentation decl → TS2300 (type aliases
+     * never declaration-merge); a block-scoped const/let → TS2451 (block-scoped values can't
+     * merge with a re-exported value). The whole `.d.ts` duplicate-identifier pipeline is
+     * skipped, and the B92d augmentation walker only handles the target's OWN exports (not
+     * re-exports) with EXPORTED augmentation decls — so this shape (non-exported aug decl vs
+     * a re-export) is uncovered. FP-safe: a re-exported name + a non-mergeable augmentation
+     * decl (type alias / block-scoped var) is always a genuine duplicate.
+     *
+     * The `.`/`./` package-index specifier (which `resolveModuleSpecifier` doesn't resolve)
+     * is handled locally via [resolveAugmentationTargetFile] — the sibling `index.{ts,d.ts}`
+     * in the augmentation file's directory.
+     */
+    private fun checkModuleAugmentationReexportDuplicates() {
+        for (result in binderResults) {
+            val augFile = result.sourceFile.fileName
+            val augSource = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val spec = (stmt.name as? StringLiteralNode)?.text ?: continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                val targetFile = resolveAugmentationTargetFile(spec, augFile) ?: continue
+                if (targetFile == augFile) continue
+                val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == targetFile } ?: continue
+                // Re-exported names in the target module (`export {N} from './x'`).
+                val reexports = mutableMapOf<String, Identifier>()
+                for (ts in targetResult.sourceFile.statements) {
+                    if (ts !is ExportDeclaration || ts.moduleSpecifier == null) continue
+                    val clause = ts.exportClause as? NamedExports ?: continue
+                    for (es in clause.elements) {
+                        if (es.name.text !in reexports) reexports[es.name.text] = es.name
+                    }
+                }
+                if (reexports.isEmpty()) continue
+                // Augmentation decls that MERGE into the module: when the body has module
+                // syntax (export statements) only exported decls merge, otherwise all do.
+                val augHasModuleSyntax = body.statements.any { it is ExportDeclaration || it is ExportAssignment }
+                for (bs in body.statements) {
+                    when (bs) {
+                        is TypeAliasDeclaration -> {
+                            if (augHasModuleSyntax && ModifierFlag.Export !in bs.modifiers) continue
+                            val re = reexports[bs.name.text] ?: continue
+                            emitAugReexportDup(bs.name.text, bs.name, augFile, augSource, re,
+                                targetFile, targetResult.sourceFile.text, 2300)
+                        }
+                        is VariableStatement -> {
+                            if (augHasModuleSyntax && ModifierFlag.Export !in bs.modifiers) continue
+                            val flags = bs.declarationList.flags
+                            if (flags != SyntaxKind.ConstKeyword && flags != SyntaxKind.LetKeyword) continue
+                            for (d in bs.declarationList.declarations) {
+                                val n = d.name as? Identifier ?: continue
+                                val re = reexports[n.text] ?: continue
+                                emitAugReexportDup(n.text, n, augFile, augSource, re,
+                                    targetFile, targetResult.sourceFile.text, 2451)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        }
+    }
+
+    /** B412: resolve a `declare module "spec"` augmentation's target source file. Handles the
+     *  `.`/`./` package-index specifier (sibling `index.{ts,tsx,d.ts}` in the augmentation
+     *  file's directory) which [resolveModuleSpecifier] does not; otherwise delegates. */
+    private fun resolveAugmentationTargetFile(spec: String, augFile: String): String? {
+        if (spec == "." || spec == "./") {
+            val dir = augFile.substringBeforeLast('/', "")
+            for (idx in listOf("index.ts", "index.tsx", "index.d.ts")) {
+                val cand = if (dir.isEmpty()) idx else "$dir/$idx"
+                if (binderResults.any { it.sourceFile.fileName == cand }) return cand
+            }
+            return null
+        }
+        return resolveModuleSpecifierRelative(spec, augFile)
+    }
+
+    /** B412: emit the symmetric TS2300/TS2451 duplicate pair (augmentation decl ↔ re-export
+     *  specifier), each carrying a TS6203 "was also declared here" pointing at the other. */
+    private fun emitAugReexportDup(
+        name: String, augNode: Node, augFile: String, augSource: String,
+        reNode: Identifier, reFile: String, reSource: String, code: Int,
+    ) {
+        val msg = if (code == 2451) "Cannot redeclare block-scoped variable '$name'."
+                  else "Duplicate identifier '$name'."
+        fun skipTrivia(src: String, p: Int): Int {
+            var i = p
+            while (i < src.length && (src[i] == ' ' || src[i] == '\t' || src[i] == '\r' || src[i] == '\n')) i++
+            return i
+        }
+        val augPos = skipTrivia(augSource, augNode.pos)
+        val rePos = skipTrivia(reSource, reNode.pos)
+        val (al, ac) = getLineAndCharacterOfPosition(augSource, augPos)
+        val (rl, rc) = getLineAndCharacterOfPosition(reSource, rePos)
+        diagnostics.add(Diagnostic(
+            message = msg, category = DiagnosticCategory.Error, code = code,
+            fileName = augFile, line = al, character = ac, start = augPos, length = name.length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' was also declared here.", category = DiagnosticCategory.Message, code = 6203,
+                fileName = reFile, line = rl, character = rc, start = rePos, length = name.length)),
+        ))
+        diagnostics.add(Diagnostic(
+            message = msg, category = DiagnosticCategory.Error, code = code,
+            fileName = reFile, line = rl, character = rc, start = rePos, length = name.length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' was also declared here.", category = DiagnosticCategory.Message, code = 6203,
+                fileName = augFile, line = al, character = ac, start = augPos, length = name.length)),
+        ))
     }
 
     /**
