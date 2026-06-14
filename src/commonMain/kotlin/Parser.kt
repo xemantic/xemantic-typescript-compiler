@@ -8279,6 +8279,16 @@ class Parser(
     private fun parseQualifiedName(): Node {
         var name: Node = parseIdentifierName()
         while (parseOptional(SyntaxKind.Dot)) {
+            // A trailing/missing right side after `.` (e.g. `import x = A.B.<EOF>`) is a syntax
+            // error → TS1003 "Identifier expected." at the position right after the dot (len 0),
+            // mirroring tsc. parseIdentifierName otherwise silently produces an empty Identifier.
+            if (!isIdentifier() && !isKeyword()) {
+                val afterDotPos = scanner.getPrevTokenEnd()
+                reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0)
+                val missing = Identifier(text = "", pos = afterDotPos, end = afterDotPos)
+                name = QualifiedName(left = name, right = missing, pos = name.pos, end = afterDotPos)
+                break
+            }
             val right = parseIdentifierName()
             name = QualifiedName(left = name, right = right, pos = name.pos, end = getEnd())
         }
