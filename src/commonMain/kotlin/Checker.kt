@@ -73089,6 +73089,87 @@ interface DataView {
         }
     }
 
+    // B419: cache of every class declaration that lives in a `.js`/checkJs file —
+    // such classes declare instance properties via `this.X = expr` in their
+    // constructor (tsc synthesizes those as members). Computed lazily.
+    private var jsFileClassDeclsCache: MutableSet<Node>? = null
+    private fun jsFileClassDecls(): Set<Node> {
+        jsFileClassDeclsCache?.let { return it }
+        val s = mutableSetOf<Node>()
+        for (result in binderResults) {
+            if (!isJsLikeFileName(result.sourceFile.fileName)) continue
+            collectClassDeclsInto(result.sourceFile.statements, s)
+        }
+        jsFileClassDeclsCache = s
+        return s
+    }
+    private fun collectClassDeclsInto(stmts: List<Statement>, into: MutableSet<Node>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> into.add(stmt)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectClassDeclsInto(it.statements, into) }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * B419: collect `this.<id> = <expr>` assignments from a JS-class constructor body
+     * (recursing into top-level if/else branches and blocks, matching the constructor
+     * shapes that declare expando instance properties), name → list of RHS exprs.
+     */
+    private fun collectConstructorThisAssignments(
+        stmts: List<Statement>, into: MutableMap<String, MutableList<Expression>>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ExpressionStatement -> {
+                    val bin = stmt.expression as? BinaryExpression ?: continue
+                    if (bin.operator != SyntaxKind.Equals) continue
+                    val pa = bin.left as? PropertyAccessExpression ?: continue
+                    if ((pa.expression as? Identifier)?.text != "this") continue
+                    val name = (pa.name as? Identifier)?.text ?: continue
+                    into.getOrPut(name) { mutableListOf() }.add(bin.right)
+                }
+                is IfStatement -> {
+                    collectConstructorThisAssignments(listOf(stmt.thenStatement), into)
+                    stmt.elseStatement?.let { collectConstructorThisAssignments(listOf(it), into) }
+                }
+                is Block -> collectConstructorThisAssignments(stmt.statements, into)
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * B419: infer a JS expando property's type from its constructor `this.X = …` RHS
+     * value(s). Widens literals; when there are multiple assignments, drops nullish
+     * members if any non-nullish one exists (tsc's "initial null + later concrete"
+     * → concrete) then unions the rest. Returns null if no concrete type resolves.
+     */
+    private fun inferJsExpandoPropType(rhsList: List<Expression>): Type? {
+        val types = rhsList.mapNotNull {
+            val t = try { getWidenedLiteralType(getTypeOfExpression(it)) } catch (_: Throwable) { null }
+            if (t == null || t === errorType) null else t
+        }
+        if (types.isEmpty()) return null
+        val nonNullish = types.filter {
+            !it.flags.hasAny(TypeFlags.Null) && !it.flags.hasAny(TypeFlags.Undefined)
+        }
+        val pool = if (nonNullish.isNotEmpty()) nonNullish else types
+        val distinct = pool.distinctBy { it.id }
+        return if (distinct.size == 1) distinct[0] else getUnionType(distinct)
+    }
+
+    /** B419: true if a JS-file class's constructor assigns `this.<propName> = …`. */
+    private fun classHasConstructorThisAssignment(classDecl: ClassDeclaration, propName: String): Boolean {
+        if (classDecl !in jsFileClassDecls()) return false
+        val body = classDecl.members.filterIsInstance<Constructor>().firstOrNull()?.body ?: return false
+        val m = LinkedHashMap<String, MutableList<Expression>>()
+        collectConstructorThisAssignments(body.statements, m)
+        return propName in m
+    }
+
     /** Resolve members of an interface/class type from its declarations + base types. */
     private fun resolveInterfaceMembers(type: Type.Interface) {
         // B280: an interface declared INSIDE a namespace must resolve its member
@@ -73387,6 +73468,29 @@ interface DataView {
         symbol.members?.forEach { (name, sym) ->
             if (name.isEmpty() || name == "new") return@forEach // already handled in member loop
             if (name !in members) members[name] = sym
+        }
+
+        // B419: JS expando instance properties. A class in a `.js`/checkJs file
+        // declares instance properties via `this.X = <expr>` in its constructor;
+        // tsc synthesizes those as members (typed from the RHS) so external
+        // `(new C()).X` access sees the property with its inferred type. Gated to
+        // JS-file classes + the simple `this.<id> = expr` shape; explicit/inherited
+        // members always win (synthesis only fills names not already present).
+        if (symbol.declarations.any { it is ClassDeclaration && it in jsFileClassDecls() }) {
+            val thisAssigns = LinkedHashMap<String, MutableList<Expression>>()
+            for (decl in symbol.declarations) {
+                if (decl !is ClassDeclaration || decl !in jsFileClassDecls()) continue
+                val ctor = decl.members.filterIsInstance<Constructor>().firstOrNull() ?: continue
+                ctor.body?.let { collectConstructorThisAssignments(it.statements, thisAssigns) }
+            }
+            for ((name, rhsList) in thisAssigns) {
+                if (name in members) continue
+                val propType = inferJsExpandoPropType(rhsList) ?: continue
+                val propSym = Symbol(SymbolFlags.Property, name)
+                propSym.parent = symbol
+                symbolTypes[propSym.id] = propType
+                members[name] = propSym
+            }
         }
 
         type.members = members
@@ -89719,7 +89823,12 @@ interface DataView {
                         // generic call form, ambient base, IndexSignature) — bail.
                         val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
                         val isCircular = classHasCircularBase(classDecl)
-                        val canEmit = chainResult == false || isCircular
+                        // B419: a JS-file class declares instance properties via
+                        // `this.X = expr` in its constructor — those are real members
+                        // (synthesized in resolveInterfaceMembersCore) even though they
+                        // are not AST PropertyDeclarations, so the chain walk misses them.
+                        val isJsExpando = classHasConstructorThisAssignment(classDecl, propName)
+                        val canEmit = (chainResult == false || isCircular) && !isJsExpando
                         if (canEmit) {
                             val typeArgs = classDecl.typeParameters?.size ?: 0
                             val display = if (typeArgs > 0) {
