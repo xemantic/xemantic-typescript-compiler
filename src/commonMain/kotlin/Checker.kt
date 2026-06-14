@@ -2856,8 +2856,19 @@ class Checker(
                 }
             }
 
-            // Also merge augmented exports into the target file's binder result locals
-            if (targetFile != null) {
+            // Also merge augmented exports into the target file's binder result locals.
+            // EXCEPT: a BARE (non-relative) ambient `declare module "X"` whose name merely
+            // coincides with a sibling SOURCE file's basename is a STANDALONE ambient module, NOT
+            // an augmentation of that source module (tsc never augments a relatively-resolvable
+            // .ts/.tsx source via a bare ambient name — only .d.ts ambient files / node_modules
+            // packages). Skipping the locals merge keeps the real source module's exports intact so
+            // a missing member fires TS2339 (externalModuleRefernceResolutionOrderInImportDeclaration).
+            // Relative augmentations (`declare module "./foo"`) are unaffected.
+            val specifierIsRelative = specifier.startsWith("./") || specifier.startsWith("../")
+            val targetIsPlainSource = targetFile != null &&
+                (targetFile.endsWith(".ts") || targetFile.endsWith(".tsx")) &&
+                !targetFile.endsWith(".d.ts") && "node_modules" !in targetFile
+            if (targetFile != null && !(targetIsPlainSource && !specifierIsRelative)) {
                 val targetResult = fileResults[targetFile]
                 if (targetResult != null) {
                     for ((exportName, augSymbol) in augExports) {
