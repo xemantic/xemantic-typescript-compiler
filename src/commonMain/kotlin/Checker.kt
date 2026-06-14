@@ -1543,6 +1543,10 @@ class Checker(
         checkDivergentAccessorVisibility()
         // 69. Check namespace used as type (TS2709)
         checkNamespaceUsedAsType()
+        // 69a'. B393: `import X = <local-namespace>` alias used as a bare type (TS2709)
+        // or `X.member` where member is non-exported (TS2724) — namespace-local aliases
+        // the file-scoped walker can't reach.
+        checkNamespaceAliasTypeRefs()
         // 69b. Check bare `import("./m")` used as a type where m has no `export =` (TS1340)
         checkImportTypeUsedAsType()
         // 70. Check property used before initialization (TS2729)
@@ -110663,6 +110667,147 @@ interface DataView {
             }
         }
         currentCheckLocals = null
+    }
+
+    /**
+     * B393: Namespace-alias visibility through `import X = <local-namespace>`.
+     * Inside `namespace N { import X = LocalNs; ... }` where LocalNs resolves to a
+     * namespace-ONLY symbol, a BARE type reference to X (`p: X`) is TS2709 (a namespace
+     * cannot be used as a bare type — only `X.Member` is valid), and a qualified
+     * `X.member` where `member` EXISTS in LocalNs but is NOT exported is TS2724
+     * (no exported member, with spelling suggestion). The file-scoped TS2709 walker and
+     * the shared qualified-name resolver never reach a namespace-LOCAL import alias, so
+     * this dedicated walker owns the shape. FP-safe by exact shape: only fires for an
+     * import-equals alias whose entity-name target is a namespace-only symbol, and the
+     * member must exist-but-be-unexported.
+     */
+    private fun checkNamespaceAliasTypeRefs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration) scanNsAliasTypeRefs(stmt, result.locals, source, fileName)
+            }
+        }
+    }
+
+    private fun scanNsAliasTypeRefs(ns: ModuleDeclaration, fileLocals: SymbolTable, source: String, fileName: String) {
+        // Only plain identifier-named, NON-ambient namespaces (`namespace N`). Ambient
+        // `declare module "X"` modules route their alias-as-type TS2709 through the
+        // existing ambient path — scanning them here double-emits (privacyImportParseErrors,
+        // where the module name and the local alias name deliberately collide).
+        if (ns.name !is Identifier) return
+        if (ModifierFlag.Declare in ns.modifiers) return
+        val body = ns.body as? ModuleBlock ?: return
+        val aliasTargets = HashMap<String, Symbol>()
+        for (s in body.statements) {
+            if (s !is ImportEqualsDeclaration) continue
+            val ref = s.moduleReference
+            val raw = when (ref) {
+                is Identifier -> globals[ref.text] ?: fileLocals[ref.text]
+                is QualifiedName -> resolveQualifiedName(ref)
+                else -> null
+            } ?: continue
+            val target = resolveAlias(raw)
+            // namespace-ONLY target: has Module meaning but no type meaning (a merged
+            // class/interface/type-alias/enum makes `X` legally usable as a bare type).
+            // A namespace symbol carries NamespaceModule (uninstantiated) or ValueModule
+            // (instantiated — has value members), not bare Module.
+            if (!target.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) continue
+            if (target.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or
+                    SymbolFlags.TypeAlias or SymbolFlags.Enum)) continue
+            aliasTargets[s.name.text] = target
+        }
+        if (aliasTargets.isNotEmpty()) {
+            for (s in body.statements) walkStmtForNsAlias(s, aliasTargets, source, fileName)
+        }
+        for (s in body.statements) if (s is ModuleDeclaration) scanNsAliasTypeRefs(s, fileLocals, source, fileName)
+    }
+
+    private fun walkStmtForNsAlias(stmt: Statement, aliases: Map<String, Symbol>, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) checkTypeNodeForNsAlias(d.type, aliases, source, fileName)
+            is ClassDeclaration -> for (m in stmt.members) {
+                when (m) {
+                    is PropertyDeclaration -> checkTypeNodeForNsAlias(m.type, aliases, source, fileName)
+                    is MethodDeclaration -> {
+                        for (p in m.parameters) checkTypeNodeForNsAlias(p.type, aliases, source, fileName)
+                        checkTypeNodeForNsAlias(m.type, aliases, source, fileName)
+                        m.body?.statements?.forEach { walkStmtForNsAlias(it, aliases, source, fileName) }
+                    }
+                    is Constructor -> {
+                        for (p in m.parameters) checkTypeNodeForNsAlias(p.type, aliases, source, fileName)
+                        m.body?.statements?.forEach { walkStmtForNsAlias(it, aliases, source, fileName) }
+                    }
+                    is GetAccessor -> checkTypeNodeForNsAlias(m.type, aliases, source, fileName)
+                    is SetAccessor -> for (p in m.parameters) checkTypeNodeForNsAlias(p.type, aliases, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionDeclaration -> {
+                for (p in stmt.parameters) checkTypeNodeForNsAlias(p.type, aliases, source, fileName)
+                checkTypeNodeForNsAlias(stmt.type, aliases, source, fileName)
+                stmt.body?.statements?.forEach { walkStmtForNsAlias(it, aliases, source, fileName) }
+            }
+            is Block -> stmt.statements.forEach { walkStmtForNsAlias(it, aliases, source, fileName) }
+            is IfStatement -> {
+                walkStmtForNsAlias(stmt.thenStatement, aliases, source, fileName)
+                stmt.elseStatement?.let { walkStmtForNsAlias(it, aliases, source, fileName) }
+            }
+            is ForStatement -> walkStmtForNsAlias(stmt.statement, aliases, source, fileName)
+            is ForInStatement -> walkStmtForNsAlias(stmt.statement, aliases, source, fileName)
+            is ForOfStatement -> walkStmtForNsAlias(stmt.statement, aliases, source, fileName)
+            is WhileStatement -> walkStmtForNsAlias(stmt.statement, aliases, source, fileName)
+            is DoStatement -> walkStmtForNsAlias(stmt.statement, aliases, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun checkTypeNodeForNsAlias(t: TypeNode?, aliases: Map<String, Symbol>, source: String, fileName: String) {
+        if (t == null) return
+        when (t) {
+            is TypeReference -> {
+                when (val tn = t.typeName) {
+                    is Identifier -> {
+                        // Bare alias used as a type → TS2709.
+                        if (tn.text in aliases) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, tn.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot use namespace '${tn.text}' as a type.",
+                                category = DiagnosticCategory.Error, code = 2709,
+                                fileName = fileName, line = line, character = character,
+                                start = tn.pos, length = tn.text.length,
+                            ))
+                        }
+                    }
+                    is QualifiedName -> {
+                        // Single-level `X.member`: the alias is the immediate left.
+                        val left = tn.left
+                        if (left is Identifier) {
+                            val target = aliases[left.text]
+                            if (target != null) {
+                                val memberName = tn.right.text
+                                val exists = target.exports?.containsKey(memberName) == true
+                                if (exists && !isNameExportedFromNamespace(target, memberName)) {
+                                    val exportedMembers = target.exports!!
+                                        .filterKeys { isNameExportedFromNamespace(target, it) }
+                                    emitTS2694(target.name, memberName, tn.right, source, fileName, exportedMembers)
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+                t.typeArguments?.forEach { checkTypeNodeForNsAlias(it, aliases, source, fileName) }
+            }
+            is UnionType -> t.types.forEach { checkTypeNodeForNsAlias(it, aliases, source, fileName) }
+            is IntersectionType -> t.types.forEach { checkTypeNodeForNsAlias(it, aliases, source, fileName) }
+            is ArrayType -> checkTypeNodeForNsAlias(t.elementType, aliases, source, fileName)
+            is ParenthesizedType -> checkTypeNodeForNsAlias(t.type, aliases, source, fileName)
+            else -> {}
+        }
     }
 
     private fun checkNamespaceAsTypeInStmt(stmt: Statement, source: String, fileName: String) {
