@@ -19609,6 +19609,8 @@ class Checker(
                 checkTypeNameResolved(type.typeName, scope, source, fileName)
                 // Check type argument count (TS2314)
                 checkTypeArgCount(type, scope, source, fileName)
+                // B407: Parameters<T>/ReturnType<T> constraint violation (TS2344).
+                checkUtilitySignatureConstraint(type, source, fileName)
                 // Check TS1099: empty type argument list. Suppress when the typeName is
                 // an unresolved Identifier — TS2304 already fires for that case, and
                 // TypeScript treats the unresolved-name diagnostic as primary.
@@ -67905,6 +67907,14 @@ interface DataView {
             ) {
                 checkArrayLiteralElementsAgainstType(init, targetType, source, fileName, literalElementsOnly = true)
             }
+            // B407: array-literal init vs TUPLE target — per-element TS2322 (e.g.
+            // `const a: Parameters<typeof x> = ['x']` where the param tuple is `[number]`).
+            if (init is ArrayLiteralExpression && targetType is Type.Object &&
+                targetType !is Type.Reference && targetType.tupleElementTypes != null && !isAssignable
+            ) {
+                checkArrayLiteralElementsAgainstTuple(init, targetType, source, fileName)
+                return
+            }
             // B395: a nested object-literal value missing required props already emitted the
             // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
             // chain that would otherwise double-report the same `something.a.b.thing` failure.
@@ -72048,6 +72058,74 @@ interface DataView {
         return result
     }
 
+    /**
+     * B407: materialize `Parameters<F>` / `ConstructorParameters<F>` (-> a tuple of the
+     * signature's parameter types) and `ReturnType<F>` (-> the signature's return type).
+     * Gated symbol==null so a user shadow wins. Returns null (-> errorType, the prior
+     * behavior) for any shape we can't model precisely (no matching signature, rest/
+     * optional params), so this is purely ADDITIVE — it can only make a previously-`any`
+     * utility resolve to a concrete type, never change an already-resolved one. The
+     * "no call signature" case (e.g. `Parameters<typeof SomeClass>`) is the constraint
+     * violation, owned separately by the TS2344 check.
+     */
+    private fun materializeSignatureUtility(name: String, typeArgs: List<TypeNode>?): Type? {
+        val args = typeArgs ?: return null
+        if (args.size != 1) return null
+        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        if (src === anyType || src === errorType) return null
+        fun tupleFromSig(sig: Signature): Type? {
+            // Bail on rest/optional params: modeling them needs rest/optional tuple
+            // elements; null keeps the prior errorType behavior (FP-safe).
+            for (p in sig.parameters) {
+                val pd = p.valueDeclaration as? Parameter
+                if (pd?.dotDotDotToken == true || pd?.questionToken == true) return null
+            }
+            val elemTypes = sig.parameters.map { ps ->
+                try { getTypeOfSymbol(ps) } catch (_: StackOverflowError) { return null }
+            }
+            if (elemTypes.any { it === errorType }) return null
+            return buildTupleFromTypes(elemTypes)
+        }
+        return when (name) {
+            "Parameters" -> getCallSignaturesOfType(src).firstOrNull()?.let { tupleFromSig(it) }
+            "ConstructorParameters" -> getConstructSignaturesOfType(src).firstOrNull()?.let { tupleFromSig(it) }
+            "ReturnType" -> getCallSignaturesOfType(src).firstOrNull()?.resolvedReturnType
+            else -> null
+        }
+    }
+
+    /**
+     * B407: TS2344 for `Parameters<X>` / `ReturnType<X>` whose type argument does not
+     * satisfy the constraint `(...args: any) => any` — specifically when X is a
+     * CONSTRUCTOR type (`typeof SomeClass`: has a construct signature but NO call
+     * signature). FP firewall: only fires when the whole reference resolved to
+     * errorType (so a user/lib `type Parameters<…>` shadow, or a valid-arg
+     * materialization to a tuple, both suppress it) AND the arg is unambiguously a
+     * constructor type. Plain non-callable objects are deliberately NOT reported
+     * (would risk FP against incompletely-resolved function types).
+     */
+    private fun checkUtilitySignatureConstraint(node: TypeReference, source: String, fileName: String) {
+        val name = getTypeReferenceLastName(node.typeName) ?: return
+        if (name != "Parameters" && name != "ReturnType") return
+        val arg = node.typeArguments?.singleOrNull() ?: return
+        val whole = try { getTypeFromTypeNode(node) } catch (_: StackOverflowError) { return }
+        if (whole !== errorType) return
+        val resolved = try { getTypeFromTypeNode(arg) } catch (_: StackOverflowError) { return }
+        if (resolved !is Type.Object) return
+        try { resolveStructuredTypeMembers(resolved) } catch (_: StackOverflowError) { return }
+        // Constructor type (typeof Class): construct sig present, no call sig.
+        if (!resolved.callSignatures.isNullOrEmpty() || resolved.constructSignatures.isNullOrEmpty()) return
+        val display = formatTypeForDisplay(arg) ?: return
+        val start = arg.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$display' does not satisfy the constraint '(...args: any) => any'.",
+            category = DiagnosticCategory.Error, code = 2344, fileName = fileName,
+            line = line, character = character, start = start, length = display.length,
+            messageChain = listOf("  Type '$display' provides no match for the signature '(...args: any): any'."),
+        ))
+    }
+
     private fun getTypeFromTypeReference(node: TypeReference): Type {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
@@ -72207,6 +72285,10 @@ interface DataView {
         // B100: `Readonly<T>` member materialization (modifier utility).
         if (name == "Readonly") {
             materializeModifierUtility(name, node.typeArguments)?.let { return it }
+        }
+        // B407: `Parameters<F>` / `ConstructorParameters<F>` / `ReturnType<F>` materialization.
+        if (name == "Parameters" || name == "ConstructorParameters" || name == "ReturnType") {
+            materializeSignatureUtility(name, node.typeArguments)?.let { return it }
         }
         // Not found — return errorType (TS2304 handles the diagnostic separately)
         return errorType
@@ -99283,6 +99365,44 @@ interface DataView {
     }
 
     /**
+     * B407: per-element TS2322 for an array-literal init assigned to a TUPLE target
+     * (`const a: [number] = ['x']`). tsc contextually types array-literal elements
+     * against the tuple's positional slots; we check element[i] against
+     * tupleElementTypes[i] when both are simple/concrete. FP-safe: only fires on a
+     * genuine concrete-vs-concrete mismatch (matching arity slot), skipping spreads,
+     * any/error/TypeParam slots and non-simple types. Excess/short elements (arity)
+     * are deliberately NOT reported here (separate diagnostic, not exercised).
+     */
+    private fun checkArrayLiteralElementsAgainstTuple(
+        arrLit: ArrayLiteralExpression, tupleType: Type.Object, source: String, fileName: String,
+    ) {
+        val slots = tupleType.tupleElementTypes ?: return
+        for ((i, elem) in arrLit.elements.withIndex()) {
+            if (elem is SpreadElement) return
+            val slot = slots.getOrNull(i) ?: continue
+            if (slot === anyType || slot === errorType || slot is Type.TypeParam) continue
+            if (!isSimpleCheckableType(slot)) continue
+            val elemType = try { getTypeOfExpression(elem) } catch (_: StackOverflowError) { continue }
+            if (elemType === anyType || elemType === errorType) continue
+            if (!isSimpleCheckableType(elemType)) continue
+            if (!checkTypeRelatedTo(elemType, slot, assignableRelation)) {
+                val displaySource = typeToString(getWidenedLiteralType(elemType))
+                val displayTarget = typeToString(slot)
+                val start = elem.pos
+                val length = expressionTrueEnd(elem) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322, fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
+        }
+    }
+
+    /**
      * 16.0: TS2353 check for each object literal element in an array literal
      * whose target is an array type with a resolvable element type. Also emits
      * TS2322 for primitive elements that aren't assignable to an Object element type.
@@ -101612,6 +101732,11 @@ interface DataView {
                 else -> getTypeFromTypeNode(elem)
             }
         }
+        return buildTupleFromTypes(elementTypes)
+    }
+
+    /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig). */
+    private fun buildTupleFromTypes(elementTypes: List<Type>): Type {
         val tupleObj = Type.Object()
         tupleObj.tupleElementTypes = elementTypes
         // Create numbered property symbols: "0", "1", "2", ...
