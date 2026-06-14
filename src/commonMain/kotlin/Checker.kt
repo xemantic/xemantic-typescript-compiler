@@ -1108,6 +1108,9 @@ class Checker(
         // 14b''''. B403: TS2322 for `g = f` assigning a generic function value with a stricter
         // type-parameter constraint to one with a looser (unconstrained) parameter.
         checkGenericFunctionValueAssignmentConstraints()
+        // 14b''''b. B404: TS2322 for an object-destructuring default value incompatible with the
+        // destructured property's type from a TUPLE annotation (e.g. `{length = {a:1}}: [number]`).
+        checkTupleDestructuringDefaultTypes()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -83613,6 +83616,61 @@ interface DataView {
         }
         val ret = md.type?.let { formatTypeForDisplay(it) } ?: "any"
         return "($params) => $ret"
+    }
+
+    /**
+     * B404 (TS2322): an object-destructuring binding default value incompatible with the type of
+     * the destructured property when the annotation is a TUPLE. `let {length = {a:1}}: [number]`
+     * → `length` has type `1` (the tuple's literal length), and the default `{a:1}` (widened to
+     * `{ a: number; }`) is not assignable to `1`. FP-safe: object-binding-pattern + tuple annotation,
+     * identifier-named property present on the tuple, object-literal default not assignable to the
+     * property type (only removes a diagnostic for a genuinely-incompatible default).
+     */
+    private fun checkTupleDestructuringDefaultTypes() {
+        for (result in binderResults) {
+            walkStmtsForTupleDestructDefaults(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
+        }
+    }
+
+    private fun walkStmtsForTupleDestructDefaults(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) checkTupleDestructDecl(d, source, fileName)
+                is FunctionDeclaration -> stmt.body?.statements?.let { walkStmtsForTupleDestructDefaults(it, source, fileName) }
+                is Block -> walkStmtsForTupleDestructDefaults(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let { walkStmtsForTupleDestructDefaults(it, source, fileName) }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    if (m is MethodDeclaration) m.body?.statements?.let { walkStmtsForTupleDestructDefaults(it, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkTupleDestructDecl(d: VariableDeclaration, source: String, fileName: String) {
+        val pattern = d.name as? ObjectBindingPattern ?: return
+        val typeNode = d.type as? TupleType ?: return
+        val tupleType = try { getTypeFromTypeNode(typeNode) } catch (_: Throwable) { return }
+        if (tupleType !is Type.Object) return
+        val members = tupleType.members ?: return
+        for (el in pattern.elements) {
+            val def = el.initializer as? ObjectLiteralExpression ?: continue
+            val nameId = el.name as? Identifier ?: continue
+            val propName = (el.propertyName as? Identifier)?.text ?: nameId.text
+            val propSym = members[propName] ?: continue
+            val propType = try { getTypeOfSymbol(propSym) } catch (_: Throwable) { continue }
+            if (propType === anyType || propType === errorType) continue
+            val defType = widenType(try { getTypeOfExpression(def) } catch (_: Throwable) { continue })
+            if (defType === anyType || defType === errorType) continue
+            if (checkTypeRelatedTo(defType, propType, assignableRelation)) continue
+            val (line, ch) = getLineAndCharacterOfPosition(source, nameId.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(defType)}' is not assignable to type '${typeToString(propType)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = nameId.pos, length = nameId.text.length,
+            ))
+        }
     }
 
     /** Render a function-expression signature WITH its type parameters: `<T, S extends T>(x: T) => R`. */
