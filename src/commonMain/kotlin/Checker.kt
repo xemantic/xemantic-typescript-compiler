@@ -3819,6 +3819,9 @@ class Checker(
                             }
                             is FunctionDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
                             is ClassDeclaration -> inner.name?.text?.let { globalAugmentationNames.add(it) }
+                            // `export import x = A.y;` inside `declare global` registers `x` as a
+                            // global alias (importAliasInModuleAugmentation) — suppress TS2304 on `x`.
+                            is ImportEqualsDeclaration -> globalAugmentationNames.add(inner.name.text)
                             else -> {}
                         }
                     }
@@ -22565,6 +22568,7 @@ class Checker(
     private fun walkRequireImportInNamespace(
         stmt: Statement, inNamespace: Boolean, source: String, fileName: String,
         ambientModuleNames: Set<String>, dtsFileBaseNames: Set<String>,
+        inGlobalAug: Boolean = false,
     ) {
         when (stmt) {
             is ModuleDeclaration -> {
@@ -22572,15 +22576,17 @@ class Checker(
                 // namespace" for TS1147. String-literal names mark ambient external
                 // module declarations / augmentations (different diagnostics:
                 // TS2439, TS2664, TS2667). `declare global` augments the global
-                // scope and is also exempt.
+                // scope and is also exempt — but an `import = require(...)` directly
+                // inside it is TS2667 (importAliasInModuleAugmentation).
                 val nm = stmt.name
                 val isInternalNamespace = nm is Identifier && nm.text != "global"
                 val nestedInNamespace = inNamespace || isInternalNamespace
+                val nestedGlobalAug = inGlobalAug || (nm is Identifier && nm.text == "global")
                 when (val body = stmt.body) {
                     is ModuleBlock -> body.statements.forEach {
-                        walkRequireImportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames)
+                        walkRequireImportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames, inGlobalAug = nestedGlobalAug)
                     }
-                    is ModuleDeclaration -> walkRequireImportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames)
+                    is ModuleDeclaration -> walkRequireImportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName, ambientModuleNames = ambientModuleNames, dtsFileBaseNames = dtsFileBaseNames, inGlobalAug = nestedGlobalAug)
                     else -> {}
                 }
             }
@@ -22611,6 +22617,25 @@ class Checker(
                 ))
             }
             is ImportEqualsDeclaration -> {
+                // `import f = require("mod");` directly inside `declare global { }` → TS2667
+                // (imports not permitted in module augmentations) at the `import` keyword, plus
+                // TS2591/TS2307 for the specifier (importAliasInModuleAugmentation). An
+                // `export import x = A.y;` has a QualifiedName reference, not ExternalModuleReference,
+                // so it is naturally exempt.
+                if (inGlobalAug) {
+                    val ref = stmt.moduleReference as? ExternalModuleReference ?: return
+                    var kwStart = stmt.pos
+                    while (kwStart < source.length && source[kwStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) kwStart++
+                    val (kl, kc) = getLineAndCharacterOfPosition(source, kwStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Imports are not permitted in module augmentations. Consider moving them to the enclosing external module.",
+                        category = DiagnosticCategory.Error, code = 2667,
+                        fileName = fileName, line = kl, character = kc, start = kwStart, length = 6,
+                    ))
+                    val expr = ref.expression
+                    if (expr is StringLiteralNode) emitTS2307(expr, expr.text, source, fileName)
+                    return
+                }
                 if (!inNamespace) return
                 val ref = stmt.moduleReference as? ExternalModuleReference ?: return
                 val expr = ref.expression
