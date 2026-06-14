@@ -15586,6 +15586,13 @@ Net effect: `find_candidates.py --fresh` now considers 24 fewer skipped tokens (
 - `errorRecoveryWithDotFollowedByNamespaceKeyword_ts` (round 156) — parser error-recovery divergence (we emit TS2304/TS1434 + dup TS1005 vs TS1003+TS1005). Blocker #7, HIGH risk.
 - `recursiveComplicatedClasses_ts` (round 156) — 6 errors incl. lib `Symbol` duplicate-identifier + `[Symbol.toPrimitive]`/`[Symbol.toStringTag]` missing-props. Lib-Symbol model.
 - `dynamicImportWithNestedThis_es2015_ts`/`bundledDtsLateExportRenaming_ts`/`constructorWithIncompleteTypeAnnotation_ts` (round 156, OUTPUT) — module-emit / bundled-decl-emit / parser-recovery emitter features (large/architectural).
+- `allowImportClausesToMergeWithTypes_ts` (round 157, B410 REVERTED) — needs (1) cross-file default-import-of-`export default <identifier>` resolution to a value-only target → TS2749, AND (2) a TS2528 suppression where a TYPE default (`export default interface`) coexists with a VALUE default (`export { x as default }`) in different spaces. 2-piece cross-file (Blocker #3); the B410 `aliasResolvesToValueOnly`/`resolveDefaultImportExprTarget` approach is documented in the round-157 note.
+- `importHelpersES6_ts` (round 157) — TS2354 tslib-helper-completeness / AMD-System tslib resolution (the provided tslib.d.ts is missing a helper the decorated-class+private-field combo needs); module/tslib-resolution, not AST-contained.
+- `jsdocResolveNameFailureInTypedef_ts` (round 157) — TS2304 for an unresolved name inside a JS `@typedef {CantResolveThis}`; needs the JSDoc-type-parser (sub-Parser positions into the comment text), Blocker #5.
+- `esModuleInteropPrettyErrorRelatedInformation_ts` (round 157) — TS2345 `{ default: () => void }` (esModuleInterop namespace shape of `export = foo`) vs `() => void`; esModuleInterop namespace-shape modeling + fn-vs-object assignability + pretty related-info.
+- `errorElaboration_ts` (round 157) — 6-error generic-`Container<Ref<T>>` comparison cascade (TS2345/TS2538/TS2339/TS2300); type-engine.
+- `defaultArgsInFunctionExpressions_ts` (round 157) — 8+ errors, function-default-argument type checking (TS2322/TS2345/TS2352); type-engine.
+- `narrowByClauseExpressionInSwitchTrue7_ts` (round 157) — TS2322 `Derived2` not assignable to `never`; real `switch(true)` instanceof-discriminant POSITIVE narrowing + default-branch exhaustiveness (Blocker #1 flow).
 
 ### End of skip log
 
