@@ -15576,6 +15576,16 @@ Net effect: `find_candidates.py --fresh` now considers 24 fewer skipped tokens (
 - `circularBaseTypes_ts` (round 155) — TS2310/TS2456/TS2313 multi-construct circular-type detection (interface-base + type-alias + type-param-constraint cycles, with mapped/indexed-access). Cycle-detection engine.
 - `uniqueSymbolJs2_ts` (round 155) — JSDoc `@type {unique symbol}` + unique-symbol typing + `z==y` no-overlap TS2367. JSDoc Blocker #5 + unique symbol.
 - `arrayFakeFlatNoCrashInferenceDeclarations_ts` (round 155) — TS5088 decl-emit of a cyclic inferred type (`declaration:true`). Decl-emit nameability + cycle detection.
+- `deeplyNestedAssignabilityErrorsCombined_ts` (round 156) — 3 pieces: MISS the line-3 deeply-nested method-return-object comparison entirely + line-15 needs `typeof Ctor2` display + `(new a.b.c.d.e.f()).g` chain path. Multi-piece.
+- `allowJscheckJsTypeParameterNoCrash_ts` (round 156) — pure display SWAP (`WatchHandler<any>` alias vs `(val: any) => void`) but touches the LOAD-BEARING aliasDisplayMap function-typed-result skip in a JS contextual-typing path. Risky display.
+- `enumAssignmentCompat_ts`/`enumAssignmentCompat2_ts`/`enumAssignmentCompat3_ts`/`enumAssignmentCompat6_ts`/`enumAssignmentCompat7_ts` (round 156) — 9-32 errors EACH; need a full enum-assignability model (numeric-vs-string, const enums, cross-namespace member-value comparison). Multi-session, broad FP.
+- `partialDiscriminatedUnionMemberHasGoodError_ts` (round 156) — discriminated-union missing-property nested in a `foo.push({types:[{type:"A"}]})` CALL ARG (contextual typing through call args + nested array element + discriminant). Not the B294 var-decl shape.
+- `constraintWithIndexedAccess_ts` (round 156) — 9 errors on generic indexed-access type params `DataFetchFns[T][F]` (TS2344 ReturnType-constraint + TS2536 T-cannot-index). Full indexed-access type engine.
+- `unionOfArraysFilterCall_ts` (round 156) — TS18048 on `item?.id` from a union-of-tuples with an optional element (`[Fizz] | readonly [Buzz?]`). Optional-tuple-element + array-method-callback-param + optional-chain result (Blocker #1 flow).
+- `implicitConstParameters_ts` (round 156) — TS18048 "x possibly undefined" only in `f5` where x is reassigned LATER (so narrowing doesn't flow into a closure). "Effectively-const param" closure flow (Blocker #1).
+- `errorRecoveryWithDotFollowedByNamespaceKeyword_ts` (round 156) — parser error-recovery divergence (we emit TS2304/TS1434 + dup TS1005 vs TS1003+TS1005). Blocker #7, HIGH risk.
+- `recursiveComplicatedClasses_ts` (round 156) — 6 errors incl. lib `Symbol` duplicate-identifier + `[Symbol.toPrimitive]`/`[Symbol.toStringTag]` missing-props. Lib-Symbol model.
+- `dynamicImportWithNestedThis_es2015_ts`/`bundledDtsLateExportRenaming_ts`/`constructorWithIncompleteTypeAnnotation_ts` (round 156, OUTPUT) — module-emit / bundled-decl-emit / parser-recovery emitter features (large/architectural).
 
 ### End of skip log
 
