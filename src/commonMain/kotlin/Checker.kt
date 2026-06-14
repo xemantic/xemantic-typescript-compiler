@@ -67834,7 +67834,10 @@ interface DataView {
             }
             // 16.0: Array literal initializer — contextual TS2353 for each object element
             // against the declared element type. `let x: { id: number }[] = [{ id: 1, name: "a" }]`.
-            checkArrayLiteralElementExcessProps(init, targetType, source, fileName)
+            // B415: when the annotation is a bare named type alias (`const blah: Style = …`)
+            // pass its name so a union element type displays as `Style`, not its unfolded form.
+            checkArrayLiteralElementExcessProps(init, targetType, source, fileName,
+                displayName = (typeAnnotation as? TypeReference)?.let { formatTypeForDisplay(it) })
             // B96-INDEXSIG: per-property/element VALUE vs the target's index-signature
             // value-type (TS2322/TS2741 + TS6501). Gated to `isAssignable` (the relation
             // WRONGLY passes for an index-sig-only target, which is why nothing fires today)
@@ -99743,16 +99746,134 @@ interface DataView {
         return true
     }
 
+    /**
+     * B415: resolve the ELEMENT type of an array-LIKE target. Handles three shapes
+     * the plain `Type.Reference`-to-Array entry could not reach:
+     *  - a `Type.Reference` to Array directly (`Style[]`)             → its type arg;
+     *  - an interface that `extends Array<X>` (`interface SA extends Array<Style>`)
+     *    → the Array base's type arg (so a named array-interface descends);
+     *  - a `Type.Union` with EXACTLY ONE array-like member (the other members being
+     *    non-array objects, e.g. `Style = StyleBase | StyleArray`) → that member's
+     *    element type.
+     * Returns null when not array-like — the recursive excess-property descent stops.
+     */
+    private fun arrayElementTypeForExcess(t: Type): Type? = when {
+        t is Type.Reference && t.target?.symbol?.name == "Array" ->
+            t.resolvedTypeArguments?.firstOrNull()
+        t is Type.Interface -> try {
+            resolveBaseTypesLazy(t)
+            // The base may be a `Type.Reference(Array,[X])` OR a bare `Type.Interface`
+            // named "Array" — the latter when `baseTypes` dropped the instantiation arg
+            // (`interface SA extends Array<Style>` resolves the base to raw `Array<T>`).
+            // For the bare case recover X from the heritage AST.
+            t.baseTypes?.firstNotNullOfOrNull { b ->
+                if (b is Type.Reference && b.target?.symbol?.name == "Array")
+                    b.resolvedTypeArguments?.firstOrNull() else null
+            } ?: run {
+                if (t.baseTypes?.any { (it as? Type.Object)?.symbol?.name == "Array" } == true)
+                    arrayBaseElementTypeFromHeritage(t) else null
+            }
+        } catch (_: StackOverflowError) { null }
+        t is Type.Union -> {
+            val elems = t.types.mapNotNull { arrayElementTypeForExcess(it) }
+            if (elems.size == 1) elems[0] else null
+        }
+        else -> null
+    }
+
+    /** B415: recover the `Array<X>` element type from an interface's heritage AST when
+     *  the resolved base lost the instantiation (`extends Array<Style>` → bare `Array<T>`
+     *  in `baseTypes`). Reads the `extends Array<…>` type-argument node directly. */
+    private fun arrayBaseElementTypeFromHeritage(iface: Type.Interface): Type? {
+        val symbol = iface.symbol ?: return null
+        for (d in symbol.declarations) {
+            val clauses = when (d) {
+                is InterfaceDeclaration -> d.heritageClauses
+                is ClassDeclaration -> d.heritageClauses
+                else -> null
+            } ?: continue
+            for (clause in clauses) {
+                if (clause.token == SyntaxKind.ImplementsKeyword) continue
+                for (ewa in clause.types) {
+                    if ((ewa.expression as? Identifier)?.text != "Array") continue
+                    val arg = ewa.typeArguments?.firstOrNull() ?: continue
+                    // Resolve a named arg (`Array<Style>`) via its SYMBOL rather than
+                    // getTypeFromTypeNode — for a self-recursive alias (`Style = … |
+                    // Array<Style>`) the node-level cache holds the errorType sentinel
+                    // captured while the alias was mid-resolution, so the node path
+                    // returns 'any'. The symbol path reads the now-complete declaredTypes.
+                    val argName = (arg as? TypeReference)?.typeName as? Identifier
+                    if (argName != null) {
+                        val sym = currentFileLocals?.get(argName.text) ?: globals[argName.text]
+                        if (sym != null) return try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                    }
+                    return try { getTypeFromTypeNode(arg) } catch (_: StackOverflowError) { null }
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * B415: the single non-array object "bag" of a target type for excess-property
+     * checking. For a union like `StyleBase | StyleArray` (one object member + one
+     * array member), returns `StyleBase`; for a plain object type returns it directly.
+     * Returns null when there is not exactly one non-array object member (ambiguous /
+     * not applicable) so the excess check is skipped (FP-safe).
+     */
+    private fun objectMemberForExcess(t: Type): Type.Object? = when {
+        t is Type.Reference && t.target?.symbol?.name == "Array" -> null
+        t is Type.Union -> {
+            val objs = t.types.filter { it is Type.Object && arrayElementTypeForExcess(it) == null }
+            if (objs.size == 1) objs[0] as Type.Object else null
+        }
+        t is Type.Object -> t
+        else -> null
+    }
+
     private fun checkArrayLiteralElementExcessProps(
         init: Expression,
         targetType: Type,
         source: String,
         fileName: String,
+        // B415: alias display for the contextual element type (e.g. "Style"). Threaded
+        // through the recursion when the leaf's contextual type is a named union alias
+        // whose own display would unfold (`StyleBase | StyleArray`) — tsc shows "Style".
+        displayName: String? = null,
     ) {
         if (init !is ArrayLiteralExpression) return
-        if (targetType !is Type.Reference) return
-        if (targetType.target?.symbol?.name != "Array") return
-        val elementType = targetType.resolvedTypeArguments?.firstOrNull() ?: return
+        // B415: descend array-LIKE targets (Reference-to-Array, interface-extends-Array,
+        // or a union with a single array-like member) rather than only direct Array refs.
+        val elementType = arrayElementTypeForExcess(targetType) ?: return
+        // B415: the element type is itself a UNION (e.g. `Style = StyleBase | StyleArray`,
+        // reached through `interface StyleArray extends Array<Style>`). Run the per-element
+        // excess / nested checks against the union's single object member, recurse array
+        // elements through the union's array member, and display the threaded alias name
+        // (`Style`) which a bare union would otherwise unfold. Self-contained so the plain
+        // Type.Object / primitive paths below stay untouched.
+        if (elementType is Type.Union) {
+            val bag = objectMemberForExcess(elementType)
+            val nestedArrayLike = arrayElementTypeForExcess(elementType) != null
+            if (bag == null && !nestedArrayLike) return
+            val disp = displayName ?: typeToString(elementType)
+            if (bag != null) try { resolveStructuredTypeMembers(bag) } catch (_: StackOverflowError) { return }
+            for (elem in init.elements) {
+                when (elem) {
+                    is ObjectLiteralExpression -> if (bag != null) {
+                        val elemType = getTypeOfExpression(elem)
+                        if (elemType is Type.Object && canUseTypeEngine(elemType, bag)) {
+                            checkExcessProperties(elem, elemType, bag, disp, source, fileName)
+                        }
+                        checkNestedObjLitPropTypes(elem, bag, source, fileName)
+                    }
+                    is ArrayLiteralExpression -> if (nestedArrayLike) {
+                        checkArrayLiteralElementExcessProps(elem, elementType, source, fileName, disp)
+                    }
+                    else -> {}
+                }
+            }
+            return
+        }
         if (elementType !is Type.Object) {
             // Primitive element type (e.g. `string[] = [voidFn()]`) — narrow void-call
             // element check. `void` call results can't satisfy any concrete primitive
