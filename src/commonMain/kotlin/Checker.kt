@@ -84078,8 +84078,9 @@ interface DataView {
                     if (baseProp.flags.hasAny(SymbolFlags.Function)) {
                         val derivedMd = derivedMethods[propName]
                         if (derivedMd != null) {
-                            val baseMd = baseProp.declarations.firstOrNull { it is MethodDeclaration } as? MethodDeclaration
-                            if (baseMd != null && baseProp.declarations.count { it is MethodDeclaration } == 1) {
+                            val baseMethodDecls = baseProp.declarations.filterIsInstance<MethodDeclaration>()
+                            val baseMd = baseMethodDecls.firstOrNull()
+                            if (baseMd != null && baseMethodDecls.size == 1) {
                                 val derivedRequired = derivedMd.parameters.count {
                                     !it.questionToken && it.initializer == null && !it.dotDotDotToken
                                 }
@@ -84095,6 +84096,25 @@ interface DataView {
                                     )
                                     return
                                 }
+                            } else if (baseMethodDecls.size >= 2) {
+                                // B421: base method is OVERLOADED (≥2 signatures). A derived
+                                // interface that re-declares it with a SINGLE incompatible
+                                // signature incorrectly extends the base (TS2430). FP firewall:
+                                // a derived that re-declares the FULL overload set (≥2 decls of
+                                // the name) is compatible — overloadOnConstInheritance1 — so we
+                                // gate on the derived having EXACTLY ONE declaration. Generic
+                                // (type-param-bearing) methods are skipped (out of scope).
+                                val derivedDeclCount = ifaceDecl.members.count {
+                                    it is MethodDeclaration && (it.name as? Identifier)?.text == propName
+                                }
+                                if (derivedDeclCount == 1 &&
+                                    derivedMd.typeParameters.isNullOrEmpty() &&
+                                    baseMethodDecls.none { it.typeParameters?.isNotEmpty() == true } &&
+                                    tryEmitTS2430OverloadSetMismatch(
+                                        ifaceDecl, derivedName, baseName, propName,
+                                        derivedMd, baseMethodDecls, source, fileName,
+                                    )
+                                ) return
                             }
                         }
                         continue
@@ -84352,6 +84372,85 @@ interface DataView {
                 "      Target signature provides too few arguments. Expected $derivedRequired or more, but got $baseMax.",
             ),
         ))
+    }
+
+    /**
+     * B421: TS2430 for a derived interface that re-declares an OVERLOADED base method with a
+     * single incompatible signature. `interface Base { f(x: string): any; f(x: 'foo'): string }`
+     * + `interface Deriver extends Base { f(x: 'bar'): string }` — the derived `(x: 'bar') => string`
+     * is not assignable to the base overload set `{ (x: string): any; (x: 'foo'): string; }` because
+     * a single derived signature must be compatible with EVERY base overload (and `'bar'` overlaps
+     * neither `'foo'` nor — bivariantly — passes `string`-yet-fails-`'foo'`). Returns true (and emits)
+     * when a genuine same-arity parameter incompatibility is found; false otherwise (no FP).
+     *
+     * Method parameters are checked BIVARIANTLY (matching tsc method-param variance), so a base
+     * overload the derived can satisfy in either direction is skipped; the first base overload with a
+     * truly-unrelated parameter drives the error. Only same-arity overloads are compared (the
+     * arity-mismatch case is owned by the single-base-decl branch above).
+     */
+    private fun tryEmitTS2430OverloadSetMismatch(
+        ifaceDecl: InterfaceDeclaration, derivedName: String, baseName: String, propName: String,
+        derivedMd: MethodDeclaration, baseMethodDecls: List<MethodDeclaration>,
+        source: String, fileName: String,
+    ): Boolean {
+        val derivedParams = derivedMd.parameters
+        for (baseMd in baseMethodDecls) {
+            val baseParams = baseMd.parameters
+            if (baseParams.size != derivedParams.size) continue
+            for (i in baseParams.indices) {
+                val bpNode = baseParams[i].type ?: continue
+                val dpNode = derivedParams[i].type ?: continue
+                val bpType = getTypeFromTypeNodeSafe(bpNode) ?: continue
+                val dpType = getTypeFromTypeNodeSafe(dpNode) ?: continue
+                if (bpType === anyType || dpType === anyType ||
+                    bpType === errorType || dpType === errorType ||
+                    bpType is Type.TypeParam || dpType is Type.TypeParam
+                ) continue
+                val bivariant = isTypeAssignableTo(dpType, bpType) || isTypeAssignableTo(bpType, dpType)
+                if (!bivariant) {
+                    val derivedSig = methodSigDisplay(derivedMd)
+                    val baseSetDisplay = "{ " +
+                        baseMethodDecls.joinToString("; ") { methodSigDisplayColon(it) } + "; }"
+                    val bpName = (baseParams[i].name as? Identifier)?.text ?: "_"
+                    val dpName = (derivedParams[i].name as? Identifier)?.text ?: "_"
+                    val bpDisplay = formatTypeForDisplay(bpNode) ?: typeToString(bpType)
+                    val dpDisplay = formatTypeForDisplay(dpNode) ?: typeToString(dpType)
+                    val start = ifaceDecl.name.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Interface '$derivedName' incorrectly extends interface '$baseName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2430,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = derivedName.length,
+                        messageChain = listOf(
+                            "  Types of property '$propName' are incompatible.",
+                            "    Type '$derivedSig' is not assignable to type '$baseSetDisplay'.",
+                            "      Types of parameters '$dpName' and '$bpName' are incompatible.",
+                            "        Type '$bpDisplay' is not assignable to type '$dpDisplay'.",
+                        ),
+                    ))
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /** B421: render a MethodDeclaration's call-signature in colon form `(p: T, ...): R` for display. */
+    private fun methodSigDisplayColon(md: MethodDeclaration): String {
+        val params = md.parameters.joinToString(", ") { p ->
+            val pname = (p.name as? Identifier)?.text ?: "_"
+            val ptype = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val q = if (p.questionToken) "?" else ""
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$pname$q: $ptype"
+        }
+        val ret = md.type?.let { formatTypeForDisplay(it) } ?: "any"
+        return "($params): $ret"
     }
 
     /** B63.3: render a MethodDeclaration's call-signature as `(p: T, ...) => R` for display. */
