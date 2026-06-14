@@ -1400,6 +1400,9 @@ class Checker(
         checkConstructorReturnTypeParam()
         // 55d. Check class constructor returning a primitive literal (TS2322 + TS2409)
         checkConstructorReturnPrimitiveLiteral()
+        // 55e. Check class constructor returning an OBJECT LITERAL or NEW expression
+        //      whose type is not assignable to the instance type (TS2322 + TS2409).
+        checkConstructorReturnObjectOrNew()
         // 56. Check circular import alias definitions (TS2303)
         checkCircularImportAlias()
         // 56b. Check circular `import = require` / `export =` re-export cycles (TS2303)
@@ -59261,6 +59264,235 @@ interface DataView {
             is LabeledStatement -> findReturnPrimitiveLiteralInStmt(stmt.statement, callback)
             else -> {}
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // TS2322 + TS2409 (+ TS6500 / chain): class constructor returning an OBJECT
+    // LITERAL or a NEW expression whose type is not assignable to the class
+    // instance type. The primitive-literal / type-param / null cases are handled
+    // by the sibling checks; this covers the two remaining value shapes
+    // (returnInConstructor1). ADDITIVE + FP-safe: only fires when the type engine
+    // resolves a CONCRETE mismatch (any/error types bail).
+    // ----------------------------------------------------------------------
+    private fun checkConstructorReturnObjectOrNew() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            walkCtorReturnObjOrNew(result, result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkCtorReturnObjOrNew(result: BinderResult, stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ClassDeclaration -> {
+                    checkOneCtorReturnObjOrNew(result, stmt, source, fileName)
+                    for (m in stmt.members) when (m) {
+                        is MethodDeclaration -> m.body?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                        is GetAccessor -> m.body?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                        is SetAccessor -> m.body?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is FunctionDeclaration -> stmt.body?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkCtorReturnObjOrNew(result, it.statements, source, fileName) }
+                is Block -> walkCtorReturnObjOrNew(result, stmt.statements, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun checkOneCtorReturnObjOrNew(result: BinderResult, classDecl: ClassDeclaration, source: String, fileName: String) {
+        val className = classDecl.name?.text ?: return
+        // Collect the relevant returns FIRST — do NOT resolve the class type unless a
+        // constructor actually returns an object-literal / new-expression. Eagerly
+        // resolving every class's declared type here poisons type caches by FIRST-touch
+        // ordering (CLAUDE.md cache-timing rules) → it regressed accessor/override tests.
+        val relevant = mutableListOf<Pair<Int, Expression>>()
+        for (member in classDecl.members) {
+            if (member !is Constructor) continue
+            val body = member.body ?: continue
+            findCtorReturnObjOrNewInStatements(body.statements) { returnPos, expr -> relevant.add(returnPos to expr) }
+        }
+        if (relevant.isEmpty()) return
+        val classSym = result.nodeToSymbol[nodeKey(classDecl)] ?: return
+        val instType = try { getDeclaredTypeOfClassOrInterface(classSym) } catch (_: StackOverflowError) { return }
+        try { resolveStructuredTypeMembers(instType) } catch (_: StackOverflowError) { return }
+        for ((returnPos, expr) in relevant) {
+            when (expr) {
+                is ObjectLiteralExpression -> emitCtorObjLitReturnMismatch(expr, returnPos, instType, className, source, fileName)
+                is NewExpression -> emitCtorNewReturnMismatch(expr, returnPos, instType, className, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    private fun findCtorReturnObjOrNewInStatements(stmts: List<Statement>, cb: (Int, Expression) -> Unit) {
+        for (stmt in stmts) findCtorReturnObjOrNewInStmt(stmt, cb)
+    }
+
+    private fun findCtorReturnObjOrNewInStmt(stmt: Statement, cb: (Int, Expression) -> Unit) {
+        when (stmt) {
+            is ReturnStatement -> {
+                val e = stmt.expression
+                if (e is ObjectLiteralExpression || e is NewExpression) cb(stmt.pos, e)
+            }
+            is Block -> findCtorReturnObjOrNewInStatements(stmt.statements, cb)
+            is IfStatement -> {
+                findCtorReturnObjOrNewInStmt(stmt.thenStatement, cb)
+                stmt.elseStatement?.let { findCtorReturnObjOrNewInStmt(it, cb) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
+                is CaseClause -> clause.statements.forEach { findCtorReturnObjOrNewInStmt(it, cb) }
+                is DefaultClause -> clause.statements.forEach { findCtorReturnObjOrNewInStmt(it, cb) }
+                else -> {}
+            }
+            is ForStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            is ForInStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            is ForOfStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            is WhileStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            is DoStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            is TryStatement -> {
+                findCtorReturnObjOrNewInStatements(stmt.tryBlock.statements, cb)
+                stmt.catchClause?.let { findCtorReturnObjOrNewInStatements(it.block.statements, cb) }
+                stmt.finallyBlock?.let { findCtorReturnObjOrNewInStatements(it.statements, cb) }
+            }
+            is LabeledStatement -> findCtorReturnObjOrNewInStmt(stmt.statement, cb)
+            else -> {}
+        }
+    }
+
+    private fun emitCtorObjLitReturnMismatch(
+        objLit: ObjectLiteralExpression, returnPos: Int,
+        instType: Type.Interface, className: String, source: String, fileName: String,
+    ) {
+        val members = instType.members ?: return
+        // (keyPos, keyLen, propName, widenedValDisplay, memberDisplay, memberDecl)
+        val mismatches = mutableListOf<Array<Any?>>()
+        for (p in objLit.properties) {
+            if (p !is PropertyAssignment) continue
+            val pn = p.name as? Identifier ?: continue
+            val member = members[pn.text] ?: continue // unknown prop = excess (handled elsewhere)
+            val memberType = try { getTypeOfSymbol(member) } catch (_: StackOverflowError) { continue }
+            if (memberType === anyType || memberType === errorType) continue
+            val valType = try { getTypeOfExpression(p.initializer) } catch (_: StackOverflowError) { continue }
+            if (valType === anyType || valType === errorType) continue
+            if (checkTypeRelatedTo(valType, memberType, assignableRelation)) continue
+            mismatches.add(arrayOf(
+                pn.pos, pn.text.length, pn.text,
+                typeToString(getWidenedLiteralType(valType)), typeToString(memberType),
+                member.declarations.firstOrNull(),
+            ))
+        }
+        if (mismatches.isEmpty()) return
+        val (rl, rc) = getLineAndCharacterOfPosition(source, returnPos)
+        diagnostics.add(Diagnostic(
+            message = "Return type of constructor signature must be assignable to the instance type of the class.",
+            category = DiagnosticCategory.Error, code = 2409,
+            fileName = fileName, line = rl, character = rc, start = returnPos, length = 6,
+        ))
+        for (m in mismatches) {
+            val keyPos = m[0] as Int; val keyLen = m[1] as Int; val propName = m[2] as String
+            val valDisplay = m[3] as String; val memberDisplay = m[4] as String
+            val memberDecl = m[5] as Node?
+            val (kl, kc) = getLineAndCharacterOfPosition(source, keyPos)
+            val related = memberDecl?.let { decl ->
+                val nameNode: Node? = when (decl) {
+                    is PropertyDeclaration -> decl.name
+                    is MethodDeclaration -> decl.name
+                    is GetAccessor -> decl.name
+                    is SetAccessor -> decl.name
+                    else -> null
+                }
+                val nIdent = nameNode as? Identifier ?: return@let null
+                val (dl, dc) = getLineAndCharacterOfPosition(source, nIdent.pos)
+                Diagnostic(
+                    message = "The expected type comes from property '$propName' which is declared here on type '$className'",
+                    category = DiagnosticCategory.Message, code = 6500,
+                    fileName = fileName, line = dl, character = dc,
+                    start = nIdent.pos, length = nIdent.text.length,
+                )
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '$valDisplay' is not assignable to type '$memberDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = kl, character = kc, start = keyPos, length = keyLen,
+                relatedInformation = if (related != null) listOf(related) else emptyList(),
+            ))
+        }
+    }
+
+    private fun emitCtorNewReturnMismatch(
+        newExpr: NewExpression, returnPos: Int,
+        instType: Type.Interface, className: String, source: String, fileName: String,
+    ) {
+        val s = try { getReturnTypeOfNewExpression(newExpr) } catch (_: StackOverflowError) { return }
+        if (s === anyType || s === errorType || s !is Type.Object) return
+        if (checkTypeRelatedTo(s, instType, assignableRelation)) return
+        // FP firewall: only emit when a CLEAN single-property-mismatch chain can be
+        // built locally (bounds the new-expression FP surface to the one shape the
+        // corpus needs). The local builder renders a no-return method as `() => void`
+        // (the global getTypeOfSymbol defaults such methods to `() => any` — broadening
+        // that is a documented net-negative change).
+        val chain = buildCtorNewReturnChain(s, instType) ?: return
+        val (rl, rc) = getLineAndCharacterOfPosition(source, returnPos)
+        diagnostics.add(Diagnostic(
+            message = "Type '${typeToString(s)}' is not assignable to type '$className'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = rl, character = rc, start = returnPos, length = 6,
+            messageChain = chain,
+        ))
+        diagnostics.add(Diagnostic(
+            message = "Return type of constructor signature must be assignable to the instance type of the class.",
+            category = DiagnosticCategory.Error, code = 2409,
+            fileName = fileName, line = rl, character = rc, start = returnPos, length = 6,
+        ))
+    }
+
+    /**
+     * Build the "Types of property 'X' are incompatible." chain for a class-instance
+     * source not assignable to a class-instance target because exactly one required
+     * target property's type fails. Returns null (suppress) for any other shape —
+     * keeps the new-expression-return FP surface to the single corpus shape.
+     */
+    private fun buildCtorNewReturnChain(s: Type.Object, t: Type.Interface): List<String>? {
+        try { resolveStructuredTypeMembers(s); resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return null }
+        val tMembers = t.members ?: return null
+        val sMembers = s.members ?: return null
+        val tStatics = getStaticMembersOfType(t)
+        for ((name, tProp) in tMembers) {
+            if (name in OBJECT_PROTOTYPE_PROPERTIES || (tStatics != null && name in tStatics)) continue
+            if (isOptionalProperty(tProp)) continue
+            val tType = try { getTypeOfSymbol(tProp) } catch (_: StackOverflowError) { return null }
+            if (tType === anyType || tType === errorType) continue
+            val sProp = sMembers[name] ?: continue // missing prop is a different (2741) shape
+            val sType = try { getTypeOfSymbol(sProp) } catch (_: StackOverflowError) { return null }
+            if (sType === anyType || sType === errorType) continue
+            if (checkTypeRelatedTo(sType, tType, assignableRelation)) continue
+            val sDisplay = renderSymbolTypeWithVoidInference(sProp, sType)
+            return listOf(
+                "  Types of property '$name' are incompatible.",
+                "    Type '$sDisplay' is not assignable to type '${typeToString(tType)}'.",
+            )
+        }
+        return null
+    }
+
+    /** Render a symbol's type, but a no-return-body un-annotated method as `(...) => void`. */
+    private fun renderSymbolTypeWithVoidInference(sym: Symbol, resolved: Type): String {
+        val decl = sym.declarations.firstOrNull()
+        val body = (decl as? MethodDeclaration)?.body
+        if (decl is MethodDeclaration && decl.type == null && body != null && bodyHasNoReturn(body)) {
+            val params = decl.parameters.joinToString(", ") { p ->
+                val pn = (p.name as? Identifier)?.text ?: "_"
+                val pt = p.type?.let { typeToString(getTypeFromTypeNode(it)) } ?: "any"
+                "$pn: $pt"
+            }
+            return "($params) => void"
+        }
+        return typeToString(resolved)
     }
 
     private fun findReturnIdentsInStatements(stmts: List<Statement>, callback: (Int, String) -> Unit) {
