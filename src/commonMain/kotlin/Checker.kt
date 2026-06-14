@@ -17350,6 +17350,8 @@ class Checker(
         val typeParamNames: MutableSet<String> = mutableSetOf(),
         /** Type-eligible names (classes, interfaces, type aliases, enums) declared in this scope. */
         val typeNames: MutableSet<String> = mutableSetOf(),
+        /** Constraint TypeNode of each type parameter (when declared with `extends`). */
+        val typeParamConstraints: MutableMap<String, TypeNode> = mutableMapOf(),
     ) {
         fun has(name: String): Boolean =
             name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
@@ -17373,10 +17375,15 @@ class Checker(
             name in typeNames || name in typeParamNames || parent?.hasType(name) == true
 
         /** Add a type parameter name to both [names] and [typeParamNames]. */
-        fun addTypeParam(name: String) {
+        fun addTypeParam(name: String, constraint: TypeNode? = null) {
             names.add(name)
             typeParamNames.add(name)
+            if (constraint != null) typeParamConstraints[name] = constraint
         }
+
+        /** Returns the constraint TypeNode of type parameter [name] (chain-walked), or null. */
+        fun typeParamConstraintOf(name: String): TypeNode? =
+            typeParamConstraints[name] ?: parent?.typeParamConstraintOf(name)
 
         /** Add a type-eligible name (class/interface/type-alias/enum) — populates both [names] and [typeNames]. */
         fun addType(name: String) {
@@ -17919,7 +17926,7 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
-                stmt.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
+                stmt.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
                 // Check type parameter constraints BEFORE adding params to scope:
                 // TypeScript evaluates type constraints without function params in scope.
                 stmt.typeParameters?.forEach { tp ->
@@ -17959,7 +17966,7 @@ class Checker(
                 stmt.decorators?.forEach { checkUnresolvedInExpr(it.expression, scope, source, fileName) }
                 val classCtx = buildClassContext(stmt, scope, fileName)
                 val classScope = scope.child(classContext = classCtx)
-                stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
+                stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -18025,7 +18032,7 @@ class Checker(
             }
             is InterfaceDeclaration -> {
                 val ifaceScope = scope.child()
-                stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text) }
+                stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text, it.constraint) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
@@ -18056,7 +18063,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             val methodScope = ifaceScope.child()
-                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
+                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
                             member.typeParameters?.forEach { tp ->
                                 tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                                 tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -18091,7 +18098,7 @@ class Checker(
             }
             is TypeAliasDeclaration -> {
                 val typeScope = scope.child()
-                stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text) }
+                stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text, it.constraint) }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
@@ -18745,7 +18752,7 @@ class Checker(
                 if (element.name is ComputedPropertyName) {
                     checkUnresolvedInExpr((element.name as ComputedPropertyName).expression, methodScope, source, fileName)
                 }
-                element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
+                element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
                 element.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -18959,7 +18966,7 @@ class Checker(
             }
             is ArrowFunction -> {
                 val arrowScope = scope.child(hasArguments = false)
-                expr.typeParameters?.forEach { arrowScope.addTypeParam(it.name.text) }
+                expr.typeParameters?.forEach { arrowScope.addTypeParam(it.name.text, it.constraint) }
                 expr.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
@@ -18984,7 +18991,7 @@ class Checker(
                 // Regular functions break 'this' binding — clear class context
                 val fnScope = scope.child(hasArguments = true, classContext = null)
                 expr.name?.let { fnScope.names.add(it.text) }
-                expr.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
+                expr.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
                 addParamsToScope(expr.parameters, fnScope)
                 // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
                 if (options.target < ScriptTarget.ES2015) {
@@ -19002,7 +19009,7 @@ class Checker(
                 val classScope = scope.child(classContext = classCtx)
                 // Class expression name is in scope within its own body
                 expr.name?.let { classScope.names.add(it.text) }
-                expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
+                expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
                 expr.heritageClauses?.forEach { clause ->
                     emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
                     for (type in clause.types) {
@@ -19058,7 +19065,7 @@ class Checker(
                         }
                         is MethodDeclaration -> {
                             val methodScope = scope.child(hasArguments = true)
-                            prop.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
+                            prop.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
                             addParamsToScope(prop.parameters, methodScope)
                             for (param in prop.parameters) {
                                 param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -19630,10 +19637,11 @@ class Checker(
                 checkUnresolvedInType(type.objectType, scope, source, fileName)
                 checkUnresolvedInType(type.indexType, scope, source, fileName)
                 checkIndexTypeValidity(type.indexType, source, fileName)
+                checkBadArrayStringLiteralIndex(type, scope, source, fileName)
             }
             is MappedType -> {
                 val mappedScope = scope.child()
-                type.typeParameter?.let { mappedScope.addTypeParam(it.name.text) }
+                type.typeParameter?.let { mappedScope.addTypeParam(it.name.text, it.constraint) }
                 // The mapped TP's constraint is checked in the OUTER scope —
                 // the TP being introduced (e.g. `K` in `[K in keyof T]`) is
                 // NOT in scope inside its own constraint.
@@ -19652,7 +19660,7 @@ class Checker(
             }
             is FunctionType -> {
                 val fnScope = scope.child()
-                type.typeParameters?.forEach { fnScope.addTypeParam(it.name.text) }
+                type.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
                 type.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
@@ -19666,7 +19674,7 @@ class Checker(
             }
             is ConstructorType -> {
                 val ctorScope = scope.child()
-                type.typeParameters?.forEach { ctorScope.addTypeParam(it.name.text) }
+                type.typeParameters?.forEach { ctorScope.addTypeParam(it.name.text, it.constraint) }
                 type.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
@@ -19705,7 +19713,7 @@ class Checker(
                                 checkUnresolvedInExpr((member.name as ComputedPropertyName).expression, scope, source, fileName)
                             }
                             val methodScope = scope.child()
-                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text) }
+                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
                             member.typeParameters?.forEach { tp ->
                                 tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                                 tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
@@ -20045,6 +20053,82 @@ class Checker(
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * tsc's isNumericLiteralName: a property name `s` is a valid numeric (array) index
+     * iff `String(Number(s)) === s`. So "0"/"1"/"1.5"/"-1" are canonical, while
+     * "0.0"/"00"/"1e3"/"01" are NOT (they parse to a number whose canonical string differs).
+     */
+    private fun isNumericLiteralName(s: String): Boolean {
+        if (s.isEmpty()) return false
+        val d = s.toDoubleOrNull() ?: return false
+        val canonical = if (d == d.toLong().toDouble() && 'e' !in s && 'E' !in s) {
+            d.toLong().toString()
+        } else {
+            d.toString()
+        }
+        return canonical == s
+    }
+
+    /**
+     * B406: emit TS2339 (concrete array) / TS2536 (type-parameter constrained to an array)
+     * for an indexed-access TYPE `Arr["<literal>"]` whose string-literal index is
+     * numeric-LOOKING but NOT a canonical numeric index (e.g. `string[]["0.0"]`,
+     * `T["0.0"]` with `T extends string[]`). FP-safe: a numeric-looking-but-non-canonical
+     * string is never a valid array member NOR a valid numeric index, and the check is
+     * gated to array-shaped object types only (so an object literal with a `"0.0"`
+     * property is unaffected). `string[]["0"]` (canonical) and union indices never fire.
+     */
+    private fun checkBadArrayStringLiteralIndex(
+        type: IndexedAccessType, scope: NameScope, source: String, fileName: String,
+    ) {
+        val literal = (type.indexType as? LiteralType)?.literal as? StringLiteralNode ?: return
+        val text = literal.text
+        // Only a numeric-looking-but-non-canonical key is unambiguously invalid.
+        if (text.toDoubleOrNull() == null || isNumericLiteralName(text)) return
+        // Is the object type an array (concrete) or a type parameter constrained to one?
+        fun isArrayShaped(t: TypeNode?): Boolean = when (t) {
+            is ArrayType -> true
+            is TypeReference -> {
+                val n = (t.typeName as? Identifier)?.text
+                n == "Array" || n == "ReadonlyArray"
+            }
+            else -> false
+        }
+        val obj = type.objectType
+        val isConcreteArray = isArrayShaped(obj)
+        val tpName = (obj as? TypeReference)?.typeName?.let { it as? Identifier }?.text
+        val isArrayConstrainedTp = tpName != null && scope.isTypeParam(tpName) &&
+            scope.typeParamConstraintOf(tpName)?.let { c ->
+                isArrayShaped(c) || c is TupleType
+            } == true
+        // True text length of the index literal incl. quotes (node.end overshoots).
+        val indexLen = (literal.rawText ?: text).length + 2
+        if (isConcreteArray) {
+            // TS2339 "Property '<text>' does not exist on type '<obj>'." — squiggle the literal.
+            val display = formatTypeForDisplay(obj) ?: return
+            val start = type.indexType.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Property '$text' does not exist on type '$display'.",
+                category = DiagnosticCategory.Error,
+                code = 2339, fileName = fileName, line = line, character = character,
+                start = start, length = indexLen,
+            ))
+        } else if (isArrayConstrainedTp) {
+            // TS2536 "Type '"<text>"' cannot be used to index type '<T>'." — squiggle the whole access.
+            val start = type.pos
+            val closeBracket = source.indexOf(']', type.indexType.pos)
+            val length = if (closeBracket >= 0) closeBracket + 1 - start else type.end - start
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type '\"$text\"' cannot be used to index type '$tpName'.",
+                category = DiagnosticCategory.Error,
+                code = 2536, fileName = fileName, line = line, character = character,
+                start = start, length = length,
+            ))
+        }
     }
 
     /** Collect namespace/module names visible from [fileName] (globals + current file locals). */
@@ -34841,7 +34925,7 @@ interface DataView {
             when (stmt) {
                 is ClassDeclaration -> {
                     val classScope = scope.child()
-                    stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text) }
+                    stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
                     stmt.heritageClauses?.forEach { clause ->
                         for (type in clause.types) {
                             checkHeritageTypeArgCount(type, classScope, source, fileName)
@@ -34850,7 +34934,7 @@ interface DataView {
                 }
                 is InterfaceDeclaration -> {
                     val ifaceScope = scope.child()
-                    stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text) }
+                    stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text, it.constraint) }
                     stmt.heritageClauses?.forEach { clause ->
                         for (type in clause.types) {
                             checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
