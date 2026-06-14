@@ -1069,6 +1069,9 @@ class Checker(
         // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
         // module-local namespace shadowing any file-level namespace of the same name.
         checkAmbientModuleLocalNamespaceMemberRefs()
+        // 14b''. B396: TS2694 for `X.member` where X is a same-file top-level `declare namespace`
+        // in a MODULE file (module-local, not cross-file-merged — sidesteps Blocker #3).
+        checkModuleFileLocalNamespaceMemberRefs()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -27682,6 +27685,83 @@ class Checker(
                                 length = memberNode.text.length,
                             ))
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * B396 (TS2694): a 2-segment qualified type ref `X.member` in a MODULE FILE where `X` is a
+     * same-file top-level `declare namespace X` and `member` is absent from X's same-file
+     * declarations. In a module file a top-level `declare namespace X` is module-LOCAL (it does
+     * NOT merge with another file's `declare namespace X`), but our checker merges every file's
+     * locals into `globals` (Blocker #3), so the symbol wrongly carries the OTHER file's members
+     * and the missing-member access silently passes. Sidestep (cf. B146 for ambient `declare
+     * module` blocks): collect X's members from THIS file's AST only.
+     *
+     * FP firewall (load-bearing): MODULE files only (a script-file top-level namespace IS global,
+     * where cross-file merge is legitimate); `declare`-namespace roots only; `X` must NOT also be
+     * bound to a non-namespace top-level decl/import (shadow); a namespace body containing a
+     * re-export / import-equals / export-assignment (members this AST collector can't track) marks
+     * X un-checkable. 2-segment refs only (forEachQualifiedTypeRefInStatement is FN-safe).
+     */
+    private fun checkModuleFileLocalNamespaceMemberRefs() {
+        for (result in binderResults) {
+            if (!isModuleFile(result.sourceFile.statements)) continue
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val nsMembers = HashMap<String, MutableSet<String>>()
+            val shadowed = HashSet<String>()
+            // Collect same-file top-level `declare namespace X` members (merging all decls of X).
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is Identifier && ModifierFlag.Declare in stmt.modifiers) {
+                    val n = (stmt.name as Identifier).text
+                    // Un-trackable members (re-export / import-equals / export-assignment in body) → skip X.
+                    val body = stmt.body as? ModuleBlock
+                    if (body != null && body.statements.any {
+                            it is ExportDeclaration || it is ImportEqualsDeclaration ||
+                                it is ImportDeclaration || it is ExportAssignment
+                        }) {
+                        shadowed.add(n)
+                    } else {
+                        collectNamespaceLocalMemberNames(stmt, nsMembers.getOrPut(n) { HashSet() })
+                    }
+                }
+            }
+            if (nsMembers.isEmpty()) continue
+            // A same-name non-namespace top-level binding shadows the namespace → don't check it.
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is ClassDeclaration -> stmt.name?.let { shadowed.add(it.text) }
+                    is InterfaceDeclaration -> shadowed.add(stmt.name.text)
+                    is FunctionDeclaration -> stmt.name?.let { shadowed.add(it.text) }
+                    is EnumDeclaration -> shadowed.add(stmt.name.text)
+                    is TypeAliasDeclaration -> shadowed.add(stmt.name.text)
+                    is VariableStatement -> stmt.declarationList.declarations.forEach { d ->
+                        (d.name as? Identifier)?.let { shadowed.add(it.text) }
+                    }
+                    is ImportEqualsDeclaration -> stmt.name?.let { shadowed.add(it.text) }
+                    else -> {}
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                forEachQualifiedTypeRefInStatement(stmt) { rootNode, memberNode ->
+                    val rootName = rootNode.text
+                    if (rootName in shadowed) return@forEachQualifiedTypeRefInStatement
+                    val members = nsMembers[rootName] ?: return@forEachQualifiedTypeRefInStatement
+                    if (memberNode.text !in members) {
+                        val (line, ch) = getLineAndCharacterOfPosition(source, memberNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Namespace '$rootName' has no exported member '${memberNode.text}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2694,
+                            fileName = fileName,
+                            line = line,
+                            character = ch,
+                            start = memberNode.pos,
+                            length = memberNode.text.length,
+                        ))
                     }
                 }
             }
