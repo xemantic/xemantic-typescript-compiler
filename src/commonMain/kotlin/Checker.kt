@@ -67519,6 +67519,24 @@ interface DataView {
                 }
             }
         }
+        // B422: JS `/** @type {Typedef} */ const x = { prop: undefined }` where the JSDoc
+        // `@typedef` declares `prop` OPTIONAL with a non-undefined type — under
+        // exactOptionalPropertyTypes that is TS2375 (`strictOptionalProperties3`). The
+        // `@typedef` is not bound (raw-source only), so resolve its property shape from the
+        // JSDoc comments. FP firewall (essentially nil surface): JS file + exactOptional +
+        // unbound `@type {Name}` TypeReference + object-literal init + a property whose value
+        // is the identifier `undefined` matching an OPTIONAL non-undefined typedef property.
+        run {
+            if (!options.exactOptionalPropertyTypes || !strictNullChecks) return@run
+            if (!isJsLikeFileName(fileName)) return@run
+            if (!decl.typeFromJSDoc) return@run
+            val init = decl.initializer as? ObjectLiteralExpression ?: return@run
+            val ann = decl.type as? TypeReference ?: return@run
+            val typedefName = (ann.typeName as? Identifier)?.text ?: return@run
+            if (globals[typedefName] != null || currentFileLocals?.get(typedefName) != null) return@run
+            val shape = resolveJsTypedefOptionalProps(typedefName, source) ?: return@run
+            if (tryEmitJsTypedefExactOptional(decl, init, typedefName, shape, source, fileName)) return
+        }
         // B294: discriminant-filtered UNION excess-property check (tsc
         // hasExcessProperties + discriminateTypeByDiscriminableItems) — must run
         // BEFORE the generic union-target TS2322 and the flat checkExcessProperties
@@ -68586,6 +68604,76 @@ interface DataView {
                 emitTS2322(name.pos, name.text.length, exprType, declaredTypeStr, source, fileName, hasElaboration = !isSimpleLiteral(init), typeParams = typeParams)
             }
         }
+    }
+
+    /**
+     * B422: resolve a JSDoc `@typedef`'s property shape from raw source (the `@typedef`
+     * is not bound anywhere). Returns prop name -> (optional, typeText). Two forms:
+     *  - `@typedef {object} NAME` + sibling `@property {TYPE} [PROP]` tags (`[..]` = optional);
+     *  - `@typedef {{ value?: number }} NAME` (inline object type, `?` = optional).
+     */
+    private fun resolveJsTypedefOptionalProps(name: String, source: String): Map<String, Pair<Boolean, String>>? {
+        val esc = Regex.escape(name)
+        // Inline object form: @typedef {{ ... }} NAME
+        Regex("""@typedef\s*\{\{([^{}]*)\}\}\s+$esc\b""").find(source)?.let { m ->
+            val map = LinkedHashMap<String, Pair<Boolean, String>>()
+            for (part in m.groupValues[1].split(';', ',')) {
+                val t = part.trim()
+                if (t.isEmpty()) continue
+                val pm = Regex("""^(\w+)\s*(\??)\s*:\s*(.+)$""").find(t) ?: continue
+                map[pm.groupValues[1]] = (pm.groupValues[2] == "?") to pm.groupValues[3].trim()
+            }
+            return if (map.isEmpty()) null else map
+        }
+        // Object form: @typedef {object} NAME  followed by @property tags in the same comment.
+        val om = Regex("""@typedef\s*\{[Oo]bject\}\s+$esc\b""").find(source) ?: return null
+        val rest = source.substring(om.range.last + 1)
+        val end = rest.indexOf("*/").let { if (it < 0) rest.length else it }
+        val block = rest.substring(0, end)
+        val map = LinkedHashMap<String, Pair<Boolean, String>>()
+        for (pm in Regex("""@property\s*\{([^}]+)\}\s*(\[)?(\w+)\]?""").findAll(block)) {
+            map[pm.groupValues[3]] = (pm.groupValues[2] == "[") to pm.groupValues[1].trim()
+        }
+        return if (map.isEmpty()) null else map
+    }
+
+    /**
+     * B422: emit TS2375 for a JS `@type {Typedef}` object-literal whose `prop: undefined`
+     * value targets an OPTIONAL non-undefined typedef property under exactOptionalPropertyTypes.
+     */
+    private fun tryEmitJsTypedefExactOptional(
+        decl: VariableDeclaration, init: ObjectLiteralExpression, typedefName: String,
+        shape: Map<String, Pair<Boolean, String>>, source: String, fileName: String,
+    ): Boolean {
+        val nameNode = decl.name as? Identifier ?: return false
+        for (p in init.properties) {
+            if (p !is PropertyAssignment) continue
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if ((p.initializer as? Identifier)?.text != "undefined") continue
+            val (optional, typeText) = shape[pn] ?: continue
+            if (!optional || typeText.contains("undefined")) continue
+            val litDisplay = "{ " + init.properties.mapNotNull { q ->
+                if (q !is PropertyAssignment) return@mapNotNull null
+                val qn = (q.name as? Identifier)?.text ?: return@mapNotNull null
+                val qDisplay = if ((q.initializer as? Identifier)?.text == "undefined") "undefined"
+                    else typeToString(getWidenedLiteralType(getTypeOfExpression(q.initializer)))
+                "$qn: $qDisplay"
+            }.joinToString("; ") + "; }"
+            val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$litDisplay' is not assignable to type '$typedefName' with " +
+                    "'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.",
+                category = DiagnosticCategory.Error, code = 2375,
+                fileName = fileName, line = line, character = ch,
+                start = nameNode.pos, length = nameNode.text.length,
+                messageChain = listOf(
+                    "  Types of property '$pn' are incompatible.",
+                    "    Type 'undefined' is not assignable to type '$typeText'.",
+                ),
+            ))
+            return true
+        }
+        return false
     }
 
     /**
