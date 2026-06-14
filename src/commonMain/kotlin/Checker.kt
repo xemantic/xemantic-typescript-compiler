@@ -11329,6 +11329,85 @@ class Checker(
         }
     }
 
+    /**
+     * B417: FLOW-AWARE TS2367 for a discriminant comparison `recv.prop === literal`
+     * (or `!==`/`==`/`!=`, symmetric) inside an `if`/`else if` condition where flow
+     * narrowing has reduced `recv` so that `recv.prop` can no longer be the compared
+     * literal. e.g. after `switch (true) { case shape.kind === "circle": return … }`
+     * the scrutinee is `{square}` past the switch, so `if (shape.kind === "circle")`
+     * compares `"square"` with `"circle"` → no overlap. Hooked into BOTH if-statement
+     * dispatchers (which carry the param/flow context). FP firewall: fires only when
+     * the DECLARED prop overlapped the literal but the NARROWED one does not (a genuine
+     * flow-induced no-overlap — statically-impossible comparisons are owned by the other
+     * TS2367 sites), and only when the narrowed prop is an all-literal set.
+     */
+    private fun checkFlowNoOverlapCondition(cond: Expression, source: String, fileName: String) {
+        var e: Expression = cond
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e !is BinaryExpression) return
+        when (e.operator) {
+            SyntaxKind.AmpersandAmpersand, SyntaxKind.BarBar -> {
+                checkFlowNoOverlapCondition(e.left, source, fileName)
+                checkFlowNoOverlapCondition(e.right, source, fileName)
+            }
+            SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+            SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals -> emitFlowNoOverlap(e, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Set of a property's literal types across a (possibly-union) type, or null when
+     *  any member lacks the property / the property type isn't a discriminant literal. */
+    private fun propTypeLiteralSet(type: Type, propName: String): List<Type>? {
+        val members = if (type is Type.Union) type.types else listOf(type)
+        val lits = mutableListOf<Type>()
+        for (m in members) {
+            val ap = try { getApparentType(m) } catch (_: StackOverflowError) { return null }
+            if (ap !is Type.Object) return null
+            val ps = getPropertyOfType(ap, propName) ?: return null
+            val pt = try { getTypeOfSymbol(ps) } catch (_: StackOverflowError) { return null }
+            if (!isLiteralKindForDiscriminant(pt)) return null
+            lits.add(pt)
+        }
+        return lits
+    }
+
+    private fun emitFlowNoOverlap(expr: BinaryExpression, source: String, fileName: String) {
+        val (propAccess, literalExpr) = when {
+            expr.left is PropertyAccessExpression && literalTypeOfExpression(expr.right) != null ->
+                (expr.left as PropertyAccessExpression) to expr.right
+            expr.right is PropertyAccessExpression && literalTypeOfExpression(expr.left) != null ->
+                (expr.right as PropertyAccessExpression) to expr.left
+            else -> return
+        }
+        val recv = propAccess.expression
+        val propName = (propAccess.name as? Identifier)?.text ?: return
+        val literalType = literalTypeOfExpression(literalExpr) ?: return
+        if (!isLiteralKindForDiscriminant(literalType)) return
+        getReferencePath(recv) ?: return
+        val declared = try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return }
+        if (declared === anyType || declared === errorType) return
+        val narrowed = getNarrowedTypeForReference(declared, recv)
+        if (narrowed === declared) return
+        val declaredProp = propTypeLiteralSet(declared, propName) ?: return
+        val narrowedProp = propTypeLiteralSet(narrowed, propName) ?: return
+        if (narrowedProp.isEmpty()) return
+        // FP firewall: only flow-INDUCED no-overlap (declared overlapped, narrowed doesn't).
+        if (declaredProp.none { literalsEqualForDiscriminant(it, literalType) }) return
+        if (narrowedProp.any { literalsEqualForDiscriminant(it, literalType) }) return
+        val narrowedDisplay = narrowedProp.joinToString(" | ") { typeToString(it) }
+        val literalDisplay = typeToString(literalType)
+        val start = expr.pos
+        val length = expressionTrueEnd(expr) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This comparison appears to be unintentional because the types '$narrowedDisplay' and '$literalDisplay' have no overlap.",
+            category = DiagnosticCategory.Error, code = 2367,
+            fileName = fileName, line = line, character = character, start = start, length = length,
+        ))
+    }
+
     private fun runFlowTS2454OnTopLevel(
         statements: List<Statement>, source: String, fileName: String,
         emitted: MutableSet<Int>, fileLocals: SymbolTable?,
@@ -64891,6 +64970,8 @@ interface DataView {
                 }
                 is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
+                    // B417: flow-aware TS2367 on the if/else-if CONDITION.
+                    checkFlowNoOverlapCondition(stmt.expression, source, fileName)
                     // B201: apply null-narrowing in the then-branch (mirrors the nested
                     // dispatcher's IfStatement arm) — `if (match !== null) { … }` at file
                     // level narrows currentLocalTypes["match"] for the block walk.
@@ -66082,6 +66163,8 @@ interface DataView {
                 }
             }
             is IfStatement -> {
+                // B417: flow-aware TS2367 on the if/else-if CONDITION.
+                checkFlowNoOverlapCondition(stmt.expression, source, fileName)
                 // Apply control flow narrowing in then-branch
                 val narrowed = extractNullNarrowing(stmt.expression)
                 if (narrowed != null) {

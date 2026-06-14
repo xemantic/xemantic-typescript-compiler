@@ -577,9 +577,19 @@ class FlowGraphBuilder {
         // End of last clause falls through to postSwitch.
         fallthroughFlow?.let { joinAntecedent(postSwitch, it) }
 
-        // If no default clause, the switch may exit without matching anything.
+        // If no default clause, the switch may exit without matching anything — and
+        // reaching postSwitch that way means EVERY case condition was false. Narrow the
+        // no-match flow by each case expression being false (chained FlowConditions over
+        // preSwitch) so post-switch narrowing reflects the un-matched scrutinee. For a
+        // `switch (true) { case shape.kind === "circle": return … }` this leaves shape as
+        // the non-circle members past the switch (tsc's post-switch exhaustiveness). For
+        // a non-discriminant scrutinee each FlowCondition narrows nothing (harmless).
         if (!hasDefault) {
-            joinAntecedent(postSwitch, preSwitch)
+            var noMatch = preSwitch
+            for (clause in clauses) {
+                if (clause is CaseClause) noMatch = newCondition(false, clause.expression, noMatch)
+            }
+            joinAntecedent(postSwitch, noMatch)
         }
 
         breakTargetStack.removeLast()
