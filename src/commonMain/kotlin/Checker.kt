@@ -94486,6 +94486,19 @@ interface DataView {
             }
         }
         if (overloadErrors.isNotEmpty()) {
+            // B418: tsc's "best matching overload" collapse. When ≥1 overload fails
+            // on MULTIPLE array-literal elements, tsc reports ONLY the overload with
+            // the FEWEST per-element diagnostics (the single best candidate) and
+            // anchors at its failing element — `max>1 ? allDiagnostics[minIndex] :
+            // flatten` in chooseOverload. Otherwise (all overloads ≤1 diag) it
+            // flattens and reports every overload (existing behavior). FP-safe: the
+            // collapse triggers only on an array-literal arg failing ≥2 elements.
+            val perOverloadFailCount = overloadErrors.map { (_, sig, _) -> countFailingArgDiagnostics(args, sig) }
+            val reported: List<Triple<Int, Signature, String>> =
+                if (overloadErrors.size > 1 && perOverloadFailCount.any { it > 1 }) {
+                    val minIdx = perOverloadFailCount.indices.minByOrNull { perOverloadFailCount[it] }!!
+                    listOf(overloadErrors[minIdx])
+                } else overloadErrors
             // 17.15b: When ANY overload's first failing arg is a fn-type-vs-fn-type
             // mismatch and we have a callee, point the squiggle at the callee instead
             // of the failing argument — TypeScript treats fn-vs-fn arg mismatch as a
@@ -94497,24 +94510,27 @@ interface DataView {
             // TypeScript squiggles the argument, not the callee. Cf.
             // signatureLengthMismatchInOverload_ts where two overloads both fail
             // at arg[0] (arity vs param-type) — expected squiggle is the arg.
-            val anyFnFnMismatch = callee != null && overloadErrors.any { (_, sig, _) ->
+            val anyFnFnMismatch = callee != null && reported.any { (_, sig, _) ->
                 getFirstFailingFnTypeArgPair(args, sig) != null
             }
             // B50.11: ANY overload that fails on a NON-function-vs-function shape
             // (e.g. function arg vs string param) suggests heterogeneous overload
             // shapes — TypeScript prefers callee squiggle in that case. Mirrors
             // `overloadsWithProvisionalErrors_ts` baseline.
-            val hasNonFnFnFailing = callee != null && overloadErrors.any { (_, sig, _) ->
+            val hasNonFnFnFailing = callee != null && reported.any { (_, sig, _) ->
                 getFirstFailingFnTypeArgPair(args, sig) == null
             }
             // Collect first-failing-arg position per overload. If all overloads
             // share the same failing position, use that — otherwise fall back to
             // callee for fn-vs-fn cases.
-            val perOverloadPos = overloadErrors.map { (_, sig, _) ->
+            val perOverloadPos = reported.map { (_, sig, _) ->
                 getFirstFailingArgPosition(args, sig)
             }
             val allSamePos = perOverloadPos.isNotEmpty() && perOverloadPos.all { it == perOverloadPos.first() }
-            val pos: Pair<Int, Int>? = if (anyFnFnMismatch && callee != null && (!allSamePos || hasNonFnFnFailing)) {
+            val pos: Pair<Int, Int>? = if (reported.size == 1 && reported !== overloadErrors) {
+                // B418 collapse: anchor at the best overload's failing (element) position.
+                getFirstFailingArgPosition(args, reported[0].second)
+            } else if (anyFnFnMismatch && callee != null && (!allSamePos || hasNonFnFnFailing)) {
                 Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
             } else if (callee is PropertyAccessExpression && !allSamePos) {
                 // B280: a METHOD call whose overloads fail at DIFFERENT arg positions
@@ -94529,7 +94545,7 @@ interface DataView {
                 val (line, character) = getLineAndCharacterOfPosition(source, argStart)
                 val chain = mutableListOf<String>()
                 val totalOverloads = signatures.size
-                for ((overloadIdx, sig, errorMsg) in overloadErrors) {
+                for ((overloadIdx, sig, errorMsg) in reported) {
                     // 17.85: Use signatureToStringColon (which handles optional
                     // params via formatParameter — `?:` + `| undefined` widening)
                     // for TS2769 overload chain display, instead of the simpler
@@ -94554,7 +94570,7 @@ interface DataView {
                 }
                 // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
                 val related = mutableListOf<Diagnostic>()
-                for ((_, sig, errorMsg) in overloadErrors) {
+                for ((_, sig, errorMsg) in reported) {
                     if (errorMsg.startsWith("Object literal may only specify known properties")) {
                         // Excess-property errors get no TS2728/TS6500 related info.
                         continue
@@ -94648,6 +94664,46 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * B418: Count the element/argument mismatches an overload produces — used to
+     * pick tsc's "best matching" overload when ALL overloads fail. tsc's
+     * `chooseOverload` reports ONLY the overload with the FEWEST per-element
+     * diagnostics when some overload has ≥2 (`max>1 ? allDiagnostics[minIndex] :
+     * flatten`). For an array-literal arg vs `Array<E>` param, counts elements not
+     * assignable to E (mirrors tsc's element-wise elaboration, one diagnostic per
+     * failing element); every other failing arg counts as 1. First-mismatch
+     * semantics on scalar args, like [getFirstArgumentError].
+     */
+    private fun countFailingArgDiagnostics(args: List<Expression>, sig: Signature): Int {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = getTypeOfSymbol(params[i])
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
+                    paramType.target?.symbol?.name == "Array") {
+                    val elemT = paramType.resolvedTypeArguments?.firstOrNull()
+                    if (elemT != null && elemT !== anyType && elemT !== errorType) {
+                        var c = 0
+                        for (elem in arg.elements) {
+                            if (elem is SpreadElement) continue
+                            val et = getTypeOfExpression(elem)
+                            if (et === anyType || et === errorType) continue
+                            if (!checkTypeRelatedTo(et, elemT, assignableRelation)) c++
+                        }
+                        if (c > 0) return c
+                    }
+                }
+                return 1
+            }
+        }
+        return 0
     }
 
     /**
