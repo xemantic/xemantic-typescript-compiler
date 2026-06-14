@@ -90891,6 +90891,38 @@ interface DataView {
         currentCheckFileName = null
     }
 
+    /**
+     * Resolve the namespace [Symbol] a [ModuleDeclaration]'s name refers to, handling BOTH a
+     * simple `Identifier` (`namespace M`) and a left-nested dotted name (`namespace A.B.C`, which
+     * our parser represents as a `PropertyAccessExpression` chain `((A.B).C)`). The binder declares
+     * nested symbols `A → exports[B] → exports[C]` (see `bindModuleDeclaration`), so we flatten the
+     * segments, resolve the head via the inference-namespace top / file-locals / globals, then walk
+     * `.exports` down to the innermost segment. Used by the call-types walker so a dotted namespace
+     * body is pushed onto `inferenceNamespaceStack` and its internal class/function names resolve
+     * (recursiveClassReferenceTest: `new State(self)` inside `namespace Sample.Thing.Languages.PlainText`).
+     */
+    private fun resolveModuleDeclNamespaceSymbol(nameExpr: Expression): Symbol? {
+        val segments = mutableListOf<String>()
+        var cur: Expression = nameExpr
+        while (cur is PropertyAccessExpression) {
+            segments.add(0, cur.name.text)
+            cur = cur.expression
+        }
+        when (cur) {
+            is Identifier -> segments.add(0, cur.text)
+            else -> return null
+        }
+        if (segments.isEmpty()) return null
+        var sym: Symbol? = if (inferenceNamespaceStack.isNotEmpty()) {
+            inferenceNamespaceStack.last().exports?.get(segments[0])
+        } else null
+        if (sym == null) sym = currentFileLocals?.get(segments[0]) ?: globals[segments[0]]
+        for (i in 1 until segments.size) {
+            sym = sym?.exports?.get(segments[i]) ?: return null
+        }
+        return sym
+    }
+
     private fun checkCallTypesInStatements(statements: List<Statement>, source: String, fileName: String) {
         for (stmt in statements) {
             checkCallTypesInStatement(stmt, source, fileName)
@@ -91237,14 +91269,9 @@ interface DataView {
                 // [lookupInInferenceNamespace]. Mirrors the precedent in
                 // `checkTypeAssignabilityInStmt`.
                 if (ModifierFlag.Declare !in stmt.modifiers) {
-                    val nameNode = stmt.name
-                    val moduleSymbol = if (nameNode is Identifier) {
-                        if (inferenceNamespaceStack.isNotEmpty()) {
-                            inferenceNamespaceStack.last().exports?.get(nameNode.text)
-                        } else {
-                            currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
-                        }
-                    } else null
+                    // Resolve the namespace symbol, handling dotted names (`namespace A.B.C`) so
+                    // the innermost block's internal names resolve when its body is walked.
+                    val moduleSymbol = resolveModuleDeclNamespaceSymbol(stmt.name)
                     val pushed = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) {
                         inferenceNamespaceStack.addLast(moduleSymbol)
                         true
