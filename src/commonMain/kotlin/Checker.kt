@@ -27567,10 +27567,60 @@ class Checker(
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
+            // Cross-block pre-pass: group same-named ambient module blocks and find "poisoned"
+            // namespace names — a name X that is declared as a NON-exported local `namespace X`
+            // in some block AND value-shadowed by an `export { Y as X }` rename (so the module's
+            // exported X is the value Y, not the namespace) AND never declared `export namespace X`.
+            // In such a group, a `X.member` ref in a block that has NO local `namespace X` resolves
+            // X to the value alias → TS2503 (exportSpecifierAndLocalMemberDeclaration).
+            val groups = HashMap<String, MutableList<ModuleBlock>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
+                    (stmt.body as? ModuleBlock)?.let { groups.getOrPut((stmt.name as StringLiteralNode).text) { mutableListOf() }.add(it) }
+                }
+            }
+            val poisonedByModule = HashMap<String, Set<String>>()
+            for ((modName, blocks) in groups) {
+                val localNonExportedNs = HashSet<String>()
+                val exportedNs = HashSet<String>()
+                val renameShadowed = HashSet<String>()
+                for (blk in blocks) for (s in blk.statements) when (s) {
+                    is ModuleDeclaration -> (s.name as? Identifier)?.let {
+                        if (ModifierFlag.Export in s.modifiers) exportedNs.add(it.text) else localNonExportedNs.add(it.text)
+                    }
+                    is ExportDeclaration -> (s.exportClause as? NamedExports)?.elements?.forEach { sp ->
+                        if (sp.propertyName != null && sp.propertyName.text != sp.name.text) renameShadowed.add(sp.name.text)
+                    }
+                    else -> {}
+                }
+                val poisoned = localNonExportedNs.filter { it in renameShadowed && it !in exportedNs }.toSet()
+                if (poisoned.isNotEmpty()) poisonedByModule[modName] = poisoned
+            }
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ModuleDeclaration) continue
                 if (stmt.name !is StringLiteralNode) continue          // ambient module "m"
                 val body = stmt.body as? ModuleBlock ?: continue
+                // TS2503: a `X.member` ref to a poisoned name in a block WITHOUT its own local
+                // `namespace X` — X resolves to the value alias, not a namespace.
+                val poisoned = poisonedByModule[(stmt.name as StringLiteralNode).text]
+                if (!poisoned.isNullOrEmpty()) {
+                    val blockLocalNs = body.statements.filterIsInstance<ModuleDeclaration>()
+                        .mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                    val firablePoison = poisoned - blockLocalNs
+                    if (firablePoison.isNotEmpty()) {
+                        for (s in body.statements) forEachQualifiedTypeRefInStatement(s) { rootNode, _ ->
+                            if (rootNode.text in firablePoison) {
+                                val (line, ch) = getLineAndCharacterOfPosition(source, rootNode.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot find namespace '${rootNode.text}'.",
+                                    category = DiagnosticCategory.Error, code = 2503,
+                                    fileName = fileName, line = line, character = ch,
+                                    start = rootNode.pos, length = rootNode.text.length,
+                                ))
+                            }
+                        }
+                    }
+                }
                 // Collect module-local namespace member names (all declarations of a name).
                 val nsMembers = HashMap<String, MutableSet<String>>()
                 // Names bound to a non-namespace value/alias in the module body — these
@@ -27600,7 +27650,8 @@ class Checker(
                 }
                 if (nsMembers.isEmpty()) continue
                 for (s in body.statements) {
-                    forEachQualifiedTypeRefInStatement(s) { rootName, memberNode ->
+                    forEachQualifiedTypeRefInStatement(s) { rootNode, memberNode ->
+                        val rootName = rootNode.text
                         if (rootName in shadowedNames) return@forEachQualifiedTypeRefInStatement
                         val members = nsMembers[rootName] ?: return@forEachQualifiedTypeRefInStatement
                         if (memberNode.text !in members) {
@@ -27646,7 +27697,7 @@ class Checker(
      * 2-segment qualified type reference `Root.member` whose `Root` is a plain Identifier.
      * Deeper chains (`A.B.member`) are not checked (FN-safe).
      */
-    private fun forEachQualifiedTypeRefInStatement(stmt: Statement, cb: (rootName: String, member: Identifier) -> Unit) {
+    private fun forEachQualifiedTypeRefInStatement(stmt: Statement, cb: (root: Identifier, member: Identifier) -> Unit) {
         when (stmt) {
             is FunctionDeclaration -> {
                 stmt.type?.let { forEachQualifiedTypeRefInType(it, cb) }
@@ -27662,7 +27713,7 @@ class Checker(
         }
     }
 
-    private fun forEachQualifiedTypeRefInClassElement(mem: ClassElement, cb: (String, Identifier) -> Unit) {
+    private fun forEachQualifiedTypeRefInClassElement(mem: ClassElement, cb: (Identifier, Identifier) -> Unit) {
         when (mem) {
             is PropertyDeclaration -> mem.type?.let { forEachQualifiedTypeRefInType(it, cb) }
             is MethodDeclaration -> {
@@ -27674,13 +27725,13 @@ class Checker(
         }
     }
 
-    private fun forEachQualifiedTypeRefInType(type: TypeNode, cb: (String, Identifier) -> Unit) {
+    private fun forEachQualifiedTypeRefInType(type: TypeNode, cb: (Identifier, Identifier) -> Unit) {
         when (type) {
             is TypeReference -> {
                 val tn = type.typeName
                 if (tn is QualifiedName) {
                     val left = tn.left
-                    if (left is Identifier) cb(left.text, tn.right)
+                    if (left is Identifier) cb(left, tn.right)
                 }
                 type.typeArguments?.forEach { forEachQualifiedTypeRefInType(it, cb) }
             }
@@ -90305,6 +90356,26 @@ interface DataView {
             }
             return
         }
+        // TS2538 'bigint' — a `bigint`-typed IDENTIFIER index (`typedArray[bigNum]`
+        // where `bigNum: bigint`). Mirrors the BigIntLiteralNode branch but for a
+        // value whose resolved type is exactly `bigint`. Gated to a receiver
+        // resolving to a concrete object/reference shape (interface/class instance/
+        // anonymous object/reference) — `any`/error receivers bail like tsc.
+        if (arg is Identifier && arg.text != "null" && arg.text != "undefined") {
+            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            if (argType === bigintType) {
+                val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+                if ((rt is Type.Object || rt is Type.Interface || rt is Type.Reference) && rt !== errorType) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'bigint' cannot be used as an index type.",
+                        category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                        line = line, character = character, start = arg.pos, length = arg.text.length,
+                    ))
+                    return
+                }
+            }
+        }
         // 17.178: TS2538 — array-typed index. `arr2[arr1[0]]` where `arr1` is
         // `(string | string[])[]` makes the indexer `string | string[]`, and
         // the `string[]` constituent is invalid as an index. TypeScript reports
@@ -101748,7 +101819,10 @@ interface DataView {
      * property name. e.g., `keyof { a: number; b: string }` → `"a" | "b"`.
      */
     private fun getKeyofType(type: Type): Type {
-        if (type === anyType || type === errorType) return stringType // keyof any = string
+        // keyof any = string | number | symbol (tsc keyofConstraintType). errorType
+        // stays conservative as `string` (its keyof is never displayed/checked meaningfully).
+        if (type === anyType) return getUnionType(listOf(stringType, numberType, esSymbolType))
+        if (type === errorType) return stringType
         if (type is Type.Object) {
             // Only use already-resolved properties to avoid triggering member resolution
             // during init (which can cause test ordering sensitivity).
