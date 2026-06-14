@@ -98214,6 +98214,35 @@ interface DataView {
                 }
             }
         }
+        // B418: primitive source vs an ANONYMOUS object target carrying index
+        // signatures (no symbol → not a named interface). A `string`'s apparent
+        // type (the `String` wrapper interface) has a NUMERIC index signature, so
+        // `string` IS assignable to `{ [n: number]: any }` ("string has numeric
+        // indexer") but NOT to `{ [s: string]: any }` (String has no string
+        // indexer), and `boolean`/`number` (no index sigs) reject both. The source's
+        // apparent type must supply a matching index signature for EACH index sig
+        // the target requires (a string-index source also satisfies a numeric-index
+        // target since string keys cover numeric ones). Only ADDS `true` results —
+        // every such pair previously fell through to `return false`.
+        if (target is Type.Object && target.symbol == null && target !is Type.Reference &&
+            (target.stringIndexInfo != null || target.numberIndexInfo != null) &&
+            (source is Type.Intrinsic || source is Type.StringLiteral ||
+                source is Type.NumberLiteral || source is Type.BigIntLiteral)) {
+            val apparent = getApparentType(source) as? Type.Interface
+            if (apparent != null) {
+                resolveStructuredTypeMembers(apparent)
+                val tStr = target.stringIndexInfo
+                val tNum = target.numberIndexInfo
+                val sStr = apparent.stringIndexInfo
+                val sNum = apparent.numberIndexInfo
+                val strOk = tStr == null ||
+                    (sStr != null && checkTypeRelatedTo(sStr.type, tStr.type, relation))
+                val numOk = tNum == null ||
+                    (sNum != null && checkTypeRelatedTo(sNum.type, tNum.type, relation)) ||
+                    (sStr != null && checkTypeRelatedTo(sStr.type, tNum.type, relation))
+                if (strOk && numOk) return true
+            }
+        }
         // TypeParam vs TypeParam: relate via apparent types (constraint, or {} when
         // unconstrained). Matters for generic-method signature comparison where source's
         // K and target's K (separate fresh params from `resolveGenericPropertyType`) would
@@ -98342,13 +98371,12 @@ interface DataView {
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
             if (sourceProp == null) {
-                // Check index signature
-                val indexInfo = source.stringIndexInfo
-                if (indexInfo != null) {
-                    val targetPropType = getPropertyTypeForRelation(target, targetProp)
-                    if (!checkTypeRelatedTo(indexInfo.type, targetPropType, relation)) return false
-                    continue
-                }
+                // B418: a source INDEX SIGNATURE does NOT satisfy a target's required
+                // NAMED property — tsc's propertiesRelatedTo looks up the source prop
+                // via getPropertyOfType, which never synthesizes a named property from
+                // a source index signature. So `{ [k: string]: any }` is NOT assignable
+                // to `{ one: number }` (one is missing → TS2741), matching the number
+                // index-sig source which already (correctly) failed here.
                 if (!isOptional) {
                     lastMissingPropertyName = targetName
                     lastMissingPropertySymbol = targetProp
