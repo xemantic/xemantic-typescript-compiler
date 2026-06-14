@@ -603,6 +603,11 @@ class Checker(
     // checkUnresolvedInExprCore (B276). MUST be declared before init {} (init-order).
     private val destructuringPatternPos = HashSet<Int>()
 
+    // B402: names of in-scope local vars initialized to an empty object literal `{}`,
+    // tracked during the type-param cast pass. MUST be declared before init {} (init-order:
+    // checkTypeParamStrictSubtypeCast runs from init and mutates this set).
+    private val emptyObjectCastLocals = HashSet<String>()
+
     // B281: per-file cache of (top-level ambient module names, file declares ANY
     // string-named module anywhere). MUST be declared before init {} (init-order).
     private val fileAmbientModuleInfoCache = HashMap<String, Triple<Set<String>, Boolean, Set<String>>>()
@@ -54054,6 +54059,9 @@ interface DataView {
                     emitTS1355IfInvalidConstAssertion(expr, source, fileName)
                     emitTS2352IfClassInstanceToRecordCast(expr, source, fileName)
                 }
+                if (inTypeParamCastPass) {
+                    emitTS2352IfEmptyObjectCastToTypeParam(expr, source, fileName)
+                }
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
             is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
@@ -54444,15 +54452,31 @@ interface DataView {
             val source = result.sourceFile.text
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
+            val savedPass = inTypeParamCastPass
+            inTypeParamCastPass = true
             try {
                 walkStmtsForTypeParamCasts(result.sourceFile.statements, source, fileName)
             } finally {
                 currentFileLocals = savedLocals
+                inTypeParamCastPass = savedPass
             }
         }
     }
 
     private fun walkStmtsForTypeParamCasts(stmts: List<Statement>, source: String, fileName: String) {
+        val addedEmptyObjLocals = mutableListOf<String>()
+        for (stmt in stmts) {
+            if (stmt is VariableStatement) {
+                for (d in stmt.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val init = d.initializer
+                    if (init is ObjectLiteralExpression && init.properties.isEmpty() && emptyObjectCastLocals.add(nm)) {
+                        addedEmptyObjLocals.add(nm)
+                    }
+                }
+            }
+        }
+        try {
         for (stmt in stmts) {
             when (stmt) {
                 is FunctionDeclaration -> {
@@ -54579,6 +54603,51 @@ interface DataView {
                 else -> walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfTypeParamStrictSubtypeCast)
             }
         }
+        } finally {
+            addedEmptyObjLocals.forEach { emptyObjectCastLocals.remove(it) }
+        }
+    }
+
+    /** True while [checkTypeParamStrictSubtypeCast] walks bodies, gating AsExpression-specific emits. */
+    private var inTypeParamCastPass = false
+
+    /**
+     * B402 (TS2352): `expr as T` where `expr` has the empty-object type `{}` and `T` is a type
+     * parameter whose constraint cannot overlap `{}` (the constraint is entirely `null`/`undefined`).
+     * `function f<T extends null | undefined>() { let x = {}; x as T }` →
+     * "Conversion of type '{}' to type 'T' may be a mistake because neither type sufficiently
+     * overlaps with the other…" + "'T' could be instantiated with an arbitrary type which could be
+     * unrelated to '{}'.". FP-safe: source must be a bare empty `Type.Object` (no symbol, members,
+     * signatures, or index info); constraint must be a non-empty union of only null/undefined.
+     */
+    private fun emitTS2352IfEmptyObjectCastToTypeParam(expr: AsExpression, source: String, fileName: String) {
+        val typeNode = expr.type as? TypeReference ?: return
+        val typeName = typeNode.typeName as? Identifier ?: return
+        val tp = currentTypeParamScope?.get(typeName.text) ?: return
+        val constraint = tp.constraint ?: return
+        if (constraint === anyType || constraint === errorType) return
+        val constraintMembers = (constraint as? Type.Union)?.types ?: listOf(constraint)
+        if (constraintMembers.isEmpty() ||
+            !constraintMembers.all { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }) return
+        // Source must be the empty object literal `{}` directly, or a local var initialized to `{}`
+        // (the type-param cast pass does not populate local var types, so `getTypeOfExpression`
+        // returns `any` here — track empty-object locals during the body walk instead).
+        val srcExpr = expr.expression
+        val srcIsEmptyObject = (srcExpr is ObjectLiteralExpression && srcExpr.properties.isEmpty()) ||
+            (srcExpr is Identifier && srcExpr.text in emptyObjectCastLocals)
+        if (!srcIsEmptyObject) return
+        val start = expr.pos
+        val length = (typeName.pos + typeName.text.length - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '{}' to type '${typeName.text}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error, code = 2352,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf(
+                "  '${typeName.text}' could be instantiated with an arbitrary type which could be unrelated to '{}'.",
+            ),
+        ))
     }
 
     private fun emitTS2352IfTypeParamStrictSubtypeCast(
