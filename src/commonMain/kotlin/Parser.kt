@@ -3393,6 +3393,19 @@ class Parser(
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
         parseExpected(SyntaxKind.TypeKeyword)
+        // TS1142 (tsc parseTypeAliasDeclaration): a line break between the `type`
+        // keyword and the alias NAME is not permitted. tsc reports at the current
+        // token (the name) via parseErrorAtCurrentToken — span = the name token.
+        if (scanner.hasPrecedingLineBreak()) {
+            val nameStart = scanner.getTokenPos()
+            val nameEnd = scanner.getPos()
+            reportError(
+                "Line break not permitted here.",
+                code = 1142,
+                overrideStart = nameStart,
+                overrideLength = (nameEnd - nameStart).coerceAtLeast(0),
+            )
+        }
         val name = parseIdentifier()
         val typeParams = parseTypeParametersOpt()
         // TS1110 "Type expected." — fires when the type body is missing.

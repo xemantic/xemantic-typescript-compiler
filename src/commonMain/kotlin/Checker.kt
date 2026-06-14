@@ -67769,6 +67769,21 @@ interface DataView {
         if (declaredTypeStr != null) {
             val exprType = inferSimpleExprType(init, varTypes)
             if (exprType != null && !isAssignableTo(exprType, declaredTypeStr)) {
+                // FP firewall: a bare `null`/`undefined` initializer against a NAMED
+                // (`@`-prefixed) target is rejected by the string-based `isAssignableTo`
+                // because it treats the name as an opaque interface. But the name may be a
+                // type ALIAS whose underlying type DOES accept nullish (`type T = null`).
+                // Resolve the annotation through the type engine and suppress the FP when
+                // the relation genuinely passes (covers `const t: T = null` where
+                // `type T = null`). FP-safe: only suppresses when checkTypeRelatedTo
+                // confirms assignability.
+                if ((exprType == "null" || exprType == "undefined") && declaredTypeStr.startsWith("@")) {
+                    val resolvedTarget = try { getTypeFromTypeNode(typeAnnotation) } catch (_: Throwable) { null }
+                    if (resolvedTarget != null && resolvedTarget !== errorType) {
+                        val srcT = if (exprType == "null") nullType else undefinedType
+                        if (checkTypeRelatedTo(srcT, resolvedTarget, assignableRelation)) return
+                    }
+                }
                 emitTS2322(name.pos, name.text.length, exprType, declaredTypeStr, source, fileName, hasElaboration = !isSimpleLiteral(init), typeParams = typeParams)
             }
         }
