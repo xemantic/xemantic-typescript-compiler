@@ -910,7 +910,10 @@ class TypeScriptCompiler {
                 // !file.parseDiagnostics.length.
                 // B331: TS2480 joins — tsc checkGrammarNameInLetOrConstDeclarations reports it
                 // via grammarErrorOnNode (hasParseDiagnostics-suppressed).
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 }
+                // TS1113 (duplicate 'default' clause) joins — tsc checkGrammarSwitchStatement
+                // reports it via grammarErrorOnNode, so an escaped-keyword TS1260 (a real
+                // parse diagnostic) suppresses every TS1113 in the file.
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1376,7 +1379,7 @@ class TypeScriptCompiler {
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll {
                     val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182) &&
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113) &&
                         fn in filesWithRealParseDiagnostics &&
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }

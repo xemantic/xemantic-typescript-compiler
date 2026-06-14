@@ -1822,6 +1822,11 @@ class Parser(
         val pos = getPos()
         val comments = leadingComments()
         return if (token == SyntaxKind.CaseKeyword) {
+            // TS1260: an escaped keyword form (e.g. `case`) decoded to `case`.
+            // Emitted before consuming so the scanner span covers the keyword token.
+            if (scanner.hasTokenUnicodeEscape()) {
+                reportError("Keywords cannot contain escape characters.", 1260)
+            }
             nextToken()
             val afterCase = trailingComments()
             val expr = parseExpression()
@@ -1842,6 +1847,10 @@ class Parser(
                 pos = pos, end = getEnd(),
                 labelTrailingComments = labelTrailingComments, leadingComments = comments)
         } else {
+            // TS1260: an escaped keyword form (e.g. `default`) decoded to `default`.
+            if (scanner.hasTokenUnicodeEscape()) {
+                reportError("Keywords cannot contain escape characters.", 1260)
+            }
             parseExpected(SyntaxKind.DefaultKeyword)
             val afterDefault = trailingComments()
             parseExpected(SyntaxKind.Colon)

@@ -81,6 +81,12 @@ class Scanner(private val text: String) {
     /** Whether the last scanned token had an invalid unicode escape sequence. */
     private var hasInvalidUnicodeEscape: Boolean = false
 
+    /** Whether the last scanned identifier/keyword token contained ANY unicode escape
+     *  (valid or invalid). Used to emit TS1260 "Keywords cannot contain escape
+     *  characters." when an escaped form decodes to a reserved keyword (e.g.
+     *  `default` in a switch clause). */
+    private var tokenHadUnicodeEscape: Boolean = false
+
     /** Position of the invalid unicode escape within the source (for error reporting). */
     private var invalidUnicodeEscapePos: Int = -1
 
@@ -161,6 +167,9 @@ class Scanner(private val text: String) {
 
     /** Returns true if the last scanned identifier had an invalid unicode escape. */
     fun hasInvalidUnicodeEscapeInToken(): Boolean = hasInvalidUnicodeEscape
+
+    /** Returns true if the last scanned identifier/keyword token contained any unicode escape. */
+    fun hasTokenUnicodeEscape(): Boolean = tokenHadUnicodeEscape
 
     /** Returns the source position of the invalid unicode escape, or -1 if none. */
     fun getInvalidUnicodeEscapePos(): Int = invalidUnicodeEscapePos
@@ -317,6 +326,7 @@ class Scanner(private val text: String) {
         tokenPos = pos
         tokenValue = ""
         hasInvalidUnicodeEscape = false
+        tokenHadUnicodeEscape = false
         invalidUnicodeEscapePos = -1
         correctedRawText = null
 
@@ -746,6 +756,7 @@ class Scanner(private val text: String) {
      * but the raw text (text.substring(start, pos)) is preserved for emit.
      */
     private fun scanIdentifierWithEscapes(start: Int): SyntaxKind {
+        tokenHadUnicodeEscape = true
         val sb = StringBuilder()
         // Include any already-scanned non-escape characters before the first escape
         val prefixLen = pos - start
