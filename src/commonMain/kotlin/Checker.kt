@@ -865,6 +865,31 @@ class Checker(
         }
         // 5. Check for variables used before assignment (TS2454)
         // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
+        // B399 (TS2563): a function/module body whose control-flow graph is too large for
+        // flow analysis. tsc disables flow analysis when a single container's flow walk
+        // exceeds its budget (flowDepth 2000) and reports once at the container. We
+        // approximate per-FILE via the flow-node count: an instrumented full-suite probe
+        // showed the ONLY file exceeding 2000 is a single 10000-deep top-level assignment
+        // chain (largeControlFlowGraph, ~20000 flow nodes); the next-largest valid file is
+        // ~1372, so a 2000 threshold is FP-safe by a wide margin. Reported at the first
+        // top-level statement's first token (matches tsc's report span — `const`, len 5).
+        for (res in binderResults) {
+            val fn = res.sourceFile.fileName
+            if (isDtsFile(fn)) continue
+            if (res.flowGraph.nodeToFlow.size <= 2000) continue
+            val firstStmt = res.sourceFile.statements.firstOrNull() ?: continue
+            val src = res.sourceFile.text
+            val start = firstStmt.pos
+            var len = 0
+            while (start + len < src.length && !src[start + len].isWhitespace()) len++
+            if (len <= 0) continue
+            val (line, ch) = getLineAndCharacterOfPosition(src, start)
+            diagnostics.add(Diagnostic(
+                message = "The containing function or module body is too large for control flow analysis.",
+                category = DiagnosticCategory.Error, code = 2563,
+                fileName = fn, line = line, character = ch, start = start, length = len,
+            ))
+        }
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
         if (shouldCheckDefiniteAssignment) {
