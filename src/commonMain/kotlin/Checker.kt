@@ -1097,6 +1097,9 @@ class Checker(
         // 14b''. B396: TS2694 for `X.member` where X is a same-file top-level `declare namespace`
         // in a MODULE file (module-local, not cross-file-merged — sidesteps Blocker #3).
         checkModuleFileLocalNamespaceMemberRefs()
+        // 14b'''. B400: TS2339 for a NON-EXPORTED nested namespace member referenced across
+        // separate blocks of a merged outer namespace (block-local, does not merge).
+        checkNonExportedNestedNamespaceCrossBlockRefs()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -27786,6 +27789,84 @@ class Checker(
                             character = ch,
                             start = memberNode.pos,
                             length = memberNode.text.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * B400 (TS2339, Blocker #3 cross-block namespace scope): a NON-EXPORTED nested
+     * namespace does NOT merge across separate blocks of a merged outer namespace —
+     * each outer block keeps its own private copy. So in
+     * `namespace One { namespace B { export var x } }`
+     * `namespace One { namespace B { export var y }  B.x; B.y; }`
+     * the `B` referenced in the second block is the second block's local B (only `y`);
+     * `B.x` → "Property 'x' does not exist on type 'typeof B'." while `B.y` is fine.
+     * Our binder flat-merges all of One's (and thus B's) members, so it wrongly exposes
+     * `x` — this AST walker restores the per-block scoping for exactly this shape.
+     * FP firewall (load-bearing): SCRIPT files only; the outer namespace must have ≥2
+     * merged blocks; `recv` must be a block-local NON-EXPORTED nested namespace that is
+     * NOT exported in ANY block (an exported nested ns merges legitimately) and has no
+     * top-level/global binding; the member must be ABSENT from the referencing block's
+     * copy yet PRESENT in a sibling block's same-named copy (a genuine cross-block leak,
+     * never a wholesale-missing member our modeling might mis-handle); only DIRECT
+     * expression-statement `recv.member` refs in the block body are scanned (nested
+     * function bodies, where `recv` could be shadowed, are skipped).
+     */
+    private fun checkNonExportedNestedNamespaceCrossBlockRefs() {
+        for (result in binderResults) {
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val outerByName = HashMap<String, MutableList<ModuleDeclaration>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ModuleDeclaration && stmt.name is Identifier && ModifierFlag.Declare !in stmt.modifiers) {
+                    outerByName.getOrPut((stmt.name as Identifier).text) { mutableListOf() }.add(stmt)
+                }
+            }
+            for ((_, blocks) in outerByName) {
+                if (blocks.size < 2) continue
+                // Per-block: name -> member set, for NON-exported nested namespaces only.
+                val perBlock = blocks.map { block ->
+                    val ns = HashMap<String, MutableSet<String>>()
+                    (block.body as? ModuleBlock)?.statements?.forEach { m ->
+                        if (m is ModuleDeclaration && m.name is Identifier && ModifierFlag.Export !in m.modifiers) {
+                            collectNamespaceLocalMemberNames(m, ns.getOrPut((m.name as Identifier).text) { HashSet() })
+                        }
+                    }
+                    ns
+                }
+                // Names that ARE exported as a nested namespace in some block merge legitimately.
+                val exportedNestedNs = HashSet<String>()
+                for (block in blocks) {
+                    (block.body as? ModuleBlock)?.statements?.forEach { m ->
+                        if (m is ModuleDeclaration && m.name is Identifier && ModifierFlag.Export in m.modifiers) {
+                            exportedNestedNs.add((m.name as Identifier).text)
+                        }
+                    }
+                }
+                for ((bi, block) in blocks.withIndex()) {
+                    val localNs = perBlock[bi]
+                    if (localNs.isEmpty()) continue
+                    val body = block.body as? ModuleBlock ?: continue
+                    for (stmt in body.statements) {
+                        val pae = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                        val recv = pae.expression as? Identifier ?: continue
+                        if (recv.text in exportedNestedNs) continue
+                        if (globals[recv.text] != null) continue
+                        val localMembers = localNs[recv.text] ?: continue
+                        val member = pae.name.text
+                        if (member in localMembers) continue
+                        val inSibling = perBlock.indices.any { it != bi && perBlock[it][recv.text]?.contains(member) == true }
+                        if (!inSibling) continue
+                        val (line, ch) = getLineAndCharacterOfPosition(source, pae.name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$member' does not exist on type 'typeof ${recv.text}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = ch,
+                            start = pae.name.pos, length = member.length,
                         ))
                     }
                 }
