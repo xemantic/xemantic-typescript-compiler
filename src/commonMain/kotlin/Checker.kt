@@ -1427,6 +1427,7 @@ class Checker(
         // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
         checkJsDocNongenericInstantiation()
         checkJsDocBareGenericTags()
+        checkJsDocExtendsTags()
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
         checkDecoratorUseBeforeDeclaration()
         // B354: uncalled-decorator arity (TS1329) + decorator return-type (TS1270/TS1271).
@@ -34407,6 +34408,10 @@ interface DataView {
         // In JS files, use TS8026 instead of TS2314 for heritage clauses without type args
         val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx")
         if (isJsFile && providedCount == 0) {
+            // If a governing `@augments`/`@extends <base>` JSDoc tag precedes this class, the
+            // tag SUPPLIES the type arguments — TS8026 is suppressed and checkJsDocExtendsTags
+            // owns the TS2314 at the tag position instead (jsExtendsImplicitAny).
+            if (hasGoverningExtendsTag(source, name, start)) return
             diagnostics.add(Diagnostic(
                 message = "Expected ${info.displayName} type arguments; provide these with an '@extends' tag.",
                 category = DiagnosticCategory.Error,
@@ -106207,6 +106212,82 @@ interface DataView {
                         start = start, length = name.length,
                     ))
                 }
+            }
+        }
+    }
+
+    /**
+     * Is the heritage base `baseName` at [beforePos] governed by an `@augments`/`@extends`
+     * JSDoc tag? Scans backward to the nearest preceding `/** ... */` block and tests whether
+     * it carries a tag naming exactly this base. Used to suppress TS8026 in favor of the tag's
+     * own TS2314 (checkJsDocExtendsTags).
+     */
+    private fun hasGoverningExtendsTag(source: String, baseName: String, beforePos: Int): Boolean {
+        val closeIdx = source.lastIndexOf("*/", beforePos.coerceIn(0, source.length))
+        if (closeIdx < 0) return false
+        val openIdx = source.lastIndexOf("/**", closeIdx)
+        if (openIdx < 0) return false
+        val block = source.substring(openIdx, closeIdx + 2)
+        return Regex("""@(?:augments|extends)\s+""" + Regex.escape(baseName) + """\b""").containsMatchIn(block)
+    }
+
+    /**
+     * JS files: an `@augments`/`@extends <Base>` JSDoc tag SUPPLIES heritage type arguments for the
+     * following class. When the arg count in the tag does not match the base's required type-param
+     * count, tsc emits TS2314 at the TAG position (the base name, or the whole `Base<...>` span when
+     * args are present), NOT TS8026 at the `extends` clause (jsExtendsImplicitAny). The companion
+     * suppression lives in checkHeritageTypeArgCount via hasGoverningExtendsTag.
+     */
+    private fun checkJsDocExtendsTags() {
+        if (!options.checkJs) return
+        if (!(options.noImplicitAny || options.strict)) return
+        val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
+        val tag = Regex("""@(?:augments|extends)\s+([A-Za-z_$][A-Za-z0-9_$]*)""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (block in jsdocBlock.findAll(source)) {
+                val m = tag.find(block.value) ?: continue
+                val nameGroup = m.groups[1] ?: continue
+                val baseName = nameGroup.value
+                val nameRel = nameGroup.range.first
+                // Compute the provided type-arg count and the full tag span (name [+ <...>]).
+                var spanEndRel = nameGroup.range.last + 1
+                var providedCount = 0
+                var j = spanEndRel
+                while (j < block.value.length && block.value[j].isWhitespace()) j++
+                if (j < block.value.length && block.value[j] == '<') {
+                    var depth = 0
+                    var k = j
+                    while (k < block.value.length) {
+                        when (block.value[k]) {
+                            '<' -> depth++
+                            '>' -> { depth--; if (depth == 0) { k++; break } }
+                        }
+                        k++
+                    }
+                    spanEndRel = k
+                    val inner = block.value.substring(j + 1, (spanEndRel - 1).coerceAtLeast(j + 1))
+                    if (inner.isNotBlank()) {
+                        var d = 0; var cnt = 1
+                        for (c in inner) when (c) { '<' -> d++; '>' -> d--; ',' -> if (d == 0) cnt++ }
+                        providedCount = cnt
+                    }
+                }
+                val info = getTypeParamInfo(baseName) ?: continue
+                if (info.maxTotal == 0) continue
+                if (info.minRequired != info.maxTotal) continue
+                if (providedCount == info.maxTotal) continue
+                val start = block.range.first + nameRel
+                val length = spanEndRel - nameRel
+                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
+                    category = DiagnosticCategory.Error, code = 2314,
+                    fileName = fileName, line = line, character = ch,
+                    start = start, length = length,
+                ))
             }
         }
     }
