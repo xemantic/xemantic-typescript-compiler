@@ -1502,6 +1502,7 @@ class Checker(
         checkRequireImportInNamespace()
         // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
         checkDefaultExportInNamespace()
+        checkExportEqualsCloduleReExport()
         // 65c3. B68.2: TS2484 — `export { x }` inside namespace re-exports a name
         // already exported from a sibling/merged block of the same namespace.
         checkExportConflictInNamespace()
@@ -22684,6 +22685,80 @@ class Checker(
      * `default` keyword (7 chars). Walks Identifier-named namespace bodies
      * recursively. Nested-in-namespace gate matches `checkRequireImportInNamespace`.
      */
+    /**
+     * Narrow single-file TS2300: when a file does `export = X` where X is a clodule
+     * (`class X` + `declare namespace X`), an `export { Name }` re-export inside the namespace body
+     * that names a TOP-LEVEL exported declaration of `Name` makes `Name` a duplicate module member
+     * (it is exported both directly and through the merged `X` namespace). tsc fires TS2300 at BOTH
+     * positions, each with a TS6203 "was also declared here" related-info pointing at the other
+     * (declarationFileNoCrashOnExtraExportModifier). FP-safe: requires the exact export=+clodule+
+     * re-export shape, which no other fixture has.
+     */
+    private fun checkExportEqualsCloduleReExport() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            val exportEqName = statements.filterIsInstance<ExportAssignment>()
+                .firstOrNull { it.isExportEquals }
+                ?.expression?.let { (it as? Identifier)?.text } ?: continue
+            val hasClassX = statements.any { it is ClassDeclaration && (it.name as? Identifier)?.text == exportEqName }
+            val nsX = statements.filterIsInstance<ModuleDeclaration>()
+                .firstOrNull { (it.name as? Identifier)?.text == exportEqName } ?: continue
+            if (!hasClassX) continue
+            val nsBody = nsX.body as? ModuleBlock ?: continue
+            // Collect top-level EXPORTED declarations by name (class/function/var).
+            val topLevelExported = mutableMapOf<String, Identifier>()
+            for (s in statements) when (s) {
+                is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers)
+                    (s.name as? Identifier)?.let { topLevelExported[it.text] = it }
+                is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers)
+                    (s.name as? Identifier)?.let { topLevelExported[it.text] = it }
+                is VariableStatement -> if (ModifierFlag.Export in s.modifiers)
+                    for (d in s.declarationList.declarations) (d.name as? Identifier)?.let { topLevelExported[it.text] = it }
+                else -> {}
+            }
+            if (topLevelExported.isEmpty()) continue
+            for (st in nsBody.statements) {
+                if (st !is ExportDeclaration || st.moduleSpecifier != null) continue
+                val clause = st.exportClause as? NamedExports ?: continue
+                for (spec in clause.elements) {
+                    val localName = (spec.propertyName ?: spec.name).text
+                    val topNode = topLevelExported[localName] ?: continue
+                    val specNode = spec.name
+                    emitDuplicateIdentifierPair(localName, topNode, specNode, source, fileName)
+                }
+            }
+        }
+    }
+
+    /** Emit TS2300 "Duplicate identifier 'X'." at both [a] and [b], each with a TS6203
+     *  "'X' was also declared here." related-info pointing at the other (same file). */
+    private fun emitDuplicateIdentifierPair(name: String, a: Identifier, b: Identifier, source: String, fileName: String) {
+        val (la, ca) = getLineAndCharacterOfPosition(source, a.pos)
+        val (lb, cb) = getLineAndCharacterOfPosition(source, b.pos)
+        diagnostics.add(Diagnostic(
+            message = "Duplicate identifier '$name'.",
+            category = DiagnosticCategory.Error, code = 2300,
+            fileName = fileName, line = la, character = ca, start = a.pos, length = name.length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' was also declared here.",
+                category = DiagnosticCategory.Message, code = 6203,
+                fileName = fileName, line = lb, character = cb, start = b.pos, length = name.length,
+            )),
+        ))
+        diagnostics.add(Diagnostic(
+            message = "Duplicate identifier '$name'.",
+            category = DiagnosticCategory.Error, code = 2300,
+            fileName = fileName, line = lb, character = cb, start = b.pos, length = name.length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$name' was also declared here.",
+                category = DiagnosticCategory.Message, code = 6203,
+                fileName = fileName, line = la, character = ca, start = a.pos, length = name.length,
+            )),
+        ))
+    }
+
     private fun checkDefaultExportInNamespace() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -22697,17 +22772,21 @@ class Checker(
 
     private fun walkDefaultExportInNamespace(
         stmt: Statement, inNamespace: Boolean, source: String, fileName: String,
+        inAmbient: Boolean = false,
     ) {
         when (stmt) {
             is ModuleDeclaration -> {
                 val nm = stmt.name
                 val isInternalNamespace = nm is Identifier && nm.text != "global"
                 val nestedInNamespace = inNamespace || isInternalNamespace
+                // tsc exempts `export { x };` (no module specifier) from TS1194 inside an AMBIENT
+                // namespace (NodeFlags.Ambient via `declare`) — it is a legal re-export there.
+                val nestedAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
                 when (val body = stmt.body) {
                     is ModuleBlock -> body.statements.forEach {
-                        walkDefaultExportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                        walkDefaultExportInNamespace(it, inNamespace = nestedInNamespace, source = source, fileName = fileName, inAmbient = nestedAmbient)
                     }
-                    is ModuleDeclaration -> walkDefaultExportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName)
+                    is ModuleDeclaration -> walkDefaultExportInNamespace(body, inNamespace = nestedInNamespace, source = source, fileName = fileName, inAmbient = nestedAmbient)
                     else -> {}
                 }
             }
@@ -22764,6 +22843,9 @@ class Checker(
                 // `export * from "..."` are TS1194.
                 val clause = stmt.exportClause
                 if (clause is NamedExports && clause.elements.isEmpty()) return
+                // In an ambient (`declare`) namespace, `export { x };` re-exports are legal — no TS1194
+                // (declarationFileNoCrashOnExtraExportModifier).
+                if (inAmbient) return
                 val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                 // Find statement end: scan forward from pos for the close-paren / semi.
                 // Use a conservative span by re-scanning the source slice for the next
