@@ -1105,6 +1105,9 @@ class Checker(
         // 14b'''. B400: TS2339 for a NON-EXPORTED nested namespace member referenced across
         // separate blocks of a merged outer namespace (block-local, does not merge).
         checkNonExportedNestedNamespaceCrossBlockRefs()
+        // 14b''''. B403: TS2322 for `g = f` assigning a generic function value with a stricter
+        // type-parameter constraint to one with a looser (unconstrained) parameter.
+        checkGenericFunctionValueAssignmentConstraints()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
@@ -83610,6 +83613,103 @@ interface DataView {
         }
         val ret = md.type?.let { formatTypeForDisplay(it) } ?: "any"
         return "($params) => $ret"
+    }
+
+    /** Render a function-expression signature WITH its type parameters: `<T, S extends T>(x: T) => R`. */
+    private fun genericFunctionExprSig(fn: FunctionExpression): String {
+        val tps = fn.typeParameters?.takeIf { it.isNotEmpty() }?.let { list ->
+            "<" + list.joinToString(", ") { p ->
+                val nm = p.name.text
+                val c = p.constraint?.let { formatTypeForDisplay(it) }
+                if (c != null) "$nm extends $c" else nm
+            } + ">"
+        } ?: ""
+        val params = fn.parameters.joinToString(", ") { p ->
+            val pname = (p.name as? Identifier)?.text ?: "_"
+            val ptype = p.type?.let { formatTypeForDisplay(it) } ?: "any"
+            val q = if (p.questionToken) "?" else ""
+            val rest = if (p.dotDotDotToken) "..." else ""
+            "$rest$pname$q: $ptype"
+        }
+        val ret = fn.type?.let { formatTypeForDisplay(it) } ?: "void"
+        return "$tps($params) => $ret"
+    }
+
+    /**
+     * B403 (TS2322): assigning a generic function value with a STRICTER type-parameter constraint
+     * to one with a LOOSER (unconstrained) parameter is unsafe. `var f = function<T, S extends T>
+     * (x:T, y:S){}; var g = function<T, S>(x:T, y:S){}; g = f` → "Type '<T, S extends T>(x: T, y: S)
+     * => void' is not assignable to type '<T, S>(x: T, y: S) => void'." + the parameter / could-be-
+     * instantiated chain. Narrow, FP-safe gate: top-level `g = f` of two generic-function-expression
+     * vars with equal type-param/param counts, where some type-param index has f constrained to a
+     * SIBLING f type-parameter and g unconstrained, the names match positionally, and a parameter is
+     * typed by that type-parameter. (Mirrors B401's method-override constraint check at the value site.)
+     */
+    private fun checkGenericFunctionValueAssignmentConstraints() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val genFnVars = HashMap<String, FunctionExpression>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement) {
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        val fn = d.initializer as? FunctionExpression ?: continue
+                        if (!fn.typeParameters.isNullOrEmpty()) genFnVars[nm] = fn
+                    }
+                }
+            }
+            if (genFnVars.size < 2) continue
+            for (stmt in result.sourceFile.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val target = bin.left as? Identifier ?: continue
+                val fFn = (bin.right as? Identifier)?.text?.let { genFnVars[it] } ?: continue
+                val gFn = genFnVars[target.text] ?: continue
+                emitGenericFnAssignConstraintMismatch(target, fFn, gFn, source, fileName)
+            }
+        }
+    }
+
+    private fun emitGenericFnAssignConstraintMismatch(
+        target: Identifier, fFn: FunctionExpression, gFn: FunctionExpression, source: String, fileName: String,
+    ) {
+        val fTps = fFn.typeParameters ?: return
+        val gTps = gFn.typeParameters ?: return
+        if (fTps.size != gTps.size || fTps.isEmpty()) return
+        if (fFn.parameters.size != gFn.parameters.size) return
+        val fTpNames = fTps.map { it.name.text }.toHashSet()
+        for (i in fTps.indices) {
+            val fConstraintName = ((fTps[i].constraint as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            if (fConstraintName !in fTpNames) continue          // constraint references a sibling type-param
+            if (gTps[i].constraint != null) continue            // g unconstrained at this index
+            val tpName = fTps[i].name.text
+            if (gTps[i].name.text != tpName) continue           // names align positionally
+            val paramName = gFn.parameters.firstOrNull {
+                ((it.type as? TypeReference)?.typeName as? Identifier)?.text == tpName
+            }?.let { (it.name as? Identifier)?.text } ?: continue
+            val (line, ch) = getLineAndCharacterOfPosition(source, target.pos)
+            val gTpPos = gTps[i].name.pos
+            val (relLine, relCh) = getLineAndCharacterOfPosition(source, gTpPos)
+            diagnostics.add(Diagnostic(
+                message = "Type '${genericFunctionExprSig(fFn)}' is not assignable to type '${genericFunctionExprSig(gFn)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = target.pos, length = target.text.length,
+                messageChain = listOf(
+                    "  Types of parameters '$paramName' and '$paramName' are incompatible.",
+                    "    Type '$tpName' is not assignable to type '$fConstraintName'.",
+                    "      '$fConstraintName' could be instantiated with an arbitrary type which could be unrelated to '$tpName'.",
+                ),
+                relatedInformation = listOf(Diagnostic(
+                    message = "This type parameter might need an `extends $fConstraintName` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = relLine, character = relCh,
+                    start = gTpPos, length = gTps[i].name.text.length,
+                )),
+            ))
+            return
+        }
     }
 
     /** Render a method signature WITH its own type parameters: `<T extends C>(p: P) => R`. */
