@@ -20327,7 +20327,16 @@ class Checker(
             // formats it as "basename".nsName. import= declarations are legacy namespace
             // aliases and do NOT make a file a module for this purpose.
             val fileResult = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
-            if (fileResult != null && isEsModuleFile(fileResult.sourceFile.statements)) {
+            // Skip the "basename" qualifier when the symbol is a NON-EXPORTED local namespace
+            // declared in THIS file — those are not part of the module's public shape so they
+            // render unqualified (namespaceMergedWithImportAliasNoCrash: local non-exported
+            // `namespace Lib` → 'Lib'). An EXPORTED local namespace (or a cross-module import)
+            // keeps the '"basename".X' form (internalAlias*: `export namespace c` → '"file".c').
+            val nonExportedLocalNs = fileResult != null && symbol.declarations.any { decl ->
+                decl is ModuleDeclaration && ModifierFlag.Export !in decl.modifiers &&
+                    fileResult.sourceFile.statements.any { it === decl }
+            }
+            if (!nonExportedLocalNs && fileResult != null && isEsModuleFile(fileResult.sourceFile.statements)) {
                 // Build quoted base name: strip known extensions, strip directory prefix
                 val baseName = fileName
                     .substringAfterLast("/")
@@ -89344,6 +89353,14 @@ interface DataView {
                             ))
                             return
                         }
+                        // A USER type-only / UNINSTANTIATED namespace (only types/interfaces, no
+                        // value exports) used in VALUE position is owned by TS2708 ("Cannot use
+                        // namespace as a value") — don't ALSO emit TS2339 for a member access on it
+                        // (namespaceMergedWithImportAliasNoCrash: `Library.foo`). Excludes lib
+                        // namespaces (Intl etc.), whose TS2550 lib-target hint above already returned.
+                        val nsDecls = identSymbol.declarations.filterIsInstance<ModuleDeclaration>()
+                        if (nsDecls.isNotEmpty() && nsDecls.none { isNamespaceInstantiated(it) } &&
+                            identSymbol.declarations.none { it in builtinLibDecls }) return
                         diagnostics.add(Diagnostic(
                             message = "Property '$propName' does not exist on type '$typeName'.",
                             category = DiagnosticCategory.Error, code = 2339,
@@ -115001,21 +115018,28 @@ interface DataView {
                         val nb = clause.namedBindings
                         if (nb is NamespaceImport) {
                             val nsName = nb.name.text
-                            if (nsName in varNames) {
-                                val varAfterImport = hasVarConflict(nsName)
-                                if (varAfterImport) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, nb.name.pos)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Import declaration conflicts with local declaration of '$nsName'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2440,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = nb.name.pos,
-                                        length = nsName.length,
-                                    ))
-                                }
+                            // A namespace import does NOT declaration-merge with a local
+                            // `namespace NS {}` declared LATER in the file (namespaceMergedWith-
+                            // ImportAliasNoCrash) → TS2440. Gated to a non-declare local namespace
+                            // declared after the import (mirrors the var-after-import rule; avoids
+                            // ambient-augmentation FPs).
+                            val nsAfterImport = stmts.any { s ->
+                                s is ModuleDeclaration && s.pos > importPos &&
+                                    ModifierFlag.Declare !in s.modifiers &&
+                                    (s.name as? Identifier)?.text == nsName
+                            }
+                            if (nsName in varNames && hasVarConflict(nsName) || nsAfterImport) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, nb.name.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Import declaration conflicts with local declaration of '$nsName'.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2440,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = nb.name.pos,
+                                    length = nsName.length,
+                                ))
                             }
                         }
                         // Named specifiers: import { x } or { x as localAlias }
