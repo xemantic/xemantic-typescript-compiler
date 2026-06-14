@@ -323,6 +323,32 @@ class Parser(
      *  after the call to capture it onto the declaration node. */
     private var lastImportAttributesPos: Int = -1
 
+    /**
+     * B397: TS2880 — `assert` in an import-CALL attributes object
+     * (`import(spec, { assert: {...} })`, type or value position) is deprecated; use `with`.
+     * tsc reports at DIFFERENT spans for the two positions: a VALUE-position dynamic import
+     * squiggles the `assert` keyword (length 6); a TYPE-position `import(...).X` squiggles the
+     * assert clause's VALUE (the inner `{`, length 1). Emitted as a parser diagnostic (2880 is
+     * in GRAMMAR_CLASS_CODES so it does not trigger the real-parse-diagnostic suppression).
+     */
+    private fun emitImportAttrAssertDeprecation(attrs: Expression?, typePosition: Boolean) {
+        val obj = attrs as? ObjectLiteralExpression ?: return
+        for (p in obj.properties) {
+            if (p !is PropertyAssignment) continue
+            val nameNode = p.name as? Identifier ?: continue
+            if (nameNode.text != "assert") continue
+            val (start, len) = if (typePosition && p.initializer != null) {
+                p.initializer!!.pos to 1
+            } else {
+                nameNode.pos to 6
+            }
+            reportError(
+                "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
+                code = 2880, overrideStart = start, overrideLength = len,
+            )
+        }
+    }
+
     private fun parseImportAttributes(): String? {
         lastImportAttributesPos = -1
         // `assert` is not a keyword — check as identifier value
@@ -5268,20 +5294,29 @@ class Parser(
                     nextToken()
                     parseExpected(OpenParen)
                     val arg = parseAssignmentExpression()
+                    val callArgs = mutableListOf(arg)
                     if (token == Comma) {
                         val commaPos = getPos()
                         nextToken()
-                        // Trailing comma `import(spec,)` — TS1009. Second-arg (options) is
-                        // TypeScript 5.3+; the trailing-comma-before-`)` form is still an error.
+                        // Trailing comma `import(spec,)` — TS1009. Second-arg (import options /
+                        // attributes) is TypeScript 5.3+; the trailing-comma-before-`)` form is
+                        // still an error.
                         if (token == CloseParen) {
                             reportError("Trailing comma not allowed.", code = 1009,
                                 overrideStart = commaPos, overrideLength = 1)
+                        } else {
+                            // B397: import attributes/options object — parse it (else CloseParen
+                            // fails on `{`), and flag a deprecated `assert` clause (TS2880).
+                            val secondArg = parseAssignmentExpression()
+                            callArgs.add(secondArg)
+                            emitImportAttrAssertDeprecation(secondArg, typePosition = false)
+                            if (token == Comma) nextToken()
                         }
                     }
                     parseExpected(CloseParen)
                     CallExpression(
                         expression = Identifier("import", pos = pos),
-                        arguments = listOf(arg),
+                        arguments = callArgs,
                         pos = pos,
                         end = getEnd()
                     )
@@ -8202,6 +8237,13 @@ class Parser(
         nextToken() // skip 'import'
         parseExpected(SyntaxKind.OpenParen)
         val arg = parseType()
+        // B397: optional import attributes/options object `import(spec, { assert/with: {...} })`
+        // — parse it (else CloseParen fails on `,`), and flag a deprecated `assert` clause (TS2880).
+        if (parseOptional(SyntaxKind.Comma)) {
+            val secondArg = parseAssignmentExpression()
+            emitImportAttrAssertDeprecation(secondArg, typePosition = true)
+            if (token == SyntaxKind.Comma) nextToken()
+        }
         parseExpected(SyntaxKind.CloseParen)
         var qualifier: Node? = null
         if (parseOptional(SyntaxKind.Dot)) {

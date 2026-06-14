@@ -2366,7 +2366,7 @@ private fun topologicalSort(
 // CHECKER (checkGrammar* via grammarErrorOnNode). They do NOT count as parse
 // diagnostics for tsc's hasParseDiagnostics suppression rule — a file whose only
 // parser emissions are these is "parse-clean" and keeps its grammar diagnostics.
-internal val GRAMMAR_CLASS_CODES = setOf(1248, 1031, 1183, 1039, 1024, 1042, 1009)
+internal val GRAMMAR_CLASS_CODES = setOf(1248, 1031, 1183, 1039, 1024, 1042, 1009, 2880)
 
 private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
 private val emptyObjectRegex = Regex("\\{\\s+\\}")
