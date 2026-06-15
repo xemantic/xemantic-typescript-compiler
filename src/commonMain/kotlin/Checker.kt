@@ -866,6 +866,13 @@ class Checker(
             checkDeclarationEmitNameability()
             checkDeclarationEmitComputedSymbolNameability()
             checkDeclarationEmitHugeInferredType()
+            // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
+            // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
+            // self-contained and well-guarded (skips any/optional/declare/static/abstract/
+            // import-type/unresolved-generic), so it is FP-safe under declarationOnly.
+            if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
+                checkPropertyInitialization()
+            }
         }
 
         if (!declarationOnly) {
