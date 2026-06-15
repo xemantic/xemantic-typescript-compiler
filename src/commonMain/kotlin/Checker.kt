@@ -999,6 +999,10 @@ class Checker(
         // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
         // property declaration, so `this.X` does not exist on the class type.
         checkJsObjectDefinePropertyThisReads()
+        // B429: a checkJs class with an illegal `declare <prop>: T` annotation (TS8009/
+        // TS8010 already fire) STILL declares the property type T — so `this.prop = …`
+        // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
+        checkJsAmbientDeclaredClassProperties()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16279,6 +16283,111 @@ class Checker(
                 fileName = fileName, line = line, character = character,
                 start = pos, length = n.length,
             ))
+        }
+    }
+
+    /**
+     * B429: a checkJs class member declared with an (illegal-in-JS) `declare <prop>: T`
+     * annotation STILL gives `prop` the declared type T (TypeScript reports TS8009 for
+     * the `declare` modifier and TS8010 for the annotation, but uses T for checking).
+     * So `this.prop = <value>` whose value is not assignable to T fires TS2322, and a
+     * `this.prop.<member>` read whose member is absent from T fires TS2339.
+     *
+     * FP firewall (corpus-EXHAUSTIVE): runs ONLY for a checkJs class carrying a
+     * `declare`-modified annotated PropertyDeclaration — the single corpus file with
+     * that (illegal) shape is the intended target. Both checks are confined to
+     * `this.<declaredProp>` writes/reads, so the load-bearing `.js` checkPropertyAccess
+     * skip (B152/B153) stays intact (dedicated walker, like B419/B424/B427/B428).
+     */
+    private fun checkJsAmbientDeclaredClassProperties() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val classes = LinkedHashMap<String, ClassDeclaration>()
+            collectNamedClassDecls(result.sourceFile.statements, classes)
+            if (classes.isEmpty()) continue
+            val source = result.sourceFile.text
+            for (cls in classes.values) {
+                val declaredProps = HashMap<String, Type>()
+                for (m in cls.members) {
+                    if (m !is PropertyDeclaration || ModifierFlag.Declare !in m.modifiers) continue
+                    val typeNode = m.type ?: continue
+                    val pname = (m.name as? Identifier)?.text ?: continue
+                    val t = try { getTypeFromTypeNode(typeNode) } catch (_: Throwable) { continue }
+                    if (t === errorType || t === anyType) continue
+                    declaredProps[pname] = t
+                }
+                if (declaredProps.isEmpty()) continue
+                for (m in cls.members) {
+                    val body: Node? = when (m) {
+                        is Constructor -> m.body
+                        is MethodDeclaration -> m.body
+                        is GetAccessor -> m.body
+                        is SetAccessor -> m.body
+                        is PropertyDeclaration -> m.initializer
+                        else -> null
+                    } ?: continue
+                    // TS2322: `this.<prop> = value` writes vs the declared type.
+                    collectAmbientThisPropWrites(body) { lhsPa, value ->
+                        val pname = (lhsPa.name as? Identifier)?.text ?: return@collectAmbientThisPropWrites
+                        val declT = declaredProps[pname] ?: return@collectAmbientThisPropWrites
+                        val vt = try { getWidenedLiteralType(getTypeOfExpression(value)) } catch (_: Throwable) { return@collectAmbientThisPropWrites }
+                        if (vt === errorType || vt === anyType) return@collectAmbientThisPropWrites
+                        if (checkTypeRelatedTo(vt, declT, assignableRelation)) return@collectAmbientThisPropWrites
+                        val pos = lhsPa.pos
+                        if (pos < 0) return@collectAmbientThisPropWrites
+                        val len = (lhsPa.name.pos + pname.length) - pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(vt)}' is not assignable to type '${typeToString(declT)}'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = line, character = character,
+                            start = pos, length = len,
+                        ))
+                    }
+                    // TS2339: `this.<prop>.<member>` reads vs the declared type.
+                    walkAccessesNoFnBoundary(body) { acc ->
+                        val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
+                        val recv = pa.expression as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
+                        if ((recv.expression as? Identifier)?.text != "this") return@walkAccessesNoFnBoundary
+                        val pname = (recv.name as? Identifier)?.text ?: return@walkAccessesNoFnBoundary
+                        val declT = declaredProps[pname] ?: return@walkAccessesNoFnBoundary
+                        val member = (pa.name as? Identifier)?.text ?: return@walkAccessesNoFnBoundary
+                        if (member in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
+                        val apparent = try { getApparentType(declT) } catch (_: Throwable) { return@walkAccessesNoFnBoundary }
+                        if (getPropertyOfType(apparent, member) != null) return@walkAccessesNoFnBoundary
+                        val pos = pa.name.pos
+                        if (pos < 0) return@walkAccessesNoFnBoundary
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$member' does not exist on type '${typeToString(declT)}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = pos, length = member.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Recurse a class-member body for `this.<id> = value` writes (B429). */
+    private fun collectAmbientThisPropWrites(node: Node?, onWrite: (PropertyAccessExpression, Expression) -> Unit) {
+        when (node) {
+            null -> {}
+            is Block -> node.statements.forEach { collectAmbientThisPropWrites(it, onWrite) }
+            is ExpressionStatement -> {
+                val bin = node.expression as? BinaryExpression ?: return
+                if (bin.operator != SyntaxKind.Equals) return
+                val pa = bin.left as? PropertyAccessExpression ?: return
+                if ((pa.expression as? Identifier)?.text == "this") onWrite(pa, bin.right)
+            }
+            is IfStatement -> {
+                collectAmbientThisPropWrites(node.thenStatement, onWrite)
+                node.elseStatement?.let { collectAmbientThisPropWrites(it, onWrite) }
+            }
+            else -> {}
         }
     }
 
