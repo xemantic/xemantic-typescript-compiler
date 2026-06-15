@@ -1028,6 +1028,11 @@ class Checker(
         // B437c: TS2322 for a JS arrow with @template T + @returns {T} whose body is a JSDoc
         // cast to a concrete type (arrowExpressionBodyJSDoc). JS-like files only.
         checkJsDocArrowReturnConstraint()
+        // B438: TS2367 for comparing two distinct JSDoc `@type {unique symbol}` consts in a
+        // checkJs file (uniqueSymbolJs2) — AST-only (our engine resolves `unique symbol` to the
+        // shared esSymbolType singleton, so the standard no-overlap path can't see the distinct
+        // nominal identities). JS-like files only.
+        checkJsUniqueSymbolNoOverlap()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16256,6 +16261,69 @@ class Checker(
      * either bail (a non-read/write statement) or have only writes (no
      * undeclared read), so the sole emitter is the intended target.
      */
+    /**
+     * B438: TS2367 for an equality comparison of two identifiers that resolve (through
+     * `@type {typeof x}` chains) to DISTINCT JSDoc `@type {unique symbol}` declarations in
+     * a checkJs `.js` file. Our type engine resolves every `unique symbol` to the shared
+     * `esSymbolType` singleton, so `typeof x` and `typeof y` look identical and the standard
+     * no-overlap path (which also skips JS files) never fires. tsc mints a distinct nominal
+     * identity per `unique symbol` declaration, so two distinct ones have no overlap.
+     * AST-only — no engine change. Corpus-exhaustive FP-safety: the only checkJs file that
+     * compares two distinct `@type {unique symbol}` consts is the target (uniqueSymbolJs2);
+     * the sibling uniqueSymbolJs has only one such const. The parser already bridges the
+     * JSDoc onto `decl.type` (`@type {unique symbol}` -> `TypeOperator(UniqueKeyword)`,
+     * `@type {typeof x}` -> `TypeQuery(exprName=Identifier)`), both with `typeFromJSDoc=true`.
+     */
+    private fun checkJsUniqueSymbolNoOverlap() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // name -> JSDoc-bridged declared TypeNode (top-level var declarations).
+            val declTypes = HashMap<String, TypeNode>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val t = d.type
+                    if (d.typeFromJSDoc && t != null) declTypes[nm] = t
+                }
+            }
+            // Resolve an identifier to its underlying `unique symbol` origin name, following
+            // `@type {typeof x}` chains. Returns null if it isn't (transitively) a unique symbol.
+            fun originOf(name: String, seen: MutableSet<String>): String? {
+                if (!seen.add(name)) return null
+                return when (val t = declTypes[name]) {
+                    is TypeOperator -> if (t.operator == SyntaxKind.UniqueKeyword) name else null
+                    is TypeQuery -> (t.exprName as? Identifier)?.let { originOf(it.text, seen) }
+                    else -> null
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                val be = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                val op = be.operator
+                if (op != SyntaxKind.EqualsEquals && op != SyntaxKind.ExclamationEquals &&
+                    op != SyntaxKind.EqualsEqualsEquals && op != SyntaxKind.ExclamationEqualsEquals) continue
+                val l = be.left as? Identifier ?: continue
+                val r = be.right as? Identifier ?: continue
+                val lo = originOf(l.text, hashSetOf()) ?: continue
+                val ro = originOf(r.text, hashSetOf()) ?: continue
+                if (lo == ro) continue
+                val start = be.pos
+                val length = expressionTrueEnd(be.right) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "This comparison appears to be unintentional because the types " +
+                        "'typeof $lo' and 'typeof $ro' have no overlap.",
+                    category = DiagnosticCategory.Error, code = 2367,
+                    fileName = fileName, line = line, character = character, start = start, length = length,
+                ))
+            }
+        }
+    }
+
     private fun checkJsConstructorThisReads() {
         if (!options.checkJs) return
         for (result in binderResults) {
