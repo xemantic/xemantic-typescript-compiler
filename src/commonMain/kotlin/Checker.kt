@@ -476,6 +476,12 @@ class Checker(
      *  non-null during the check pipeline. */
     private val mappedReadonlyMemberIds = mutableSetOf<Int>()
 
+    /** B435: ids of `Object.freeze(objLit)` result Type.Objects. `widenType` returns these
+     *  AS-IS (no member-widening rebuild) so the readonly marking + literal member types
+     *  survive the `getTypeOfSymbol` → `inferTypeFromInitializer` → `widenType` path that a
+     *  plain object-literal var goes through (mirrors Readonly<T> not widening). */
+    private val frozenObjectTypeIds = mutableSetOf<Int>()
+
     /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
      *  type's value type recursively references another mapped type / generic alias
      *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
@@ -25003,6 +25009,9 @@ class Checker(
             }
             is Type.Interface -> type
             is Type.Object -> {
+                // B435: a frozen-object result (Readonly<T> shape) never widens — keep the
+                // marked, literal-preserving instance intact.
+                if (type.id in frozenObjectTypeIds) return type
                 // Recursively widen anonymous object literal member types — matches
                 // TypeScript's behavior where `let x = {a: true}` infers `{a: boolean}`.
                 // Skip Reference/Interface (handled above) — only fresh anonymous Object
@@ -71923,11 +71932,61 @@ interface DataView {
      *
      * Bails silently for any shape outside the gate — no FP risk.
      */
+    /**
+     * B435: an element WRITE through a `ReadonlyArray` receiver (`a[i] = v` where `a: readonly
+     * number[]`) → TS2542 "Index signature in type 'readonly number[]' only permits reading."
+     * plus the element-type TS2322 when `v` does not match the element type. Both squiggle the
+     * whole `a[i]`; the baseline orders TS2322 before TS2542 (the formatter sorts equal-position
+     * diagnostics by code). Gated tightly to a `ReadonlyArray` Type.Reference receiver so the
+     * general element-write surface is untouched (a normal `Array` element write is legal).
+     */
+    private fun tryEmitReadonlyArrayElementWrite(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String
+    ): Boolean {
+        if (target.questionDotToken) return false
+        val recvType = try { getTypeOfExpression(target.expression) } catch (_: StackOverflowError) { return false }
+        if (recvType !is Type.Reference) return false
+        val isReadonlyArr = (globalReadonlyArrayType != null && recvType.target === globalReadonlyArrayType) ||
+            recvType.target.symbol?.name == "ReadonlyArray"
+        if (!isReadonlyArr) return false
+        val start = target.expression.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // TS2322 element-type mismatch (sorted first by code). FP-safe: only emits when a
+        // concrete element type and a concrete, non-assignable RHS are both resolvable.
+        val elem = recvType.resolvedTypeArguments?.singleOrNull()
+        if (elem != null && elem !== anyType && elem !== errorType) {
+            val rhs = try { getTypeOfExpression(value) } catch (_: StackOverflowError) { null }
+            if (rhs != null && rhs !== anyType && rhs !== errorType &&
+                !rhs.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+            ) {
+                val widened = getWidenedLiteralType(rhs)
+                if (!checkTypeRelatedTo(widened, elem, assignableRelation)) {
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(widened)}' is not assignable to type '${typeToString(elem)}'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                }
+            }
+        }
+        diagnostics.add(Diagnostic(
+            message = "Index signature in type '${typeToString(recvType)}' only permits reading.",
+            category = DiagnosticCategory.Error, code = 2542,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
+        return true
+    }
+
     private fun checkElementAccessAssignment(
         target: ElementAccessExpression, value: Expression, source: String, fileName: String,
         varTypes: Map<String, String>
     ) {
         try {
+            // B435: readonly-array element write (`a[i] = v` on `readonly T[]`).
+            if (tryEmitReadonlyArrayElementWrite(target, value, source, fileName)) return
             // B228: `arr[Symbol.X] = value` when the @lib does NOT provide the Symbol VALUE
             // (es5 / es2015.core only): tsc resolves the index to an error type (→ any),
             // falls through to the array's number-index element type, and reports TS2322
@@ -72476,6 +72535,13 @@ interface DataView {
                 resolveStructuredTypeMembers(objType)
                 val propSym = objType.members?.get(propName) ?: return
                 targetPropSym = propSym
+                // B435: a member made readonly through the Readonly<T> / Object.freeze
+                // side-channel — TypeScript reports the readonly write (TS2540, via
+                // checkReadonlyAssignmentTarget) and does NOT additionally check
+                // assignability (the write reference types as `any`). Skip the TS2322
+                // path here. Gated to mappedReadonlyMemberIds (NOT the `readonly`
+                // MODIFIER) so declared `readonly x` members keep their prior behavior.
+                if (propSym.id in mappedReadonlyMemberIds) return
                 // B54.5: For accessor pairs (get + set), `x.x = v` uses the SETTER's
                 // parameter type for the write check (NOT the getter return type). Pairs
                 // with B54.6's accessor-pair-declarations merging — together they let
@@ -77080,11 +77146,92 @@ interface DataView {
         return null
     }
 
+    /**
+     * B435: `Object.freeze(x)` return-type modeling — bounded to the two arg shapes that
+     * carry diagnostics in the corpus (object literal, primitive array literal). Mirrors
+     * TypeScript's `freeze` overloads:
+     *   - `freeze<T extends {[idx:string]:U|...}, U extends primitive>(o:T): Readonly<T>` and
+     *     the `freeze<T>(o:T): Readonly<T>` fallback for an OBJECT literal → a Type.Object with
+     *     the literal-preserving member types, every member marked readonly (TS2540 on write).
+     *   - the same `Readonly<T>` for a PRIMITIVE-element ARRAY literal → `ReadonlyArray<elem>`
+     *     (`readonly number[]`), so an element WRITE fires TS2542 + element-type TS2322.
+     * Function / class / other args return null (caller keeps anyType — those forms produce
+     * NO error, so anyType is faithful). Non-literal-element arrays (e.g. `[['a',1],...]`)
+     * also bail → anyType, preserving the `readonly [string,number][]`-annotated assignment in
+     * objectFromEntries. Object must be the lib's ObjectConstructor (no user shadow).
+     */
+    private fun tryResolveObjectFreezeCall(expr: CallExpression): Type? {
+        val pa = expr.expression as? PropertyAccessExpression ?: return null
+        if (pa.questionDotToken || pa.name.text != "freeze") return null
+        if ((pa.expression as? Identifier)?.text != "Object") return null
+        if (!expr.typeArguments.isNullOrEmpty()) return null
+        if (expr.arguments.size != 1) return null
+        if (currentLocalTypes.containsKey("Object")) return null
+        val objSym = currentFileLocals?.get("Object") ?: globals["Object"]
+        if (objSym != null && objSym.declarations.any { it !in builtinLibDecls }) return null
+        return when (val arg = expr.arguments[0]) {
+            is ObjectLiteralExpression -> freezeObjectLiteral(arg)
+            is ArrayLiteralExpression -> freezeArrayLiteral(arg)
+            else -> null
+        }
+    }
+
+    /** B435: build the frozen-object type for `Object.freeze(objLit)` — a Type.Object with the
+     *  object literal's members marked readonly (TS2540 on write) and literal member types
+     *  preserved as FRESH non-widening literals (so `let x = frozen.prop` keeps `"lit"` rather
+     *  than widening to the primitive — the `objectFreezeLiteralsDontWiden` rule). */
+    private fun freezeObjectLiteral(arg: ObjectLiteralExpression): Type? {
+        val t = try { getTypeOfObjectLiteral(arg) } catch (_: StackOverflowError) { return null }
+        if (t !is Type.Object) return null
+        if (t.members.isNullOrEmpty()) return null
+        try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return null }
+        frozenObjectTypeIds.add(t.id)
+        // Every member is readonly (TS2540 on write).
+        for (m in t.members!!.values) mappedReadonlyMemberIds.add(m.id)
+        // Preserve LITERAL member types (getTypeOfObjectLiteral widens via getTypeOfExpression,
+        // e.g. `'1011831'` → `string`). Override each literal-valued property with a FRESH
+        // non-widening literal so `let x = frozen.prop` keeps `"1011831"` (the
+        // objectFreezeLiteralsDontWiden rule). Boolean literals (trueType/falseType singletons)
+        // and non-literal initializers keep getTypeOfObjectLiteral's type.
+        for (prop in arg.properties) {
+            if (prop !is PropertyAssignment) continue
+            val pname = (prop.name as? Identifier)?.text
+                ?: (prop.name as? StringLiteralNode)?.text
+                ?: (prop.name as? NumericLiteralNode)?.text ?: continue
+            val m = t.members!![pname] ?: continue
+            val litT = literalTypeOfExpression(prop.initializer) ?: continue
+            symbolTypes[m.id] = litT
+            if (litT is Type.StringLiteral || litT is Type.NumberLiteral || litT is Type.BigIntLiteral) {
+                nonWideningLiteralTypeIds.add(litT.id)
+            }
+        }
+        return t
+    }
+
+    /** B435: build `ReadonlyArray<elem>` for `Object.freeze(arrLit)` when every element is a
+     *  primitive literal (the `[1, 2, 3]` shape). Nested/object element arrays return null →
+     *  anyType (preserves objectFromEntries' `readonly [string,number][]` annotation). */
+    private fun freezeArrayLiteral(arg: ArrayLiteralExpression): Type? {
+        if (arg.elements.isEmpty()) return null
+        val roTarget = globalReadonlyArrayType ?: globalArrayType ?: return null
+        val elemTypes = arg.elements.map { el ->
+            if (el is SpreadElement || el is OmittedExpression) return null
+            val et = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return null }
+            if (et !is Type.Intrinsic || et.intrinsicName !in setOf("number", "string", "boolean", "bigint")) return null
+            et
+        }
+        val distinct = elemTypes.distinctBy { (it as Type.Intrinsic).intrinsicName }
+        val elem = if (distinct.size == 1) distinct[0] else getUnionType(elemTypes)
+        return getOrInternReference(roTarget, listOf(elem))
+    }
+
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
         // 16.0: super(...) call inside a constructor returns void
         if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") return voidType
         // B209: `Array.from(x)` — bounded single-arg resolution to `T[]`.
         tryResolveArrayFromCall(expr)?.let { return it }
+        // B435: `Object.freeze(objLit/arrLit)` → readonly object / ReadonlyArray.
+        tryResolveObjectFreezeCall(expr)?.let { return it }
         // Unwrap value-preserving wrappers before classifying the callee.
         // `(fn)()`, `fn!()`, and `(fn satisfies T)()` should resolve like `fn()`.
         var callee: Expression = expr.expression
