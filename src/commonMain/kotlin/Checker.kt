@@ -1265,6 +1265,8 @@ class Checker(
         checkProtectedWriteViaThisParam()
         // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
         checkProtectedMemberReadAccess()
+        // 21b5. B447: noUncheckedIndexedAccess compound-assign target (TS18048/TS2532)
+        checkNoUncheckedIndexedCompoundAssign()
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
@@ -43335,6 +43337,125 @@ interface DataView {
                 fileName = fileName, line = line, character = ch,
                 start = pa.name.pos, length = member.length,
             ))
+        }
+    }
+
+    /**
+     * B447: noUncheckedIndexedAccess — a compound assignment / increment / decrement
+     * whose TARGET is an index-signature access reads the element as `T | undefined`,
+     * which can't be `+`/`++`-ed → "possibly undefined". A PROPERTY-access target
+     * (`stringMap.foo` where the receiver has a string index sig and `foo` isn't a
+     * declared member) → TS18048 "'<access>' is possibly 'undefined'."; an ELEMENT-access
+     * target (`map[k]`) → TS2532 "Object is possibly 'undefined'." (tsc uses the named
+     * code only for the human-nameable property form). The var-decl-init case is owned by
+     * B201; this is the compound-assign-target case. Dedicated FP-safe pass: gated to
+     * `noUncheckedIndexedAccess && strictNullChecks`, a compound-assign/`++`/`--` op, and
+     * a target that genuinely goes through an index signature (declared-member literal
+     * indices excluded). Corpus-rare (only 9 noUncheckedIndexedAccess fixtures; the
+     * compound-on-index shape is unique to this test) — full-suite verified.
+     */
+    private fun checkNoUncheckedIndexedCompoundAssign() {
+        if (!options.noUncheckedIndexedAccess || !strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (s in result.sourceFile.statements) nuiaWalkStmt(s, source, fileName)
+        }
+    }
+
+    private fun nuiaWalkStmt(s: Statement, source: String, fileName: String) {
+        when (s) {
+            is ExpressionStatement -> nuiaWalkExpr(s.expression, source, fileName)
+            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { nuiaWalkExpr(it, source, fileName) }
+            is ReturnStatement -> s.expression?.let { nuiaWalkExpr(it, source, fileName) }
+            is IfStatement -> { nuiaWalkExpr(s.expression, source, fileName); nuiaWalkStmt(s.thenStatement, source, fileName); s.elseStatement?.let { nuiaWalkStmt(it, source, fileName) } }
+            is Block -> for (st in s.statements) nuiaWalkStmt(st, source, fileName)
+            is ForStatement -> { (s.initializer as? Expression)?.let { nuiaWalkExpr(it, source, fileName) }; s.condition?.let { nuiaWalkExpr(it, source, fileName) }; (s.incrementor)?.let { nuiaWalkExpr(it, source, fileName) }; nuiaWalkStmt(s.statement, source, fileName) }
+            is ForInStatement -> nuiaWalkStmt(s.statement, source, fileName)
+            is ForOfStatement -> nuiaWalkStmt(s.statement, source, fileName)
+            is WhileStatement -> { nuiaWalkExpr(s.expression, source, fileName); nuiaWalkStmt(s.statement, source, fileName) }
+            is FunctionDeclaration -> s.body?.statements?.forEach { nuiaWalkStmt(it, source, fileName) }
+            is ClassDeclaration -> for (m in s.members) when (m) {
+                is MethodDeclaration -> m.body?.statements?.forEach { nuiaWalkStmt(it, source, fileName) }
+                is Constructor -> m.body?.statements?.forEach { nuiaWalkStmt(it, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.statements?.forEach { nuiaWalkStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun nuiaWalkExpr(e: Expression, source: String, fileName: String) {
+        when (e) {
+            is PrefixUnaryExpression -> {
+                if (e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) nuiaCheckTarget(e.operand, source, fileName)
+                nuiaWalkExpr(e.operand, source, fileName)
+            }
+            is PostfixUnaryExpression -> {
+                if (e.operator == SyntaxKind.PlusPlus || e.operator == SyntaxKind.MinusMinus) nuiaCheckTarget(e.operand, source, fileName)
+                nuiaWalkExpr(e.operand, source, fileName)
+            }
+            is BinaryExpression -> {
+                if (e.operator != SyntaxKind.Equals && e.operator in ASSIGNMENT_OPERATORS) nuiaCheckTarget(e.left, source, fileName)
+                if (e.operator != SyntaxKind.Equals) nuiaWalkExpr(e.left, source, fileName)
+                nuiaWalkExpr(e.right, source, fileName)
+            }
+            is ParenthesizedExpression -> nuiaWalkExpr(e.expression, source, fileName)
+            is CallExpression -> { nuiaWalkExpr(e.expression, source, fileName); for (a in e.arguments) nuiaWalkExpr(a, source, fileName) }
+            is ConditionalExpression -> { nuiaWalkExpr(e.condition, source, fileName); nuiaWalkExpr(e.whenTrue, source, fileName); nuiaWalkExpr(e.whenFalse, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun nuiaCheckTarget(target: Expression, source: String, fileName: String) {
+        when (target) {
+            is PropertyAccessExpression -> {
+                val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
+                if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
+                if (recvType === anyType || recvType === errorType) return
+                try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return }
+                if (recvType.tupleElementTypes != null) return
+                if (recvType.stringIndexInfo == null) return
+                if (recvType.members?.containsKey(target.name.text) == true) return
+                val end = expressionTrueEnd(target)
+                val len = end - target.pos
+                if (len <= 0 || target.pos + len > source.length) return
+                val text = source.substring(target.pos, end)
+                val (line, ch) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "'$text' is possibly 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 18048,
+                    fileName = fileName, line = line, character = ch,
+                    start = target.pos, length = len,
+                ))
+            }
+            is ElementAccessExpression -> {
+                val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
+                if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
+                if (recvType === anyType || recvType === errorType) return
+                try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return }
+                if (recvType.tupleElementTypes != null) return
+                if (recvType.stringIndexInfo == null && recvType.numberIndexInfo == null) return
+                var arg: Expression = target.argumentExpression
+                while (arg is ParenthesizedExpression) arg = arg.expression
+                val idxLit = when (arg) { is NumericLiteralNode -> arg.text; is StringLiteralNode -> arg.text; else -> null }
+                if (idxLit != null && recvType.members?.containsKey(idxLit) == true) return
+                // span to the closing ']'
+                var i = expressionTrueEnd(arg).coerceAtMost(source.length)
+                while (i < source.length && source[i] != ']') i++
+                val end = if (i < source.length) i + 1 else return
+                val len = end - target.pos
+                if (len <= 0) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Object is possibly 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 2532,
+                    fileName = fileName, line = line, character = ch,
+                    start = target.pos, length = len,
+                ))
+            }
+            else -> {}
         }
     }
 
