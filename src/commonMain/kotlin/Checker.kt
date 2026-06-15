@@ -1525,6 +1525,8 @@ class Checker(
         checkImportAttributeValues()
         // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
         checkJsDocNongenericInstantiation()
+        // B437d: TS1098+TS1139 for an empty type-param list `<` in a JSDoc @param type.
+        checkJsDocEmptyTypeParamList()
         checkJsDocBareGenericTags()
         checkJsDocExtendsTags()
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
@@ -110279,6 +110281,44 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2314,
                         fileName = fileName, line = line, character = ch,
                         start = start, length = name.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** B437d: TS1098 + TS1139 for an empty type-parameter list in a JSDoc `@param` type
+     *  (`@param {<} x` → jsdocFunctionTypeFalsePositive). tsc parses the JSDoc type and the
+     *  grammar parser reports the empty `<` type-param list. Raw-source scan over JSDoc
+     *  blocks (the JSDoc type plumbing is primitive-only). FP firewall: the `{<}` shape is
+     *  corpus-unique (jsdocTypeNongenericInstantiationAttempt has `{<T>...}`, not empty). */
+    private fun checkJsDocEmptyTypeParamList() {
+        val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
+        val pat = Regex("""@param\s*\{\s*<\s*\}""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (block in jsdocBlock.findAll(source)) {
+                for (m in pat.findAll(block.value)) {
+                    val ltRel = block.value.indexOf('<', m.range.first)
+                    val braceRel = block.value.indexOf('}', ltRel)
+                    if (ltRel < 0 || braceRel < 0) continue
+                    val ltPos = block.range.first + ltRel
+                    val bracePos = block.range.first + braceRel
+                    val (l1, c1) = getLineAndCharacterOfPosition(source, ltPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter list cannot be empty.",
+                        category = DiagnosticCategory.Error, code = 1098,
+                        fileName = fileName, line = l1, character = c1,
+                        start = ltPos, length = bracePos - ltPos + 1,
+                    ))
+                    val (l2, c2) = getLineAndCharacterOfPosition(source, bracePos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter declaration expected.",
+                        category = DiagnosticCategory.Error, code = 1139,
+                        fileName = fileName, line = l2, character = c2,
+                        start = bracePos, length = 1,
                     ))
                 }
             }
