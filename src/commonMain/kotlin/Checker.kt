@@ -56795,6 +56795,101 @@ interface DataView {
         emitTS2352NullishCastCore(
             expr.expression, expr.type, expr.pos, expressionTrueEnd(expr.expression), source, fileName,
         )
+        emitTS2352IfObjectLiteralToInterfaceCast(expr, source, fileName)
+    }
+
+    /**
+     * B448: `<IFoo>{ ... }` — a type assertion of an OBJECT LITERAL to a named user
+     * interface that the literal doesn't sufficiently overlap → TS2352. tsc requires the
+     * (fresh) literal to be COMPARABLE to the cast target: a missing required property or
+     * an incompatible shared-property type means "neither type sufficiently overlaps".
+     * Chains: single missing → "Property 'X' is missing in type '<obj>' but required in
+     * type 'IFoo'." (+ TS2728); multi missing → "Type '<obj>' is missing the following
+     * properties from type 'IFoo': a, b"; incompatible shared prop → "Types of property
+     * 'X' are incompatible." + "Type '<src>' is not comparable to type '<tgt>'.".
+     * (noImplicitAnyInCastExpression.) FP-safe: target must be a concrete non-generic
+     * user `Type.Interface` with resolvable members; fires only on a genuine
+     * missing-required / not-comparable mismatch (a valid cast has neither). Excess props
+     * are allowed for casts (not checked). Span = the whole `<IFoo>{...}` assertion.
+     */
+    private fun emitTS2352IfObjectLiteralToInterfaceCast(expr: TypeAssertionExpression, source: String, fileName: String) {
+        val tref = expr.type as? TypeReference ?: return
+        if (tref.typeArguments != null) return
+        val name = (tref.typeName as? Identifier)?.text ?: return
+        var op: Expression = expr.expression
+        while (op is ParenthesizedExpression) op = op.expression
+        val ol = op as? ObjectLiteralExpression ?: return
+        val tgt = try { getTypeFromTypeNode(tref) } catch (_: Throwable) { return }
+        if (tgt !is Type.Interface || tgt is Type.Reference) return
+        try { resolveStructuredTypeMembers(tgt) } catch (_: StackOverflowError) { return }
+        val tgtProps = tgt.properties ?: return
+        if (tgtProps.isEmpty()) return
+        if (tgt.stringIndexInfo != null || tgt.numberIndexInfo != null) return
+        if (tgt.callSignatures?.isNotEmpty() == true) return
+        val olProps = ol.properties.filterIsInstance<PropertyAssignment>()
+        if (olProps.size != ol.properties.size) return // spreads/methods/accessors → bail
+        // tsc's cast-overlap rule is BIDIRECTIONAL: TS2352 fires only when NEITHER the
+        // literal is comparable to the target NOR the target is comparable to the literal.
+        // The missing/incompatible detection below establishes "literal NOT comparable to
+        // target"; here we suppress when the TARGET is comparable to the literal (an empty
+        // `<T>{}` and a partial `<IFoo>{n:1}` where IFoo's props subsume the literal's are
+        // legal — the target side overlaps). Without this the walker FPs on every
+        // partial/empty object-literal cast (contextualTyping/m7Bugs).
+        val srcType = try { getTypeOfObjectLiteral(ol) } catch (_: Throwable) { return }
+        val tgtComparableToSrc = try { checkTypeRelatedTo(tgt, srcType, comparableRelation) } catch (_: StackOverflowError) { true }
+        if (tgtComparableToSrc) return
+        fun pName(p: PropertyAssignment) = (p.name as? Identifier)?.text ?: (p.name as? StringLiteralNode)?.text
+        val olNames = olProps.mapNotNull { pName(it) }.toSet()
+        fun valDisplay(v: Expression): String = when {
+            v is Identifier && v.text == "undefined" -> "undefined"
+            v is Identifier && v.text == "null" -> "null"
+            else -> typeToString(getWidenedLiteralType(try { getTypeOfExpression(v) } catch (_: Throwable) { return "any" }))
+        }
+        val objDisp = "{ " + olProps.joinToString("; ") { p -> "${pName(p)}: ${valDisplay(p.initializer)}" } + "; }"
+        val start = expr.pos
+        val end = expressionTrueEnd(ol)
+        val len = end - start
+        if (len <= 0) return
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        val baseMsg = "Conversion of type '$objDisp' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+        val missing = tgtProps.filter { !isOptionalProperty(it) && it.name !in olNames && it.name !in OBJECT_PROTOTYPE_PROPERTIES }
+        if (missing.isNotEmpty()) {
+            val chain: List<String>
+            var related: List<Diagnostic> = emptyList()
+            if (missing.size == 1) {
+                chain = listOf("  Property '${missing[0].name}' is missing in type '$objDisp' but required in type '$name'.")
+                createPropertyDeclaredHereRelatedInfo(missing[0])?.let { related = listOf(it) }
+            } else {
+                chain = listOf("  " + formatTs2740Message(objDisp, name, missing.map { it.name }))
+            }
+            diagnostics.add(Diagnostic(
+                message = baseMsg, category = DiagnosticCategory.Error, code = 2352,
+                fileName = fileName, line = line, character = ch, start = start, length = len,
+                messageChain = chain, relatedInformation = related,
+            ))
+            return
+        }
+        // No missing required prop → check shared props for an incomparable type.
+        for (p in olProps) {
+            val nm = pName(p) ?: continue
+            val tgtSym = tgtProps.find { it.name == nm } ?: continue
+            val srcT = try { getTypeOfExpression(p.initializer) } catch (_: Throwable) { continue }
+            val tgtT = try { getTypeOfSymbol(tgtSym) } catch (_: Throwable) { continue }
+            if (srcT === anyType || srcT === errorType || tgtT === anyType || tgtT === errorType) continue
+            val comparable = try { checkTypeRelatedTo(srcT, tgtT, comparableRelation) } catch (_: StackOverflowError) { true }
+            if (!comparable) {
+                val chain = listOf(
+                    "  Types of property '$nm' are incompatible.",
+                    "    Type '${valDisplay(p.initializer)}' is not comparable to type '${typeToString(tgtT)}'.",
+                )
+                diagnostics.add(Diagnostic(
+                    message = baseMsg, category = DiagnosticCategory.Error, code = 2352,
+                    fileName = fileName, line = line, character = ch, start = start, length = len,
+                    messageChain = chain,
+                ))
+                return
+            }
+        }
     }
 
     /** B95d (round 82): `undefined as number` / `null as Foo` AsExpression form. The shared
