@@ -1020,6 +1020,10 @@ class Checker(
         // B438d: TS2303 + TS2339 for a checkJs CJS callable-exports module that aliases one
         // export member to an undeclared other (`module.exports=fn; exports.X=exports.Y`).
         checkJsCjsExpandoAliasReads()
+        // B441: TS2323 for a checkJs CJS export property declared by BOTH an `E.X = …`
+        // assignment AND an `Object.defineProperty(E, "X", …)` where `E` is the local bound
+        // to `module.exports` (ensureNoCrashExportAssignmentDefineProperrtyPotentialMerge).
+        checkJsCjsExportObjectRedeclare()
         // B428: TS2339 for reading `this.<X>` in a checkJs class constructor that uses
         // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
         // property declaration, so `this.X` does not exist on the class type.
@@ -17184,6 +17188,115 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * B441 (TS2323): in a checkJs CJS module, a local object `E` bound to `module.exports`
+     * whose export property `X` is DECLARED by BOTH an `E.X = …` assignment AND an
+     * `Object.defineProperty(E, "X", …)` call. tsc treats the two forms as separate export
+     * declarations, so the property is redeclared → "Cannot redeclare exported variable 'X'."
+     * is reported at EACH declaration site (the `E.X` LHS for the assignment, the whole
+     * `Object.defineProperty(…)` call for the defineProperty).
+     *
+     * FP firewall (corpus-EXHAUSTIVE): fires ONLY when a property has BOTH mechanisms (a plain
+     * double-assignment or a lone defineProperty is not a redeclare); across the whole corpus
+     * the only checkJs file with `module.exports = <local>` + that local carrying both an
+     * `X =` assignment and an `Object.defineProperty(X, …)` for the same prop is the single
+     * target (ensureNoCrashExportAssignmentDefineProperrtyPotentialMerge).
+     */
+    private fun checkJsCjsExportObjectRedeclare() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val sf = result.sourceFile
+            // CJS only: bail on ES-module signals (top-level import/export).
+            if (sf.statements.any {
+                    it is ImportDeclaration || it is ExportDeclaration ||
+                    it is ExportAssignment || it is ImportEqualsDeclaration
+                }) continue
+            // Find the local Identifier bound to `module.exports = <Identifier>`.
+            var exportsLocal: String? = null
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                if ((lhs.expression as? Identifier)?.text == "module" && lhs.name.text == "exports") {
+                    (bin.right as? Identifier)?.let { exportsLocal = it.text }
+                }
+            }
+            val E = exportsLocal ?: continue
+            // Collect declaration sites per property name: assignment LHS spans + defineProperty calls.
+            data class Site(val start: Int, val length: Int)
+            val assignSites = HashMap<String, MutableList<Site>>()
+            val definePropSites = HashMap<String, MutableList<Site>>()
+            val source = sf.text
+            for (stmt in sf.statements) {
+                val expr = (stmt as? ExpressionStatement)?.expression ?: continue
+                when (expr) {
+                    is BinaryExpression -> {
+                        if (expr.operator != SyntaxKind.Equals) continue
+                        val lhs = expr.left as? PropertyAccessExpression ?: continue
+                        if ((lhs.expression as? Identifier)?.text != E) continue
+                        val nm = lhs.name.text
+                        val len = (lhs.name.pos + lhs.name.text.length - lhs.pos).coerceAtLeast(1)
+                        assignSites.getOrPut(nm) { mutableListOf() }.add(Site(lhs.pos, len))
+                    }
+                    is CallExpression -> {
+                        val callee = expr.expression as? PropertyAccessExpression ?: continue
+                        if ((callee.expression as? Identifier)?.text != "Object" ||
+                            callee.name.text != "defineProperty") continue
+                        val args = expr.arguments
+                        if (args.size < 2) continue
+                        if ((args[0] as? Identifier)?.text != E) continue
+                        val nm = (args[1] as? StringLiteralNode)?.text ?: continue
+                        val end = matchClosingParen(source, expr.pos)
+                        val len = (end - expr.pos).coerceAtLeast(1)
+                        definePropSites.getOrPut(nm) { mutableListOf() }.add(Site(expr.pos, len))
+                    }
+                    else -> {}
+                }
+            }
+            // A property declared by BOTH mechanisms is redeclared → flag every site.
+            for (nm in assignSites.keys) {
+                if (nm !in definePropSites) continue
+                val sites = (assignSites[nm].orEmpty() + definePropSites[nm].orEmpty())
+                    .sortedBy { it.start }
+                for (s in sites) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, s.start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare exported variable '$nm'.",
+                        category = DiagnosticCategory.Error, code = 2323,
+                        fileName = fileName, line = line, character = character,
+                        start = s.start, length = s.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Matches the `(` at-or-after [start] to its closing `)`, skipping string
+     *  literals; returns the position just past `)`, or [start] on failure. */
+    private fun matchClosingParen(source: String, start: Int): Int {
+        var i = start
+        while (i < source.length && source[i] != '(') i++
+        if (i >= source.length) return start
+        var depth = 0
+        while (i < source.length) {
+            when (val ch = source[i]) {
+                '\'', '"', '`' -> {
+                    i++
+                    while (i < source.length && source[i] != ch) {
+                        if (source[i] == '\\') i++
+                        i++
+                    }
+                }
+                '(' -> depth++
+                ')' -> { depth--; if (depth == 0) return i + 1 }
+            }
+            i++
+        }
+        return start
     }
 
     /**
