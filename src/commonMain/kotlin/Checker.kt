@@ -39949,6 +39949,29 @@ interface DataView {
      * in the same file. Skips overloaded functions and rest parameters.
      */
     private fun checkArgumentCounts() {
+        // B434 (Blocker #3 substep): cross-file function-call arity. In SCRIPT-mode
+        // multi-file programs, a top-level `function f` declared in file A is globally
+        // visible in file B, but the per-file arity check below only sees the current
+        // file's functions. Build a program-wide overlay of top-level FunctionDeclarations
+        // from NON-module (script) files; a NON-module file consults it for callees not
+        // declared locally. Names declared in 2+ files (cross-file overloads) are skipped
+        // (conservative — no FP). JS-param optionality is JSDoc-`@param`-aware (B434):
+        // a JS param is required only if a non-bracket `@param` tag documents it.
+        val crossFileFuncs = mutableMapOf<String, FuncParamInfo>()
+        val crossFileDupNames = mutableSetOf<String>()
+        for (br in binderResults) {
+            val bfn = br.sourceFile.fileName
+            if (isDtsFile(bfn) || isModuleFile(br.sourceFile.statements)) continue
+            val bIsJs = bfn.endsWith(".js") || bfn.endsWith(".jsx") || bfn.endsWith(".mjs") || bfn.endsWith(".cjs")
+            for (stmt in br.sourceFile.statements) {
+                if (stmt !is FunctionDeclaration) continue
+                val nm = stmt.name?.text ?: continue
+                if (nm in crossFileDupNames) continue
+                if (nm in crossFileFuncs) { crossFileDupNames.add(nm); crossFileFuncs.remove(nm); continue }
+                val req = if (bIsJs) jsDocRequiredParamNames(stmt.leadingComments) else emptySet()
+                crossFileFuncs[nm] = paramInfo(stmt.parameters, bIsJs, req).copy(declFileName = bfn, declSource = br.sourceFile.text)
+            }
+        }
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -39960,6 +39983,16 @@ interface DataView {
             val funcParams = mutableMapOf<String, FuncParamInfo>()
             val classCtorParams = mutableMapOf<String, FuncParamInfo>()
             collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile, source)
+            // B434: cross-file overlay (fallback) for NON-module files. Only for callees
+            // NOT declared locally (own funcParams win; a local binding of any kind shadows
+            // a cross-file function — guard via the file's own locals to avoid FP).
+            if (!isModuleFile(result.sourceFile.statements)) {
+                val ownLocals = result.locals
+                for ((nm, info) in crossFileFuncs) {
+                    if (nm in funcParams || ownLocals.containsKey(nm)) continue
+                    funcParams[nm] = info
+                }
+            }
 
             // B95c (round 82): a class with an `extends` base but NO own constructor inherits
             // the base's constructor arity. collectFuncDecls records NOTHING for these (a
@@ -40001,6 +40034,11 @@ interface DataView {
         // call with EXPLICIT type args filter the overload set to the generic signatures
         // that can actually accept that many type args, then arity-check against THAT subset.
         val overloadSigs: List<OverloadSig> = emptyList(),
+        // B434: when this info came from a CROSS-FILE (script-mode) function, the declaring
+        // file's name + source, so TS6210/TS6211 related-info positions resolve against the
+        // declaration's file (not the calling file). Null for same-file functions.
+        val declFileName: String? = null,
+        val declSource: String? = null,
     )
 
     /** One overload SIGNATURE's arity + type-param shape (for explicit-type-arg filtering). */
@@ -40173,7 +40211,50 @@ interface DataView {
         }
     }
 
-    private fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false): FuncParamInfo {
+    /**
+     * B434: collect the names of JSDoc `@param` tags that are NOT optional-bracketed
+     * (`@param name` → required; `@param [name]` → optional). In a JS file a parameter
+     * is implicitly optional UNLESS it carries a (non-bracket) `@param` tag, so this set
+     * marks which JS params become REQUIRED. Mirrors the `@param`-parsing in
+     * [checkJSDocParamTagsForFunction] (incl. the `{type}` skip and `[name]` bracket rule).
+     */
+    private fun jsDocRequiredParamNames(comments: List<Comment>?): Set<String> {
+        if (comments.isNullOrEmpty()) return emptySet()
+        val out = HashSet<String>()
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (idx < ct.length) {
+                val tagIdx = ct.indexOf("@param", idx)
+                if (tagIdx < 0) break
+                val afterTag = if (tagIdx + 6 < ct.length) ct[tagIdx + 6] else ' '
+                if (afterTag.isLetterOrDigit() || afterTag == '_') { idx = tagIdx + 6; continue }
+                var i = tagIdx + 6
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '\n' || ct[i] == '\r' || ct[i] == '*')) i++
+                if (i < ct.length && ct[i] == '{') {
+                    var depth = 1; i++
+                    while (i < ct.length && depth > 0) { when (ct[i]) { '{' -> depth++; '}' -> depth-- }; i++ }
+                }
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                val hasBrackets = i < ct.length && ct[i] == '['
+                if (hasBrackets) i++
+                val nameStart = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                val name = ct.substring(nameStart, i)
+                idx = tagIdx + 6
+                if (name.isEmpty()) continue
+                val isNested = i < ct.length && ct[i] == '.'
+                // `[name]` (optional), `[name=default]` (optional w/ default), and nested
+                // `obj.foo` tags do NOT make the param required.
+                if (!hasBrackets && !isNested) out.add(name)
+            }
+        }
+        return out
+    }
+
+    private fun paramInfo(parameters: List<Parameter>, isJsFile: Boolean = false, jsDocRequiredNames: Set<String> = emptySet()): FuncParamInfo {
         var total = 0
         var hasRest = false
         var lastRequiredPos = -1  // 0-based index of last non-optional param
@@ -40184,9 +40265,11 @@ interface DataView {
                 hasRest = true
                 continue
             }
-            // In JS files (checkJs), all parameters are implicitly optional (min=0, max=N)
-            if (!isJsFile && !p.questionToken && p.initializer == null) {
-                lastRequiredPos = total
+            // In JS files (checkJs), a parameter is implicitly optional UNLESS it carries
+            // a non-bracket JSDoc `@param` tag (B434). In TS files, a non-optional param
+            // without an initializer is required.
+            if (!p.questionToken && p.initializer == null) {
+                if (!isJsFile || (p.name as? Identifier)?.text in jsDocRequiredNames) lastRequiredPos = total
             }
             total++
         }
@@ -40392,7 +40475,7 @@ interface DataView {
                             if (info.hasRest) {
                                 emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
                             } else {
-                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
                             }
                         } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
                             // B170: rest param typed `Parameters<Fn>` where another param is typed
@@ -40478,7 +40561,7 @@ interface DataView {
                                 }
                             }
                         } else if (argCount < info.minParams) {
-                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters)
+                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
                         } else if (!info.hasRest && argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
                         } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
@@ -40580,7 +40663,7 @@ interface DataView {
                             if (info.hasRest) {
                                 emitTS2555TooFew(info.minParams, argCount, expr, source, fileName, info.parameters)
                             } else {
-                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters)
+                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
                             }
                         }
                     }
@@ -40799,10 +40882,16 @@ interface DataView {
         source: String,
         fileName: String,
         parameters: List<Parameter> = emptyList(),
+        // B434: when the callee is declared in ANOTHER (script-mode) file, the param-related
+        // TS6210/TS6211 positions must resolve against the DECLARING file's source/name.
+        relSource: String? = null,
+        relFileName: String? = null,
     ) {
         val start = calleeExpr.pos
         val length = expressionTrueEnd(calleeExpr) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val rSource = relSource ?: source
+        val rFileName = relFileName ?: fileName
         // Check if the first missing parameter is a binding pattern → emit TS6211 related info
         val relatedInfo = mutableListOf<Diagnostic>()
         if (parameters.isNotEmpty()) {
@@ -40816,12 +40905,12 @@ interface DataView {
                     is ObjectBindingPattern, is ArrayBindingPattern -> {
                         val paramStart = paramName.pos
                         val paramLen = paramName.end - paramStart
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(rSource, paramStart)
                         relatedInfo.add(Diagnostic(
                             message = "An argument matching this binding pattern was not provided.",
                             category = DiagnosticCategory.Message,
                             code = 6211,
-                            fileName = fileName,
+                            fileName = rFileName,
                             line = relLine,
                             character = relChar,
                             start = paramStart,
@@ -40836,12 +40925,12 @@ interface DataView {
                         // Parameter.pos == name.pos so function-call TS6210 is unaffected.
                         val paramStart = missingParam.pos
                         val paramLen = (paramName.pos + paramName.text.length - paramStart).coerceAtLeast(1)
-                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, paramStart)
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(rSource, paramStart)
                         relatedInfo.add(Diagnostic(
                             message = "An argument for '${paramName.text}' was not provided.",
                             category = DiagnosticCategory.Message,
                             code = 6210,
-                            fileName = fileName,
+                            fileName = rFileName,
                             line = relLine,
                             character = relChar,
                             start = paramStart,
