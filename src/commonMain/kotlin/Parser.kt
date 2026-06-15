@@ -7298,9 +7298,14 @@ class Parser(
     // Conservative gate (primitive-only) avoids 17.61's revert risk: a sub-Parser
     // TypeNode pointing at JSDoc-internal positions would emit name-resolution
     // diagnostics with garbled squiggles. Primitives have no name — no risk.
-    private fun parseJSDocParamPrimitiveTypeMap(comments: List<Comment>?): Map<String, TypeNode>? {
+    /** Result of [parseJSDocParamPrimitiveTypeMap]: synthesized param type nodes by name,
+     *  plus the subset of names declared as a JSDoc rest param (`@param {...T} name`). */
+    private data class JsDocParamTypeMap(val types: Map<String, TypeNode>, val restNames: Set<String>)
+
+    private fun parseJSDocParamPrimitiveTypeMap(comments: List<Comment>?): JsDocParamTypeMap? {
         if (!isJsLikeFile || comments.isNullOrEmpty()) return null
         var map: MutableMap<String, TypeNode>? = null
+        val restNames = mutableSetOf<String>()
         for (comment in comments) {
             if (comment.kind != SyntaxKind.MultiLineComment) continue
             val ct = comment.text
@@ -7345,6 +7350,25 @@ class Parser(
                 if (name.isEmpty() || typeText == null) continue
                 // Skip nested name (`@param obj.foo`) — not a top-level parameter binding.
                 if (i < ct.length && ct[i] == '.') continue
+                // B437: JSDoc rest param `@param {...PRIMITIVE} name` → a rest parameter
+                // of type `PRIMITIVE[]`. Primitive element only (no name resolution → no
+                // JSDoc-position risk). The element keyword node carries pos=-1/end=-1
+                // (synthetic); the callers set `dotDotDotToken` for names in restNames.
+                if (typeText.startsWith("...")) {
+                    val elemText = typeText.substring(3).trim()
+                    val elemKind = primitiveKeywordKindFor(elemText)
+                    if (elemKind != null) {
+                        if (map == null) map = mutableMapOf()
+                        if (name !in map!!) {
+                            map[name] = ArrayType(
+                                elementType = KeywordTypeNode(kind = elemKind, pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            )
+                            restNames.add(name)
+                        }
+                    }
+                    continue
+                }
                 val kind = primitiveKeywordKindFor(typeText)
                 if (kind != null) {
                     if (map == null) map = mutableMapOf()
@@ -7385,16 +7409,20 @@ class Parser(
                 }
             }
         }
-        return map
+        if (map == null) return null
+        return JsDocParamTypeMap(map!!, restNames)
     }
 
     /** Apply JSDoc `@param {primitive} name` types to params whose `type` is null,
      *  matched by Identifier name. Non-Identifier param names (destructuring) are
-     *  preserved unchanged. Returns the original list when no JSDoc primitives match. */
+     *  preserved unchanged. A `@param {...PRIMITIVE} name` (B437) also sets the
+     *  param's `dotDotDotToken` so it becomes a typed rest parameter.
+     *  Returns the original list when no JSDoc primitives match. */
     private fun applyJSDocParamPrimitiveTypes(
         params: List<Parameter>, comments: List<Comment>?,
     ): List<Parameter> {
-        val map = parseJSDocParamPrimitiveTypeMap(comments) ?: return params
+        val parsed = parseJSDocParamPrimitiveTypeMap(comments) ?: return params
+        val map = parsed.types
         var changed = false
         val out = params.map { p ->
             if (p.type != null) p
@@ -7403,7 +7431,8 @@ class Parser(
                 val t = name?.let { map[it] }
                 if (t != null) {
                     changed = true
-                    p.copy(type = t, typeFromJSDoc = true)
+                    val isRest = name in parsed.restNames
+                    p.copy(type = t, typeFromJSDoc = true, dotDotDotToken = p.dotDotDotToken || isRest)
                 } else p
             }
         }
