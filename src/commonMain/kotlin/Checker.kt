@@ -968,6 +968,9 @@ class Checker(
         // when the user's `@lib` excludes es2015+ (es2015.iterable provides
         // Symbol.iterator); without it, only Array and string are iterable.
         checkForOfNonIterable()
+        // B438e: TS2488 / TS2504 for iterating an object whose `[Symbol.iterator]` /
+        // `[Symbol.asyncIterator]` method REQUIRES a parameter (iteratorExtraParameters).
+        checkIteratorMethodExtraParameters()
         // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
         // Gated on noImplicitAny/strict.
         if (options.noImplicitAny || options.strict) {
@@ -14723,6 +14726,198 @@ class Checker(
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * B438e (iteratorExtraParameters / asyncIteratorExtraParameters, TS2488 / TS2504):
+     * an object whose `[Symbol.iterator]` (or `[Symbol.asyncIterator]`) method REQUIRES a
+     * parameter is not a valid iterable — tsc requires the iterator method to be callable
+     * with no arguments (`[Symbol.iterator]()`). So every iteration position over such an
+     * object — `for(-await)-of`, `yield*`, array spread `[...x]`, call-arg spread `f(...x)`
+     * — fails with TS2488 (sync) / TS2504 (async) carrying the object's expando type display.
+     *
+     * Dedicated walker. FP firewall: fires ONLY for an object-LITERAL-typed local variable
+     * whose computed `[Symbol.iterator]`/`[Symbol.asyncIterator]` method has a REQUIRED first
+     * parameter (non-optional, non-rest), used in an iteration position by name. A valid
+     * iterable (`[Symbol.iterator]()` with no params) never matches → the per-file `bad` map
+     * is empty and the position walk is skipped entirely. Corpus-rare shape.
+     */
+    private data class BadIterInfo(
+        val isAsync: Boolean, val display: String, val sym: String,
+        val paramStr: String, val genType: String, val reqCount: Int,
+    )
+
+    private fun checkIteratorMethodExtraParameters() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val bad = HashMap<String, BadIterInfo>()
+            try {
+                collectBadIteratorVars(result.sourceFile.statements, bad)
+                if (bad.isEmpty()) continue
+                walkIterationPositions(result.sourceFile.statements) { iteratedExpr ->
+                    val id = iteratedExpr as? Identifier ?: return@walkIterationPositions
+                    val info = bad[id.text] ?: return@walkIterationPositions
+                    val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
+                    val iterableT = if (info.isAsync) "AsyncIterable" else "Iterable"
+                    val iteratorT = if (info.isAsync) "AsyncIterator" else "Iterator"
+                    val related = Diagnostic(
+                        message = "Type '${info.display}' is not assignable to type '$iterableT<T, TReturn, TNext>'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character, start = id.pos, length = id.text.length,
+                        messageChain = listOf(
+                            "  Types of property '[Symbol.${info.sym}]' are incompatible.",
+                            "    Type '(${info.paramStr}) => ${info.genType}' is not assignable to type '() => $iteratorT<T, TReturn, TNext>'.",
+                            "      Target signature provides too few arguments. Expected ${info.reqCount} or more, but got 0.",
+                        ),
+                    )
+                    diagnostics.add(Diagnostic(
+                        message = if (info.isAsync)
+                            "Type '${info.display}' must have a '[Symbol.asyncIterator]()' method that returns an async iterator."
+                        else
+                            "Type '${info.display}' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                        category = DiagnosticCategory.Error, code = if (info.isAsync) 2504 else 2488,
+                        fileName = fileName, line = line, character = character,
+                        start = id.pos, length = id.text.length,
+                        relatedInformation = listOf(related),
+                    ))
+                }
+            } catch (_: StackOverflowError) { /* deeply nested — bail this file */ }
+        }
+    }
+
+    private fun collectBadIteratorVars(stmts: List<Statement>, out: MutableMap<String, BadIterInfo>) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val obj = d.initializer as? ObjectLiteralExpression ?: continue
+                badIteratorDisplay(obj)?.let { out[nm] = it }
+            }
+            is FunctionDeclaration -> stmt.body?.let { collectBadIteratorVars(it.statements, out) }
+            is Block -> collectBadIteratorVars(stmt.statements, out)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectBadIteratorVars(it.statements, out) }
+            else -> {}
+        }
+    }
+
+    /** Detect an object literal with a `[Symbol.(async)iterator]` method requiring a parameter. */
+    private fun badIteratorDisplay(obj: ObjectLiteralExpression): BadIterInfo? {
+        for (m in obj.properties) {
+            if (m !is MethodDeclaration) continue
+            val cpn = m.name as? ComputedPropertyName ?: continue
+            val pa = cpn.expression as? PropertyAccessExpression ?: continue
+            if ((pa.expression as? Identifier)?.text != "Symbol") continue
+            val sym = pa.name.text
+            val isAsync = sym == "asyncIterator"
+            if (!isAsync && sym != "iterator") continue
+            val p0 = m.parameters.firstOrNull() ?: continue
+            if (p0.questionToken || p0.dotDotDotToken) continue // not required → valid iterable
+            val paramStr = m.parameters.joinToString(", ") { p ->
+                val nm = (p.name as? Identifier)?.text ?: "_"
+                val t = p.type?.let { formatTypeForDisplay(it) } ?: if (p.dotDotDotToken) "any[]" else "any"
+                (if (p.dotDotDotToken) "..." else "") + nm + (if (p.questionToken) "?" else "") + ": " + t
+            }
+            val reqCount = m.parameters.count { !it.questionToken && !it.dotDotDotToken }
+            val yieldT = inferGeneratorYieldDisplay(m.body)
+            val gen = if (isAsync) "AsyncGenerator" else "Generator"
+            val genType = "$gen<$yieldT, void, unknown>"
+            return BadIterInfo(isAsync, "{ [Symbol.$sym]($paramStr): $genType; }", sym, paramStr, genType, reqCount)
+        }
+        return null
+    }
+
+    private fun inferGeneratorYieldDisplay(body: Block?): String {
+        body ?: return "any"
+        val types = LinkedHashSet<String>()
+        fun scan(stmts: List<Statement>) {
+            for (s in stmts) when (s) {
+                is ExpressionStatement -> {
+                    val y = s.expression as? YieldExpression
+                    if (y != null && !y.asteriskToken) y.expression?.let {
+                        val t = try { getWidenedLiteralType(getTypeOfExpression(it)) } catch (_: Throwable) { anyType }
+                        types.add(typeToString(t))
+                    }
+                }
+                is Block -> scan(s.statements)
+                is IfStatement -> { scan(listOf(s.thenStatement)); s.elseStatement?.let { scan(listOf(it)) } }
+                is ForStatement -> scan(listOf(s.statement))
+                is ForOfStatement -> scan(listOf(s.statement))
+                is ForInStatement -> scan(listOf(s.statement))
+                is WhileStatement -> scan(listOf(s.statement))
+                is DoStatement -> scan(listOf(s.statement))
+                else -> {}
+            }
+        }
+        scan(body.statements)
+        return if (types.isEmpty()) "never" else types.joinToString(" | ")
+    }
+
+    /** Visit iteration positions (for-of expr, `yield*` operand, array/call spread operand). */
+    private fun walkIterationPositions(stmts: List<Statement>, cb: (Expression) -> Unit) {
+        for (s in stmts) walkIterPosStmt(s, cb)
+    }
+    private fun walkIterPosStmt(s: Statement, cb: (Expression) -> Unit) {
+        when (s) {
+            is ForOfStatement -> { cb(s.expression); walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
+            is Block -> walkIterationPositions(s.statements, cb)
+            is IfStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.thenStatement, cb); s.elseStatement?.let { walkIterPosStmt(it, cb) } }
+            is ForStatement -> {
+                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> walkIterPosExpr(i, cb) } }
+                (s.initializer as? Expression)?.let { walkIterPosExpr(it, cb) }
+                s.condition?.let { walkIterPosExpr(it, cb) }; s.incrementor?.let { walkIterPosExpr(it, cb) }
+                walkIterPosStmt(s.statement, cb)
+            }
+            is ForInStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
+            is WhileStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
+            is DoStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
+            is ExpressionStatement -> walkIterPosExpr(s.expression, cb)
+            is ReturnStatement -> s.expression?.let { walkIterPosExpr(it, cb) }
+            is ThrowStatement -> s.expression?.let { walkIterPosExpr(it, cb) }
+            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { walkIterPosExpr(it, cb) }
+            is FunctionDeclaration -> s.body?.let { walkIterationPositions(it.statements, cb) }
+            is ClassDeclaration -> for (mem in s.members) when (mem) {
+                is MethodDeclaration -> mem.body?.let { walkIterationPositions(it.statements, cb) }
+                is Constructor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
+                is GetAccessor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
+                is SetAccessor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walkIterationPositions(it.statements, cb) }
+            is LabeledStatement -> walkIterPosStmt(s.statement, cb)
+            is SwitchStatement -> for (c in s.caseBlock) when (c) {
+                is CaseClause -> { walkIterPosExpr(c.expression, cb); walkIterationPositions(c.statements, cb) }
+                is DefaultClause -> walkIterationPositions(c.statements, cb)
+                else -> {}
+            }
+            is TryStatement -> {
+                walkIterationPositions(s.tryBlock.statements, cb)
+                s.catchClause?.block?.statements?.let { walkIterationPositions(it, cb) }
+                s.finallyBlock?.statements?.let { walkIterationPositions(it, cb) }
+            }
+            else -> {}
+        }
+    }
+    private fun walkIterPosExpr(expr: Expression, cb: (Expression) -> Unit) {
+        when (expr) {
+            is YieldExpression -> { if (expr.asteriskToken) expr.expression?.let { cb(it) }; expr.expression?.let { walkIterPosExpr(it, cb) } }
+            is SpreadElement -> { cb(expr.expression); walkIterPosExpr(expr.expression, cb) }
+            is ArrayLiteralExpression -> for (e in expr.elements) walkIterPosExpr(e, cb)
+            is CallExpression -> { walkIterPosExpr(expr.expression, cb); for (a in expr.arguments) walkIterPosExpr(a, cb) }
+            is NewExpression -> { walkIterPosExpr(expr.expression, cb); expr.arguments?.forEach { walkIterPosExpr(it, cb) } }
+            is BinaryExpression -> { walkIterPosExpr(expr.left, cb); walkIterPosExpr(expr.right, cb) }
+            is ParenthesizedExpression -> walkIterPosExpr(expr.expression, cb)
+            is PropertyAccessExpression -> walkIterPosExpr(expr.expression, cb)
+            is ElementAccessExpression -> { walkIterPosExpr(expr.expression, cb); walkIterPosExpr(expr.argumentExpression, cb) }
+            is ConditionalExpression -> { walkIterPosExpr(expr.condition, cb); walkIterPosExpr(expr.whenTrue, cb); walkIterPosExpr(expr.whenFalse, cb) }
+            is PrefixUnaryExpression -> walkIterPosExpr(expr.operand, cb)
+            is PostfixUnaryExpression -> walkIterPosExpr(expr.operand, cb)
+            is AwaitExpression -> walkIterPosExpr(expr.expression, cb)
+            is ObjectLiteralExpression -> for (p in expr.properties) (p as? PropertyAssignment)?.initializer?.let { walkIterPosExpr(it, cb) }
+            is ArrowFunction -> when (val b = expr.body) { is Block -> walkIterationPositions(b.statements, cb); is Expression -> walkIterPosExpr(b, cb); else -> {} }
+            is FunctionExpression -> walkIterationPositions(expr.body.statements, cb)
+            else -> {}
         }
     }
 

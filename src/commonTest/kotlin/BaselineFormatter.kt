@@ -667,6 +667,15 @@ fun formatErrorBaseline(
                         +": "
                         +related.message
                         +"\r\n"
+                        // Related-info message chain continuation lines (already carry their
+                        // own leading indentation, NO `!!!` prefix — matches tsc's nested
+                        // DiagnosticMessageChain rendering, e.g. iteratorExtraParameters'
+                        // TS2322 related under TS2488). Additive: no diagnostic set a related
+                        // messageChain before B438e, so this cannot shift existing baselines.
+                        for (relChain in related.messageChain) {
+                            +relChain
+                            +"\r\n"
+                        }
                     }
 
                     // Emit additional diagnostics that START on this diag's continuation lines
