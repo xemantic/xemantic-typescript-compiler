@@ -82279,45 +82279,180 @@ interface DataView {
      * (node.end overshoots).
      */
     private fun checkCircularTypeArgumentSelfRef(stmt: TypeAliasDeclaration, source: String, fileName: String) {
-        val ref = stmt.type as? TypeReference ?: return
-        val args = ref.typeArguments ?: return
-        if (args.isEmpty()) return
         val aliasName = stmt.name.text
-        val hit = args.any { arg ->
-            val cond = arg as? ConditionalType ?: return@any false
-            val check = cond.checkType as? TypeReference ?: return@any false
-            (check.typeName as? Identifier)?.text == aliasName && check.typeArguments.isNullOrEmpty()
-        }
-        if (!hit) return
-        val nameIdent = ref.typeName as? Identifier ?: return
-        val refName = nameIdent.text
-        val start = ref.pos
-        var i = nameIdent.pos + refName.length
-        while (i < source.length && source[i].isWhitespace()) i++
-        if (i >= source.length || source[i] != '<') return
-        var depth = 0
-        var end = -1
-        while (i < source.length) {
-            when (source[i]) {
-                '<' -> depth++
-                '>' -> {
-                    if (i > 0 && source[i - 1] == '=') { i++; continue }
-                    depth--
-                    if (depth == 0) { end = i + 1; break }
+        // TS4109 — the alias body is a generic TypeReference whose top-level type
+        // arguments circularly reference the alias being defined, either via a
+        // ConditionalType check-type (B188's original shape) or via an indexed
+        // access back into the alias (`type Mxs = Mx<'list', Mxs['p1']>`).
+        val ref = stmt.type as? TypeReference
+        if (ref != null) {
+            val args = ref.typeArguments
+            if (!args.isNullOrEmpty()) {
+                val hit = args.any { arg ->
+                    val cond = arg as? ConditionalType
+                    if (cond != null) {
+                        val check = cond.checkType as? TypeReference
+                        if (check != null && (check.typeName as? Identifier)?.text == aliasName &&
+                            check.typeArguments.isNullOrEmpty()) return@any true
+                    }
+                    // `Mxs['p1']` etc. — a top-level arg that indexes back into the alias.
+                    selfRefViaIndexedAccess(arg, aliasName)
                 }
+                if (hit) {
+                    val nameIdent = ref.typeName as? Identifier
+                    if (nameIdent != null) {
+                        val refName = nameIdent.text
+                        val start = ref.pos
+                        var i = nameIdent.pos + refName.length
+                        while (i < source.length && source[i].isWhitespace()) i++
+                        if (i < source.length && source[i] == '<') {
+                            var depth = 0
+                            var end = -1
+                            while (i < source.length) {
+                                when (source[i]) {
+                                    '<' -> depth++
+                                    '>' -> {
+                                        if (i > 0 && source[i - 1] == '=') { i++; continue }
+                                        depth--
+                                        if (depth == 0) { end = i + 1; break }
+                                    }
+                                }
+                                i++
+                            }
+                            if (end > start) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type arguments for '$refName' circularly reference themselves.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 4109,
+                                    fileName = fileName,
+                                    line = line, character = character,
+                                    start = start, length = end - start,
+                                ))
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+        }
+        // TS4110 — a TUPLE type within the body whose own elements circularly
+        // reference the alias via an indexed access (`type ArrElem = ['list',
+        // ArrElem[number][0]][]`, `type TupleElem = [['list', TupleElem[0][0]]]`).
+        // Each innermost offending tuple is reported (nested tuples own their
+        // own diagnostic, so the shallow self-ref check stops at tuple boundaries).
+        val tuples = mutableListOf<TupleType>()
+        collectSelfRefTuples(stmt.type, aliasName, tuples)
+        for (tt in tuples) {
+            val end = matchClosingBracket(source, tt.pos)
+            if (end <= tt.pos) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, tt.pos)
+            diagnostics.add(Diagnostic(
+                message = "Tuple type arguments circularly reference themselves.",
+                category = DiagnosticCategory.Error,
+                code = 4110,
+                fileName = fileName,
+                line = line, character = character,
+                start = tt.pos, length = end - tt.pos,
+            ))
+        }
+    }
+
+    /** Unwraps nested [IndexedAccessType] layers to the ultimate object type. */
+    private fun indexedAccessBaseType(t: TypeNode): TypeNode {
+        var cur = t
+        while (cur is IndexedAccessType) cur = cur.objectType
+        return cur
+    }
+
+    /**
+     * True if [node]'s subtree contains an [IndexedAccessType] whose base object
+     * type is a [TypeReference] named [aliasName] — i.e. a self-referential
+     * indexed access like `Mxs['p1']` / `ArrElem[number][0]`. Crosses Array/
+     * Union/Intersection/Parenthesized/TypeReference-args AND nested tuples.
+     */
+    private fun selfRefViaIndexedAccess(node: TypeNode, aliasName: String): Boolean {
+        if (node is IndexedAccessType) {
+            val base = indexedAccessBaseType(node)
+            if (base is TypeReference && (base.typeName as? Identifier)?.text == aliasName) return true
+        }
+        return when (node) {
+            is IndexedAccessType -> selfRefViaIndexedAccess(node.objectType, aliasName) ||
+                selfRefViaIndexedAccess(node.indexType, aliasName)
+            is ArrayType -> selfRefViaIndexedAccess(node.elementType, aliasName)
+            is TupleType -> node.elements.any { selfRefViaIndexedAccess(it, aliasName) }
+            is UnionType -> node.types.any { selfRefViaIndexedAccess(it, aliasName) }
+            is IntersectionType -> node.types.any { selfRefViaIndexedAccess(it, aliasName) }
+            is ParenthesizedType -> selfRefViaIndexedAccess(node.type, aliasName)
+            is TypeReference -> node.typeArguments?.any { selfRefViaIndexedAccess(it, aliasName) } ?: false
+            else -> false
+        }
+    }
+
+    /** Like [selfRefViaIndexedAccess] but does NOT descend into nested tuples
+     *  (a nested tuple owns its own TS4110), used to attribute the diagnostic
+     *  to the innermost offending tuple. */
+    private fun selfRefNotCrossingTuple(node: TypeNode, aliasName: String): Boolean {
+        if (node is TupleType) return false
+        if (node is IndexedAccessType) {
+            val base = indexedAccessBaseType(node)
+            if (base is TypeReference && (base.typeName as? Identifier)?.text == aliasName) return true
+        }
+        return when (node) {
+            is IndexedAccessType -> selfRefNotCrossingTuple(node.objectType, aliasName) ||
+                selfRefNotCrossingTuple(node.indexType, aliasName)
+            is ArrayType -> selfRefNotCrossingTuple(node.elementType, aliasName)
+            is UnionType -> node.types.any { selfRefNotCrossingTuple(it, aliasName) }
+            is IntersectionType -> node.types.any { selfRefNotCrossingTuple(it, aliasName) }
+            is ParenthesizedType -> selfRefNotCrossingTuple(node.type, aliasName)
+            is TypeReference -> node.typeArguments?.any { selfRefNotCrossingTuple(it, aliasName) } ?: false
+            else -> false
+        }
+    }
+
+    /** Collects every [TupleType] in [node] whose own (non-tuple-crossing)
+     *  elements self-reference [aliasName] via an indexed access. */
+    private fun collectSelfRefTuples(node: TypeNode?, aliasName: String, out: MutableList<TupleType>) {
+        if (node == null) return
+        when (node) {
+            is TupleType -> {
+                if (node.elements.any { selfRefNotCrossingTuple(it, aliasName) }) out.add(node)
+                node.elements.forEach { collectSelfRefTuples(it, aliasName, out) }
+            }
+            is ArrayType -> collectSelfRefTuples(node.elementType, aliasName, out)
+            is IndexedAccessType -> {
+                collectSelfRefTuples(node.objectType, aliasName, out)
+                collectSelfRefTuples(node.indexType, aliasName, out)
+            }
+            is UnionType -> node.types.forEach { collectSelfRefTuples(it, aliasName, out) }
+            is IntersectionType -> node.types.forEach { collectSelfRefTuples(it, aliasName, out) }
+            is ParenthesizedType -> collectSelfRefTuples(node.type, aliasName, out)
+            is TypeReference -> node.typeArguments?.forEach { collectSelfRefTuples(it, aliasName, out) }
+            else -> {}
+        }
+    }
+
+    /** Bracket-matches `[` at [start] to its closing `]`, skipping string
+     *  literals; returns the position just past `]`, or [start] on failure. */
+    private fun matchClosingBracket(source: String, start: Int): Int {
+        if (start >= source.length || source[start] != '[') return start
+        var i = start
+        var depth = 0
+        while (i < source.length) {
+            when (val ch = source[i]) {
+                '\'', '"', '`' -> {
+                    i++
+                    while (i < source.length && source[i] != ch) {
+                        if (source[i] == '\\') i++
+                        i++
+                    }
+                }
+                '[' -> depth++
+                ']' -> { depth--; if (depth == 0) return i + 1 }
             }
             i++
         }
-        if (end <= start) return
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Type arguments for '$refName' circularly reference themselves.",
-            category = DiagnosticCategory.Error,
-            code = 4109,
-            fileName = fileName,
-            line = line, character = character,
-            start = start, length = end - start,
-        ))
+        return start
     }
 
     private fun checkFunctionReturnTypeCircular(
