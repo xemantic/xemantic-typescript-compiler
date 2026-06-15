@@ -1003,6 +1003,9 @@ class Checker(
         // TS8010 already fire) STILL declares the property type T — so `this.prop = …`
         // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
         checkJsAmbientDeclaredClassProperties()
+        // B431: TS2339 for an expando-function property accessed inside a NESTED function
+        // where it was never declared at file scope (`Foo.X` inside `function bar(p=(Foo.X=1))`).
+        checkExpandoFunctionNestedReads()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16573,6 +16576,240 @@ class Checker(
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * B431 (expandoFunctionNestedAssigments, TS2339): an expando-function property
+     * assignment `Foo.X = v` DECLARES `X` on `typeof Foo` only when its container is
+     * `Foo`'s container (the source file for a top-level `function Foo`). A write inside
+     * a NESTED function (e.g. a parameter default of another function) does NOT declare
+     * — so `Foo.inNestedFunction = 1` inside `function bar(p = (Foo.inNestedFunction = 1))`
+     * reads/writes a property that does not exist → TS2339 "Property 'X' does not exist
+     * on type 'typeof Foo'." at the property name.
+     *
+     * Dedicated walker (NOT the general TS2339 path — function-typed receivers are skipped
+     * there). FP firewall (corpus-EXHAUSTIVE): fires ONLY for an access at function-nesting
+     * depth >= 1 (inside a nested function-like, NOT a plain block) of a property NOT
+     * declared at file scope, on a PLAIN top-level `function Foo` with NO same-name merge
+     * (namespace/interface/class/enum/type-alias/import-equals/var) and NO overload, where
+     * `Foo` is not shadowed by a closer binding. Top-level writes (incl. in if/while/for/do
+     * blocks) all declare, matching tsc; top-level undeclared reads are deliberately NOT
+     * checked (broader FP surface, no consumer). RUNTIME function props excluded.
+     */
+    private fun checkExpandoFunctionNestedReads() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (isDtsFile(fileName)) continue
+            val funcNames = HashSet<String>()
+            val nameCount = HashMap<String, Int>()
+            val merged = HashSet<String>()
+            for (stmt in sf.statements) {
+                when (stmt) {
+                    is FunctionDeclaration -> stmt.name?.text?.let {
+                        funcNames.add(it); nameCount[it] = (nameCount[it] ?: 0) + 1
+                    }
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { merged.add(it) }
+                    is InterfaceDeclaration -> merged.add(stmt.name.text)
+                    is ClassDeclaration -> stmt.name?.text?.let { merged.add(it) }
+                    is EnumDeclaration -> merged.add(stmt.name.text)
+                    is TypeAliasDeclaration -> merged.add(stmt.name.text)
+                    is ImportEqualsDeclaration -> merged.add(stmt.name.text)
+                    is VariableStatement -> stmt.declarationList.declarations.forEach {
+                        (it.name as? Identifier)?.text?.let { n -> merged.add(n) }
+                    }
+                    else -> {}
+                }
+            }
+            if (funcNames.isEmpty()) continue
+            val candidates = funcNames.filterTo(HashSet()) { it !in merged && (nameCount[it] ?: 0) == 1 }
+            if (candidates.isEmpty()) continue
+            val declared = HashMap<String, HashSet<String>>()
+            candidates.forEach { declared[it] = HashSet() }
+            for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
+            val source = sf.text
+            for (stmt in sf.statements) {
+                visitExpandoStmt(stmt, false, candidates, declared, HashSet(), source, fileName)
+            }
+        }
+    }
+
+    /** Pass 1: collect file-scope `Foo.prop =` writes (NOT descending into function-likes). */
+    private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
+        when (s) {
+            null -> {}
+            is ExpressionStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
+            is ReturnStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
+            is ThrowStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
+            is VariableStatement -> s.declarationList.declarations.forEach { collectExpandoDeclsExpr(it.initializer, cands, declared) }
+            is IfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.thenStatement, cands, declared); collectExpandoDecls(s.elseStatement, cands, declared) }
+            is Block -> s.statements.forEach { collectExpandoDecls(it, cands, declared) }
+            is ForStatement -> {
+                s.initializer?.let { if (it is Expression) collectExpandoDeclsExpr(it, cands, declared) else if (it is VariableDeclarationList) it.declarations.forEach { d -> collectExpandoDeclsExpr(d.initializer, cands, declared) } }
+                collectExpandoDeclsExpr(s.condition, cands, declared); collectExpandoDeclsExpr(s.incrementor, cands, declared); collectExpandoDecls(s.statement, cands, declared)
+            }
+            is ForInStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
+            is ForOfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
+            is WhileStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
+            is DoStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
+            is SwitchStatement -> {
+                collectExpandoDeclsExpr(s.expression, cands, declared)
+                for (c in s.caseBlock) when (c) {
+                    is CaseClause -> { collectExpandoDeclsExpr(c.expression, cands, declared); c.statements.forEach { collectExpandoDecls(it, cands, declared) } }
+                    is DefaultClause -> c.statements.forEach { collectExpandoDecls(it, cands, declared) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                s.tryBlock.statements.forEach { collectExpandoDecls(it, cands, declared) }
+                s.catchClause?.block?.statements?.forEach { collectExpandoDecls(it, cands, declared) }
+                s.finallyBlock?.statements?.forEach { collectExpandoDecls(it, cands, declared) }
+            }
+            is LabeledStatement -> collectExpandoDecls(s.statement, cands, declared)
+            else -> {}
+        }
+    }
+
+    private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
+        when (e) {
+            null -> {}
+            is BinaryExpression -> {
+                if (e.operator == SyntaxKind.Equals) {
+                    val pa = e.left as? PropertyAccessExpression
+                    val recv = pa?.expression as? Identifier
+                    if (pa != null && recv != null && recv.text in cands) declared[recv.text]?.add(pa.name.text)
+                }
+                collectExpandoDeclsExpr(e.left, cands, declared); collectExpandoDeclsExpr(e.right, cands, declared)
+            }
+            is PropertyAccessExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is ElementAccessExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); collectExpandoDeclsExpr(e.argumentExpression, cands, declared) }
+            is ParenthesizedExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is CallExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); e.arguments.forEach { collectExpandoDeclsExpr(it, cands, declared) } }
+            is NewExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); e.arguments?.forEach { collectExpandoDeclsExpr(it, cands, declared) } }
+            is ConditionalExpression -> { collectExpandoDeclsExpr(e.condition, cands, declared); collectExpandoDeclsExpr(e.whenTrue, cands, declared); collectExpandoDeclsExpr(e.whenFalse, cands, declared) }
+            is PrefixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
+            is PostfixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
+            is ArrayLiteralExpression -> e.elements.forEach { collectExpandoDeclsExpr(it, cands, declared) }
+            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> collectExpandoDeclsExpr(p.initializer, cands, declared); is SpreadAssignment -> collectExpandoDeclsExpr(p.expression, cands, declared); else -> {} } }
+            is SpreadElement -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is AsExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is TypeAssertionExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is NonNullExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is SatisfiesExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            else -> {}
+        }
+    }
+
+    /** Collect parameter + top-level-body local names that would shadow a candidate inside a function-like. */
+    private fun collectExpandoFnLocals(params: List<Parameter>, body: Node?): Set<String> {
+        val s = HashSet<String>()
+        for (p in params) (p.name as? Identifier)?.text?.let { s.add(it) }
+        val stmts = (body as? Block)?.statements ?: return s
+        for (st in stmts) when (st) {
+            is VariableStatement -> st.declarationList.declarations.forEach { (it.name as? Identifier)?.text?.let { n -> s.add(n) } }
+            is FunctionDeclaration -> st.name?.text?.let { s.add(it) }
+            is ClassDeclaration -> st.name?.text?.let { s.add(it) }
+            else -> {}
+        }
+        return s
+    }
+
+    /** Pass 2: emit TS2339 for nested-function accesses of undeclared expando props. */
+    private fun visitExpandoStmt(s: Statement?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: Set<String>, source: String, fileName: String) {
+        when (s) {
+            null -> {}
+            is ExpressionStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is ReturnStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is ThrowStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is VariableStatement -> s.declarationList.declarations.forEach { visitExpandoExpr(it.initializer, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is IfStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.thenStatement, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.elseStatement, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is Block -> s.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is ForStatement -> {
+                s.initializer?.let { if (it is Expression) visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) else if (it is VariableDeclarationList) it.declarations.forEach { d -> visitExpandoExpr(d.initializer, inNestedFn, cands, declared, shadowed, source, fileName) } }
+                visitExpandoExpr(s.condition, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(s.incrementor, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
+            }
+            is ForInStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is ForOfStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is WhileStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is DoStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is SwitchStatement -> {
+                visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+                for (c in s.caseBlock) when (c) {
+                    is CaseClause -> { visitExpandoExpr(c.expression, inNestedFn, cands, declared, shadowed, source, fileName); c.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
+                    is DefaultClause -> c.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                s.tryBlock.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+                s.catchClause?.block?.statements?.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+                s.finallyBlock?.statements?.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+            }
+            is LabeledStatement -> visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
+            is FunctionDeclaration -> {
+                val inner = shadowed + collectExpandoFnLocals(s.parameters, s.body)
+                s.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
+                s.body?.statements?.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun visitExpandoExpr(e: Expression?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: Set<String>, source: String, fileName: String) {
+        when (e) {
+            null -> {}
+            is PropertyAccessExpression -> {
+                val recv = e.expression as? Identifier
+                if (inNestedFn && recv != null && recv.text in cands && recv.text !in shadowed) {
+                    val prop = e.name.text
+                    if (prop !in (declared[recv.text] ?: emptySet()) && prop !in RUNTIME_PROPERTIES) {
+                        val pos = e.name.pos
+                        if (pos >= 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$prop' does not exist on type 'typeof ${recv.text}'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = pos, length = prop.length,
+                            ))
+                        }
+                    }
+                }
+                visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            }
+            is ElementAccessExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.argumentExpression, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is BinaryExpression -> { visitExpandoExpr(e.left, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.right, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is ParenthesizedExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is CallExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); e.arguments.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
+            is NewExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); e.arguments?.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
+            is ConditionalExpression -> { visitExpandoExpr(e.condition, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.whenTrue, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.whenFalse, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is PrefixUnaryExpression -> visitExpandoExpr(e.operand, inNestedFn, cands, declared, shadowed, source, fileName)
+            is PostfixUnaryExpression -> visitExpandoExpr(e.operand, inNestedFn, cands, declared, shadowed, source, fileName)
+            is ArrayLiteralExpression -> e.elements.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) }
+            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> visitExpandoExpr(p.initializer, inNestedFn, cands, declared, shadowed, source, fileName); is SpreadAssignment -> visitExpandoExpr(p.expression, inNestedFn, cands, declared, shadowed, source, fileName); else -> {} } }
+            is SpreadElement -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is AsExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is TypeAssertionExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is NonNullExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is SatisfiesExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is YieldExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is AwaitExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
+            is FunctionExpression -> {
+                val inner = shadowed + collectExpandoFnLocals(e.parameters, e.body) + (e.name?.text?.let { setOf(it) } ?: emptySet())
+                e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
+                e.body.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
+            }
+            is ArrowFunction -> {
+                val inner = shadowed + collectExpandoFnLocals(e.parameters, e.body)
+                e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
+                when (val b = e.body) {
+                    is Block -> b.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
+                    is Expression -> visitExpandoExpr(b, true, cands, declared, inner, source, fileName)
+                    else -> {}
+                }
+            }
+            else -> {}
         }
     }
 
