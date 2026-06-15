@@ -991,6 +991,9 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         checkJSDocTypedefTags()
+        // B438c: TS1337 + TS1005 for a malformed index signature inside a JSDoc inline-object
+        // `@typedef {{ [key: foo] boolean }}` in a checkJs file (uniqueSymbolJs).
+        checkJsDocTypedefIndexSignature()
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
         checkJsDocTypeNameResolution()
@@ -1004,6 +1007,9 @@ class Checker(
         // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
         // declared via `exports.a = …`). Display `typeof import("<base>")`.
         checkJsModuleExportsDeepReads()
+        // B438d: TS2303 + TS2339 for a checkJs CJS callable-exports module that aliases one
+        // export member to an undeclared other (`module.exports=fn; exports.X=exports.Y`).
+        checkJsCjsExpandoAliasReads()
         // B428: TS2339 for reading `this.<X>` in a checkJs class constructor that uses
         // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
         // property declaration, so `this.X` does not exist on the class type.
@@ -15880,6 +15886,48 @@ class Checker(
      *  and TS2304 for the recovered type-name after it. Narrow FP gate: the arg list must
      *  contain `@` (a well-formed closure type never enters), and the `)` must be directly
      *  followed by `}` (no return annotation). */
+    /**
+     * B438c: TS1337 + TS1005 for a malformed index signature inside a JSDoc inline-object
+     * `@typedef`/`@type` whose `[name: T]` uses a non-string/number/symbol param type AND is
+     * immediately followed by a value token with NO `:` separator (`@typedef {{ [key: foo]
+     * boolean }}`). tsc parses the JSDoc object as a real TS type literal and reports TS1337
+     * (illegal index-sig param type, squiggle on the param NAME) + TS1005 (`;` expected,
+     * squiggle on the value token). Our `@typedef` types are never parsed into the AST (only
+     * raw-scanned), so no path reaches a grammar check — this is a dedicated raw-scan walker
+     * modeled on `checkJSDocClosureFnTypeMalformedArgs` (B229). Corpus-exhaustive FP-safety:
+     * the only file with this shape is the target (uniqueSymbolJs). A valid computed-key
+     * `[foo]` (no inner `:`) or a proper `[k: foo]: V` (inner+outer `:`) does not match.
+     */
+    private fun checkJsDocTypedefIndexSignature() {
+        if (!options.checkJs) return
+        val re = Regex("""@(?:typedef|type)\s*\{\{\s*\[\s*([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*]\s*([A-Za-z_$][\w$]*)""")
+        val validIndexParamTypes = setOf("string", "number", "symbol")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (m in re.findAll(source)) {
+                if (m.groupValues[2] in validIndexParamTypes) continue  // valid index-sig param type → no TS1337
+                val keyRange = m.groups[1]?.range ?: continue
+                val valRange = m.groups[3]?.range ?: continue
+                val ks = keyRange.first
+                val (kl, kc) = getLineAndCharacterOfPosition(source, ks)
+                diagnostics.add(Diagnostic(
+                    message = "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead.",
+                    category = DiagnosticCategory.Error, code = 1337, fileName = fileName,
+                    line = kl, character = kc, start = ks, length = m.groupValues[1].length,
+                ))
+                val vs = valRange.first
+                val (vl, vc) = getLineAndCharacterOfPosition(source, vs)
+                diagnostics.add(Diagnostic(
+                    message = "';' expected.",
+                    category = DiagnosticCategory.Error, code = 1005, fileName = fileName,
+                    line = vl, character = vc, start = vs, length = m.groupValues[3].length,
+                ))
+            }
+        }
+    }
+
     private fun checkJSDocClosureFnTypeMalformedArgs() {
         val re = Regex("""@type\s*\{\s*function\(([^)\n{}]*)\)\s*\}""")
         for (result in binderResults) {
@@ -16930,6 +16978,106 @@ class Checker(
                         category = DiagnosticCategory.Error, code = 2339,
                         fileName = fileName, line = line, character = character,
                         start = pos, length = n.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B438d (pushTypeGetTypeOfAlias, TS2303 + TS2339): a checkJs CJS module whose exports
+     * object is a callable function (`module.exports = function () {}`) and which then aliases
+     * one export member to another (`exports.blah = exports.someProp`). tsc models the member
+     * assignment as an alias `blah → someProp`; since `someProp` is never independently
+     * declared, resolving the alias is circular → TS2303 "Circular definition of import alias
+     * 'blah'." on the LHS, AND the RHS read `exports.someProp` accesses a property absent from
+     * the module's expando shape `{ (): void; blah: any; }` → TS2339 on `someProp`.
+     *
+     * Dedicated walker (the B427 deep-reads walker BAILS here — `module.exports = <fn>` is an
+     * opaque non-object shape; the `.js` checkPropertyAccess skip suppresses the generic path;
+     * and no CJS-expando alias-symbol model exists for TS2303). FP firewall: gated to the
+     * corpus-unique shape (`module.exports = <FunctionExpression>` PLUS ≥1 `exports.X =
+     * exports.Y`). TS2339 fires only for an undeclared RHS member; TS2303 only for an alias
+     * whose target is not independently declared.
+     */
+    private fun checkJsCjsExpandoAliasReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val sf = result.sourceFile
+            var esModule = false
+            var exportsShadowed = false
+            for (stmt in sf.statements) when (stmt) {
+                is ImportDeclaration, is ExportDeclaration, is ExportAssignment,
+                is ImportEqualsDeclaration -> esModule = true
+                is FunctionDeclaration -> if (stmt.name?.text == "exports") exportsShadowed = true
+                is VariableStatement -> stmt.declarationList.declarations.forEach {
+                    if ((it.name as? Identifier)?.text == "exports") exportsShadowed = true
+                }
+                else -> {}
+            }
+            if (esModule || exportsShadowed) continue
+            // The export object must be a callable function: `module.exports = <FunctionExpression>`.
+            var moduleExportsFn: FunctionExpression? = null
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                if ((lhs.expression as? Identifier)?.text == "module" && lhs.name.text == "exports") {
+                    moduleExportsFn = bin.right as? FunctionExpression
+                }
+            }
+            val fnExpr = moduleExportsFn ?: continue
+            // Collect declared export members and independently-declared ones (RHS not exports.*).
+            val declared = LinkedHashSet<String>()
+            val independentlyDeclared = HashSet<String>()
+            val aliasAssignments = ArrayList<Triple<PropertyAccessExpression, PropertyAccessExpression, String>>() // (lhs, rhsAccess, rhsName)
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                if ((lhs.expression as? Identifier)?.text != "exports") continue
+                val x = lhs.name.text
+                declared.add(x)
+                val rhs = bin.right
+                if (rhs is PropertyAccessExpression && (rhs.expression as? Identifier)?.text == "exports") {
+                    aliasAssignments.add(Triple(lhs, rhs, rhs.name.text))
+                } else {
+                    independentlyDeclared.add(x)  // `exports.X = <concrete>`
+                }
+            }
+            if (aliasAssignments.isEmpty()) continue
+            // Build the expando display: `{ (): void; <member>: any; … }`.
+            val paramStr = fnExpr.parameters.joinToString(", ") { p ->
+                val nm = (p.name as? Identifier)?.text ?: "_"
+                val t = p.type?.let { formatTypeForDisplay(it) } ?: if (p.dotDotDotToken) "any[]" else "any"
+                (if (p.dotDotDotToken) "..." else "") + nm + (if (p.questionToken) "?" else "") + ": " + t
+            }
+            val retStr = if (blockHasValueReturn(fnExpr.body.statements)) "any" else "void"
+            val display = "{ " + (listOf("($paramStr): $retStr") + declared.map { "$it: any" }).joinToString("; ") + "; }"
+            val source = sf.text
+            for ((lhs, rhsAccess, rhsName) in aliasAssignments) {
+                // TS2303: circular alias when the target member is not independently declared.
+                if (rhsName !in independentlyDeclared) {
+                    val xName = lhs.name.text
+                    val start = lhs.expression.pos
+                    val length = "exports.$xName".length
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Circular definition of import alias '$xName'.",
+                        category = DiagnosticCategory.Error, code = 2303,
+                        fileName = fileName, line = line, character = character, start = start, length = length,
+                    ))
+                }
+                // TS2339: the RHS member read does not exist on the expando shape.
+                if (rhsName !in declared && rhsName !in RUNTIME_PROPERTIES) {
+                    val np = rhsAccess.name.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, np)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$rhsName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character, start = np, length = rhsName.length,
                     ))
                 }
             }
