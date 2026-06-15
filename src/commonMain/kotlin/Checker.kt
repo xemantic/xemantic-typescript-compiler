@@ -995,6 +995,10 @@ class Checker(
         // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
         // declared via `exports.a = …`). Display `typeof import("<base>")`.
         checkJsModuleExportsDeepReads()
+        // B428: TS2339 for reading `this.<X>` in a checkJs class constructor that uses
+        // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
+        // property declaration, so `this.X` does not exist on the class type.
+        checkJsObjectDefinePropertyThisReads()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16275,6 +16279,81 @@ class Checker(
                 fileName = fileName, line = line, character = character,
                 start = pos, length = n.length,
             ))
+        }
+    }
+
+    /**
+     * B428: TS2339 for reading `this.<X>` inside a checkJs class constructor that
+     * defines members via `Object.defineProperty(this, "X", …)`. TypeScript does NOT
+     * (yet) recognize an `Object.defineProperty(this, …)` call as a property
+     * declaration on the class, so a subsequent `this.X` read (e.g. as the first
+     * argument of a further `Object.defineProperty(this.X, …)`) does not exist on the
+     * class instance type → TS2339 "Property 'X' does not exist on type '<Class>'.".
+     *
+     * FP firewall (corpus-EXHAUSTIVE): runs ONLY for a class whose constructor body
+     * contains at least one `Object.defineProperty(this, …)` call — the single corpus
+     * file with that shape is the intended target. The "declared" set (class
+     * field/method/accessor names + `this.X = …` constructor writes) is excluded;
+     * `Object.defineProperty`-defined names are deliberately NOT declared (matching
+     * tsc), so reading such a name fires. The `.js` `checkPropertyAccess` skip
+     * (B152/B153) stays intact — this is a dedicated walker, like B419/B424/B427.
+     */
+    private fun checkJsObjectDefinePropertyThisReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val classes = LinkedHashMap<String, ClassDeclaration>()
+            collectNamedClassDecls(result.sourceFile.statements, classes)
+            if (classes.isEmpty()) continue
+            val source = result.sourceFile.text
+            for (cls in classes.values) {
+                val clsName = cls.name?.text ?: continue
+                val ctorBody = cls.members.filterIsInstance<Constructor>().firstOrNull()?.body ?: continue
+                // Gate: the constructor must use `Object.defineProperty(this, …)`.
+                var hasDefinePropThis = false
+                for (stmt in ctorBody.statements) {
+                    val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                    val callee = call.expression as? PropertyAccessExpression ?: continue
+                    if ((callee.expression as? Identifier)?.text == "Object" &&
+                        callee.name.text == "defineProperty" &&
+                        (call.arguments.firstOrNull() as? Identifier)?.text == "this"
+                    ) { hasDefinePropThis = true; break }
+                }
+                if (!hasDefinePropThis) continue
+                // Declared members: class-body fields/methods/accessors + `this.X = …` writes.
+                val declared = HashSet<String>()
+                for (m in cls.members) {
+                    val nm: NameNode? = when (m) {
+                        is PropertyDeclaration -> m.name
+                        is MethodDeclaration -> m.name
+                        is GetAccessor -> m.name
+                        is SetAccessor -> m.name
+                        else -> null
+                    }
+                    nm?.let { nameTextOrNull(it) }?.let { declared.add(it) }
+                }
+                val writes = LinkedHashMap<String, MutableList<Expression>>()
+                collectConstructorThisAssignments(ctorBody.statements, writes)
+                declared.addAll(writes.keys)
+                // Fire on `this.X` reads of an undeclared X.
+                walkAccessesNoFnBoundary(ctorBody) { acc ->
+                    val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
+                    if ((pa.expression as? Identifier)?.text != "this") return@walkAccessesNoFnBoundary
+                    val nameId = pa.name as? Identifier ?: return@walkAccessesNoFnBoundary
+                    val n = nameId.text
+                    if (n in declared || n in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
+                    val pos = nameId.pos
+                    if (pos < 0) return@walkAccessesNoFnBoundary
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$n' does not exist on type '$clsName'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = n.length,
+                    ))
+                }
+            }
         }
     }
 
