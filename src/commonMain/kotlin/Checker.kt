@@ -1263,6 +1263,8 @@ class Checker(
         // param types `this` as a class T, when the member's declaring class is not in T's
         // hierarchy (the protected-write companion to B374's private check).
         checkProtectedWriteViaThisParam()
+        // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
+        checkProtectedMemberReadAccess()
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
@@ -43114,6 +43116,226 @@ interface DataView {
             fileName = fileName, line = line, character = ch,
             start = lhs.name.pos, length = member.length,
         ))
+    }
+
+    /**
+     * B446: general protected-member READ access checking (TS2445 / TS2446). For a
+     * read `obj.member` (property access / call receiver) where `member` resolves to a
+     * PROTECTED instance member declared in class D, applies tsc's accessibility rule:
+     *   enclosing = the class governing protected access at the site (the lexical class,
+     *               or — for a `this: T` parameter — T's class / its constraint's class;
+     *               null for a free function with an unconstrained/non-class `this`).
+     *   - enclosing == null OR enclosing does NOT derive from D → TS2445
+     *     "Property 'm' is protected and only accessible within class 'D' and its subclasses."
+     *   - else (enclosing can access D's protected members) but the RECEIVER's class is
+     *     NOT enclosing-or-derived → TS2446 "...only accessible through an instance of
+     *     class '<enclosing>'. This is an instance of class '<recv>'."
+     * Receiver class is resolved AST-only: `this` → enclosing, a param/local typed as a
+     * concrete non-generic class, `new C()`, or `this.prop` of a class-typed member.
+     * This is a dedicated pass (NOT an un-gating of the heavily-gated property-access
+     * walker). FP firewall: fires ONLY when the receiver resolves to a concrete class
+     * AND the member is found protected on its hierarchy (a public override stops the
+     * search → no error); static members, generic-instantiated receivers, accessor-only
+     * shapes with no protected decl, and writes (owned by B377) are excluded. Reads of a
+     * genuinely-protected member from outside the hierarchy are ALWAYS errors.
+     */
+    private fun checkProtectedMemberReadAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            for (s in result.sourceFile.statements) pmrScanContainer(s, null, result.sourceFile.text, fileName, result.locals)
+        }
+    }
+
+    private fun pmrScanContainer(s: Statement, lexicalClass: ClassDeclaration?, source: String, fileName: String, locals: SymbolTable?) {
+        when (s) {
+            is FunctionDeclaration -> pmrProcessFunctionLike(s.parameters, s.typeParameters, s.body?.statements, null, source, fileName, locals)
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                (d.initializer as? FunctionExpression)?.let { pmrProcessFunctionLike(it.parameters, it.typeParameters, it.body?.statements, null, source, fileName, locals) }
+                (d.initializer as? ArrowFunction)?.let { af -> (af.body as? Block)?.let { pmrProcessFunctionLike(af.parameters, af.typeParameters, it.statements, null, source, fileName, locals) } }
+            }
+            is ClassDeclaration -> for (m in s.members) {
+                when (m) {
+                    is MethodDeclaration -> pmrProcessFunctionLike(m.parameters, m.typeParameters, m.body?.statements, s, source, fileName, locals)
+                    is GetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
+                    is SetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
+                    is Constructor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
+                    else -> {}
+                }
+            }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { for (st in it.statements) pmrScanContainer(st, lexicalClass, source, fileName, locals) }
+            else -> {}
+        }
+    }
+
+    /** Resolve a `this:` type node (or a heritage base) to a concrete non-generic class;
+     *  a `this: T` where T is a type param resolves through its constraint. */
+    private fun pmrResolveClass(t: TypeNode?, tps: List<TypeParameter>?, locals: SymbolTable?, depth: Int = 0): ClassDeclaration? {
+        if (t == null || depth > 8) return null
+        val tr = t as? TypeReference ?: return null
+        if (tr.typeArguments != null) return null
+        val name = (tr.typeName as? Identifier)?.text ?: return null
+        val tp = tps?.firstOrNull { it.name.text == name }
+        if (tp != null) return pmrResolveClass(tp.constraint, tps, locals, depth + 1)
+        val sym = locals?.get(name) ?: globals[name] ?: return null
+        return sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+    }
+
+    /** The class declaring a PROTECTED instance member named `member` reachable from
+     *  `cls` (searching `cls` then its superclasses), or null when the member is not
+     *  found, is public (a public override stops the search), or is static. */
+    private fun pmrFindProtectedDeclaringClass(cls: ClassDeclaration, member: String, locals: SymbolTable?, depth: Int = 0): ClassDeclaration? {
+        if (depth > 12) return null
+        var found = false
+        var protectedFound = false
+        for (m in cls.members) {
+            val mods = when (m) {
+                is PropertyDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is MethodDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is GetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is SetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                else -> null
+            } ?: continue
+            if (ModifierFlag.Static in mods) continue
+            found = true
+            if (ModifierFlag.Protected in mods) protectedFound = true
+        }
+        if (found) return if (protectedFound) cls else null
+        for (h in cls.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pmrResolveClass(TypeReference(typeName = baseName), null, locals) ?: continue
+                pmrFindProtectedDeclaringClass(base, member, locals, depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun pmrProcessFunctionLike(
+        params: List<Parameter>, fnTps: List<TypeParameter>?, body: List<Statement>?,
+        lexicalClass: ClassDeclaration?, source: String, fileName: String, locals: SymbolTable?,
+    ) {
+        if (body == null) return
+        // The class governing `this` for protected access: a `this:` param overrides the
+        // lexical class; a free function with no usable `this:` has none.
+        val thisType = ptpOwnThisType(params)
+        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else lexicalClass
+        val varClasses = HashMap<String, ClassDeclaration>()
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if (pn == "this") continue
+            pmrResolveClass(p.type, fnTps, locals)?.let { varClasses[pn] = it }
+        }
+        for (st in body) pmrWalkStmt(st, thisClass, thisClass, varClasses, source, fileName, locals)
+    }
+
+    /** thisClass = what `this` resolves to; enclosing = same (the protected-access governor). */
+    private fun pmrWalkStmt(s: Statement, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: HashMap<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                d.initializer?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
+                val nm = (d.name as? Identifier)?.text
+                if (nm != null) pmrLocalClass(d.initializer, thisClass, vars, locals)?.let { vars[nm] = it }
+            }
+            is ExpressionStatement -> pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals)
+            is ReturnStatement -> s.expression?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
+            is ThrowStatement -> s.expression?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
+            is Block -> for (st in s.statements) pmrWalkStmt(st, thisClass, enclosing, vars, source, fileName, locals)
+            is IfStatement -> { pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkStmt(s.thenStatement, thisClass, enclosing, vars, source, fileName, locals); s.elseStatement?.let { pmrWalkStmt(it, thisClass, enclosing, vars, source, fileName, locals) } }
+            is ForStatement -> { (s.initializer as? Expression)?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }; s.condition?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }; pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals) }
+            is ForInStatement -> pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals)
+            is ForOfStatement -> pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals)
+            is WhileStatement -> { pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals) }
+            is FunctionDeclaration -> pmrProcessNestedFn(s.parameters, s.typeParameters, s.body?.statements, vars, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    /** A nested `function(this: T){}` resets `this`; carries the captured local→class map. */
+    private fun pmrProcessNestedFn(params: List<Parameter>, fnTps: List<TypeParameter>?, body: List<Statement>?, outerVars: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        if (body == null) return
+        val thisType = ptpOwnThisType(params)
+        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else null
+        val vars = HashMap(outerVars)
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if (pn == "this") continue
+            pmrResolveClass(p.type, fnTps, locals)?.let { vars[pn] = it }
+        }
+        for (st in body) pmrWalkStmt(st, thisClass, thisClass, vars, source, fileName, locals)
+    }
+
+    private fun pmrLocalClass(init: Expression?, thisClass: ClassDeclaration?, vars: Map<String, ClassDeclaration>, locals: SymbolTable?): ClassDeclaration? {
+        return when (init) {
+            is NewExpression -> ((init.expression as? Identifier)?.text)?.let { pmrResolveClass(TypeReference(typeName = Identifier(it)), null, locals) }
+            is Identifier -> vars[init.text]
+            is PropertyAccessExpression -> {
+                // `this.prop` of a class-typed member.
+                if ((init.expression as? Identifier)?.text == "this" && thisClass != null) {
+                    val pm = thisClass.members.firstOrNull { (it as? PropertyDeclaration)?.let { p -> (p.name as? Identifier)?.text == init.name.text } == true } as? PropertyDeclaration
+                    pmrResolveClass(pm?.type, null, locals)
+                } else null
+            }
+            else -> null
+        }
+    }
+
+    private fun pmrWalkExpr(e: Expression, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: HashMap<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        when (e) {
+            is PropertyAccessExpression -> {
+                // Skip the LHS of a write (`obj.member = …`) — owned by B377 / write paths.
+                pmrCheckAccess(e, thisClass, enclosing, vars, source, fileName, locals)
+                pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
+            }
+            is CallExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); for (a in e.arguments) pmrWalkExpr(a, thisClass, enclosing, vars, source, fileName, locals) }
+            is BinaryExpression -> {
+                // Don't descend into a write LHS property access (avoid double-emit with B377).
+                if (!(e.operator == SyntaxKind.Equals && e.left is PropertyAccessExpression)) pmrWalkExpr(e.left, thisClass, enclosing, vars, source, fileName, locals)
+                pmrWalkExpr(e.right, thisClass, enclosing, vars, source, fileName, locals)
+            }
+            is ElementAccessExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.argumentExpression, thisClass, enclosing, vars, source, fileName, locals) }
+            is ParenthesizedExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
+            is PrefixUnaryExpression -> pmrWalkExpr(e.operand, thisClass, enclosing, vars, source, fileName, locals)
+            is PostfixUnaryExpression -> pmrWalkExpr(e.operand, thisClass, enclosing, vars, source, fileName, locals)
+            is ConditionalExpression -> { pmrWalkExpr(e.condition, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.whenTrue, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.whenFalse, thisClass, enclosing, vars, source, fileName, locals) }
+            is AwaitExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
+            is NonNullExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
+            is AsExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
+            is TemplateExpression -> for (sp in e.templateSpans) pmrWalkExpr(sp.expression, thisClass, enclosing, vars, source, fileName, locals)
+            // Arrow inherits `this`; nested function expression resets it.
+            is ArrowFunction -> (e.body as? Expression)?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) } ?: (e.body as? Block)?.statements?.forEach { pmrWalkStmt(it, thisClass, enclosing, vars, source, fileName, locals) }
+            is FunctionExpression -> pmrProcessNestedFn(e.parameters, e.typeParameters, e.body?.statements, vars, source, fileName, locals)
+            else -> {}
+        }
+    }
+
+    private fun pmrCheckAccess(pa: PropertyAccessExpression, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
+        val obj = pa.expression
+        val recvClass = when {
+            obj is Identifier && obj.text == "this" -> thisClass
+            obj is Identifier -> vars[obj.text]
+            else -> null
+        } ?: return
+        val member = pa.name.text
+        val declaring = pmrFindProtectedDeclaringClass(recvClass, member, locals) ?: return
+        val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+        val enc = enclosing
+        if (enc == null || !pwClassDerivesFrom(enc, declaring, locals)) {
+            diagnostics.add(Diagnostic(
+                message = "Property '$member' is protected and only accessible within class '${declaring.name?.text}' and its subclasses.",
+                category = DiagnosticCategory.Error, code = 2445,
+                fileName = fileName, line = line, character = ch,
+                start = pa.name.pos, length = member.length,
+            ))
+        } else if (!pwClassDerivesFrom(recvClass, enc, locals)) {
+            diagnostics.add(Diagnostic(
+                message = "Property '$member' is protected and only accessible through an instance of class '${enc.name?.text}'. This is an instance of class '${recvClass.name?.text}'.",
+                category = DiagnosticCategory.Error, code = 2446,
+                fileName = fileName, line = line, character = ch,
+                start = pa.name.pos, length = member.length,
+            ))
+        }
     }
 
     private fun checkImplicitThis() {
