@@ -991,6 +991,10 @@ class Checker(
         // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
         // constructor-style `function NAME() { … }` in a checkJs JS file.
         checkJsConstructorThisReads()
+        // B427: TS2339 for a DEEP read of an uncreated CommonJS export member in a
+        // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
+        // declared via `exports.a = …`). Display `typeof import("<base>")`.
+        checkJsModuleExportsDeepReads()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16271,6 +16275,116 @@ class Checker(
                 fileName = fileName, line = line, character = character,
                 start = pos, length = n.length,
             ))
+        }
+    }
+
+    /**
+     * B427: TS2339 for a DEEP read of an uncreated CommonJS export member in a
+     * checkJs `.js` file. In a CJS module the `exports` identifier IS the module's
+     * own exports object (`typeof import("<base>")`). A DIRECT `exports.X = …`
+     * assignment DECLARES the export `X`; but `exports.X.<deeper> = …` (or any use
+     * of `exports.X` as the receiver of a further access) is a READ of `exports.X`,
+     * so when `X` was never declared via a direct `exports.X = …` it does not exist
+     * → TS2339 "Property 'X' does not exist on type 'typeof import("<base>")'.".
+     *
+     * FP firewall (corpus-EXHAUSTIVE): the walker fires ONLY on the DEEP-READ shape
+     * (`exports.<id>` used as the receiver of a further property/element access),
+     * and only when `<id>` is absent from the collected created-export set. Across
+     * the whole corpus the ONLY checkJs file with a deep read of an uncreated export
+     * member is the single intended target — every other file's `exports.<id>` reads
+     * are of members it directly declares (`exports.x = 0; exports.x;`). Bails when
+     * the module's export shape is OPAQUE (`module.exports = <non-object-literal>`
+     * or `exports = …` reassignment), when `exports` is shadowed by a local binding,
+     * or when the file is an ES module (top-level import/export) rather than CJS.
+     */
+    private fun checkJsModuleExportsDeepReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val sf = result.sourceFile
+            // ES-module files (top-level import/export) are not CJS — `exports` is not
+            // the module object there. Also bail if `exports` is shadowed by a local.
+            var esModule = false
+            var exportsShadowed = false
+            for (stmt in sf.statements) {
+                when (stmt) {
+                    is ImportDeclaration, is ExportDeclaration, is ExportAssignment,
+                    is ImportEqualsDeclaration -> esModule = true
+                    is FunctionDeclaration -> if (stmt.name?.text == "exports") exportsShadowed = true
+                    is VariableStatement -> stmt.declarationList.declarations.forEach {
+                        if ((it.name as? Identifier)?.text == "exports") exportsShadowed = true
+                    }
+                    else -> {}
+                }
+            }
+            if (esModule || exportsShadowed) continue
+            // Collect the set of DECLARED exports + detect an opaque export shape.
+            val created = HashSet<String>()
+            var opaque = false
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                when (val lhs = bin.left) {
+                    is Identifier -> if (lhs.text == "exports") opaque = true // `exports = …`
+                    is PropertyAccessExpression -> {
+                        val recv = lhs.expression
+                        if ((recv as? Identifier)?.text == "exports") {
+                            created.add(lhs.name.text) // `exports.X = …`
+                        } else if (recv is PropertyAccessExpression &&
+                            (recv.expression as? Identifier)?.text == "module" &&
+                            recv.name.text == "exports"
+                        ) {
+                            created.add(lhs.name.text) // `module.exports.X = …`
+                        } else if ((recv as? Identifier)?.text == "module") {
+                            // unreachable (module.X handled above); kept for clarity
+                        }
+                        // `module.exports = …`
+                        if ((recv as? Identifier)?.text == "module" && lhs.name.text == "exports") {
+                            val rhs = bin.right
+                            if (rhs is ObjectLiteralExpression) {
+                                rhs.properties.forEach { p ->
+                                    val nm: NameNode? = when (p) {
+                                        is PropertyAssignment -> p.name
+                                        is ShorthandPropertyAssignment -> p.name
+                                        is MethodDeclaration -> p.name
+                                        else -> null
+                                    }
+                                    nm?.let { nameTextOrNull(it) }?.let { created.add(it) }
+                                }
+                            } else opaque = true
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            if (opaque) continue
+            val base = fileName.substringAfterLast('/').substringAfterLast('\\')
+                .removeSuffix(".mjs").removeSuffix(".cjs").removeSuffix(".jsx").removeSuffix(".js")
+            val source = sf.text
+            for (stmt in sf.statements) {
+                walkAccessesNoFnBoundary(stmt) { acc ->
+                    val recvOfAcc = when (acc) {
+                        is PropertyAccessExpression -> acc.expression
+                        is ElementAccessExpression -> acc.expression
+                        else -> null
+                    }
+                    val inner = recvOfAcc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
+                    if ((inner.expression as? Identifier)?.text != "exports") return@walkAccessesNoFnBoundary
+                    val nameId = inner.name as? Identifier ?: return@walkAccessesNoFnBoundary
+                    val n = nameId.text
+                    if (n in created || n in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
+                    val pos = nameId.pos
+                    if (pos < 0) return@walkAccessesNoFnBoundary
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$n' does not exist on type 'typeof import(\"$base\")'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = n.length,
+                    ))
+                }
+            }
         }
     }
 
