@@ -468,6 +468,11 @@ class Checker(
      *  to avoid double-emitting the TS2451. Populated just before 73b runs. */
     private val crossFileIdentifierHandledBlockNames = mutableSetOf<String>()
 
+    /** B442: dedup keys ("<file>:<pos>") for the for-in/c-for `var` redeclaration walker
+     *  ([checkForInNumericForRedeclare]). checkFunctionBody can be invoked more than once
+     *  per body across passes; this prevents double-emitting the TS2403/TS2365/TS2356 set. */
+    private val forInNumForProcessed = mutableSetOf<String>()
+
     /** B100: ids of synthesized member Symbols that a `Readonly<T>` materialization
      *  marked read-only. The synthesized members copy `T`'s members (so their type
      *  resolves correctly via the shared declarations) but the `readonly` modifier
@@ -68101,6 +68106,140 @@ interface DataView {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // B442: `for (var X in …)` then numeric `for (var X = 0; X < N; X++)` in the
+    //   same function scope. `var` is function-scoped, so X has a single declared
+    //   type; the FIRST declaration (the for-in, which types X as `string`) wins,
+    //   making the later numeric redeclaration + uses errors:
+    //     TS2403 at the c-for `var X`        — subsequent decl must be 'string', has 'number'
+    //     TS2365 at the condition LHS `X`     — `<`/`>`/… cannot apply to 'string' and 'number'
+    //     TS2356 at the incrementor `X`       — arithmetic operand must be number
+    //   Dedicated walker (the existing TS2403/TS2365/TS2356 paths don't type a for-in
+    //   `var` as string nor apply first-decl-wins across for-loop initializers). FP-safe:
+    //   only fires when one function scope contains BOTH a `for (var X in …)` and a strictly
+    //   later numeric c-style `for (var X = <number>; …)` with the SAME name (corpus-unique).
+    // -----------------------------------------------------------------------
+    private fun checkForInNumericForRedeclare(stmts: List<Statement>, source: String, fileName: String) {
+        val forInVars = HashMap<String, Identifier>()
+        val cFors = ArrayList<ForStatement>()
+        collectForInNumericRedeclare(stmts, forInVars, cFors)
+        if (forInVars.isEmpty() || cFors.isEmpty()) return
+        for (cf in cFors) {
+            val vdl = cf.initializer as? VariableDeclarationList ?: continue
+            if (vdl.flags != SyntaxKind.VarKeyword) continue
+            for (d in vdl.declarations) {
+                if (d.type != null) continue                       // annotated → not an inferred 'number'
+                val nameNode = d.name as? Identifier ?: continue
+                val name = nameNode.text
+                val forInId = forInVars[name] ?: continue
+                if (forInId.pos >= cf.pos) continue                // for-in must be the FIRST (earlier) decl
+                if (!isPlainNumericInit(d.initializer)) continue   // c-for decl is `X = <number>`
+                if (!forInNumForProcessed.add("$fileName:${nameNode.pos}")) continue
+                // TS6203 "'X' was also declared here." → the for-in `var X`.
+                val (rLine, rChar) = getLineAndCharacterOfPosition(source, forInId.pos)
+                val related = listOf(Diagnostic(
+                    message = "'$name' was also declared here.", category = DiagnosticCategory.Message,
+                    code = 6203, fileName = fileName, line = rLine, character = rChar,
+                    start = forInId.pos, length = name.length,
+                ))
+                emitForInRedeclare(source, fileName, nameNode.pos, name.length, 2403,
+                    "Subsequent variable declarations must have the same type.  Variable '$name' must be of type 'string', but here has type 'number'.",
+                    related)
+                (cf.condition as? BinaryExpression)?.let { cond ->
+                    val lhs = cond.left as? Identifier
+                    val opText = getOperatorText(cond.operator)
+                    val isRelational = cond.operator == SyntaxKind.LessThan || cond.operator == SyntaxKind.GreaterThan ||
+                        cond.operator == SyntaxKind.LessThanEquals || cond.operator == SyntaxKind.GreaterThanEquals
+                    if (lhs?.text == name && isRelational && isPlainNumericInit(cond.right)) {
+                        // Squiggle the whole comparison expression `X < N`.
+                        val spanLen = (expressionTrueEnd(cond) - lhs.pos).coerceAtLeast(name.length)
+                        emitForInRedeclare(source, fileName, lhs.pos, spanLen, 2365,
+                            "Operator '$opText' cannot be applied to types 'string' and 'number'.")
+                    }
+                }
+                val incOperand = when (val inc = cf.incrementor) {
+                    is PostfixUnaryExpression -> if (inc.operator == SyntaxKind.PlusPlus || inc.operator == SyntaxKind.MinusMinus) inc.operand as? Identifier else null
+                    is PrefixUnaryExpression -> if (inc.operator == SyntaxKind.PlusPlus || inc.operator == SyntaxKind.MinusMinus) inc.operand as? Identifier else null
+                    else -> null
+                }
+                if (incOperand?.text == name) {
+                    emitForInRedeclare(source, fileName, incOperand.pos, name.length, 2356,
+                        "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.")
+                }
+            }
+        }
+    }
+
+    /** `X = <number>` or `X = -<number>` (a plainly-numeric initializer). */
+    private fun isPlainNumericInit(e: Expression?): Boolean = when (e) {
+        is NumericLiteralNode -> true
+        is PrefixUnaryExpression -> (e.operator == SyntaxKind.Minus || e.operator == SyntaxKind.Plus) && e.operand is NumericLiteralNode
+        else -> false
+    }
+
+    private fun emitForInRedeclare(
+        source: String, fileName: String, start: Int, length: Int, code: Int, message: String,
+        related: List<Diagnostic> = emptyList(),
+    ) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message, category = DiagnosticCategory.Error, code = code,
+            fileName = fileName, line = line, character = character, start = start, length = length,
+            relatedInformation = related,
+        ))
+    }
+
+    /** Collect, within ONE function scope (recursing through control-flow statements but
+     *  NOT crossing nested function/class boundaries — those are their own var scopes):
+     *  the first `for (var X in …)` per name, and every c-style `for (var …; …; …)`. */
+    private fun collectForInNumericRedeclare(
+        stmts: List<Statement>, forInVars: HashMap<String, Identifier>, cFors: ArrayList<ForStatement>,
+    ) {
+        for (s in stmts) collectForInNumericRedeclareStmt(s, forInVars, cFors)
+    }
+
+    private fun collectForInNumericRedeclareStmt(
+        s: Statement?, forInVars: HashMap<String, Identifier>, cFors: ArrayList<ForStatement>,
+    ) {
+        when (s) {
+            null -> {}
+            is ForInStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { vdl ->
+                    if (vdl.flags == SyntaxKind.VarKeyword) {
+                        for (d in vdl.declarations) (d.name as? Identifier)?.let { id ->
+                            if (id.text !in forInVars) forInVars[id.text] = id
+                        }
+                    }
+                }
+                collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            }
+            is ForStatement -> {
+                if (s.initializer is VariableDeclarationList) cFors.add(s)
+                collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            }
+            is ForOfStatement -> collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            is Block -> collectForInNumericRedeclare(s.statements, forInVars, cFors)
+            is IfStatement -> {
+                collectForInNumericRedeclareStmt(s.thenStatement, forInVars, cFors)
+                collectForInNumericRedeclareStmt(s.elseStatement, forInVars, cFors)
+            }
+            is WhileStatement -> collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            is DoStatement -> collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            is LabeledStatement -> collectForInNumericRedeclareStmt(s.statement, forInVars, cFors)
+            is TryStatement -> {
+                collectForInNumericRedeclare(s.tryBlock.statements, forInVars, cFors)
+                s.catchClause?.block?.let { collectForInNumericRedeclare(it.statements, forInVars, cFors) }
+                s.finallyBlock?.let { collectForInNumericRedeclare(it.statements, forInVars, cFors) }
+            }
+            is SwitchStatement -> for (c in s.caseBlock) when (c) {
+                is CaseClause -> collectForInNumericRedeclare(c.statements, forInVars, cFors)
+                is DefaultClause -> collectForInNumericRedeclare(c.statements, forInVars, cFors)
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
     private fun checkFunctionBody(
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
@@ -68109,6 +68248,12 @@ interface DataView {
         isAsync: Boolean = false,
     ) {
         body?.let {
+            // B442: a `var X` declared by a `for (var X in …)` (→ string) and later
+            // redeclared by a numeric `for (var X = 0; X < N; X++)` in the SAME function
+            // scope — TS2403 (first decl wins: string) + TS2365 (string < number) + TS2356
+            // (string++). Dedicated walker; corpus-EXHAUSTIVE FP-safety (the only two files
+            // with this shape are the targets).
+            checkForInNumericForRedeclare(it.statements, source, fileName)
             val innerTypes = varTypes.toMutableMap()
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
