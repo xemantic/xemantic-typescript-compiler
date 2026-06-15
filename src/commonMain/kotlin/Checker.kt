@@ -1510,6 +1510,8 @@ class Checker(
         checkNamespaceEnumUnionAssignments()
         // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
         checkEnumToEnumAssignments()
+        // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
+        checkSpreadPropertyOverrides()
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
         checkIndexSigRecordAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
@@ -75603,7 +75605,17 @@ interface DataView {
                     methodType.properties = emptyList()
                     symbolTypes[sym.id] = methodType
                 }
-                is SpreadAssignment -> continue // spread not yet supported
+                is SpreadAssignment -> {
+                    // B426: merge the spread's GUARANTEED (required, non-nullish) properties into
+                    // the object-literal type so missing-required-property checks account for them
+                    // (`{ id, ...thingProvidingLabel }` no longer FP's "label missing"). Additive +
+                    // conservative: only adds props not already explicit; spreading nullish is a
+                    // no-op so union spreads filter nullish constituents in spreadGuaranteedProps.
+                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Throwable) { continue }
+                    for ((pn, psym) in spreadGuaranteedProps(st)) {
+                        if (members[pn] == null) { members[pn] = psym; properties.add(psym) }
+                    }
+                }
                 is GetAccessor -> {
                     val name = when (val n = prop.name) {
                         is Identifier -> n.text
@@ -75650,6 +75662,157 @@ interface DataView {
         objType.members = members
         objType.properties = properties
         return objType
+    }
+
+    /**
+     * B426: the GUARANTEED (required, non-optional) properties a spread of type [t] contributes.
+     * A single object → its required props; a union → props required in EVERY non-nullish
+     * constituent (spreading `undefined`/`null` is a no-op, so nullish members are filtered);
+     * anything else → none. Used by [getTypeOfObjectLiteral]'s spread merge AND the TS2783
+     * spread-override walker.
+     */
+    private fun spreadGuaranteedProps(t: Type): Map<String, Symbol> = when (t) {
+        is Type.Union -> {
+            val nonNullish = t.types.filter {
+                it !== undefinedType && it !== nullType &&
+                    !it.flags.hasAny(TypeFlags.Undefined) && !it.flags.hasAny(TypeFlags.Null)
+            }
+            if (nonNullish.isEmpty()) emptyMap()
+            else {
+                val perMember = nonNullish.map { spreadGuaranteedProps(it) }
+                val common = perMember.map { it.keys }.reduce { a, b -> a intersect b }
+                if (common.isEmpty()) emptyMap()
+                else common.associateWith { n -> perMember.first { n in it }.getValue(n) }
+            }
+        }
+        is Type.Object -> {
+            try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) {}
+            (t.properties ?: emptyList()).filter { !isOptionalProperty(it) }.associateBy { it.name }
+        }
+        else -> emptyMap()
+    }
+
+    /**
+     * B426: TS2783 "'X' is specified more than once, so this usage will be overwritten." for an
+     * EXPLICIT object-literal property that appears BEFORE a spread whose type GUARANTEES that
+     * property (so the spread definitely overwrites it). FP firewall: the spread must guarantee
+     * the property (present + required in every non-nullish union constituent — see
+     * [spreadGuaranteedProps]); a property only-sometimes-present (`{y}|{y,x}`) or optional
+     * (`{a, b?}`) does NOT fire. Squiggle = the explicit property name. Conservative full-tree
+     * walk (FN-safe: missing a position only drops a diagnostic, never adds a wrong one).
+     */
+    private fun checkSpreadPropertyOverrides() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) spreadOverrideStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun spreadOverrideStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { spreadOverrideExpr(it, source, fileName) }
+            is ExpressionStatement -> spreadOverrideExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { spreadOverrideExpr(it, source, fileName) }
+            is IfStatement -> {
+                spreadOverrideExpr(stmt.expression, source, fileName)
+                spreadOverrideStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { spreadOverrideStmt(it, source, fileName) }
+            }
+            is Block -> stmt.statements.forEach { spreadOverrideStmt(it, source, fileName) }
+            is ForStatement -> { stmt.initializer?.let { (it as? Expression)?.let { e -> spreadOverrideExpr(e, source, fileName) } }; spreadOverrideStmt(stmt.statement, source, fileName) }
+            is ForInStatement -> spreadOverrideStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> spreadOverrideStmt(stmt.statement, source, fileName)
+            is WhileStatement -> spreadOverrideStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) (m as? MethodDeclaration)?.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun spreadOverrideExpr(expr: Expression, source: String, fileName: String) {
+        var e: Expression = expr
+        while (true) {
+            when (e) {
+                is BinaryExpression -> { spreadOverrideExpr(e.left, source, fileName); e = e.right }
+                is ParenthesizedExpression -> e = e.expression
+                is AsExpression -> e = e.expression
+                is NonNullExpression -> e = e.expression
+                else -> break
+            }
+        }
+        when (val x = e) {
+            is ObjectLiteralExpression -> {
+                checkOneObjectLiteralSpreadOverride(x, source, fileName)
+                for (p in x.properties) when (p) {
+                    is PropertyAssignment -> spreadOverrideExpr(p.initializer, source, fileName)
+                    is SpreadAssignment -> spreadOverrideExpr(p.expression, source, fileName)
+                    else -> {}
+                }
+            }
+            is ArrayLiteralExpression -> x.elements.forEach { spreadOverrideExpr(it, source, fileName) }
+            is CallExpression -> { spreadOverrideExpr(x.expression, source, fileName); x.arguments.forEach { spreadOverrideExpr(it, source, fileName) } }
+            is NewExpression -> x.arguments?.forEach { spreadOverrideExpr(it, source, fileName) }
+            is ConditionalExpression -> { spreadOverrideExpr(x.whenTrue, source, fileName); spreadOverrideExpr(x.whenFalse, source, fileName) }
+            is PropertyAccessExpression -> spreadOverrideExpr(x.expression, source, fileName)
+            is ElementAccessExpression -> { spreadOverrideExpr(x.expression, source, fileName); spreadOverrideExpr(x.argumentExpression, source, fileName) }
+            is SpreadElement -> spreadOverrideExpr(x.expression, source, fileName)
+            is ArrowFunction -> (x.body as? Block)?.statements?.forEach { spreadOverrideStmt(it, source, fileName) } ?: (x.body as? Expression)?.let { spreadOverrideExpr(it, source, fileName) }
+            is FunctionExpression -> x.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun checkOneObjectLiteralSpreadOverride(obj: ObjectLiteralExpression, source: String, fileName: String) {
+        // (name, squiggleStart, squiggleLength) for each explicit property seen so far.
+        val explicitSeen = mutableListOf<Triple<String, Int, Int>>()
+        val emitted = HashSet<String>()
+        for (prop in obj.properties) {
+            when (prop) {
+                is PropertyAssignment -> {
+                    val nameText = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> null
+                    } ?: continue
+                    val start = prop.name.pos
+                    val end = expressionTrueEnd(prop.initializer)
+                    explicitSeen.add(Triple(nameText, start, if (end > start) end - start else nameText.length))
+                }
+                is ShorthandPropertyAssignment -> explicitSeen.add(Triple(prop.name.text, prop.name.pos, prop.name.text.length))
+                is SpreadAssignment -> {
+                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Throwable) { continue }
+                    val guaranteed = spreadGuaranteedProps(st).keys
+                    if (guaranteed.isEmpty()) continue
+                    val spreadStart = prop.expression.pos - 3 // the `...` token
+                    for ((pn, start, len) in explicitSeen) {
+                        if (pn in emitted || pn !in guaranteed) continue
+                        emitted.add(pn)
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        val related = if (spreadStart >= 0) {
+                            val (rl, rc) = getLineAndCharacterOfPosition(source, spreadStart)
+                            listOf(Diagnostic(
+                                message = "This spread always overwrites this property.",
+                                category = DiagnosticCategory.Message, code = 2785,
+                                fileName = fileName, line = rl, character = rc,
+                                start = spreadStart, length = 3,
+                            ))
+                        } else emptyList()
+                        diagnostics.add(Diagnostic(
+                            message = "'$pn' is specified more than once, so this usage will be overwritten.",
+                            category = DiagnosticCategory.Error, code = 2783,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = len,
+                            relatedInformation = related,
+                        ))
+                    }
+                }
+                else -> {}
+            }
+        }
     }
 
     /** Get the type of an array literal expression. */
