@@ -1025,6 +1025,9 @@ class Checker(
         // B437b: TS2322 + TS2554 for a JS `@callback`-typed variable initialized with `{}`
         // and called with arguments (jsdocCallbackAndType). JS-like files only.
         checkJsCallbackTypeAssignments()
+        // B437c: TS2322 for a JS arrow with @template T + @returns {T} whose body is a JSDoc
+        // cast to a concrete type (arrowExpressionBodyJSDoc). JS-like files only.
+        checkJsDocArrowReturnConstraint()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -17101,6 +17104,146 @@ class Checker(
         return result
     }
 
+    /** B437c: TS2322 for a JS arrow whose JSDoc declares `@template T` + `@returns {T}` and
+     *  whose concise body is a JSDoc type-cast to a CONCRETE type C (not T). Assigning a
+     *  concrete C to the bare unconstrained type-param T is unsound ("'T' could be
+     *  instantiated with an arbitrary type"). Dedicated narrow walker; the cast type bridge
+     *  (ParenthesizedExpression.jsdocCastType) already resolves the body type. */
+    private fun checkJsDocArrowReturnConstraint() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            for (stmt in sf.statements) {
+                if (stmt !is VariableStatement) continue
+                val comments = (stmt.leadingComments ?: emptyList()) +
+                    (stmt.declarationList.declarations.firstOrNull()?.leadingComments ?: emptyList())
+                val ct = comments.lastOrNull {
+                    it.kind == SyntaxKind.MultiLineComment && it.text.startsWith("/**") && it.text.contains("@return")
+                }?.text ?: continue
+                val templates = parseJsDocTemplateNames(ct)
+                if (templates.isEmpty()) continue
+                val retName = parseJsDocReturnsTypeName(ct) ?: continue
+                if (retName !in templates) continue  // @returns is a bare unconstrained type-param
+                for (decl in stmt.declarationList.declarations) {
+                    val arrow = decl.initializer as? ArrowFunction ?: continue
+                    val body = arrow.body as? ParenthesizedExpression ?: continue
+                    val cast = body.jsdocCastType ?: continue
+                    val castDisplay = formatTypeForDisplay(cast) ?: continue
+                    if (castDisplay == retName) continue  // cast IS the return type-param (no error)
+                    // Span = the cast ParenthesizedExpression `(...)`, via source bracket-match.
+                    var sp = body.pos
+                    while (sp < source.length && source[sp] != '(') sp++
+                    if (sp >= source.length) continue
+                    var depth = 0; var k = sp
+                    while (k < source.length) {
+                        val c = source[k]
+                        if (c == '(') depth++ else if (c == ')') { depth--; if (depth == 0) { k++; break } }
+                        k++
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, sp)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$castDisplay' is not assignable to type '$retName'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = sp,
+                        length = k - sp,
+                        messageChain = listOf("  '$retName' could be instantiated with an arbitrary type which could be unrelated to '$castDisplay'."),
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Parse `@template A,B` names from a JSDoc comment text (skips `{constraint}`). */
+    private fun parseJsDocTemplateNames(ct: String): Set<String> {
+        val out = HashSet<String>()
+        var idx = 0
+        while (true) {
+            val t = ct.indexOf("@template", idx)
+            if (t < 0) break
+            idx = t + 9
+            var i = t + 9
+            if (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_')) continue
+            while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+            if (i < ct.length && ct[i] == '{') {
+                var d = 1; i++
+                while (i < ct.length && d > 0) { when (ct[i]) { '{' -> d++; '}' -> d-- }; if (d == 0) break; i++ }
+                if (i < ct.length && ct[i] == '}') i++
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+            }
+            while (i < ct.length && ct[i] != '\n' && ct[i] != '\r') {
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == ',')) i++
+                if (i >= ct.length || ct[i] == '\n' || ct[i] == '\r') break
+                if (!(ct[i].isLetter() || ct[i] == '_' || ct[i] == '$')) break
+                val ns = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                out.add(ct.substring(ns, i))
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i >= ct.length || ct[i] != ',') break
+            }
+        }
+        return out
+    }
+
+    /** Parse the bare type-name of a JSDoc `@returns {Name}` / `@return {Name}` tag (else null). */
+    private fun parseJsDocReturnsTypeName(ct: String): String? {
+        for (tag in listOf("@returns", "@return")) {
+            var idx = 0
+            while (true) {
+                val t = ct.indexOf(tag, idx)
+                if (t < 0) break
+                idx = t + tag.length
+                var i = t + tag.length
+                if (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_')) continue
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i >= ct.length || ct[i] != '{') continue
+                var d = 1; i++; val ns = i
+                while (i < ct.length && d > 0) { when (ct[i]) { '{' -> d++; '}' -> d-- }; if (d == 0) break; i++ }
+                val inner = ct.substring(ns, i).trim()
+                if (inner.isNotEmpty() && (inner[0].isLetter() || inner[0] == '_' || inner[0] == '$') &&
+                    inner.all { it.isLetterOrDigit() || it == '_' || it == '$' }) return inner
+            }
+        }
+        return null
+    }
+
+    /** Names of params documented by a JSDoc `@param [{type}] [name]` tag (B437c TS7006 suppression). */
+    private fun jsDocDocumentedParamNames(comments: List<Comment>?): Set<String> {
+        if (comments == null) return emptySet()
+        val out = HashSet<String>()
+        for (c in comments) {
+            if (c.kind != SyntaxKind.MultiLineComment) continue
+            val ct = c.text
+            if (!ct.startsWith("/**")) continue
+            var idx = 0
+            while (true) {
+                val t = ct.indexOf("@param", idx)
+                if (t < 0) break
+                idx = t + 6
+                var i = t + 6
+                if (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_')) continue
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '*' || ct[i] == '\n' || ct[i] == '\r')) i++
+                if (i < ct.length && ct[i] == '{') {
+                    var d = 1; i++
+                    while (i < ct.length && d > 0) { when (ct[i]) { '{' -> d++; '}' -> d-- }; if (d == 0) break; i++ }
+                    if (i < ct.length && ct[i] == '}') i++
+                }
+                while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                if (i < ct.length && ct[i] == '[') i++
+                val ns = i
+                while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                val name = ct.substring(ns, i)
+                if (name.isNotEmpty()) out.add(name)
+            }
+        }
+        return out
+    }
+
     /** Collect every CallExpression reachable from a statement (FP-safe traversal for the
      *  narrow JS-callback walker; emits nothing itself). */
     private fun collectJsCallsStmt(s: Statement?, out: MutableList<CallExpression>) {
@@ -17957,7 +18100,24 @@ class Checker(
                             // function types is the common shape. Conservative: any
                             // annotation when the initializer is an arrow/function.
                             val arrowInit = declInit is ArrowFunction || declInit is FunctionExpression
-                            val ctxFn = arrowInit && decl.type != null
+                            // B437c: in a JS file, a leading JSDoc whose @param tags document
+                            // EVERY param of the arrow/fn-expr initializer types those params
+                            // (tsc never emits TS7006 for a JSDoc-documented param). Suppress
+                            // the FP TS7006 for that shape (all-params-documented gate keeps
+                            // partially-documented arrows reporting the undocumented ones).
+                            val jsDocParamCtx = arrowInit && isJsLikeFileName(fileName) && run {
+                                val ip = when (declInit) {
+                                    is ArrowFunction -> declInit.parameters
+                                    is FunctionExpression -> declInit.parameters
+                                    else -> emptyList()
+                                }
+                                if (ip.isEmpty()) return@run false
+                                val documented = jsDocDocumentedParamNames(stmt.leadingComments) +
+                                    jsDocDocumentedParamNames(decl.leadingComments)
+                                if (documented.isEmpty()) return@run false
+                                ip.all { p -> p.type != null || (p.name as? Identifier)?.text?.let { it in documented } == true }
+                            }
+                            val ctxFn = (arrowInit && decl.type != null) || jsDocParamCtx
                             // B224: a bare rest-free FunctionType annotation contextually
                             // types only its OWN arity worth of params — `const f7: () =>
                             // any = (x?) => 0` leaves `x` un-contextually-typed → TS7006.
