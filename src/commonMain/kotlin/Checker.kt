@@ -985,6 +985,9 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         checkJSDocTypedefTags()
+        // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
+        // `@property {Name}` type in a checkJs .js file.
+        checkJsDocTypeNameResolution()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16134,6 +16137,62 @@ class Checker(
     }
 
     /**
+     * B423: TS2304/TS2552 for an UNRESOLVABLE single-identifier type name inside a JSDoc
+     * `@typedef {Name}` or `@property {Name}` tag in a checkJs `.js` file. The `@typedef`/
+     * `@property` tags are not bound anywhere (raw-source only, like B422), so this resolves
+     * the bare type name against a comprehensive in-scope name set (JSDoc primitives +
+     * KNOWN_GLOBALS + the file's binder locals + sibling `@typedef`/`@template` names) and
+     * emits TS2304 (no close spelling match) or TS2552 ("Did you mean 'X'?") for a leftover.
+     *
+     * FP firewall (corpus-exhaustive): the regex matches ONLY a single bare identifier as the
+     * ENTIRE `{...}` type expression (`{Name}`, not `{number|string}` / `{import(...)}` /
+     * `{{...}}` / `{Array<T>}` etc.) — across the whole corpus the only such unresolvable
+     * identifiers are the two intended targets (`CantResolveThis`, `sting`); every other
+     * single-identifier JSDoc type (`Object`, `number`, `string`, `boolean`, `object`,
+     * `function`) is in the known set. checkJs-gated (a semantic error needs `@ts-check`).
+     */
+    private fun checkJsDocTypeNameResolution() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("@typedef") && !source.contains("@property")) continue
+            val known = HashSet<String>(JSDOC_TYPE_PRIMITIVE_NAMES)
+            known.addAll(KNOWN_GLOBALS)
+            known.addAll(result.locals.keys)
+            // Sibling `@typedef [{type}] NAME` declared names (a `@property`/`@typedef` may
+            // reference another typedef in the same file). Greedy-to-last-`}` so inline-object
+            // typedefs (`@typedef {{ a: 1 }} NAME`) still yield NAME.
+            for (m in Regex("""@typedef\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""").findAll(source)) {
+                known.add(m.groupValues[1])
+            }
+            // `@template T` / `@template T, U` type parameters.
+            for (m in Regex("""@template\b[^\n*]*?([A-Za-z_$][\w$,\s]*)""").findAll(source)) {
+                m.groupValues[1].split(',').forEach { p -> p.trim().takeIf { it.isNotEmpty() }?.let { known.add(it) } }
+            }
+            for (m in Regex("""@(?:typedef|property)\s*\{\s*([A-Za-z_$][\w$]*)\s*\}""").findAll(source)) {
+                val ident = m.groupValues[1]
+                if (ident in known) continue
+                val pos = m.groups[1]!!.range.first
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                val suggestion = getSpellingSuggestionFromNames(ident, known)
+                diagnostics.add(if (suggestion != null) Diagnostic(
+                    message = "Cannot find name '$ident'. Did you mean '$suggestion'?",
+                    category = DiagnosticCategory.Error, code = 2552,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = ident.length,
+                ) else Diagnostic(
+                    message = "Cannot find name '$ident'.",
+                    category = DiagnosticCategory.Error, code = 2304,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = ident.length,
+                ))
+            }
+        }
+    }
+
+    /**
      * TS7012: a JSDoc `@overload` block (a detached JSDoc comment preceding a
      * function) that has NO `@returns`/`@return` tag implicitly returns `any`.
      * JS-like files under noImplicitAny only. Purely syntactic comment scan
@@ -17598,6 +17657,13 @@ class Checker(
                 fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
                 fileScope.names.addAll(TEST_RUNNER_GLOBALS_TS2593)
                 fileScope.names.addAll(JQUERY_GLOBALS_TS2592)
+                // B423: a JSDoc `@typedef NAME` declares a type-eligible name that the binder
+                // does NOT bind (raw-source only) — register it so a `@param {NAME}` /
+                // `@property {NAME}` reference resolves instead of FP-ing TS2304. Both forms:
+                // `@typedef {type} NAME` and the object-style `@typedef NAME`.
+                for (m in Regex("""@typedef\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""").findAll(source)) {
+                    fileScope.addType(m.groupValues[1])
+                }
             }
             fileScope.names.addAll(globalAugmentationNames)
             // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
@@ -32963,6 +33029,13 @@ class Checker(
     companion object {
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
+
+        /** B423: JSDoc-valid primitive / keyword type names (lowercase-ish) that are NOT in
+         *  KNOWN_GLOBALS but are legal single-identifier `@typedef`/`@property` types. */
+        private val JSDOC_TYPE_PRIMITIVE_NAMES: Set<String> = setOf(
+            "string", "number", "boolean", "object", "function", "undefined", "null",
+            "void", "any", "unknown", "never", "symbol", "bigint", "this", "true", "false",
+        )
 
         /** B57.3b: Maximum recursion depth for [getTypeFromMappedType]. Mirrors the
          *  alias-substitution depth limit (10). When exceeded, [getTypeFromMappedType]
