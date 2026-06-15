@@ -988,6 +988,9 @@ class Checker(
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
         checkJsDocTypeNameResolution()
+        // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
+        // constructor-style `function NAME() { … }` in a checkJs JS file.
+        checkJsConstructorThisReads()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -16189,6 +16192,81 @@ class Checker(
                     start = pos, length = ident.length,
                 ))
             }
+        }
+    }
+
+    /**
+     * B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
+     * constructor-style `function NAME() { … }` in a checkJs JS file. Such a
+     * function's `this` type is named after the function; its members are the
+     * `this.X = …` writes in its OWN body. A `this.Y` READ where Y is neither
+     * written nor a runtime property → TS2339 "Property 'Y' does not exist on
+     * type 'NAME'." (e.g. `inexistentPropertyInsideToStringType`'s `this.yadda`).
+     *
+     * FP firewall (corpus-exhaustive): fires ONLY when (a) the function has ≥1
+     * `this.X =` write (a genuine constructor shape) AND (b) the function body
+     * consists EXCLUSIVELY of top-level `this.<id>` bare-read and `this.<id> = …`
+     * write expression-statements — it BAILS (suppresses the whole function) on
+     * ANY other statement/expression shape (nested functions that rebind `this`,
+     * control flow, calls, element access, etc.). Across the whole corpus only 4
+     * checkJs files have a top-level `function NAME()` using `this`; the other 3
+     * either bail (a non-read/write statement) or have only writes (no
+     * undeclared read), so the sole emitter is the intended target.
+     */
+    private fun checkJsConstructorThisReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is FunctionDeclaration) continue
+                val fnName = stmt.name?.text ?: continue
+                val body = stmt.body ?: continue
+                checkJsConstructorThisReadsInFn(body, fnName, fileName, result.sourceFile.text)
+            }
+        }
+    }
+
+    private fun checkJsConstructorThisReadsInFn(
+        body: Block, fnName: String, fileName: String, source: String,
+    ) {
+        val writes = LinkedHashMap<String, MutableList<Expression>>()
+        collectConstructorThisAssignments(body.statements, writes)
+        if (writes.isEmpty()) return // not a constructor-function shape
+        val reads = mutableListOf<Identifier>()
+        for (s in body.statements) {
+            val expr = (s as? ExpressionStatement)?.expression ?: return // bail: non-expr statement
+            when (expr) {
+                is BinaryExpression -> {
+                    // Only a plain `this.<id> = …` write is supported (already collected).
+                    if (expr.operator != SyntaxKind.Equals) return
+                    val pa = expr.left as? PropertyAccessExpression ?: return
+                    if ((pa.expression as? Identifier)?.text != "this") return
+                    if (pa.name !is Identifier) return
+                    // RHS `this.<id>` reads are deliberately NOT scanned (conservative FN).
+                }
+                is PropertyAccessExpression -> {
+                    // A bare `this.<id>` read statement.
+                    if ((expr.expression as? Identifier)?.text != "this") return
+                    val nameId = expr.name as? Identifier ?: return
+                    reads.add(nameId)
+                }
+                else -> return // bail: any other expression shape
+            }
+        }
+        for (nameId in reads) {
+            val n = nameId.text
+            if (n in writes.keys) continue
+            if (n in RUNTIME_PROPERTIES) continue
+            val pos = nameId.pos
+            if (pos < 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+            diagnostics.add(Diagnostic(
+                message = "Property '$n' does not exist on type '$fnName'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = pos, length = n.length,
+            ))
         }
     }
 
