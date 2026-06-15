@@ -1002,6 +1002,9 @@ class Checker(
         // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
         // property declaration, so `this.X` does not exist on the class type.
         checkJsObjectDefinePropertyThisReads()
+        // B433: TS2339 for `X.<undeclared>` where X is a local function-valued binding
+        // augmented by Object.defineProperty(X,…) in a checkJs file.
+        checkJsObjectDefinePropertyLocalFnReads()
         // B429: a checkJs class with an illegal `declare <prop>: T` annotation (TS8009/
         // TS8010 already fire) STILL declares the property type T — so `this.prop = …`
         // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
@@ -16619,6 +16622,122 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * B433 (checkingObjectDefinePropertyOnFunctionNonexistentPropertyNoCrash1, TS2339):
+     * in a checkJs JS file, a LOCAL function-valued binding `const composed = function(...){}`
+     * augmented by `Object.defineProperty(composed, 'name', { value: … })` has the synthesized
+     * expando type `{ (…sig…); readonly <defined>: <T>; }`. Reading `composed.<prop>` for a prop
+     * that is neither a defined-via-defineProperty member nor a runtime Function prop → TS2339
+     * "Property '<prop>' does not exist on type '{ … }'.".
+     *
+     * Dedicated walker (NOT an un-gating of the `.js` checkPropertyAccess skip). FP firewall
+     * (corpus-EXHAUSTIVE): the ONLY checkJs corpus file calling `Object.defineProperty` on a
+     * LOCAL function variable (and reading an undeclared prop on it) is the target. Gated to a
+     * block holding both a local `const/let/var X = function/arrow` AND `Object.defineProperty(X,…)`.
+     */
+    private fun checkJsObjectDefinePropertyLocalFnReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            processObjDefineLocalFnBlock(sf.statements, sf.text, fileName)
+        }
+    }
+
+    private fun processObjDefineLocalFnBlock(stmts: List<Statement>, source: String, fileName: String) {
+        // 1. local function-valued bindings declared directly in this block
+        val fnBindings = HashMap<String, Expression>() // name -> FunctionExpression/ArrowFunction
+        for (s in stmts) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val init = d.initializer
+                if (init is FunctionExpression || init is ArrowFunction) fnBindings[nm] = init
+            }
+        }
+        // 2. Object.defineProperty(X, 'prop', {desc}) calls in this block
+        val defined = HashMap<String, LinkedHashMap<String, Expression?>>() // X -> (propName -> descriptor value expr)
+        for (s in stmts) {
+            val call = (s as? ExpressionStatement)?.expression as? CallExpression ?: continue
+            val callee = call.expression as? PropertyAccessExpression ?: continue
+            if ((callee.expression as? Identifier)?.text != "Object" || callee.name.text != "defineProperty") continue
+            val recv = (call.arguments.getOrNull(0) as? Identifier)?.text ?: continue
+            if (recv !in fnBindings) continue
+            val propName = (call.arguments.getOrNull(1) as? StringLiteralNode)?.text ?: continue
+            val desc = call.arguments.getOrNull(2) as? ObjectLiteralExpression
+            val valueExpr = desc?.properties?.filterIsInstance<PropertyAssignment>()?.firstOrNull { nameTextOrNull(it.name) == "value" }?.initializer
+            defined.getOrPut(recv) { LinkedHashMap() }[propName] = valueExpr
+        }
+        // 3. for each X with both a binding AND a defineProperty, build the type display + fire on undeclared reads
+        for ((x, props) in defined) {
+            val fnExpr = fnBindings[x] ?: continue
+            val typeDisplay = buildExpandoFnTypeDisplay(fnExpr, props)
+            for (s in stmts) {
+                walkAccessesNoFnBoundary(s) { acc ->
+                    val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
+                    if ((pa.expression as? Identifier)?.text != x) return@walkAccessesNoFnBoundary
+                    val nameId = pa.name as? Identifier ?: return@walkAccessesNoFnBoundary
+                    val n = nameId.text
+                    if (n in props.keys || n in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
+                    val pos = nameId.pos
+                    if (pos < 0) return@walkAccessesNoFnBoundary
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$n' does not exist on type '$typeDisplay'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = n.length,
+                    ))
+                }
+            }
+        }
+        // 4. recurse into nested function/block bodies
+        for (s in stmts) {
+            when (s) {
+                is FunctionDeclaration -> s.body?.let { processObjDefineLocalFnBlock(it.statements, source, fileName) }
+                is Block -> processObjDefineLocalFnBlock(s.statements, source, fileName)
+                is IfStatement -> { (s.thenStatement as? Block)?.let { processObjDefineLocalFnBlock(it.statements, source, fileName) }; (s.elseStatement as? Block)?.let { processObjDefineLocalFnBlock(it.statements, source, fileName) } }
+                is ForStatement -> (s.statement as? Block)?.let { processObjDefineLocalFnBlock(it.statements, source, fileName) }
+                is WhileStatement -> (s.statement as? Block)?.let { processObjDefineLocalFnBlock(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun buildExpandoFnTypeDisplay(fnExpr: Expression, props: Map<String, Expression?>): String {
+        val params = when (fnExpr) { is FunctionExpression -> fnExpr.parameters; is ArrowFunction -> fnExpr.parameters; else -> emptyList() }
+        val body = when (fnExpr) { is FunctionExpression -> fnExpr.body as Node?; is ArrowFunction -> fnExpr.body; else -> null }
+        val paramStr = params.joinToString(", ") { p ->
+            val nm = (p.name as? Identifier)?.text ?: "_"
+            val tStr = p.type?.let { formatTypeForDisplay(it) } ?: if (p.dotDotDotToken) "any[]" else "any"
+            (if (p.dotDotDotToken) "..." else "") + nm + (if (p.questionToken) "?" else "") + ": " + tStr
+        }
+        // Return type: void when the body has no `return <expr>`; else best-effort.
+        val hasValueReturn = (body as? Block)?.let { blockHasValueReturn(it.statements) } ?: (body is Expression)
+        val retStr = if (!hasValueReturn) "void" else "any"
+        val members = mutableListOf("($paramStr): $retStr")
+        for ((pn, valueExpr) in props) {
+            val vt = valueExpr?.let { try { typeToString(getTypeOfExpression(it)) } catch (_: Throwable) { "any" } } ?: "any"
+            members.add("readonly $pn: $vt")
+        }
+        return "{ " + members.joinToString("; ") + "; }"
+    }
+
+    private fun blockHasValueReturn(stmts: List<Statement>): Boolean {
+        for (s in stmts) when (s) {
+            is ReturnStatement -> if (s.expression != null) return true
+            is IfStatement -> { if (blockHasValueReturn(listOfNotNull(s.thenStatement))) return true; s.elseStatement?.let { if (blockHasValueReturn(listOf(it))) return true } }
+            is Block -> if (blockHasValueReturn(s.statements)) return true
+            is ForStatement -> if (blockHasValueReturn(listOf(s.statement))) return true
+            is WhileStatement -> if (blockHasValueReturn(listOf(s.statement))) return true
+            is DoStatement -> if (blockHasValueReturn(listOf(s.statement))) return true
+            is TryStatement -> { if (blockHasValueReturn(s.tryBlock.statements)) return true; s.catchClause?.block?.let { if (blockHasValueReturn(it.statements)) return true }; s.finallyBlock?.let { if (blockHasValueReturn(it.statements)) return true } }
+            else -> {}
+        }
+        return false
     }
 
     /**
