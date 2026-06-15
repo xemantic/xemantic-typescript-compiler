@@ -1581,6 +1581,8 @@ class Checker(
         checkEnumToEnumAssignments()
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
         checkSpreadPropertyOverrides()
+        // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
+        checkRedefineArrayConstructor()
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
         checkIndexSigRecordAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
@@ -77814,6 +77816,56 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) spreadOverrideStmt(stmt, source, fileName)
+        }
+    }
+
+    /**
+     * B444: `Array = function (...) {...}` — assigning a plain function to the global
+     * `Array` value (typed `ArrayConstructor`) → TS2739: the function is missing the
+     * ArrayConstructor-only members `isArray`, `from`, `of`, `[Symbol.species]`. The
+     * embedded lib has NO `ArrayConstructor` declaration (CLAUDE.md), so the standard
+     * assignability path emits nothing for this. Dedicated FP-safe walker: the shape
+     * `Array = <function/arrow>` at top level (with `Array` NOT user-redeclared) is
+     * corpus-unique (`^Array *=` matches only redefineArray.ts) and a plain function
+     * is ALWAYS missing exactly those four ArrayConstructor members (it provides the
+     * call/construct sig + prototype/length/name, never the static helpers). Source
+     * display is the function's call signature; the missing-member list + target name
+     * are fixed. es2015-only fixture so `[Symbol.species]` is correct.
+     */
+    private fun checkRedefineArrayConstructor() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isJsLikeFileName(fileName)) continue
+            // A user redeclaration of Array (var/class/etc.) takes the normal path.
+            if (result.locals.containsKey("Array")) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val expr = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (expr.operator != SyntaxKind.Equals) continue
+                val lhs = expr.left as? Identifier ?: continue
+                if (lhs.text != "Array") continue
+                val rhs = expr.right
+                if (rhs !is FunctionExpression && rhs !is ArrowFunction) continue
+                val fnType = try { getTypeOfExpression(rhs) } catch (_: Throwable) { continue }
+                val sig = (fnType as? Type.Object)?.callSignatures?.firstOrNull() ?: continue
+                val fnDisplay = signatureToString(sig, false)
+                val missing = listOf("isArray", "from", "of", "[Symbol.species]")
+                val start = lhs.pos
+                val length = lhs.text.length
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = formatTs2740Message(fnDisplay, "ArrayConstructor", missing),
+                    category = DiagnosticCategory.Error,
+                    code = 2739,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
         }
     }
 
