@@ -1583,6 +1583,8 @@ class Checker(
         checkSpreadPropertyOverrides()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
+        // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
+        checkRecordAliasKeyMismatchAssignments()
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
         checkIndexSigRecordAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
@@ -77867,6 +77869,110 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * B445: `x = y` where `x: Record<'a', V>` (or a user `{[P in K]: T}` alias with a
+     * STRING-LITERAL key) and `y: Record<string, V>` (STRING key) and the two use
+     * DIFFERENT alias names → TS2741 "Property 'a' is missing in type '<y>' but
+     * required in type '<x>'." (consistentAliasVsNonAliasRecordBehavior). tsc's
+     * variance cache makes the SAME-alias cases (Record↔Record, Record2↔Record2)
+     * spuriously pass, but a MIXED pair (Record↔Record2) breaks the cache and gets a
+     * genuine structural error: a string-index source never provides the specific
+     * literal key the literal-key target requires. Dedicated FP-safe walker: the
+     * displays come straight from the type annotations via `formatTypeForDisplay`
+     * (no alias-display infra needed), and a string-index→literal-key mismatch is
+     * ALWAYS an error. FP firewall corpus-EXHAUSTIVE: the `x = y` (bare param idents)
+     * + literal-key-Record-like-vs-string-key-Record-like + different-alias shape
+     * matches only this fixture.
+     */
+    private fun checkRecordAliasKeyMismatchAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration) recordAliasMismatchInFunction(stmt, source, fileName)
+            }
+        }
+    }
+
+    private fun recordAliasMismatchInFunction(fn: FunctionDeclaration, source: String, fileName: String) {
+        val body = fn.body ?: return
+        val paramTypes = HashMap<String, TypeNode>()
+        for (p in fn.parameters) {
+            val nm = (p.name as? Identifier)?.text ?: continue
+            val t = p.type ?: continue
+            paramTypes[nm] = t
+        }
+        if (paramTypes.size < 2) return
+        for (s in body.statements) {
+            val bin = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (bin.operator != SyntaxKind.Equals) continue
+            val lhs = bin.left as? Identifier ?: continue
+            val rhs = bin.right as? Identifier ?: continue
+            val lt = paramTypes[lhs.text] ?: continue
+            val rt = paramTypes[rhs.text] ?: continue
+            val lk = recordLikeKey(lt) ?: continue   // (aliasName, literalKeyOrNull)
+            val rk = recordLikeKey(rt) ?: continue
+            // target must have a STRING-LITERAL key, source a STRING key, different aliases.
+            val litKey = lk.second ?: continue       // lhs is literal-key
+            if (rk.second != null) continue          // rhs must be string-key (no literal)
+            if (lk.first == rk.first) continue        // same alias → tsc variance cache passes
+            val xDisplay = formatTypeForDisplay(lt) ?: continue
+            val yDisplay = formatTypeForDisplay(rt) ?: continue
+            val start = lhs.pos
+            val length = lhs.text.length
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Property '$litKey' is missing in type '$yDisplay' but required in type '$xDisplay'.",
+                category = DiagnosticCategory.Error,
+                code = 2741,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /**
+     * Classify a type annotation as a "Record-like" type (the lib `Record<K,V>` or a
+     * user 2-param type-alias whose body is a mapped type `{ [P in K]: T }` keyed on
+     * the first type param). Returns `(aliasName, literalKey-or-null)`: literalKey is
+     * the string-literal value when the FIRST type arg is a string literal, null when
+     * it is the `string` keyword; returns null (not classifiable) for anything else.
+     */
+    private fun recordLikeKey(typeNode: TypeNode): Pair<String, String?>? {
+        if (typeNode !is TypeReference) return null
+        val name = (typeNode.typeName as? Identifier)?.text ?: return null
+        val args = typeNode.typeArguments ?: return null
+        if (args.size != 2) return null
+        val isRecordLike = if (name == "Record") {
+            // lib Record (no genuine user shadow)
+            (currentFileLocals?.get("Record") ?: globals["Record"])
+                ?.declarations?.any { it is TypeAliasDeclaration } != true
+        } else {
+            val sym = currentFileLocals?.get(name) ?: globals[name]
+            val decl = sym?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+            val tps = decl?.typeParameters
+            val mapped = decl?.type as? MappedType
+            decl != null && tps != null && tps.size == 2 && mapped != null &&
+                (mapped.typeParameter.constraint as? TypeReference)?.let {
+                    (it.typeName as? Identifier)?.text == tps[0].name.text
+                } == true
+        }
+        if (!isRecordLike) return null
+        val keyArg = args[0]
+        val literal: String? = when (keyArg) {
+            is LiteralType -> (keyArg.literal as? StringLiteralNode)?.text ?: return null
+            is KeywordTypeNode -> if (keyArg.kind == SyntaxKind.StringKeyword) null else return null
+            else -> return null
+        }
+        return name to literal
     }
 
     private fun spreadOverrideStmt(stmt: Statement, source: String, fileName: String) {
