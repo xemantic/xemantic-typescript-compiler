@@ -42643,13 +42643,17 @@ interface DataView {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
-            // Round 79h: skip JS-like files. Under allowJs/checkJs TypeScript
-            // infers `this` from JSDoc `@this`, prototype-assignment and IIFE
-            // context, so a bare `this` in a JS file is NOT implicit-any the way
-            // it is in a `.ts` file. No JS-file error baseline expects TS2683, so
-            // skipping them is FP-safe and prevents regressions on
-            // `signaturesUseJSDocForOptionalParameters` / `noParameterReassignmentJSIIFE`.
-            if (isJsLikeFileName(fileName)) continue
+            // Round 79h: skip JS-like files under the harness-DEFAULT gate. Under
+            // allowJs/checkJs TypeScript infers `this` from JSDoc `@this`,
+            // prototype-assignment and IIFE context, so a bare `this` in a JS file is
+            // NOT implicit-any the way it is in a `.ts` file. The blanket skip is FP-safe
+            // for the default case and prevents regressions on
+            // `signaturesUseJSDocForOptionalParameters` / `noParameterReassignmentJSIIFE`
+            // (neither sets `@noImplicitThis: true`). B438b: but an EXPLICIT
+            // `@noImplicitThis: true` JS file DOES expect TS2683 (thisInFunctionCallJs) —
+            // the downstream walker already suppresses via `@this`/contextual-this/
+            // object-literal-method-this, so let those files through.
+            if (isJsLikeFileName(fileName) && !options.noImplicitThis) continue
             val source = result.sourceFile.text
             checkThisInStatements(
                 result.sourceFile.statements, source, fileName,
