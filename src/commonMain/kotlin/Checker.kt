@@ -1508,6 +1508,8 @@ class Checker(
         checkEnumLiteralAssignments()
         // (B266) Namespace-qualified enum members vs union annotations (TS2322)
         checkNamespaceEnumUnionAssignments()
+        // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
+        checkEnumToEnumAssignments()
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
         checkIndexSigRecordAssignments()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
@@ -110865,6 +110867,172 @@ interface DataView {
         }
         return true
     }
+
+    /** B425: collected info for an enum (possibly merged across blocks / namespace-nested). */
+    private class EnumAsgInfo(
+        val simpleName: String,
+        val namespacePath: String?,
+        val memberOrder: List<String>,
+        /** member -> numeric value; null when the enum is string-valued or un-evaluable. */
+        val values: Map<String, Double>?,
+        val isConst: Boolean,
+        val isString: Boolean,
+        val decl: EnumDeclaration,
+    ) {
+        val qualifiedDisplay: String get() = if (namespacePath != null) "$namespacePath.$simpleName" else simpleName
+    }
+
+    /**
+     * B425: TS2322 for assigning one enum-typed variable to another, INCOMPATIBLE, enum-typed
+     * variable (`abc = secondAbcd` where `abc: First.E`, `secondAbcd: Abcd.E`). TypeScript's
+     * enum relation is NOMINAL: two enums relate iff they share a SIMPLE name AND every source
+     * member is present in the target with an EQUAL value; a const enum relates only to itself.
+     * The chain reports the FIRST failing source member: missing in target → "Property 'X' is
+     * missing in type 'TGT'."; present but different value → "Each declaration of 'E.X' differs
+     * in its value, where 'V_tgt' was expected but 'V_src' was given." Type names are qualified
+     * (`Namespace.E`) ONLY when source and target share a simple name (TypeScript's relative-name
+     * disambiguation); otherwise rendered as the simple name. ADDITIVE + nominal (no relation
+     * engine): fires only on `enumVar = enumVar` / `var x: E = enumVar` where the resolved enums
+     * are genuinely incompatible — assignable pairs and same-enum assignments emit nothing.
+     * String-valued / un-evaluable enums set `values = null` → conservatively assignable (FN, no
+     * FP). Squiggle = the LHS identifier (assignment target).
+     */
+    private fun checkEnumToEnumAssignments() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val enums = LinkedHashMap<String, EnumAsgInfo>()
+            collectEnumsForAsg(stmts, null, enums)
+            if (enums.isEmpty()) continue
+            // var name -> enum key, from `[declare] var X: NS.E` annotations (top-level only).
+            val varEnum = HashMap<String, String>()
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val key = enumKeyOfTypeNode(d.type, enums) ?: continue
+                    varEnum[n] = key
+                }
+            }
+            if (varEnum.isEmpty()) continue
+            for (st in stmts) {
+                if (st !is ExpressionStatement) continue
+                val be = st.expression as? BinaryExpression ?: continue
+                if (be.operator != SyntaxKind.Equals) continue
+                val lhs = be.left as? Identifier ?: continue
+                val rhs = be.right as? Identifier ?: continue
+                val tgtKey = varEnum[lhs.text] ?: continue
+                val srcKey = varEnum[rhs.text] ?: continue
+                if (srcKey == tgtKey) continue
+                val src = enums[srcKey] ?: continue
+                val tgt = enums[tgtKey] ?: continue
+                val (top, chain) = enumAsgFailure(src, tgt) ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                diagnostics.add(Diagnostic(
+                    message = top, category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = lhs.pos, length = lhs.text.length,
+                    messageChain = chain,
+                ))
+            }
+        }
+    }
+
+    /** B425: recursively collect enum declarations (merging blocks of the same name) keyed by
+     *  their namespace-qualified name. */
+    private fun collectEnumsForAsg(
+        stmts: List<Statement>, nsPath: String?, into: LinkedHashMap<String, EnumAsgInfo>,
+    ) {
+        val byKey = LinkedHashMap<String, MutableList<EnumDeclaration>>()
+        for (st in stmts) {
+            when (st) {
+                is EnumDeclaration -> {
+                    val key = if (nsPath != null) "$nsPath.${st.name.text}" else st.name.text
+                    byKey.getOrPut(key) { mutableListOf() }.add(st)
+                }
+                is ModuleDeclaration -> {
+                    val n = (st.name as? Identifier)?.text ?: continue
+                    val body = st.body as? ModuleBlock ?: continue
+                    collectEnumsForAsg(body.statements, if (nsPath != null) "$nsPath.$n" else n, into)
+                }
+                else -> {}
+            }
+        }
+        for ((key, decls) in byKey) {
+            val simple = decls[0].name.text
+            var isConst = false
+            var isString = false
+            var evaluable = true
+            val memberOrder = mutableListOf<String>()
+            val values = LinkedHashMap<String, Double>()
+            for (d in decls) {
+                if (ModifierFlag.Const in d.modifiers) isConst = true
+                var auto = 0.0
+                for (m in d.members) {
+                    val mName = (m.name as? Identifier)?.text ?: (m.name as? StringLiteralNode)?.text
+                    if (mName == null) { evaluable = false; continue }
+                    if (mName !in memberOrder) memberOrder.add(mName)
+                    val init = m.initializer
+                    if (init is StringLiteralNode) { isString = true; evaluable = false }
+                    val v = if (init == null) auto else evalEnumConstExpr(init)
+                    if (v == null) evaluable = false else { values[mName] = v; auto = v + 1 }
+                }
+            }
+            into[key] = EnumAsgInfo(
+                simple, nsPath, memberOrder,
+                if (evaluable && !isString) values else null, isConst, isString, decls[0],
+            )
+        }
+    }
+
+    /** B425: resolve a `[declare] var X: <type>` annotation to a collected enum key, or null. */
+    private fun enumKeyOfTypeNode(t: TypeNode?, enums: Map<String, EnumAsgInfo>): String? {
+        val tr = t as? TypeReference ?: return null
+        if (tr.typeArguments != null) return null
+        val key = when (val tn = tr.typeName) {
+            is Identifier -> tn.text
+            is QualifiedName -> qualifiedNameToDottedString(tn)
+            else -> null
+        } ?: return null
+        return if (key in enums) key else null
+    }
+
+    private fun qualifiedNameToDottedString(qn: QualifiedName): String? {
+        val left = when (val l = qn.left) {
+            is Identifier -> l.text
+            is QualifiedName -> qualifiedNameToDottedString(l)
+            else -> null
+        } ?: return null
+        return "$left.${qn.right.text}"
+    }
+
+    /** B425: returns null if `src` is assignable to `tgt`; else (topMessage, chainLines). */
+    private fun enumAsgFailure(src: EnumAsgInfo, tgt: EnumAsgInfo): Pair<String, List<String>>? {
+        val sameSimple = src.simpleName == tgt.simpleName
+        val srcD = if (sameSimple) src.qualifiedDisplay else src.simpleName
+        val tgtD = if (sameSimple) tgt.qualifiedDisplay else tgt.simpleName
+        val top = "Type '$srcD' is not assignable to type '$tgtD'."
+        if (!sameSimple) return top to emptyList() // different name → not assignable, no chain
+        if (src.isConst || tgt.isConst) {
+            if (src.decl === tgt.decl) return null
+            return top to emptyList() // const only assignable to itself, no chain
+        }
+        val sv = src.values ?: return null // string/un-evaluable → conservatively assignable
+        val tv = tgt.values ?: return null
+        for (m in src.memberOrder) {
+            if (m !in tv) return top to listOf("  Property '$m' is missing in type '$tgtD'.")
+            val tval = tv[m]!!; val sval = sv[m]!!
+            if (tval != sval) return top to listOf(
+                "  Each declaration of '${src.simpleName}.$m' differs in its value, where '${fmtEnumAsgVal(tval)}' was expected but '${fmtEnumAsgVal(sval)}' was given."
+            )
+        }
+        return null
+    }
+
+    private fun fmtEnumAsgVal(v: Double): String =
+        if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
 
     private fun checkGenericIndexWrite() {
         for (result in binderResults) {
