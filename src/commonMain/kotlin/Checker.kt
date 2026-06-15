@@ -991,6 +991,9 @@ class Checker(
         // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
         // constructor-style `function NAME() { … }` in a checkJs JS file.
         checkJsConstructorThisReads()
+        // B432: TS2339 for `this.<prop>` inside a checkJs prototype method (`Color.prototype
+        // = {…}`) where prop is not a constructor `this.X=` write nor a prototype key.
+        checkJsPrototypeMethodThisReads()
         // B427: TS2339 for a DEEP read of an uncreated CommonJS export member in a
         // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
         // declared via `exports.a = …`). Display `typeof import("<base>")`.
@@ -16286,6 +16289,155 @@ class Checker(
                 fileName = fileName, line = line, character = character,
                 start = pos, length = n.length,
             ))
+        }
+    }
+
+    /**
+     * B432 (jsFunctionWithPrototypeNoErrorTruncationNoCrash, TS2339): in a checkJs JS file,
+     * a constructor-function + `Color.prototype = { …methods… }` defines the instance type
+     * `Color` whose members are the constructor's `this.X=` writes PLUS the prototype object
+     * literal's keys. Inside a prototype METHOD, `this.<prop>` where `prop` is not such a
+     * member → TS2339 "Property 'prop' does not exist on type 'Color'." (e.g. `toJSON(){ return
+     * this.rgb(); }` where `rgb` is never declared).
+     *
+     * Dedicated walker (NOT an un-gating of the `.js` checkPropertyAccess skip — B152/B153).
+     * FP firewall (corpus-EXHAUSTIVE): the ONLY checkJs corpus file assigning an object literal
+     * to `<Fn>.prototype` is the target (the other 3 `.prototype =` files are `.ts`-only or read
+     * `instance.prototype`). `this.X=` write targets inside methods are EXCLUDED from the read
+     * set (they declare expando members, matching tsc). RUNTIME function props excluded. The
+     * read-walk does NOT cross a nested `function(){}` boundary (rebinds `this`).
+     */
+    private fun checkJsPrototypeMethodThisReads() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val funcs = HashMap<String, FunctionDeclaration>()
+            for (stmt in sf.statements) if (stmt is FunctionDeclaration) stmt.name?.text?.let { funcs[it] = stmt }
+            if (funcs.isEmpty()) continue
+            val source = sf.text
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                if (lhs.name.text != "prototype") continue
+                val ctorName = (lhs.expression as? Identifier)?.text ?: continue
+                val ctorFn = funcs[ctorName] ?: continue
+                val objLit = bin.right as? ObjectLiteralExpression ?: continue
+                val members = HashSet<String>()
+                val writes = LinkedHashMap<String, MutableList<Expression>>()
+                ctorFn.body?.let { collectConstructorThisAssignments(it.statements, writes) }
+                members.addAll(writes.keys)
+                for (p in objLit.properties) {
+                    val nm = when (p) {
+                        is PropertyAssignment -> nameTextOrNull(p.name)
+                        is ShorthandPropertyAssignment -> p.name.text
+                        is MethodDeclaration -> nameTextOrNull(p.name)
+                        is GetAccessor -> nameTextOrNull(p.name)
+                        is SetAccessor -> nameTextOrNull(p.name)
+                        else -> null
+                    }
+                    nm?.let { members.add(it) }
+                }
+                for (p in objLit.properties) {
+                    val fnBody: Node? = when (p) {
+                        is PropertyAssignment -> when (val init = p.initializer) {
+                            is FunctionExpression -> init.body
+                            is ArrowFunction -> init.body
+                            else -> null
+                        }
+                        is MethodDeclaration -> p.body
+                        is GetAccessor -> p.body
+                        is SetAccessor -> p.body
+                        else -> null
+                    } ?: continue
+                    val reads = mutableListOf<Identifier>()
+                    collectProtoThisReadsNode(fnBody, reads)
+                    for (nameId in reads) {
+                        val n = nameId.text
+                        if (n in members || n in RUNTIME_PROPERTIES) continue
+                        val pos = nameId.pos
+                        if (pos < 0) continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$n' does not exist on type '$ctorName'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = pos, length = n.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Collect `this.<id>` READS (not write-LHS) from a method body, NOT crossing a nested `function(){}` (rebinds this); arrows preserve this. */
+    private fun collectProtoThisReadsNode(node: Node?, out: MutableList<Identifier>) {
+        when (node) {
+            null -> {}
+            is Block -> node.statements.forEach { collectProtoThisReadsStmt(it, out) }
+            is Statement -> collectProtoThisReadsStmt(node, out)
+            is Expression -> collectProtoThisReadsExpr(node, out)
+            else -> {}
+        }
+    }
+
+    private fun collectProtoThisReadsStmt(s: Statement?, out: MutableList<Identifier>) {
+        when (s) {
+            null -> {}
+            is ExpressionStatement -> collectProtoThisReadsExpr(s.expression, out)
+            is ReturnStatement -> collectProtoThisReadsExpr(s.expression, out)
+            is ThrowStatement -> collectProtoThisReadsExpr(s.expression, out)
+            is VariableStatement -> s.declarationList.declarations.forEach { collectProtoThisReadsExpr(it.initializer, out) }
+            is IfStatement -> { collectProtoThisReadsExpr(s.expression, out); collectProtoThisReadsStmt(s.thenStatement, out); collectProtoThisReadsStmt(s.elseStatement, out) }
+            is Block -> s.statements.forEach { collectProtoThisReadsStmt(it, out) }
+            is ForStatement -> { (s.initializer as? Expression)?.let { collectProtoThisReadsExpr(it, out) }; (s.initializer as? VariableDeclarationList)?.declarations?.forEach { collectProtoThisReadsExpr(it.initializer, out) }; collectProtoThisReadsExpr(s.condition, out); collectProtoThisReadsExpr(s.incrementor, out); collectProtoThisReadsStmt(s.statement, out) }
+            is ForInStatement -> { collectProtoThisReadsExpr(s.expression, out); collectProtoThisReadsStmt(s.statement, out) }
+            is ForOfStatement -> { collectProtoThisReadsExpr(s.expression, out); collectProtoThisReadsStmt(s.statement, out) }
+            is WhileStatement -> { collectProtoThisReadsExpr(s.expression, out); collectProtoThisReadsStmt(s.statement, out) }
+            is DoStatement -> { collectProtoThisReadsExpr(s.expression, out); collectProtoThisReadsStmt(s.statement, out) }
+            is SwitchStatement -> { collectProtoThisReadsExpr(s.expression, out); for (c in s.caseBlock) when (c) { is CaseClause -> { collectProtoThisReadsExpr(c.expression, out); c.statements.forEach { collectProtoThisReadsStmt(it, out) } }; is DefaultClause -> c.statements.forEach { collectProtoThisReadsStmt(it, out) }; else -> {} } }
+            is TryStatement -> { s.tryBlock.statements.forEach { collectProtoThisReadsStmt(it, out) }; s.catchClause?.block?.statements?.forEach { collectProtoThisReadsStmt(it, out) }; s.finallyBlock?.statements?.forEach { collectProtoThisReadsStmt(it, out) } }
+            is LabeledStatement -> collectProtoThisReadsStmt(s.statement, out)
+            else -> {}
+        }
+    }
+
+    private fun collectProtoThisReadsExpr(e: Expression?, out: MutableList<Identifier>) {
+        when (e) {
+            null -> {}
+            is PropertyAccessExpression -> {
+                if ((e.expression as? Identifier)?.text == "this") {
+                    (e.name as? Identifier)?.let { out.add(it) }
+                } else collectProtoThisReadsExpr(e.expression, out)
+            }
+            is ElementAccessExpression -> { collectProtoThisReadsExpr(e.expression, out); collectProtoThisReadsExpr(e.argumentExpression, out) }
+            is BinaryExpression -> {
+                // A `this.X = …` write target is NOT a read (it declares the expando member).
+                val l = e.left
+                val isThisWriteTarget = e.operator == SyntaxKind.Equals && l is PropertyAccessExpression && (l.expression as? Identifier)?.text == "this"
+                if (!isThisWriteTarget) collectProtoThisReadsExpr(l, out)
+                collectProtoThisReadsExpr(e.right, out)
+            }
+            is ParenthesizedExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is CallExpression -> { collectProtoThisReadsExpr(e.expression, out); e.arguments.forEach { collectProtoThisReadsExpr(it, out) } }
+            is NewExpression -> { collectProtoThisReadsExpr(e.expression, out); e.arguments?.forEach { collectProtoThisReadsExpr(it, out) } }
+            is ConditionalExpression -> { collectProtoThisReadsExpr(e.condition, out); collectProtoThisReadsExpr(e.whenTrue, out); collectProtoThisReadsExpr(e.whenFalse, out) }
+            is PrefixUnaryExpression -> collectProtoThisReadsExpr(e.operand, out)
+            is PostfixUnaryExpression -> collectProtoThisReadsExpr(e.operand, out)
+            is ArrayLiteralExpression -> e.elements.forEach { collectProtoThisReadsExpr(it, out) }
+            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> collectProtoThisReadsExpr(p.initializer, out); is SpreadAssignment -> collectProtoThisReadsExpr(p.expression, out); else -> {} } }
+            is SpreadElement -> collectProtoThisReadsExpr(e.expression, out)
+            is AsExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is TypeAssertionExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is NonNullExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is SatisfiesExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is YieldExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is AwaitExpression -> collectProtoThisReadsExpr(e.expression, out)
+            is ArrowFunction -> when (val b = e.body) { is Block -> b.statements.forEach { collectProtoThisReadsStmt(it, out) }; is Expression -> collectProtoThisReadsExpr(b, out); else -> {} }
+            // FunctionExpression deliberately NOT descended — it rebinds `this`.
+            else -> {}
         }
     }
 
