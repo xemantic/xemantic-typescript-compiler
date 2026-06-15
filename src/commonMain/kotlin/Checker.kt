@@ -1022,6 +1022,9 @@ class Checker(
         // (`@param {...number} a`) — dedicated walker (the `.js` checkCallExpressionTypes
         // skip is load-bearing). JS-like files only.
         checkJsRestParamArgTypes()
+        // B437b: TS2322 + TS2554 for a JS `@callback`-typed variable initialized with `{}`
+        // and called with arguments (jsdocCallbackAndType). JS-like files only.
+        checkJsCallbackTypeAssignments()
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
         checkJSDocClosureFnTypeMalformedArgs()
@@ -17010,6 +17013,158 @@ class Checker(
             is SatisfiesExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
             is ArrowFunction -> { (e.body as? Block)?.statements?.forEach { walkJsRestCallStmt(it, cands, source, fileName) }; (e.body as? Expression)?.let { walkJsRestCallExpr(it, cands, source, fileName) } }
             is FunctionExpression -> e.body.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** B437b: TS2322 + TS2554 for a JS `@callback`-typed variable (jsdocCallbackAndType).
+     *  A standalone `@callback NAME` JSDoc (no `@param`/`@returns`) declares a callback
+     *  type `NAME = () => any`. A var `@type {NAME<...>}` initialized with an empty
+     *  object literal `{}` is not assignable to that function type (TS2322), and calling
+     *  the var with any argument is a too-many-args error (TS2554). The full type bridge
+     *  for `@callback` does not exist, so this is a dedicated narrow walker (the `.js`
+     *  checkPropertyAccess/checkCall skips are load-bearing). Gated to the SIMPLE callback
+     *  shape; FP firewall corpus-verified (the only `@callback`+`@type {Cb}` corpus file). */
+    private fun checkJsCallbackTypeAssignments() {
+        for (result in binderResults) {
+            val sf = result.sourceFile
+            val fileName = sf.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = sf.text
+            if (!source.contains("@callback")) continue
+            val callbacks = collectSimpleJsCallbacks(source)
+            if (callbacks.isEmpty()) continue
+            val callbackVars = HashSet<String>()  // vars typed as a simple (0-arg) callback
+            for (stmt in sf.statements) {
+                if (stmt !is VariableStatement) continue
+                for (decl in stmt.declarationList.declarations) {
+                    if (!decl.typeFromJSDoc) continue
+                    val tr = decl.type as? TypeReference ?: continue
+                    val tn = (tr.typeName as? Identifier)?.text ?: continue
+                    if (tn !in callbacks) continue
+                    val nameNode = decl.name as? Identifier ?: continue
+                    callbackVars.add(nameNode.text)
+                    val display = formatTypeForDisplay(tr) ?: tn
+                    val init = decl.initializer
+                    if (init is ObjectLiteralExpression && init.properties.isEmpty()) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '{}' is not assignable to type '$display'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = nameNode.text.length,
+                            messageChain = listOf("  Type '{}' provides no match for the signature '(): any'."),
+                        ))
+                    }
+                }
+            }
+            if (callbackVars.isEmpty()) continue
+            val calls = mutableListOf<CallExpression>()
+            for (stmt in sf.statements) collectJsCallsStmt(stmt, calls)
+            for (call in calls) {
+                val callee = call.expression as? Identifier ?: continue
+                if (callee.text !in callbackVars) continue
+                if (call.arguments.isEmpty()) continue
+                emitTS2554TooMany(0, 0, call.arguments.size, call.arguments, 0, source, fileName)
+            }
+        }
+    }
+
+    /** Find `@callback NAME` JSDoc tags whose enclosing block has NO `@param`/`@returns`
+     *  (a "simple" callback whose signature is `() => any`). Raw-source scan — `@callback`
+     *  has no bound AST node. */
+    private fun collectSimpleJsCallbacks(source: String): Set<String> {
+        val result = HashSet<String>()
+        var idx = 0
+        while (true) {
+            val cb = source.indexOf("@callback", idx)
+            if (cb < 0) break
+            idx = cb + 9
+            var i = cb + 9
+            while (i < source.length && (source[i] == ' ' || source[i] == '\t')) i++
+            val ns = i
+            while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_' || source[i] == '$')) i++
+            val name = source.substring(ns, i)
+            if (name.isEmpty()) continue
+            val open = source.lastIndexOf("/*", cb)
+            val close = source.indexOf("*/", cb)
+            if (open < 0 || close < cb) continue
+            val block = source.substring(open, close)
+            // Simple = no @param and no @return(s) → signature is `() => any`.
+            if (block.contains("@param") || block.contains("@return")) continue
+            result.add(name)
+        }
+        return result
+    }
+
+    /** Collect every CallExpression reachable from a statement (FP-safe traversal for the
+     *  narrow JS-callback walker; emits nothing itself). */
+    private fun collectJsCallsStmt(s: Statement?, out: MutableList<CallExpression>) {
+        when (s) {
+            null -> {}
+            is ExpressionStatement -> collectJsCallsExpr(s.expression, out)
+            is ReturnStatement -> collectJsCallsExpr(s.expression, out)
+            is ThrowStatement -> collectJsCallsExpr(s.expression, out)
+            is VariableStatement -> s.declarationList.declarations.forEach { collectJsCallsExpr(it.initializer, out) }
+            is IfStatement -> { collectJsCallsExpr(s.expression, out); collectJsCallsStmt(s.thenStatement, out); collectJsCallsStmt(s.elseStatement, out) }
+            is Block -> s.statements.forEach { collectJsCallsStmt(it, out) }
+            is ForStatement -> {
+                (s.initializer as? Expression)?.let { collectJsCallsExpr(it, out) }
+                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { collectJsCallsExpr(it.initializer, out) }
+                collectJsCallsExpr(s.condition, out); collectJsCallsExpr(s.incrementor, out); collectJsCallsStmt(s.statement, out)
+            }
+            is ForInStatement -> { collectJsCallsExpr(s.expression, out); collectJsCallsStmt(s.statement, out) }
+            is ForOfStatement -> { collectJsCallsExpr(s.expression, out); collectJsCallsStmt(s.statement, out) }
+            is WhileStatement -> { collectJsCallsExpr(s.expression, out); collectJsCallsStmt(s.statement, out) }
+            is DoStatement -> { collectJsCallsExpr(s.expression, out); collectJsCallsStmt(s.statement, out) }
+            is SwitchStatement -> {
+                collectJsCallsExpr(s.expression, out)
+                for (c in s.caseBlock) when (c) {
+                    is CaseClause -> { collectJsCallsExpr(c.expression, out); c.statements.forEach { collectJsCallsStmt(it, out) } }
+                    is DefaultClause -> c.statements.forEach { collectJsCallsStmt(it, out) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                s.tryBlock.statements.forEach { collectJsCallsStmt(it, out) }
+                s.catchClause?.block?.statements?.forEach { collectJsCallsStmt(it, out) }
+                s.finallyBlock?.statements?.forEach { collectJsCallsStmt(it, out) }
+            }
+            is LabeledStatement -> collectJsCallsStmt(s.statement, out)
+            is FunctionDeclaration -> s.body?.statements?.forEach { collectJsCallsStmt(it, out) }
+            else -> {}
+        }
+    }
+
+    private fun collectJsCallsExpr(e: Expression?, out: MutableList<CallExpression>) {
+        when (e) {
+            null -> {}
+            is CallExpression -> { out.add(e); collectJsCallsExpr(e.expression, out); e.arguments.forEach { collectJsCallsExpr(it, out) } }
+            is BinaryExpression -> {
+                var cur: Expression? = e
+                while (cur is BinaryExpression) { collectJsCallsExpr(cur.left, out); cur = cur.right }
+                collectJsCallsExpr(cur, out)
+            }
+            is ParenthesizedExpression -> collectJsCallsExpr(e.expression, out)
+            is PropertyAccessExpression -> collectJsCallsExpr(e.expression, out)
+            is ElementAccessExpression -> { collectJsCallsExpr(e.expression, out); collectJsCallsExpr(e.argumentExpression, out) }
+            is NewExpression -> { collectJsCallsExpr(e.expression, out); e.arguments?.forEach { collectJsCallsExpr(it, out) } }
+            is ConditionalExpression -> { collectJsCallsExpr(e.condition, out); collectJsCallsExpr(e.whenTrue, out); collectJsCallsExpr(e.whenFalse, out) }
+            is PrefixUnaryExpression -> collectJsCallsExpr(e.operand, out)
+            is PostfixUnaryExpression -> collectJsCallsExpr(e.operand, out)
+            is ArrayLiteralExpression -> e.elements.forEach { collectJsCallsExpr(it, out) }
+            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> collectJsCallsExpr(p.initializer, out); is SpreadAssignment -> collectJsCallsExpr(p.expression, out); else -> {} } }
+            is SpreadElement -> collectJsCallsExpr(e.expression, out)
+            is AsExpression -> collectJsCallsExpr(e.expression, out)
+            is TypeAssertionExpression -> collectJsCallsExpr(e.expression, out)
+            is NonNullExpression -> collectJsCallsExpr(e.expression, out)
+            is SatisfiesExpression -> collectJsCallsExpr(e.expression, out)
+            is ArrowFunction -> { (e.body as? Block)?.statements?.forEach { collectJsCallsStmt(it, out) }; (e.body as? Expression)?.let { collectJsCallsExpr(it, out) } }
+            is FunctionExpression -> e.body.statements.forEach { collectJsCallsStmt(it, out) }
             else -> {}
         }
     }
