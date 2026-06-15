@@ -1760,6 +1760,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkCrossFileClassConflicts()
         }
+        // 73g'. B443: cross-file `declare global { namespace NS { … } }` member with a
+        //       non-mergeable kind combination (a type-alias never merges) → TS2300 + TS6203.
+        if (binderResults.size > 1) {
+            checkGlobalNamespaceMemberConflicts()
+        }
         // 73h. Check block-scoped export re-declared via module augmentation(s) (TS2451)
         if (binderResults.size > 1) {
             checkCrossFileModuleAugmentationDuplicates()
@@ -118913,6 +118918,96 @@ interface DataView {
                             start = enumDecl.name.pos,
                             length = enumName.length,
                         )),
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B443: cross-file `declare global { namespace NS { … } }` member conflict (TS2300).
+     * When two DIFFERENT files each declare a member of the same name inside the SAME
+     * global-augmentation namespace path, and the declaration kinds do NOT merge (a
+     * type-alias never merges with anything), emit "Duplicate identifier 'X'." at each
+     * declaration's name + a cross-referencing TS6203 "'X' was also declared here.".
+     * (The cross-file `declare global` namespace merge is not modeled by the binder's
+     * symbol tables, so this is AST-based — like the other dedicated cross-file walkers.)
+     * FP-safe: requires a type-alias declaration in the mix (type-aliases are the only
+     * kind that can never merge); plain interface/namespace/class merges never fire.
+     */
+    private data class GlobalNsMemberDecl(val isTypeAlias: Boolean, val id: Identifier, val fileName: String, val source: String)
+
+    private fun checkGlobalNamespaceMemberConflicts() {
+        // (nsName -> memberName -> declarations across all files)
+        val byNs = HashMap<String, HashMap<String, MutableList<GlobalNsMemberDecl>>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if ((stmt.name as? Identifier)?.text != "global") continue
+                if (ModifierFlag.Declare !in stmt.modifiers) continue
+                val gBody = stmt.body as? ModuleBlock ?: continue
+                for (nsStmt in gBody.statements) {
+                    if (nsStmt !is ModuleDeclaration) continue
+                    val nsName = (nsStmt.name as? Identifier)?.text ?: continue
+                    val nsBody = nsStmt.body as? ModuleBlock ?: continue
+                    val memberMap = byNs.getOrPut(nsName) { HashMap() }
+                    for (member in nsBody.statements) {
+                        val (memberName, isTypeAlias) = when (member) {
+                            is TypeAliasDeclaration -> member.name.text to true
+                            is ImportEqualsDeclaration -> member.name.text to false
+                            is InterfaceDeclaration -> member.name.text to false
+                            is ClassDeclaration -> (member.name?.text ?: continue) to false
+                            is FunctionDeclaration -> (member.name?.text ?: continue) to false
+                            is EnumDeclaration -> member.name.text to false
+                            is ModuleDeclaration -> ((member.name as? Identifier)?.text ?: continue) to false
+                            is VariableStatement -> {
+                                for (d in member.declarationList.declarations) {
+                                    val idn = d.name as? Identifier ?: continue
+                                    memberMap.getOrPut(idn.text) { mutableListOf() }
+                                        .add(GlobalNsMemberDecl(false, idn, fileName, source))
+                                }
+                                continue
+                            }
+                            else -> continue
+                        }
+                        val idNode = when (member) {
+                            is TypeAliasDeclaration -> member.name
+                            is ImportEqualsDeclaration -> member.name
+                            is InterfaceDeclaration -> member.name
+                            is ClassDeclaration -> member.name
+                            is FunctionDeclaration -> member.name
+                            is EnumDeclaration -> member.name
+                            is ModuleDeclaration -> member.name as? Identifier
+                            else -> null
+                        } ?: continue
+                        memberMap.getOrPut(memberName) { mutableListOf() }
+                            .add(GlobalNsMemberDecl(isTypeAlias, idNode, fileName, source))
+                    }
+                }
+            }
+        }
+        for ((_, memberMap) in byNs) {
+            for ((_, decls) in memberMap) {
+                // Require declarations from ≥2 DIFFERENT files and at least one type-alias
+                // (the only kind that can never merge — guarantees a genuine TS2300).
+                val distinctFiles = decls.map { it.fileName }.distinct()
+                if (distinctFiles.size < 2) continue
+                if (decls.none { it.isTypeAlias }) continue
+                for (d in decls) {
+                    val other = decls.firstOrNull { it !== d } ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(d.source, d.id.pos)
+                    val (oLine, oChar) = getLineAndCharacterOfPosition(other.source, other.id.pos)
+                    val related = listOf(Diagnostic(
+                        message = "'${d.id.text}' was also declared here.", category = DiagnosticCategory.Message,
+                        code = 6203, fileName = other.fileName, line = oLine, character = oChar,
+                        start = other.id.pos, length = other.id.text.length,
+                    ))
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate identifier '${d.id.text}'.", category = DiagnosticCategory.Error,
+                        code = 2300, fileName = d.fileName, line = line, character = character,
+                        start = d.id.pos, length = d.id.text.length, relatedInformation = related,
                     ))
                 }
             }
