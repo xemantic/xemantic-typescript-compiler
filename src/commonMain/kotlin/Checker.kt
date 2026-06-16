@@ -1218,6 +1218,7 @@ class Checker(
         // shape (typeParameterFixingWithContextSensitiveArguments2/3).
         checkGenericCallContextualArrowReturns()
         checkGenericThenChainConstraints()
+        checkChainedTypeParamClimbing()
         // 18. Check unreachable code (TS7027)
         if (options.allowUnreachableCode == false) {
             checkUnreachableCode()
@@ -41162,6 +41163,209 @@ interface DataView {
                 ))
             }
             // result type arg clamps to the constraint (curT unchanged)
+        }
+    }
+
+    /**
+     * B467: `chainedCallsWithTypeParameterConstrainedToOtherTypeParameter2` — the documented
+     * harder variant of B462. Inside the BODY of a `then<S extends T>(cb:(x:T)=>S):C<S>`
+     * method on a generic class `C<T [extends I]>`, fluent `.then` chains whose arrow bodies
+     * RETURN bare type-param locals (`var t!:T; var s!:S; var i!:I`) climb/descend the
+     * constraint lattice {S extends T extends I}. Two FP-safe AST + constraint-graph checks
+     * (no relation engine for the climb):
+     *   - TS2322 + "could be instantiated" + TS2208 + TS6502 when an arrow returns a local of
+     *     type-param R that is NOT a subtype of the chain's current type arg (climbing up).
+     *   - TS2322 when a non-climbing chain ends in `.value.<prop> = rhs` and rhs is not
+     *     assignable to the property type resolved from the type arg's ultimate constraint.
+     * Gated to the exact `thenChainMethod` class shape (corpus-rare → FP-safe). These chains
+     * live inside method bodies, which the B462 `walkThenChains` never recurses into (and the
+     * B462 `processThenChain` bails on Identifier arrow bodies), so the two are disjoint.
+     */
+    private fun checkChainedTypeParamClimbing() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
+            val source = result.sourceFile.text
+            ctpcWalkStatements(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun ctpcWalkStatements(stmts: List<Statement>, source: String, fileName: String) {
+        for (st in stmts) when (st) {
+            is ClassDeclaration -> thenChainMethod(st)?.let { ctpcProcessThenMethod(st, it, source, fileName) }
+            is ModuleDeclaration -> (st.body as? ModuleBlock)?.let { ctpcWalkStatements(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun ctpcBareRefName(t: TypeNode?): String? {
+        val tr = t as? TypeReference ?: return null
+        if (!tr.typeArguments.isNullOrEmpty()) return null
+        return (tr.typeName as? Identifier)?.text
+    }
+
+    private fun ctpcIsSubtype(r: String, target: String, graph: Map<String, String>): Boolean {
+        if (r == target) return true
+        var cur = r
+        val seen = HashSet<String>()
+        while (true) {
+            val c = graph[cur] ?: return false
+            if (c == target) return true
+            if (!seen.add(c)) return false
+            cur = c
+        }
+    }
+
+    private fun ctpcProcessThenMethod(classDecl: ClassDeclaration, then: MethodDeclaration, source: String, fileName: String) {
+        val body = then.body ?: return
+        val className = classDecl.name?.text ?: return
+        val classTpNode = classDecl.typeParameters?.singleOrNull() ?: return
+        val classTpName = (classTpNode.name as? Identifier)?.text ?: return
+        val methodTpNode = then.typeParameters?.singleOrNull() ?: return
+        val methodTpName = (methodTpNode.name as? Identifier)?.text ?: return
+        val classTpConstraintName = ctpcBareRefName(classTpNode.constraint)
+        // Constraint graph among the names that can appear as chain type args.
+        val graph = HashMap<String, String>()
+        graph[methodTpName] = classTpName // S extends T
+        if (classTpConstraintName != null) graph[classTpName] = classTpConstraintName // T extends I
+        // TypeParameter decl nodes (for the TS2208 position).
+        val tpDeclNodes = mapOf(methodTpName to methodTpNode, classTpName to classTpNode)
+        // The cb FunctionType anchors TS6502.
+        val cbFt = then.parameters.singleOrNull()?.type as? FunctionType ?: return
+        // Collect body-local `var x!: BareRef` → ref name (TP or interface).
+        val localTpMap = HashMap<String, String>()
+        for (st in body.statements) {
+            if (st !is VariableStatement) continue
+            for (d in st.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                ctpcBareRefName(d.type)?.let { localTpMap[n] = it }
+            }
+        }
+        if (localTpMap.isEmpty()) return
+        // The interface that is the ultimate constraint (for the `.value.<prop>` write check).
+        val constraintType: Type? = classTpNode.constraint?.let {
+            try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+        }
+        for (st in body.statements) {
+            if (st !is ExpressionStatement) continue
+            val expr = st.expression
+            // (a) a `.value.<prop> = rhs` write whose receiver is a then-chain.
+            if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+                val lhs = expr.left
+                val propAccess = lhs as? PropertyAccessExpression
+                val valueAccess = propAccess?.expression as? PropertyAccessExpression
+                if (propAccess != null && valueAccess != null && valueAccess.name.text == "value") {
+                    var recv: Expression = valueAccess.expression
+                    while (recv is ParenthesizedExpression) recv = recv.expression
+                    val chain = ctpcChainFromExpr(recv, className) ?: continue
+                    ctpcRunChain(
+                        chain.first, chain.second, localTpMap, graph, tpDeclNodes, cbFt,
+                        constraintType, propAccess.name.text, lhs, expr.right, source, fileName,
+                    )
+                }
+                continue
+            }
+            // (b) a bare then-chain expression statement → climbing check only.
+            val chain = ctpcChainFromExpr(expr, className) ?: continue
+            ctpcRunChain(
+                chain.first, chain.second, localTpMap, graph, tpDeclNodes, cbFt,
+                null, null, null, null, source, fileName,
+            )
+        }
+    }
+
+    /** Unwind `(new ClassName(arg)).then(a).then(b)...` → (newExpr, segs left-to-right). */
+    private fun ctpcChainFromExpr(expr: Expression, className: String): Pair<NewExpression, List<CallExpression>>? {
+        val segs = mutableListOf<CallExpression>()
+        var cur: Expression = expr
+        while (cur is CallExpression) {
+            val pae = cur.expression as? PropertyAccessExpression ?: return null
+            if (pae.name.text != "then") return null
+            if ((cur.arguments?.size ?: 0) != 1) return null
+            if (!cur.typeArguments.isNullOrEmpty()) return null
+            segs.add(cur)
+            var recv: Expression = pae.expression
+            while (recv is ParenthesizedExpression) recv = recv.expression
+            cur = recv
+        }
+        val newExpr = cur as? NewExpression ?: return null
+        if ((newExpr.expression as? Identifier)?.text != className) return null
+        if (segs.size < 1) return null
+        segs.reverse()
+        return newExpr to segs
+    }
+
+    private fun ctpcRunChain(
+        newExpr: NewExpression, segs: List<CallExpression>,
+        localTpMap: Map<String, String>, graph: Map<String, String>,
+        tpDeclNodes: Map<String, TypeParameter>, cbFt: FunctionType,
+        constraintType: Type?, writePropName: String?, writeLhs: Expression?, writeRhs: Expression?,
+        source: String, fileName: String,
+    ) {
+        val ctorArg = newExpr.arguments?.singleOrNull() as? Identifier ?: return
+        var curArg = localTpMap[ctorArg.text] ?: return
+        // Resolve all arrow body type-param names first; bail if any seg is not a tracked local.
+        val bodyTps = mutableListOf<Pair<Identifier, String>>()
+        for (seg in segs) {
+            val arrow = seg.arguments!![0] as? ArrowFunction ?: return
+            val bodyId = arrow.body as? Identifier ?: return
+            val r = localTpMap[bodyId.text] ?: return
+            bodyTps.add(bodyId to r)
+        }
+        var climbingError = false
+        for ((bodyId, r) in bodyTps) {
+            if (!ctpcIsSubtype(r, curArg, graph)) {
+                climbingError = true
+                val related = mutableListOf<Diagnostic>()
+                tpDeclNodes[r]?.let { tpNode ->
+                    val (dl, dc) = getLineAndCharacterOfPosition(source, tpNode.name.pos)
+                    related.add(Diagnostic(
+                        message = "This type parameter might need an `extends $curArg` constraint.",
+                        category = DiagnosticCategory.Message, code = 2208,
+                        fileName = fileName, line = dl, character = dc,
+                        start = tpNode.name.pos, length = r.length,
+                    ))
+                }
+                run {
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, cbFt.pos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Message, code = 6502,
+                        fileName = fileName, line = rl, character = rc,
+                        start = cbFt.pos, length = (cbFt.type.end - cbFt.pos).coerceAtLeast(1),
+                    ))
+                }
+                val (line, ch) = getLineAndCharacterOfPosition(source, bodyId.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$r' is not assignable to type '$curArg'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = bodyId.pos, length = bodyId.text.length,
+                    messageChain = listOf("  '$curArg' could be instantiated with an arbitrary type which could be unrelated to '$r'."),
+                    relatedInformation = related,
+                ))
+            }
+            curArg = r // result type arg = inferred (clamps to r even on error)
+        }
+        // Final `.value.<prop> = rhs` write check (only when no climbing error in this chain).
+        if (!climbingError && constraintType != null && writePropName != null && writeLhs != null && writeRhs != null) {
+            val objType = constraintType as? Type.Object
+            if (objType != null) resolveStructuredTypeMembers(objType)
+            val propSym = getPropertyOfType(constraintType, writePropName) ?: return
+            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return }
+            val rhsType = try { getWidenedLiteralType(getTypeOfExpression(writeRhs)) } catch (_: StackOverflowError) { return }
+            if (rhsType === errorType || propType === errorType) return
+            if (!checkTypeRelatedTo(rhsType, propType, assignableRelation)) {
+                val start = writeLhs.pos
+                val length = (expressionTrueEnd(writeLhs) - start).coerceAtLeast(1)
+                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(rhsType)}' is not assignable to type '${typeToString(propType)}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch, start = start, length = length,
+                ))
+            }
         }
     }
 
