@@ -473,6 +473,12 @@ class Checker(
      *  per body across passes; this prevents double-emitting the TS2403/TS2365/TS2356 set. */
     private val forInNumForProcessed = mutableSetOf<String>()
 
+    /** B459: names of `unique symbol`-valued consts in the current file, used by the
+     *  TS2389/TS2391/TS2393 overload walker to decide whether a `[ident]` computed
+     *  method name late-binds (only `unique symbol` / `Symbol()` consts do; a plain
+     *  `symbol` or a string-literal-union does NOT, so those computed names are skipped). */
+    private var currentMissingImplUniqueSymNames: Set<String> = emptySet()
+
     /** B100: ids of synthesized member Symbols that a `Readonly<T>` materialization
      *  marked read-only. The synthesized members copy `T`'s members (so their type
      *  resolves correctly via the shared declarations) but the `readonly` modifier
@@ -40723,8 +40729,48 @@ interface DataView {
             // Skip JS files — TS8017 handles bodiless functions in JS
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
+            currentMissingImplUniqueSymNames = collectUniqueSymbolConstNames(result.sourceFile.statements)
             checkMissingImplInStatements(result.sourceFile.statements, source, fileName)
         }
+        currentMissingImplUniqueSymNames = emptySet()
+    }
+
+    /** B459: collect names of `unique symbol` / `Symbol()`-valued consts at file level and
+     *  inside non-declare namespaces, so a `[ident]` computed method name can be classified
+     *  as a late-bound (overload-participating) name vs a skippable dynamic name. */
+    private fun collectUniqueSymbolConstNames(statements: List<Statement>): Set<String> {
+        val out = mutableSetOf<String>()
+        fun scan(stmts: List<Statement>) {
+            for (stmt in stmts) {
+                when (stmt) {
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        if (varDeclIsSymbol(d)) out.add(nm)
+                    }
+                    is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { scan(it.statements) }
+                    else -> {}
+                }
+            }
+        }
+        scan(statements)
+        return out
+    }
+
+    /** B459: grouping key + display for an overload/impl method name, including late-bound
+     *  computed names. Returns null for a non-late-bindable name (e.g. `[sym]` where `sym`
+     *  is a plain `symbol`, `[union]`) so it is skipped by the overload walker (matches tsc). */
+    private fun methodOverloadNameAndDisplay(name: NameNode?): Pair<String, String>? = when (name) {
+        is Identifier -> name.text to name.text
+        is StringLiteralNode -> name.text to "\"${name.text}\""
+        is NumericLiteralNode -> name.text to name.text
+        is ComputedPropertyName -> when (val e = name.expression) {
+            is StringLiteralNode -> "@cstr:${e.text}" to "[\"${e.text}\"]"
+            is NumericLiteralNode -> "@cnum:${e.text}" to "[${e.text}]"
+            is Identifier -> if (e.text in currentMissingImplUniqueSymNames)
+                "@cus:${e.text}" to "[${e.text}]" else null
+            else -> null
+        }
+        else -> null
     }
 
     private fun checkMissingImplInStatements(
@@ -40874,12 +40920,10 @@ interface DataView {
                     }
                 }
             } else if (member is MethodDeclaration) {
-                val name = when (val n = member.name) {
-                    is Identifier -> n.text
-                    is StringLiteralNode -> n.text
-                    is NumericLiteralNode -> n.text
-                    else -> continue
-                }
+                // B459: late-bound computed names (`["x"]`/`[1]`/`[uniqueSym]`) participate
+                // in overload checking like literal/identifier names; non-late-bindable
+                // computed names (`[sym]`/`[union]`) return null → skipped (matches tsc).
+                val (name, displayName) = methodOverloadNameAndDisplay(member.name) ?: continue
                 // Include static qualifier in the key to distinguish instance vs static
                 val isStatic = ModifierFlag.Static in member.modifiers
                 val key = if (isStatic) "static:$name" else name
@@ -40909,10 +40953,6 @@ interface DataView {
                 } else if (member.body == null && ModifierFlag.Abstract !in member.modifiers) {
                     // Overload without body (node EXISTENCE — a missing-block body suppresses
                     // the final rule, same as the file-level walker) — check for missing impl
-                    val displayName = when (member.name) {
-                        is StringLiteralNode -> "\"$name\""
-                        else -> name
-                    }
                     val implResult = findMethodImplementation(members, i, name)
                     when (implResult) {
                         is ImplResult.Found -> {} // Same name follows
@@ -40937,13 +40977,13 @@ interface DataView {
 
     private fun emitTS2393(nameNode: Node, source: String, fileName: String) {
         val start = nameNode.pos
-        val name = when (nameNode) {
-            is Identifier -> nameNode.text
-            is StringLiteralNode -> nameNode.text
-            is NumericLiteralNode -> nameNode.text
+        val length = when (nameNode) {
+            is Identifier -> nameNode.text.length
+            is StringLiteralNode -> nameNode.text.length
+            is NumericLiteralNode -> nameNode.text.length
+            is ComputedPropertyName -> matchClosingBracket(source, start) - start
             else -> return
         }
-        val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Duplicate function implementation.",
@@ -40965,12 +41005,7 @@ interface DataView {
         for (j in fromIdx + 1 until members.size) {
             val next = members[j]
             if (next is MethodDeclaration) {
-                val nextName = when (val n = next.name) {
-                    is Identifier -> n.text
-                    is StringLiteralNode -> n.text
-                    is NumericLiteralNode -> n.text
-                    else -> null
-                }
+                val nextName = methodOverloadNameAndDisplay(next.name)?.first
                 if (nextName == name) {
                     return ImplResult.Found
                 }
@@ -41196,12 +41231,12 @@ interface DataView {
 
     private fun emitTS2391(nameNode: Node, source: String, fileName: String) {
         val start = nameNode.pos
-        val name = when (nameNode) {
-            is Identifier -> nameNode.text
-            is StringLiteralNode -> nameNode.text
+        val length = when (nameNode) {
+            is Identifier -> nameNode.text.length
+            is StringLiteralNode -> nameNode.text.length
+            is ComputedPropertyName -> matchClosingBracket(source, start) - start
             else -> return
         }
-        val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Function implementation is missing or not immediately following the declaration.",
@@ -41217,13 +41252,13 @@ interface DataView {
 
     private fun emitTS2389(nameNode: Node, source: String, fileName: String, expectedName: String) {
         val start = nameNode.pos
-        val name = when (nameNode) {
-            is Identifier -> nameNode.text
-            is StringLiteralNode -> "\"${nameNode.text}\""
-            is NumericLiteralNode -> nameNode.text
+        val length = when (nameNode) {
+            is Identifier -> nameNode.text.length
+            is StringLiteralNode -> nameNode.text.length + 2
+            is NumericLiteralNode -> nameNode.text.length
+            is ComputedPropertyName -> matchClosingBracket(source, start) - start
             else -> return
         }
-        val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
             message = "Function implementation name must be '$expectedName'.",
