@@ -77639,6 +77639,7 @@ interface DataView {
      */
     private fun collectConstructorThisAssignments(
         stmts: List<Statement>, into: MutableMap<String, MutableList<Expression>>,
+        jsdocTypes: MutableMap<String, TypeNode>? = null,
     ) {
         for (stmt in stmts) {
             when (stmt) {
@@ -77649,12 +77650,20 @@ interface DataView {
                     if ((pa.expression as? Identifier)?.text != "this") continue
                     val name = (pa.name as? Identifier)?.text ?: continue
                     into.getOrPut(name) { mutableListOf() }.add(bin.right)
+                    // B419b: a leading JSDoc `@type {T}` on the assignment statement supplies
+                    // the member's declared type (`/** @type {number[]} */ this.p = []` → number[]
+                    // not the inferred any[]). First-wins per name. Only captured when the caller
+                    // requests it (synthesis path) — the name-presence caller passes null.
+                    if (jsdocTypes != null && name !in jsdocTypes && stmt.leadingComments != null) {
+                        Parser("", "").parseJsDocTypeNodeFromComments(stmt.leadingComments)
+                            ?.let { jsdocTypes[name] = it }
+                    }
                 }
                 is IfStatement -> {
-                    collectConstructorThisAssignments(listOf(stmt.thenStatement), into)
-                    stmt.elseStatement?.let { collectConstructorThisAssignments(listOf(it), into) }
+                    collectConstructorThisAssignments(listOf(stmt.thenStatement), into, jsdocTypes)
+                    stmt.elseStatement?.let { collectConstructorThisAssignments(listOf(it), into, jsdocTypes) }
                 }
-                is Block -> collectConstructorThisAssignments(stmt.statements, into)
+                is Block -> collectConstructorThisAssignments(stmt.statements, into, jsdocTypes)
                 else -> {}
             }
         }
@@ -77997,14 +78006,20 @@ interface DataView {
         // members always win (synthesis only fills names not already present).
         if (symbol.declarations.any { it is ClassDeclaration && it in jsFileClassDecls() }) {
             val thisAssigns = LinkedHashMap<String, MutableList<Expression>>()
+            val thisAssignJsDocTypes = LinkedHashMap<String, TypeNode>()
             for (decl in symbol.declarations) {
                 if (decl !is ClassDeclaration || decl !in jsFileClassDecls()) continue
                 val ctor = decl.members.filterIsInstance<Constructor>().firstOrNull() ?: continue
-                ctor.body?.let { collectConstructorThisAssignments(it.statements, thisAssigns) }
+                ctor.body?.let { collectConstructorThisAssignments(it.statements, thisAssigns, thisAssignJsDocTypes) }
             }
             for ((name, rhsList) in thisAssigns) {
                 if (name in members) continue
-                val propType = inferJsExpandoPropType(rhsList) ?: continue
+                // B419b: prefer a JSDoc `@type {T}`-declared type (resolving to a concrete,
+                // non-error Type) over the RHS-inferred type; fall back to RHS inference.
+                val jsdocType = thisAssignJsDocTypes[name]?.let { node ->
+                    try { getTypeFromTypeNode(node).takeIf { it !== errorType } } catch (_: Throwable) { null }
+                }
+                val propType = jsdocType ?: inferJsExpandoPropType(rhsList) ?: continue
                 val propSym = Symbol(SymbolFlags.Property, name)
                 propSym.parent = symbol
                 symbolTypes[propSym.id] = propType

@@ -7305,6 +7305,16 @@ class Parser(
         return null
     }
 
+    /**
+     * B419b: public entry for the Checker to parse a JSDoc `@type {T}` from a comment
+     * list into a TypeNode (used to type a JS class expando `/** @type {number[]} */
+     * this.p = []` member). The resulting node's positions point into the JSDoc text,
+     * so the Checker must only use it to RESOLVE a member type, never to emit a
+     * position-bearing diagnostic on the node itself.
+     */
+    fun parseJsDocTypeNodeFromComments(comments: List<Comment>?): TypeNode? =
+        parsePropertyTypeFromJSDoc(comments)
+
     // 17.62: primitive-only variant of parsePropertyTypeFromJSDoc for use on
     // VariableDeclaration. The full sub-Parser approach (17.61 attempt) regressed
     // jsdocReferenceGlobalTypeInCommonJs_ts because TypeNode positions point into
