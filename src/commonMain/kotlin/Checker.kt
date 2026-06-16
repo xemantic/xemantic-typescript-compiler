@@ -56519,8 +56519,152 @@ interface DataView {
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
                 walkTypeAssertionsInStmt(stmt, source, fileName, ::emitErasableTypeAssertion)
+                // TS1294 also fires on non-erasable DECLARATION syntax (parameter
+                // properties, enums, instantiated namespaces, import/export-equals)
+                // in non-ambient context. `erasableSyntaxOnly` is rare (3 corpus
+                // tests, gated by the option), so this walk is FP-bounded.
+                walkErasableDeclsInStmt(stmt, source, fileName, result, ambient = false)
             }
         }
+    }
+
+    /** Recursively flags non-erasable TypeScript DECLARATION syntax (TS1294) under
+     *  `erasableSyntaxOnly`. Stops at any ambient (`declare`) boundary. */
+    private fun walkErasableDeclsInStmt(
+        stmt: Statement, source: String, fileName: String, result: BinderResult, ambient: Boolean,
+    ) {
+        if (ambient) return
+        when (stmt) {
+            is ClassDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                for (m in stmt.members) when (m) {
+                    is Constructor -> for (p in m.parameters) {
+                        if (p.modifiers.any { isParameterPropertyModifier(it) }) {
+                            val start = trimLeadingWs(source, p.pos)
+                            emitErasable1294(start, erasableParamEnd(source, start) - start, source, fileName)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            is EnumDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                emitErasable1294(stmt.name.pos, stmt.name.text.length, source, fileName)
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers) return
+                val state = result.moduleInstanceStates[nodeKey(stmt)]
+                if (state == ModuleInstanceState.Instantiated) {
+                    val nm = stmt.name
+                    val len = (nm as? Identifier)?.text?.length
+                        ?: (erasableStmtTrueEnd(source, nm.pos) - nm.pos).coerceAtLeast(1)
+                    emitErasable1294(nm.pos, len, source, fileName)
+                }
+                (stmt.body as? ModuleBlock)?.statements?.forEach {
+                    walkErasableDeclsInStmt(it, source, fileName, result, ambient = false)
+                }
+            }
+            is ImportEqualsDeclaration -> {
+                if (ModifierFlag.Declare in stmt.modifiers || stmt.isTypeOnly) return
+                val start = trimLeadingWs(source, stmt.pos)
+                emitErasable1294(start, erasableStmtTrueEnd(source, start) - start, source, fileName)
+            }
+            is ExportAssignment -> {
+                if (stmt.isExportEquals) {
+                    val start = trimLeadingWs(source, stmt.pos)
+                    emitErasable1294(start, erasableStmtTrueEnd(source, start) - start, source, fileName)
+                }
+            }
+            is Block -> stmt.statements.forEach { walkErasableDeclsInStmt(it, source, fileName, result, false) }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach {
+                walkErasableDeclsInStmt(it, source, fileName, result, false)
+            }
+            is IfStatement -> {
+                walkErasableDeclsInStmt(stmt.thenStatement, source, fileName, result, false)
+                stmt.elseStatement?.let { walkErasableDeclsInStmt(it, source, fileName, result, false) }
+            }
+            is ForStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is ForInStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is ForOfStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is WhileStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is DoStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is LabeledStatement -> walkErasableDeclsInStmt(stmt.statement, source, fileName, result, false)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { walkErasableDeclsInStmt(it, source, fileName, result, false) }
+                stmt.catchClause?.block?.statements?.forEach { walkErasableDeclsInStmt(it, source, fileName, result, false) }
+                stmt.finallyBlock?.statements?.forEach { walkErasableDeclsInStmt(it, source, fileName, result, false) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun trimLeadingWs(source: String, from: Int): Int {
+        var i = from.coerceIn(0, source.length)
+        while (i < source.length && source[i].isWhitespace()) i++
+        return i
+    }
+
+    /** End (exclusive) of a constructor parameter: scans to the first depth-0 `,`/`)`,
+     *  skipping nested brackets/generics and string literals, then trims trailing ws. */
+    private fun erasableParamEnd(source: String, from: Int): Int {
+        var i = from; var depth = 0; val n = source.length
+        while (i < n) {
+            when (val c = source[i]) {
+                '(', '[', '{', '<' -> depth++
+                ')' -> { if (depth == 0) break; depth-- }
+                ']', '}', '>' -> if (depth > 0) depth--
+                ',' -> if (depth == 0) break
+                '"', '\'', '`' -> { i = erasableSkipString(source, i, c); continue }
+                else -> {}
+            }
+            i++
+        }
+        while (i > from && source[i - 1].isWhitespace()) i--
+        return i
+    }
+
+    /** End (exclusive) of a declaration statement: first depth-0 `;` (inclusive),
+     *  skipping nested brackets and string literals; falls back to trimmed scan end. */
+    private fun erasableStmtTrueEnd(source: String, from: Int): Int {
+        var i = from; var depth = 0; val n = source.length
+        while (i < n) {
+            when (val c = source[i]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (depth > 0) depth--
+                ';' -> if (depth == 0) return i + 1
+                '"', '\'', '`' -> { i = erasableSkipString(source, i, c); continue }
+                '\n' -> if (depth == 0) { var e = i; while (e > from && source[e - 1].isWhitespace()) e--; return e }
+                else -> {}
+            }
+            i++
+        }
+        var e = i; while (e > from && source[e - 1].isWhitespace()) e--; return e
+    }
+
+    private fun erasableSkipString(source: String, start: Int, quote: Char): Int {
+        var i = start + 1; val n = source.length
+        while (i < n) {
+            val c = source[i]
+            if (c == '\\') { i += 2; continue }
+            if (c == quote) return i + 1
+            i++
+        }
+        return i
+    }
+
+    private fun emitErasable1294(start: Int, length: Int, source: String, fileName: String) {
+        val len = length.coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This syntax is not allowed when 'erasableSyntaxOnly' is enabled.",
+            category = DiagnosticCategory.Error,
+            code = 1294,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = len,
+        ))
     }
 
     private fun walkTypeAssertionsInStmt(
