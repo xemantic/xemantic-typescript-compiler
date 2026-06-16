@@ -45343,11 +45343,11 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            walkForDerivedConstructors(result.sourceFile.statements, source, fileName)
+            walkForDerivedConstructors(result.sourceFile.statements, source, fileName, result.flowGraph)
         }
     }
 
-    private fun walkForDerivedConstructors(statements: List<Statement>, source: String, fileName: String) {
+    private fun walkForDerivedConstructors(statements: List<Statement>, source: String, fileName: String, flowGraph: FlowGraph) {
         for (stmt in statements) {
             when (stmt) {
                 is ClassDeclaration -> {
@@ -45355,7 +45355,7 @@ interface DataView {
                     if (stmt.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) {
                         for (member in stmt.members) {
                             if (member is Constructor && member.body != null) {
-                                checkConstructorThisBeforeSuper(member.body!!.statements, source, fileName)
+                                checkConstructorThisBeforeSuper(member.body!!.statements, source, fileName, flowGraph)
                                 // TS2376: when derived class has initialized properties/param properties,
                                 // super() must be the first statement in the constructor
                                 val hasInitializedProps = stmt.members.any { m ->
@@ -45402,14 +45402,14 @@ interface DataView {
                     // Recurse into class members for nested classes
                     for (member in stmt.members) {
                         when (member) {
-                            is MethodDeclaration -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
-                            is Constructor -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                            is MethodDeclaration -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName, flowGraph) }
+                            is Constructor -> member.body?.let { walkForDerivedConstructors(it.statements, source, fileName, flowGraph) }
                             is PropertyDeclaration -> {
                                 val init = member.initializer
                                 if (init is ClassExpression && init.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) {
                                     for (m in init.members) {
                                         if (m is Constructor && m.body != null) {
-                                            checkConstructorThisBeforeSuper(m.body!!.statements, source, fileName)
+                                            checkConstructorThisBeforeSuper(m.body!!.statements, source, fileName, flowGraph)
                                         }
                                     }
                                 }
@@ -45418,36 +45418,36 @@ interface DataView {
                         }
                     }
                 }
-                is FunctionDeclaration -> stmt.body?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { walkForDerivedConstructors(it.statements, source, fileName, flowGraph) }
                 is ModuleDeclaration -> {
                     val body = stmt.body
-                    if (body is ModuleBlock) walkForDerivedConstructors(body.statements, source, fileName)
+                    if (body is ModuleBlock) walkForDerivedConstructors(body.statements, source, fileName, flowGraph)
                 }
-                is Block -> walkForDerivedConstructors(stmt.statements, source, fileName)
+                is Block -> walkForDerivedConstructors(stmt.statements, source, fileName, flowGraph)
                 is IfStatement -> {
-                    walkForDerivedConstructors(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForDerivedConstructors(listOf(it), source, fileName) }
+                    walkForDerivedConstructors(listOf(stmt.thenStatement), source, fileName, flowGraph)
+                    stmt.elseStatement?.let { walkForDerivedConstructors(listOf(it), source, fileName, flowGraph) }
                 }
-                is ForStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is ForStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
+                is ForInStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
+                is ForOfStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
+                is WhileStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
+                is DoStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
                 is SwitchStatement -> {
                     for (clause in stmt.caseBlock) {
                         when (clause) {
-                            is CaseClause -> walkForDerivedConstructors(clause.statements, source, fileName)
-                            is DefaultClause -> walkForDerivedConstructors(clause.statements, source, fileName)
+                            is CaseClause -> walkForDerivedConstructors(clause.statements, source, fileName, flowGraph)
+                            is DefaultClause -> walkForDerivedConstructors(clause.statements, source, fileName, flowGraph)
                             else -> {}
                         }
                     }
                 }
                 is TryStatement -> {
-                    walkForDerivedConstructors(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { walkForDerivedConstructors(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForDerivedConstructors(it.statements, source, fileName) }
+                    walkForDerivedConstructors(stmt.tryBlock.statements, source, fileName, flowGraph)
+                    stmt.catchClause?.block?.let { walkForDerivedConstructors(it.statements, source, fileName, flowGraph) }
+                    stmt.finallyBlock?.let { walkForDerivedConstructors(it.statements, source, fileName, flowGraph) }
                 }
-                is LabeledStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName)
+                is LabeledStatement -> walkForDerivedConstructors(listOf(stmt.statement), source, fileName, flowGraph)
                 else -> {}
             }
         }
@@ -45459,22 +45459,213 @@ interface DataView {
     private fun isSuperIdentifier(node: Node): Boolean =
         node is Identifier && node.text == "super"
 
-    private fun checkConstructorThisBeforeSuper(statements: List<Statement>, source: String, fileName: String) {
-        // Walk statements until we find super() call; any this reference before that is TS17009
+    /**
+     * Flow-based super-before-this check (TS17009 / TS17011), ported from tsc's
+     * `checkThisBeforeSuper` + `isPostSuperFlowNode`. For every `this` reference
+     * and `super.<prop>` access in the constructor body whose nearest enclosing
+     * function-like is the constructor itself (NOT a nested function/arrow — those
+     * evaluate lazily and are excluded), emit the diagnostic unless `super()` is
+     * guaranteed to have run on EVERY control-flow path reaching that point.
+     *
+     * The flow graph (built by FlowGraphBuilder) already models if/else, switch
+     * fallthrough, ternaries and object/array literals, and creates a [FlowCall]
+     * for every call — including `super()`. `isPostSuperFlowNode` walks the
+     * antecedent chain looking for a `super()` [FlowCall]; a branch label is
+     * post-super only when EVERY antecedent is.
+     *
+     * Disjoint from the existing param-initializer (TS2336/TS17011), `new super(...)`
+     * (TS2351/TS17011) and `super(super.X())`-args (B51.5 TS17011) emitters: the
+     * collection here does NOT descend into super() call arguments (owned by those).
+     */
+    private fun checkConstructorThisBeforeSuper(statements: List<Statement>, source: String, fileName: String, flowGraph: FlowGraph) {
+        // super(this): `this` inside super() call arguments evaluates before the
+        // super call completes → TS17009. Handled here because the flow collection
+        // below skips super() argument lists (super.X in those args is owned by the
+        // B51.5 emitter, which uses a different squiggle span).
         for (stmt in statements) {
-            // Check for super(this) — this in super call arguments is also an error
             val superCallThisRef = findThisInSuperCallArgs(stmt)
             if (superCallThisRef != null) {
                 emitTS17009(superCallThisRef, source, fileName)
-                return
+                break
             }
-            // Check if this statement contains a super() call (and stop if so)
-            if (containsSuperCall(stmt)) return
-            // Check if this statement references 'this' before super
-            val thisRef = findFirstThisReference(stmt)
-            if (thisRef != null) {
-                emitTS17009(thisRef, source, fileName)
-                return // Only report first occurrence
+        }
+        val refs = mutableListOf<Pair<Identifier, Boolean>>() // (keyword node, isSuper)
+        for (stmt in statements) collectThisSuperRefs(stmt, refs)
+        if (refs.isEmpty()) return
+        val cache = HashMap<Int, Boolean>()
+        for ((node, isSuper) in refs) {
+            val flow = flowGraph.nodeToFlow[nodeKey(node)] ?: continue
+            if (isPostSuperFlowNode(flow, cache)) continue
+            if (isSuper) {
+                val start = node.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'super' must be called before accessing a property of 'super' in the constructor of a derived class.",
+                    category = DiagnosticCategory.Error,
+                    code = 17011,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = 5,
+                ))
+            } else {
+                emitTS17009(node, source, fileName)
+            }
+        }
+    }
+
+    /**
+     * Walk for TS17009/TS17011: collect `this` Identifiers and the `super`
+     * Identifier of any `super.<prop>` / `super[<expr>]` access whose container
+     * is the constructor (does NOT descend into nested function-likes, class
+     * bodies, or `super()` call arguments). Each entry is (keyword node, isSuper).
+     */
+    private fun collectThisSuperRefs(node: Node, out: MutableList<Pair<Identifier, Boolean>>) {
+        when (node) {
+            // ---- expressions ----
+            // Leaf keyword: a bare `this`. (`super` on its own is only valid as a
+            // call or property-access base, handled by the parent below.)
+            is Identifier -> if (node.text == "this") out.add(node to false)
+            is PropertyAccessExpression -> {
+                if (isSuperIdentifier(node.expression)) out.add((node.expression as Identifier) to true)
+                else collectThisSuperRefs(node.expression, out)
+            }
+            is ElementAccessExpression -> {
+                if (isSuperIdentifier(node.expression)) out.add((node.expression as Identifier) to true)
+                else collectThisSuperRefs(node.expression, out)
+                collectThisSuperRefs(node.argumentExpression, out)
+            }
+            is CallExpression -> {
+                // `super(...)` — the call boundary itself; its args are owned by
+                // findThisInSuperCallArgs (this) and the B51.5 emitter (super.X).
+                if (isSuperIdentifier(node.expression)) return
+                collectThisSuperRefs(node.expression, out)
+                for (arg in node.arguments) collectThisSuperRefs(arg, out)
+            }
+            is NewExpression -> {
+                collectThisSuperRefs(node.expression, out)
+                node.arguments?.forEach { collectThisSuperRefs(it, out) }
+            }
+            is BinaryExpression -> { collectThisSuperRefs(node.left, out); collectThisSuperRefs(node.right, out) }
+            is ConditionalExpression -> {
+                collectThisSuperRefs(node.condition, out)
+                collectThisSuperRefs(node.whenTrue, out)
+                collectThisSuperRefs(node.whenFalse, out)
+            }
+            is ParenthesizedExpression -> collectThisSuperRefs(node.expression, out)
+            is PrefixUnaryExpression -> collectThisSuperRefs(node.operand, out)
+            is PostfixUnaryExpression -> collectThisSuperRefs(node.operand, out)
+            is TypeAssertionExpression -> collectThisSuperRefs(node.expression, out)
+            is AsExpression -> collectThisSuperRefs(node.expression, out)
+            is SatisfiesExpression -> collectThisSuperRefs(node.expression, out)
+            is NonNullExpression -> collectThisSuperRefs(node.expression, out)
+            is SpreadElement -> collectThisSuperRefs(node.expression, out)
+            is YieldExpression -> node.expression?.let { collectThisSuperRefs(it, out) }
+            is AwaitExpression -> collectThisSuperRefs(node.expression, out)
+            is VoidExpression -> collectThisSuperRefs(node.expression, out)
+            is TypeOfExpression -> collectThisSuperRefs(node.expression, out)
+            is DeleteExpression -> collectThisSuperRefs(node.expression, out)
+            is ArrayLiteralExpression -> node.elements.forEach { collectThisSuperRefs(it, out) }
+            is CommaListExpression -> node.elements.forEach { collectThisSuperRefs(it, out) }
+            is TemplateExpression -> node.templateSpans.forEach { collectThisSuperRefs(it.expression, out) }
+            is TaggedTemplateExpression -> {
+                collectThisSuperRefs(node.tag, out)
+                (node.template as? Expression)?.let { collectThisSuperRefs(it, out) }
+            }
+            is ObjectLiteralExpression -> {
+                for (prop in node.properties) {
+                    (prop as? Node)?.let { p ->
+                        // computed property NAME evaluates eagerly
+                        when (p) {
+                            is PropertyAssignment -> {
+                                (p.name as? ComputedPropertyName)?.let { collectThisSuperRefs(it.expression, out) }
+                                collectThisSuperRefs(p.initializer, out)
+                            }
+                            is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { collectThisSuperRefs(it, out) }
+                            is SpreadAssignment -> collectThisSuperRefs(p.expression, out)
+                            // methods/accessors are nested function-likes — excluded
+                            else -> {}
+                        }
+                    }
+                }
+            }
+            // Nested function-likes / class bodies establish their own `this`/`super`
+            // and evaluate lazily — excluded (matches tsc getThisContainer(includeArrowFunctions)).
+            is ArrowFunction, is FunctionExpression, is FunctionDeclaration,
+            is ClassExpression, is ClassDeclaration -> { /* do not descend */ }
+            // ---- statements ----
+            is Block -> node.statements.forEach { collectThisSuperRefs(it, out) }
+            is VariableStatement -> node.declarationList.declarations.forEach { d -> d.initializer?.let { collectThisSuperRefs(it, out) } }
+            is ExpressionStatement -> collectThisSuperRefs(node.expression, out)
+            is IfStatement -> {
+                collectThisSuperRefs(node.expression, out)
+                collectThisSuperRefs(node.thenStatement, out)
+                node.elseStatement?.let { collectThisSuperRefs(it, out) }
+            }
+            is ReturnStatement -> node.expression?.let { collectThisSuperRefs(it, out) }
+            is ThrowStatement -> node.expression?.let { collectThisSuperRefs(it, out) }
+            is ForStatement -> {
+                (node.initializer as? Expression)?.let { collectThisSuperRefs(it, out) }
+                (node.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { collectThisSuperRefs(it, out) } }
+                node.condition?.let { collectThisSuperRefs(it, out) }
+                node.incrementor?.let { collectThisSuperRefs(it, out) }
+                collectThisSuperRefs(node.statement, out)
+            }
+            is ForInStatement -> { collectThisSuperRefs(node.expression, out); collectThisSuperRefs(node.statement, out) }
+            is ForOfStatement -> { collectThisSuperRefs(node.expression, out); collectThisSuperRefs(node.statement, out) }
+            is WhileStatement -> { collectThisSuperRefs(node.expression, out); collectThisSuperRefs(node.statement, out) }
+            is DoStatement -> { collectThisSuperRefs(node.statement, out); collectThisSuperRefs(node.expression, out) }
+            is SwitchStatement -> {
+                collectThisSuperRefs(node.expression, out)
+                for (clause in node.caseBlock) when (clause) {
+                    is CaseClause -> { collectThisSuperRefs(clause.expression, out); clause.statements.forEach { collectThisSuperRefs(it, out) } }
+                    is DefaultClause -> clause.statements.forEach { collectThisSuperRefs(it, out) }
+                    else -> {}
+                }
+            }
+            is TryStatement -> {
+                node.tryBlock.statements.forEach { collectThisSuperRefs(it, out) }
+                node.catchClause?.block?.statements?.forEach { collectThisSuperRefs(it, out) }
+                node.finallyBlock?.statements?.forEach { collectThisSuperRefs(it, out) }
+            }
+            is LabeledStatement -> collectThisSuperRefs(node.statement, out)
+            else -> {}
+        }
+    }
+
+    /**
+     * tsc `isPostSuperFlowNode`: true iff `super()` is guaranteed called on every
+     * path reaching [flow]. Memoized at branch labels to avoid exponential blowup.
+     */
+    private fun isPostSuperFlowNode(flow: FlowNode, cache: HashMap<Int, Boolean>): Boolean {
+        var f = flow
+        while (true) {
+            when (f) {
+                is FlowStart -> return false
+                is FlowUnreachable -> return true // unreachable code is "post-super" to silence errors
+                is FlowCall -> {
+                    if (isSuperIdentifier(f.node.expression)) return true
+                    f = f.antecedent
+                }
+                is FlowAssignment -> f = f.antecedent
+                is FlowCondition -> f = f.antecedent
+                is FlowSwitchClause -> f = f.antecedent
+                is FlowArrayMutation -> f = f.antecedent
+                is FlowBranchLabel -> {
+                    cache[f.id]?.let { return it }
+                    cache[f.id] = false // break cycles conservatively
+                    val result = f.antecedents.isNotEmpty() &&
+                        f.antecedents.all { isPostSuperFlowNode(it, cache) }
+                    cache[f.id] = result
+                    return result
+                }
+                is FlowLoopLabel -> {
+                    val ants = f.antecedents
+                    if (ants.isEmpty()) return false
+                    f = ants[0]
+                }
+                else -> return false
             }
         }
     }
