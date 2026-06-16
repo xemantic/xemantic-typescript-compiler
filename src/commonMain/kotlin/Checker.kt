@@ -21955,6 +21955,102 @@ class Checker(
         return null
     }
 
+    private enum class DefaultExportKind { VALUE_ONLY, TYPE_ELIGIBLE, UNKNOWN }
+
+    /**
+     * B466: classify a module's DEFAULT export as strictly a value, type-eligible,
+     * or uncertain — purely AST-based over the target file's statements (no relation
+     * engine, no merge-polluted symbol flags). Used to decide whether a default-import
+     * alias used in a TYPE position is TS2749 ("refers to a value, but is being used
+     * as a type here"). Any type-eligibility signal OR an unresolvable / cross-module
+     * re-export form returns TYPE_ELIGIBLE/UNKNOWN respectively → suppress TS2749
+     * (conservative — aliases otherwise carry an `Alias` flag that suppresses it
+     * wholesale). VALUE_ONLY fires only when a value default form is found and NO
+     * type form and nothing uncertain.
+     */
+    private fun defaultExportClassification(targetResult: BinderResult): DefaultExportKind {
+        var sawValue = false
+        var sawType = false
+        var sawUnknown = false
+        // Classify a LOCAL name (the target of `export default <ident>` / `export {x as default}`)
+        // by scanning the target file's own declarations of that name.
+        fun classifyLocalName(localName: String) {
+            var foundV = false
+            var foundT = false
+            for (stmt in targetResult.sourceFile.statements) {
+                when (stmt) {
+                    is InterfaceDeclaration -> if (stmt.name.text == localName) foundT = true
+                    is TypeAliasDeclaration -> if (stmt.name.text == localName) foundT = true
+                    is ClassDeclaration -> if (stmt.name?.text == localName) foundT = true // class is type-eligible
+                    is EnumDeclaration -> if (stmt.name.text == localName) foundT = true
+                    is FunctionDeclaration -> if (stmt.name?.text == localName) foundV = true
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text == localName) foundV = true
+                    }
+                    else -> {}
+                }
+            }
+            when {
+                foundT -> sawType = true
+                foundV -> sawValue = true
+                else -> sawUnknown = true // imported / re-exported elsewhere → uncertain
+            }
+        }
+        for (stmt in targetResult.sourceFile.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> if (ModifierFlag.Default in stmt.modifiers) sawType = true
+                is ClassDeclaration -> if (ModifierFlag.Default in stmt.modifiers) sawType = true
+                is FunctionDeclaration -> if (ModifierFlag.Default in stmt.modifiers) sawValue = true
+                is ExportAssignment -> if (!stmt.isExportEquals) {
+                    val e = stmt.expression
+                    if (e is Identifier) classifyLocalName(e.text)
+                    else sawValue = true // `export default {obj}` / 123 / etc. → value
+                }
+                is ExportDeclaration -> {
+                    val clause = stmt.exportClause as? NamedExports
+                    if (clause != null) {
+                        for (spec in clause.elements) {
+                            if (spec.name.text != "default") continue
+                            if (stmt.moduleSpecifier != null) { sawUnknown = true; continue }
+                            classifyLocalName((spec.propertyName ?: spec.name).text)
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return when {
+            sawType -> DefaultExportKind.TYPE_ELIGIBLE
+            sawUnknown -> DefaultExportKind.UNKNOWN
+            sawValue -> DefaultExportKind.VALUE_ONLY
+            else -> DefaultExportKind.UNKNOWN
+        }
+    }
+
+    /**
+     * B466: true iff `name` is a DEFAULT import (`import X from "./mod"`) declared
+     * IN the current file (`fileName`) whose target module's default export is
+     * unambiguously a value (see [defaultExportClassification]). Used to fire TS2749
+     * when X is used as a type. The current-file restriction is load-bearing: the
+     * merged symbol's `declarations` list is polluted with same-name imports from
+     * OTHER files (CLAUDE.md: `mergeSymbolTable` addAll), so we must scan the current
+     * file's own `import` statements, not the symbol declarations.
+     */
+    private fun defaultImportIsStrictlyValue(name: String, fileName: String): Boolean {
+        val ownStatements = fileResults[fileName]?.sourceFile?.statements ?: return false
+        for (stmt in ownStatements) {
+            if (stmt !is ImportDeclaration) continue
+            val clauseName = stmt.importClause?.name ?: continue
+            if (clauseName.text != name) continue
+            if (stmt.importClause?.isTypeOnly == true) return false
+            val specifier = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: return false
+            val targetFile = resolveModuleSpecifier(specifier, stmt) ?: return false
+            val targetResult = fileResults[targetFile] ?: return false
+            return defaultExportClassification(targetResult) == DefaultExportKind.VALUE_ONLY
+        }
+        return false
+    }
+
     private fun checkUnresolvedInTypeCore(
         type: TypeNode,
         scope: NameScope,
@@ -23518,7 +23614,7 @@ class Checker(
      * returns false (suppressing TS2749) whenever ANY type-eligibility signal exists,
      * to avoid FPs in cases where our scope tracking is incomplete.
      */
-    private fun isValueOnlyTypeRef(name: String, scope: NameScope): Boolean {
+    private fun isValueOnlyTypeRef(name: String, scope: NameScope, fileName: String): Boolean {
         // Type params and types added via scope.addType (class/interface/type-alias/enum)
         // are unambiguously type-eligible.
         if (scope.hasType(name)) return false
@@ -23532,7 +23628,11 @@ class Checker(
         // as type-eligible (alias may resolve to a type cross-file; conservative pass).
         val sym = currentFileLocals?.get(name) ?: globals[name]
         if (sym != null) {
-            if (sym.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module or SymbolFlags.Alias)) return false
+            if (sym.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module)) return false
+            // B466: an alias MAY resolve to a type cross-file → conservatively suppress,
+            // EXCEPT a default import whose target's default export is unambiguously a
+            // value (no type meaning) — that IS a value used as a type (TS2749).
+            if (sym.flags.hasAny(SymbolFlags.Alias)) return defaultImportIsStrictlyValue(name, fileName)
             // Only fire when symbol is unambiguously a value (Variable/Function/etc.).
             return sym.flags.hasAny(SymbolFlags.Value)
         }
@@ -23644,7 +23744,7 @@ class Checker(
         if (scope.has(name) && !proxyLibStripped) {
             // 16.4ct: TS2749 — name is in scope but is value-only (var/function/etc.)
             // and being used in a type position. E.g. `var X: X` self-reference.
-            if (inTypePosition && isValueOnlyTypeRef(name, scope)) {
+            if (inTypePosition && isValueOnlyTypeRef(name, scope, fileName)) {
                 val start = node.pos
                 val length = name.length
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -62385,20 +62485,59 @@ interface DataView {
                 }
             }
 
-            // TS2528 pass — an `export default interface` MERGES with a class-valued
-            // export-assignment default (class+interface declaration merging), so it is
-            // NOT a participant when such a REF_VALUE-to-class default exists (B274;
-            // a type-alias/interface ref can't merge with anything, so the interface
-            // stays a participant there — exportDefaultAlias_excludesEverything).
+            // TS2528 pass — an `export default interface` is TYPE-space only, so it
+            // MERGES with any VALUE-providing default (class-valued ref, an EXPR/value
+            // DECL, or a local `export { value as default }` re-export). It is then NOT
+            // a TS2528 participant (B274 / B466 — class+interface decl merging extended
+            // to the type-default + value-default merge of `allowImportClausesToMergeWithTypes`).
+            // A type-alias/interface ref-default can't merge (both type-space) so the
+            // interface stays a participant there (exportDefaultAlias_excludesEverything).
             // The related-info "last" anchor is the last PARTICIPANT.
             val participants = if (emitTs2528) {
-                val hasClassRef = defaults.any { d ->
-                    d.kind == DefaultDeclKind.REF_VALUE &&
-                        ((d.stmt as? ExportAssignment)?.expression as? Identifier)?.let { id ->
-                            result.locals[id.text]?.declarations?.any { it is ClassDeclaration }
-                        } == true
+                // Does a local `export { X as default }` re-export a VALUE? (no `from` clause;
+                // X declared as class/function/enum/var in this file, or a default-import of
+                // a value-providing module default). Conservative: false unless confident.
+                fun reexportLocalProvidesValue(localName: String): Boolean {
+                    for (stmt in result.sourceFile.statements) {
+                        when (stmt) {
+                            is ClassDeclaration -> if (stmt.name?.text == localName) return true
+                            is FunctionDeclaration -> if (stmt.name?.text == localName) return true
+                            is EnumDeclaration -> if (stmt.name.text == localName) return true
+                            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                                if ((d.name as? Identifier)?.text == localName) return true
+                            }
+                            is ImportDeclaration -> {
+                                val ic = stmt.importClause ?: continue
+                                if (ic.isTypeOnly) continue
+                                if (ic.name?.text != localName) continue
+                                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                                val tf = resolveModuleSpecifier(spec, stmt) ?: continue
+                                val tr = fileResults[tf] ?: continue
+                                if (defaultExportClassification(tr) == DefaultExportKind.VALUE_ONLY) return true
+                            }
+                            else -> {}
+                        }
+                    }
+                    return false
                 }
-                defaults.filterNot { hasClassRef && it.kind == DefaultDeclKind.DECL && it.stmt is InterfaceDeclaration }
+                val hasValueDefault = defaults.any { d ->
+                    when (d.kind) {
+                        DefaultDeclKind.REF_VALUE, DefaultDeclKind.EXPR -> true
+                        DefaultDeclKind.DECL ->
+                            d.stmt is ClassDeclaration || d.stmt is FunctionDeclaration
+                        DefaultDeclKind.REEXPORT -> {
+                            val ed = d.stmt as? ExportDeclaration
+                            // local re-export only (no `from` clause)
+                            ed != null && ed.moduleSpecifier == null &&
+                                (ed.exportClause as? NamedExports)?.elements?.any { spec ->
+                                    spec.name.text == "default" &&
+                                        reexportLocalProvidesValue((spec.propertyName ?: spec.name).text)
+                                } == true
+                        }
+                        DefaultDeclKind.REF_TYPE -> false
+                    }
+                }
+                defaults.filterNot { hasValueDefault && it.kind == DefaultDeclKind.DECL && it.stmt is InterfaceDeclaration }
                     .ifEmpty { defaults }
             } else emptyList()
             if (!emitTs2528 || participants.size < 2) continue
