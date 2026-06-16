@@ -1213,6 +1213,10 @@ class Checker(
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
         checkMissingImplementations()
+        // 17c. B460: generic-call contextual arrow-return mismatch (TS2741) for the
+        // narrow "≥2 bare-TP value params + function-typed-of-TP params + arrow args"
+        // shape (typeParameterFixingWithContextSensitiveArguments2/3).
+        checkGenericCallContextualArrowReturns()
         // 18. Check unreachable code (TS7027)
         if (options.allowUnreachableCode == false) {
             checkUnreachableCode()
@@ -40771,6 +40775,158 @@ interface DataView {
             else -> null
         }
         else -> null
+    }
+
+    // -----------------------------------------------------------------------
+    // B460: generic-call contextual arrow-return mismatch (TS2741)
+    // -----------------------------------------------------------------------
+    /**
+     * Detects the narrow generic-inference shape that the broad inference path
+     * deliberately leaves uncovered (CLAUDE.md round-79l): a call to a top-level
+     * generic FunctionDeclaration `f<T,U,…>(a: T, b: U, …, cb: (x: T) => U, …)`
+     * with ≥2 BARE-TYPE-PARAM value params (anchors that pin the TPs) and ≥1
+     * function-typed param `(x: TP) => TP`, where an arrow ARG's body return type
+     * does not satisfy the substituted expected return → TS2741.
+     *
+     * FP firewall (excludes the documented regressors genericCombinators2 /
+     * contextualTypingOfGenericFunctionTypedArguments1, which use generic-REFERENCE
+     * value params `c: Collection<T>` and METHOD calls): the gate requires a bare
+     * IDENTIFIER callee resolving to a top-level generic FunctionDeclaration, EVERY
+     * value param to be either a bare-TP ref or a `(…)=>…` FunctionType (any other
+     * shape bails the whole call), ≥2 bare-TP params, every TP inferable from a
+     * bare-TP arg to a concrete type, and the arrow body a simple identifier /
+     * `param.prop` access. Firing requires a genuine missing required property in
+     * the substituted return — always a real error in tsc.
+     */
+    private fun checkGenericCallContextualArrowReturns() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
+            val source = result.sourceFile.text
+            val genFns = mutableMapOf<String, FunctionDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
+                    val nm = stmt.name?.text ?: continue
+                    if (nm !in genFns) genFns[nm] = stmt
+                }
+            }
+            if (genFns.isEmpty()) continue
+            walkGenericArrowCalls(result.sourceFile.statements, genFns, source, fileName)
+        }
+    }
+
+    private fun walkGenericArrowCalls(
+        stmts: List<Statement>, genFns: Map<String, FunctionDeclaration>, source: String, fileName: String,
+    ) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                (d.initializer as? CallExpression)?.let { processGenericArrowCall(it, genFns, source, fileName) }
+            }
+            is ExpressionStatement -> (stmt.expression as? CallExpression)?.let {
+                processGenericArrowCall(it, genFns, source, fileName)
+            }
+            is Block -> walkGenericArrowCalls(stmt.statements, genFns, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkGenericArrowCalls(it.statements, genFns, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { walkGenericArrowCalls(it.statements, genFns, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun resolveTpNode(node: TypeNode?, tpMap: Map<String, Type>): Type? {
+        if (node == null) return null
+        if (node is TypeReference && node.typeArguments.isNullOrEmpty()) {
+            val nm = (node.typeName as? Identifier)?.text
+            if (nm != null && tpMap.containsKey(nm)) return tpMap[nm]
+        }
+        val t = try { getTypeFromTypeNode(node) } catch (_: StackOverflowError) { return null }
+        return if (t === errorType) null else t
+    }
+
+    private fun processGenericArrowCall(
+        call: CallExpression, genFns: Map<String, FunctionDeclaration>, source: String, fileName: String,
+    ) {
+        val callee = call.expression as? Identifier ?: return
+        val fd = genFns[callee.text] ?: return
+        if (!call.typeArguments.isNullOrEmpty()) return // explicit type args: standard path
+        val tpNames = fd.typeParameters!!.mapNotNull { (it.name as? Identifier)?.text ?: it.name.text }.toSet()
+        if (tpNames.isEmpty()) return
+        val params = fd.parameters
+        val args = call.arguments ?: return
+        val bareTpParams = mutableListOf<Pair<Int, String>>()
+        val fnTypedParams = mutableListOf<Pair<Int, FunctionType>>()
+        for ((i, p) in params.withIndex()) {
+            val t = p.type
+            when {
+                t is TypeReference && t.typeArguments.isNullOrEmpty() &&
+                    (t.typeName as? Identifier)?.text in tpNames ->
+                    bareTpParams.add(i to (t.typeName as Identifier).text)
+                t is FunctionType -> fnTypedParams.add(i to t)
+                else -> return // unhandled param shape → bail whole call (FP firewall)
+            }
+        }
+        if (bareTpParams.size < 2 || fnTypedParams.isEmpty()) return
+        val tpMap = mutableMapOf<String, Type>()
+        for ((i, tpName) in bareTpParams) {
+            if (i >= args.size) return
+            val arg = args[i]
+            if (arg is SpreadElement) return
+            val at = try { widenType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return }
+            if (at === errorType || at === anyType) return
+            if (!tpMap.containsKey(tpName)) tpMap[tpName] = at
+        }
+        if (!tpNames.all { tpMap.containsKey(it) }) return
+        for ((i, ft) in fnTypedParams) {
+            if (i >= args.size) continue
+            val arrow = args[i] as? ArrowFunction ?: continue
+            if (arrow.parameters.size != 1 || ft.parameters.size != 1) continue
+            val arrowParamName = (arrow.parameters[0].name as? Identifier)?.text ?: continue
+            val substParamType = resolveTpNode(ft.parameters[0].type, tpMap) ?: continue
+            val substRetType = resolveTpNode(ft.type, tpMap) ?: continue
+            val arrowRet: Type = when (val body = arrow.body) {
+                is Identifier -> if (body.text == arrowParamName) substParamType else continue
+                is PropertyAccessExpression -> {
+                    val recv = body.expression
+                    if (recv is Identifier && recv.text == arrowParamName)
+                        getPropertyOfType(substParamType, body.name.text)?.let { getTypeOfSymbol(it) } ?: continue
+                    else continue
+                }
+                else -> continue
+            }
+            if (substRetType !is Type.Object || arrowRet !is Type.Object) continue
+            val missing = collectMissingProperties(arrowRet, substRetType)
+            if (missing.size != 1) continue // single-missing only (TS2741); multi defers
+            val propName = missing[0]
+            val bodyExpr = arrow.body as Expression
+            val start = bodyExpr.pos
+            val length = (expressionTrueEnd(bodyExpr) - start).coerceAtLeast(1)
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            val related = mutableListOf<Diagnostic>()
+            getPropertyOfType(substRetType, propName)?.valueDeclaration?.let { decl ->
+                val declPos = (decl as? PropertyDeclaration)?.name?.pos ?: decl.pos
+                val (dl, dc) = getLineAndCharacterOfPosition(source, declPos)
+                related.add(Diagnostic(
+                    message = "'$propName' is declared here.",
+                    category = DiagnosticCategory.Message, code = 2728,
+                    fileName = fileName, line = dl, character = dc, start = declPos, length = propName.length,
+                ))
+            }
+            run {
+                val (rl, rc) = getLineAndCharacterOfPosition(source, ft.pos)
+                related.add(Diagnostic(
+                    message = "The expected type comes from the return type of this signature.",
+                    category = DiagnosticCategory.Message, code = 6502,
+                    fileName = fileName, line = rl, character = rc,
+                    start = ft.pos, length = (ft.type.end - ft.pos).coerceAtLeast(1),
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' is missing in type '${typeToString(arrowRet)}' but required in type '${typeToString(substRetType)}'.",
+                category = DiagnosticCategory.Error, code = 2741,
+                fileName = fileName, line = line, character = ch, start = start, length = length,
+                relatedInformation = related,
+            ))
+        }
     }
 
     private fun checkMissingImplInStatements(
