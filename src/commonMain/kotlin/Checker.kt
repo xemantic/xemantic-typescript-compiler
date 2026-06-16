@@ -76293,7 +76293,7 @@ interface DataView {
                 }
                 when (member) {
                     is PropertyDeclaration -> {
-                        val name = getMemberName(member.name) ?: continue
+                        val name = getMemberName(member.name) ?: computedLiteralKey(member.name) ?: continue
                         val propSymbol = Symbol(SymbolFlags.Property, name)
                         propSymbol.declarations.add(member)
                         propSymbol.valueDeclaration = member
@@ -76648,6 +76648,22 @@ interface DataView {
                     if (recv is Identifier && recv.text == "Symbol") "[Symbol.${e.name.text}]" else null
                 } else null
             }
+            else -> null
+        }
+    }
+
+    /** B451: a computed member/property name `[<literal>]` whose inner expression is a
+     *  numeric or string literal is a STATIC key (`[2]`→"2", `["bar"]`→"bar") — tsc
+     *  treats these like the bare `2`/`"bar"` forms. Returns null for genuinely dynamic
+     *  computed names (`[expr]`, `[Symbol.x]`, `[`tmpl`]`). Applied ONLY at the
+     *  type-BUILDING sites (object-literal / interface-class member maps), NOT the shared
+     *  [getMemberName] (which feeds duplicate-detection / abstract-tracking). Unblocks
+     *  `literalsInComputedProperties1` (`x[2]`/`y[2]`/`z[2]` resolving). */
+    private fun computedLiteralKey(name: NameNode): String? {
+        val cpn = name as? ComputedPropertyName ?: return null
+        return when (val e = cpn.expression) {
+            is NumericLiteralNode -> e.text
+            is StringLiteralNode -> e.text
             else -> null
         }
     }
@@ -78092,6 +78108,7 @@ interface DataView {
                         is Identifier -> n.text
                         is StringLiteralNode -> n.text
                         is NumericLiteralNode -> n.text
+                        is ComputedPropertyName -> computedLiteralKey(n) ?: continue
                         else -> continue
                     }
                     val propCtx = ctxObj?.members?.get(name)?.let { sym ->
@@ -95894,6 +95911,13 @@ interface DataView {
         is Identifier -> nameNode.text
         is StringLiteralNode -> nameNode.text
         is NumericLiteralNode -> nameNode.text
+        // B451: a computed member name `[2]`/`["4"]` with a literal inner is a STATIC key,
+        // so `z[2]` resolves against the instance member rather than FP'ing TS2339.
+        is ComputedPropertyName -> when (val e = nameNode.expression) {
+            is NumericLiteralNode -> e.text
+            is StringLiteralNode -> e.text
+            else -> null
+        }
         else -> null
     }
 

@@ -193,6 +193,14 @@ class Binder(private val options: CompilerOptions) {
                 is Identifier -> n.text
                 is StringLiteralNode -> n.text
                 is NumericLiteralNode -> n.text
+                // B451: a computed enum member name `["bar"]`/`[2]` whose inner expression
+                // is a string/numeric literal is a STATIC member key (so `X["bar"]` resolves
+                // and doesn't FP TS7015). Dynamic computed names stay unbound.
+                is ComputedPropertyName -> when (val e = n.expression) {
+                    is StringLiteralNode -> e.text
+                    is NumericLiteralNode -> e.text
+                    else -> continue
+                }
                 else -> continue
             }
             val memberSymbol = declareSymbol(memberScope, memberName, SymbolFlags.EnumMember, member)

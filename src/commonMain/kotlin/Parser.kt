@@ -3493,6 +3493,20 @@ class Parser(
         )
     }
 
+    /** tsc isNumericLiteralName: a string is a numeric name iff `String(Number(s)) === s`
+     *  ("3"/"1.5"/"-1" canonical; "03"/"1e3"/"13e-1"/"foo" are NOT). Used for TS2452 on
+     *  string / computed-string enum member names (B451). */
+    private fun isEnumNumericName(s: String): Boolean {
+        if (s.isEmpty()) return false
+        val d = s.toDoubleOrNull() ?: return false
+        val canonical = if (d == d.toLong().toDouble() && 'e' !in s && 'E' !in s) {
+            d.toLong().toString()
+        } else {
+            d.toString()
+        }
+        return canonical == s
+    }
+
     private fun parseEnumDeclaration(
         modifiers: Set<ModifierFlag> = emptySet(),
         outerComments: List<Comment>? = null,
@@ -3518,10 +3532,17 @@ class Parser(
             val mPos = getPos()
             val mLeading = leadingComments()
             val mName = parsePropertyName()
-            // 17.183: TS2452 — enum member cannot have a numeric (or bigint)
-            // name. `parsePropertyName` returns NumericLiteralNode for `0` /
-            // `1.5` / etc. and BigIntLiteralNode for `0n`. Squiggle on the
-            // literal text length.
+            // True source end of the name node (incl. closing bracket/quote) — avoids the
+            // node.end overshoot for ComputedPropertyName/StringLiteralNode spans (B451).
+            val mNameEnd = scanner.getPrevTokenEnd()
+            // 17.183: TS2452 — enum member cannot have a numeric (or bigint) name.
+            // `parsePropertyName` returns NumericLiteralNode for `0`/`1.5`, BigIntLiteralNode
+            // for `0n`, StringLiteralNode for `"3"`, and ComputedPropertyName for `[2]`/`["4"]`.
+            // tsc fires for a numeric/bigint literal name, a numeric-CANONICAL string name
+            // (`"3"` yes, `"13e-1"` no — isNumericLiteralName), or a computed name whose inner
+            // expression is one of those (B451 — `literalsInComputedProperties1`). Span covers
+            // the whole name node (literal text for numeric/bigint; getPrevTokenEnd for the
+            // string/computed forms so quotes/brackets are included).
             when (mName) {
                 is NumericLiteralNode -> reportError(
                     "An enum member cannot have a numeric name.",
@@ -3531,7 +3552,24 @@ class Parser(
                     "An enum member cannot have a numeric name.",
                     code = 2452, overrideStart = mName.pos, overrideLength = mName.text.length,
                 )
-                else -> { /* Identifier / StringLiteralNode / ComputedPropertyName ok */ }
+                is StringLiteralNode -> if (isEnumNumericName(mName.text)) reportError(
+                    "An enum member cannot have a numeric name.",
+                    code = 2452, overrideStart = mName.pos,
+                    overrideLength = (mNameEnd - mName.pos).coerceAtLeast(1),
+                )
+                is ComputedPropertyName -> {
+                    val numeric = when (val inner = mName.expression) {
+                        is NumericLiteralNode, is BigIntLiteralNode -> true
+                        is StringLiteralNode -> isEnumNumericName(inner.text)
+                        else -> false
+                    }
+                    if (numeric) reportError(
+                        "An enum member cannot have a numeric name.",
+                        code = 2452, overrideStart = mName.pos,
+                        overrideLength = (mNameEnd - mName.pos).coerceAtLeast(1),
+                    )
+                }
+                else -> { /* Identifier ok */ }
             }
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
             val mTrailing = scanner.getTrailingComments()
