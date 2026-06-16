@@ -1732,6 +1732,8 @@ class Checker(
         checkReverseMappedExcessProps()
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         checkEnumForwardReferences()
+        // 72b2. Const-enum cluster: TS2474/2475/2476/2477/2478/2567 (AST + const-eval).
+        checkConstEnumDiagnostics()
         // 72c. Setter bodies may not return a value (TS2408)
         checkSetterReturns()
         // 72d. A class's own name used in a direct member's computed property name is a
@@ -3258,6 +3260,271 @@ class Checker(
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
             walk(result.sourceFile.statements, { nm -> result.locals[nm] ?: globals[nm] }, source, fileName)
+        }
+    }
+
+    /**
+     * Const-enum diagnostic cluster (constEnumErrors), all AST/constant-eval — no
+     * relation engine. Six checks, gated tightly to const enums (rare shape):
+     *  - TS2474: a const enum member initializer that is not a constant expression
+     *    (references a NON-existent member via `E.X`/`E["X"]`). Distinct from a
+     *    forward-reference to an existing-but-later member (that is TS2651). Squiggle = init expr.
+     *  - TS2477: the member initializer evaluates to a non-finite (±Infinity) value.
+     *  - TS2478: the member initializer evaluates to NaN. Both squiggle the init expr.
+     *  - TS2476: a const-enum element access `E[x]` whose index is not a string literal.
+     *    Squiggle = the index argument.
+     *  - TS2475: a const-enum NAME used as a value (anywhere that is not a property/element
+     *    access base, a `typeof` operand, or an import/export-= RHS). Squiggle = the name.
+     *  - TS2567: a const enum merging with an INSTANTIATED same-name namespace (two runtime
+     *    objects); fires on BOTH the enum name and the namespace name.
+     */
+    private fun checkConstEnumDiagnostics() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val constEnumDecls = mutableListOf<EnumDeclaration>()
+            collectConstEnumDecls(stmts, constEnumDecls)
+            if (constEnumDecls.isEmpty()) continue
+
+            // --- declaration-level: TS2474 / TS2477 / TS2478 ---
+            for (enumDecl in constEnumDecls) {
+                val sym = result.locals[enumDecl.name.text] ?: globals[enumDecl.name.text] ?: continue
+                if (!sym.flags.hasAny(SymbolFlags.ConstEnum)) continue
+                computeEnumSymbolValues(sym)
+                val values = enumValues[sym.id] ?: emptyMap()
+                val memberNames = mutableSetOf<String>()
+                for (d in sym.declarations) if (d is EnumDeclaration) for (m in d.members)
+                    constEnumMemberName(m.name)?.let { memberNames.add(it) }
+                for (member in enumDecl.members) {
+                    val mName = constEnumMemberName(member.name) ?: continue
+                    val init = member.initializer
+                    val v = values[mName]
+                    if (v is ConstantValue.NumberValue && init != null) {
+                        if (v.value.isNaN()) {
+                            emitConstEnumInitDiag(init, source, fileName, 2478,
+                                "'const' enum member initializer was evaluated to disallowed value 'NaN'.")
+                            continue
+                        } else if (v.value.isInfinite()) {
+                            emitConstEnumInitDiag(init, source, fileName, 2477,
+                                "'const' enum member initializer was evaluated to a non-finite value.")
+                            continue
+                        }
+                    }
+                    // TS2474: init references a non-existent member of this enum.
+                    if (init != null && constEnumInitRefsNonMember(init, enumDecl.name.text, memberNames)) {
+                        emitConstEnumInitDiag(init, source, fileName, 2474,
+                            "const enum member initializers must be constant expressions.")
+                    }
+                }
+            }
+
+            // --- merge: TS2567 const enum + instantiated same-name namespace ---
+            run {
+                val byName = mutableMapOf<String, MutableList<Node>>()
+                for (stmt in stmts) when (stmt) {
+                    is EnumDeclaration -> if (ModifierFlag.Const in stmt.modifiers)
+                        byName.getOrPut(stmt.name.text) { mutableListOf() }.add(stmt)
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let {
+                        if (isNamespaceInstantiated(stmt)) byName.getOrPut(it.text) { mutableListOf() }.add(stmt)
+                    }
+                    else -> {}
+                }
+                for ((_, group) in byName) {
+                    val hasConstEnum = group.any { it is EnumDeclaration }
+                    val hasInstNs = group.any { it is ModuleDeclaration }
+                    if (!hasConstEnum || !hasInstNs) continue
+                    for (decl in group) {
+                        val nameNode = when (decl) {
+                            is EnumDeclaration -> decl.name
+                            is ModuleDeclaration -> decl.name as? Identifier
+                            else -> null
+                        } ?: continue
+                        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Enum declarations can only merge with namespace or other enum declarations.",
+                            category = DiagnosticCategory.Error, code = 2567,
+                            fileName = fileName, line = line, character = ch,
+                            start = nameNode.pos, length = nameNode.text.length,
+                        ))
+                    }
+                }
+            }
+
+            // --- usage: TS2475 (value position) / TS2476 (non-string-literal index) ---
+            for (stmt in stmts) walkConstEnumUsageStmt(stmt, result, source, fileName)
+        }
+    }
+
+    /** Position right after the closing backtick of a template literal that starts at [start]. */
+    private fun constEnumTemplateEnd(source: String, start: Int): Int {
+        var i = start + 1 // skip opening backtick
+        while (i < source.length) {
+            when (source[i]) {
+                '\\' -> i += 2
+                '`' -> return i + 1
+                '$' -> if (i + 1 < source.length && source[i + 1] == '{') {
+                    var depth = 1; i += 2
+                    while (i < source.length && depth > 0) {
+                        when (source[i]) { '{' -> depth++; '}' -> depth-- }
+                        i++
+                    }
+                } else i++
+                else -> i++
+            }
+        }
+        return i
+    }
+
+    private fun collectConstEnumDecls(stmts: List<Statement>, out: MutableList<EnumDeclaration>) {
+        for (stmt in stmts) when (stmt) {
+            is EnumDeclaration -> if (ModifierFlag.Const in stmt.modifiers) out.add(stmt)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectConstEnumDecls(it.statements, out) }
+            else -> {}
+        }
+    }
+
+    private fun constEnumMemberName(node: Node): String? = when (node) {
+        is Identifier -> node.text
+        is StringLiteralNode -> node.text
+        is NumericLiteralNode -> node.text
+        else -> null
+    }
+
+    private fun emitConstEnumInitDiag(init: Expression, source: String, fileName: String, code: Int, message: String) {
+        val start = init.pos
+        val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message, category = DiagnosticCategory.Error, code = code,
+            fileName = fileName, line = line, character = ch, start = start, length = length,
+        ))
+    }
+
+    /** True if [init] references a NON-existent member of [enumName] via `E.X`/`E["X"]`
+     *  (a forward-reference to an existing member is TS2651, not TS2474). */
+    private fun constEnumInitRefsNonMember(init: Expression, enumName: String, memberNames: Set<String>): Boolean {
+        var found = false
+        fun walk(e: Expression?) {
+            if (e == null || found) return
+            when (e) {
+                is PropertyAccessExpression -> {
+                    if ((e.expression as? Identifier)?.text == enumName && e.name.text !in memberNames) found = true
+                    else walk(e.expression)
+                }
+                is ElementAccessExpression -> {
+                    val key = (e.argumentExpression as? StringLiteralNode)?.text
+                        ?: (e.argumentExpression as? NoSubstitutionTemplateLiteralNode)?.text
+                    if ((e.expression as? Identifier)?.text == enumName && key != null && key !in memberNames) found = true
+                    else { walk(e.expression); walk(e.argumentExpression) }
+                }
+                is BinaryExpression -> { walk(e.left); walk(e.right) }
+                is PrefixUnaryExpression -> walk(e.operand)
+                is PostfixUnaryExpression -> walk(e.operand)
+                is ParenthesizedExpression -> walk(e.expression)
+                is ConditionalExpression -> { walk(e.condition); walk(e.whenTrue); walk(e.whenFalse) }
+                else -> {}
+            }
+        }
+        walk(init)
+        return found
+    }
+
+    private fun walkConstEnumUsageStmt(stmt: Statement, result: BinderResult, source: String, fileName: String) {
+        val isConstEnumName = { id: Identifier ->
+            val s = result.locals[id.text] ?: globals[id.text]
+            s != null && resolveAlias(s).flags.hasAny(SymbolFlags.ConstEnum)
+        }
+        // Walk a value expression. `asValue` = true when the expression occupies a value
+        // position where a bare const-enum reference is illegal (TS2475).
+        fun walkExpr(e: Expression?) {
+            if (e == null) return
+            when (e) {
+                is Identifier -> if (isConstEnumName(e)) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, e.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'const' enums can only be used in property or index access expressions or the right hand side of an import declaration or export assignment or type query.",
+                        category = DiagnosticCategory.Error, code = 2475,
+                        fileName = fileName, line = line, character = ch, start = e.pos, length = e.text.length,
+                    ))
+                }
+                is PropertyAccessExpression -> {
+                    // `E.A` — E is a valid base; don't flag E, but recurse if base isn't a const enum.
+                    if (!(e.expression is Identifier && isConstEnumName(e.expression as Identifier))) walkExpr(e.expression)
+                }
+                is ElementAccessExpression -> {
+                    val baseIsConstEnum = e.expression is Identifier && isConstEnumName(e.expression as Identifier)
+                    if (!baseIsConstEnum) walkExpr(e.expression)
+                    else {
+                        // TS2476: const-enum member access must use a string literal.
+                        val arg = e.argumentExpression
+                        val isStringLit = arg is StringLiteralNode || arg is NoSubstitutionTemplateLiteralNode
+                        if (!isStringLit) {
+                            val start = arg.pos
+                            // `expressionTrueEnd` overshoots a TemplateExpression (no dedicated
+                            // branch) — scan for the closing backtick (skipping `${...}` spans).
+                            val trueEnd = if (arg is TemplateExpression) constEnumTemplateEnd(source, start) else expressionTrueEnd(arg)
+                            val length = (trueEnd - start).coerceAtLeast(1)
+                            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "A const enum member can only be accessed using a string literal.",
+                                category = DiagnosticCategory.Error, code = 2476,
+                                fileName = fileName, line = line, character = ch, start = start, length = length,
+                            ))
+                        }
+                    }
+                    walkExpr(e.argumentExpression)
+                }
+                is CallExpression -> { walkExpr(e.expression); e.arguments.forEach { walkExpr(it) } }
+                is NewExpression -> { walkExpr(e.expression); e.arguments?.forEach { walkExpr(it) } }
+                is BinaryExpression -> { walkExpr(e.left); walkExpr(e.right) }
+                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
+                is ParenthesizedExpression -> walkExpr(e.expression)
+                is PrefixUnaryExpression -> walkExpr(e.operand)
+                is PostfixUnaryExpression -> walkExpr(e.operand)
+                is NonNullExpression -> walkExpr(e.expression)
+                is AsExpression -> walkExpr(e.expression)
+                is SatisfiesExpression -> walkExpr(e.expression)
+                is TypeAssertionExpression -> walkExpr(e.expression)
+                is SpreadElement -> walkExpr(e.expression)
+                is AwaitExpression -> walkExpr(e.expression)
+                is VoidExpression -> walkExpr(e.expression)
+                is DeleteExpression -> walkExpr(e.expression)
+                is YieldExpression -> walkExpr(e.expression)
+                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
+                is CommaListExpression -> e.elements.forEach { walkExpr(it) }
+                is TemplateExpression -> e.templateSpans.forEach { walkExpr(it.expression) }
+                is TaggedTemplateExpression -> { walkExpr(e.tag); (e.template as? Expression)?.let { walkExpr(it) } }
+                is ObjectLiteralExpression -> for (p in e.properties) when (p) {
+                    is PropertyAssignment -> walkExpr(p.initializer)
+                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { walkExpr(it) }
+                    is SpreadAssignment -> walkExpr(p.expression)
+                    else -> {}
+                }
+                // TypeOfExpression operand is a type-query value (valid for const enums) — don't flag.
+                // Nested function-likes: walk via the statement walker below.
+                else -> {}
+            }
+        }
+        when (stmt) {
+            is VariableStatement -> stmt.declarationList.declarations.forEach { walkExpr(it.initializer) }
+            is ExpressionStatement -> walkExpr(stmt.expression)
+            is ReturnStatement -> walkExpr(stmt.expression)
+            is ThrowStatement -> walkExpr(stmt.expression)
+            is IfStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.thenStatement, result, source, fileName); stmt.elseStatement?.let { walkConstEnumUsageStmt(it, result, source, fileName) } }
+            is Block -> stmt.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
+            is ForStatement -> { (stmt.initializer as? Expression)?.let { walkExpr(it) }; (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { walkExpr(it.initializer) }; stmt.condition?.let { walkExpr(it) }; stmt.incrementor?.let { walkExpr(it) }; walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
+            is ForInStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
+            is ForOfStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
+            is WhileStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
+            is DoStatement -> { walkConstEnumUsageStmt(stmt.statement, result, source, fileName); walkExpr(stmt.expression) }
+            is SwitchStatement -> { walkExpr(stmt.expression); for (c in stmt.caseBlock) when (c) { is CaseClause -> { walkExpr(c.expression); c.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) } }; is DefaultClause -> c.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; else -> {} } }
+            is TryStatement -> { stmt.tryBlock.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; stmt.catchClause?.block?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; stmt.finallyBlock?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) } }
+            is LabeledStatement -> walkConstEnumUsageStmt(stmt.statement, result, source, fileName)
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
+            else -> {}
         }
     }
 
