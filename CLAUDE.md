@@ -650,6 +650,8 @@ instead of fixing it.
 
 **Note:** All failures are deterministic (confirmed via 5-run study). Count variance between runs is caused entirely by dirty binary cache from interrupted runs, not JVM instability. **Gradle wipes XMLs when run with `--tests '*Name*'`** — the full suite must be re-run before `find_candidates.py` can report accurate results; the script warns if the XML count is below the expected ~27.
 
+- **When hand-parsing JUnit XML to enumerate failing tests, use a real XML parser (`xml.etree.ElementTree`), NEVER a regex like `<testcase name="X"[^>]*>(.*?)</testcase>`.** JUnit emits PASSED testcases as self-closing `<testcase .../>` (no body) and FAILED ones with a `<failure>` child. A naive regex consumes a passed test's `/>`, then `(.*?)</testcase>` captures the NEXT (failing) testcase's body and ATTRIBUTES that failure to the passed test — silently shifting names and producing a garbage failing-list. This caused round-174's false "338/364 failures are order-dependent" conclusion (which mis-promoted B450); round-175 re-measured with `xml.etree` and found the 364 failures are GENUINE and DETERMINISTIC (running the failing-base patterns as an isolated batch reproduces all 364). The "Test ordering sensitivity" gotcha above is real but bounded (~25–50 boundary tests, both directions), not the bulk of the failing set.
+
 ## Anti-patterns to avoid
 
 - Do not add content to this file that is already discoverable by reading the source or build scripts — that inflates context without adding signal, reducing AI agent task success rates (see [arxiv 2602.11988](https://arxiv.org/abs/2602.11988)).
