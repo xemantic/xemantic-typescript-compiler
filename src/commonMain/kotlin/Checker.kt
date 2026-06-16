@@ -1773,6 +1773,10 @@ class Checker(
         if (binderResults.size > 1) {
             checkGlobalNamespaceMemberConflicts()
         }
+        // 73g'' (B449). cross-file global `type N` (script) + `namespace N` (script) → TS2649.
+        if (binderResults.size > 1) {
+            checkCrossFileTypeAliasNamespaceConflict()
+        }
         // 73h. Check block-scoped export re-declared via module augmentation(s) (TS2451)
         if (binderResults.size > 1) {
             checkCrossFileModuleAugmentationDuplicates()
@@ -119607,6 +119611,59 @@ interface DataView {
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * B449 (noSymbolForMergeCrash): a top-level `type N = …` in a SCRIPT file, where N
+     * ALSO has a top-level `namespace N`/`module N` declaration in a DIFFERENT SCRIPT
+     * file, is a cross-file global-scope merge that tsc rejects with TS2649 "Cannot
+     * augment module 'N' with value exports because it resolves to a non-module entity."
+     * at the type-alias name (the type alias is the "non-module entity" the namespace
+     * cannot merge with). The binder's symbol tables don't model this cross-file global
+     * merge, so it's AST-based — like the other dedicated cross-file walkers (B443).
+     *
+     * FP firewall (corpus-EXHAUSTIVE): BOTH files must be SCRIPT files (no imports/
+     * exports) — the only other corpus file sharing the `type X`+`namespace X` shape is
+     * `reexportNameAliasedAndHoisted`, whose files are MODULE files (top-level `export`),
+     * so the type/namespace are module-scoped (no global conflict) and it is excluded.
+     * The conflict must be cross-FILE (same-file `type X`+`namespace X` is TS2300, owned
+     * by the duplicate-identifier pipeline).
+     */
+    private fun checkCrossFileTypeAliasNamespaceConflict() {
+        // name -> first script-file top-level type-alias name node (+ its file/source)
+        val typeAliases = HashMap<String, Triple<Identifier, String, String>>()
+        // name -> set of script files declaring a top-level namespace/module of that name
+        val namespaces = HashMap<String, MutableSet<String>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is TypeAliasDeclaration ->
+                        typeAliases.getOrPut(stmt.name.text) { Triple(stmt.name, fileName, source) }
+                    is ModuleDeclaration -> {
+                        val nm = (stmt.name as? Identifier)?.text ?: continue
+                        namespaces.getOrPut(nm) { mutableSetOf() }.add(fileName)
+                    }
+                    else -> {}
+                }
+            }
+        }
+        for ((name, ta) in typeAliases) {
+            val (idNode, taFile, taSource) = ta
+            // Require a namespace of the same name in a DIFFERENT script file.
+            val nsFiles = namespaces[name] ?: continue
+            if (nsFiles.none { it != taFile }) continue
+            val (line, character) = getLineAndCharacterOfPosition(taSource, idNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Cannot augment module '$name' with value exports because it resolves to a non-module entity.",
+                category = DiagnosticCategory.Error, code = 2649,
+                fileName = taFile, line = line, character = character,
+                start = idNode.pos, length = idNode.text.length,
+            ))
         }
     }
 
