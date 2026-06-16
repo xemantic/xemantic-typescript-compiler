@@ -1507,6 +1507,8 @@ class Checker(
         }
         // 62. Check block-scoped declarations outside blocks (TS1156)
         checkBlockScopedDeclarationsInSingleBody()
+        // 62a2. Check block-NESTED let/const redeclarations (TS2451) — binder doesn't bind these
+        checkBlockScopedRedeclarations()
         // 62b. Check var shadowing outer block-scoped name (TS2481)
         checkOuterScopeVarShadowing()
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
@@ -28603,8 +28605,14 @@ class Checker(
                 // When block-scoped (let/const) mixes with var/class/func (not interface/namespace
                 // which are legal merges), emit TS2451 for const/class conflicts, TS2300 for others
                 if (hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)) {
-                    // TS2451 when block-scoped conflicts with class (TypeScript uses TS2451 for this)
-                    val useTs2451 = hasBlockScoped && hasClass && !hasVar && !hasFunc && !hasEnum
+                    // TS2451 when block-scoped conflicts with class (TypeScript uses TS2451 for this).
+                    // Also: a block-scoped (let/const) declared FIRST that conflicts with a `var`
+                    // (no function/class/enum in the group) is a block-scoped redeclaration (TS2451);
+                    // a `var` declared first makes the symbol function-scoped → TS2300. (Order matters.)
+                    val firstDecl = group.minByOrNull { it.nameNode.pos }
+                    val firstIsBlockScoped = firstDecl?.kind == "let" || firstDecl?.kind == "const"
+                    val useTs2451 = (hasBlockScoped && hasClass && !hasVar && !hasFunc && !hasEnum) ||
+                        (hasBlockScoped && hasVar && !hasFunc && !hasClass && !hasEnum && firstIsBlockScoped)
                     for (decl in group) {
                         if (decl.kind == "interface" || decl.kind == "namespace") continue
                         if (useTs2451) {
@@ -56511,6 +56519,96 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS1294: `erasableSyntaxOnly` — narrow scope, TypeAssertion only
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // TS2451: block-NESTED block-scoped (let/const) redeclaration.
+    // The binder does NOT bind declarations inside blocks (B83.5), so the
+    // duplicate-identifier pipeline (file/module top-level only) misses
+    // let/const declared twice in the same block/switch/try/function body.
+    // This walker is ADDITIVE (disjoint from the binder pipeline's scopes).
+    // -----------------------------------------------------------------------
+    private fun checkBlockScopedRedeclarations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // File top-level is binder-handled; recurse only into nested block scopes.
+            for (stmt in result.sourceFile.statements) descendBlockRedecl(stmt, source, fileName)
+        }
+    }
+
+    private fun descendBlockRedecl(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is Block -> processBlockRedecl(stmt.statements, source, fileName)
+            // Function/method/ctor/accessor body DIRECT decls are already handled by the
+            // existing pipeline; only recurse into them to reach NESTED blocks.
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { descendBlockRedecl(it, source, fileName) }
+            is IfStatement -> {
+                descendBlockRedecl(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { descendBlockRedecl(it, source, fileName) }
+            }
+            is WhileStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is DoStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is ForStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is ForInStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is ForOfStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is LabeledStatement -> descendBlockRedecl(stmt.statement, source, fileName)
+            is SwitchStatement -> {
+                // All case/default clauses share ONE block scope.
+                val all = mutableListOf<Statement>()
+                for (clause in stmt.caseBlock) {
+                    ((clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements)?.let { all.addAll(it) }
+                }
+                processBlockRedecl(all, source, fileName)
+            }
+            is TryStatement -> {
+                processBlockRedecl(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.block?.let { processBlockRedecl(it.statements, source, fileName) }
+                stmt.finallyBlock?.let { processBlockRedecl(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                val body = when (m) {
+                    is MethodDeclaration -> m.body
+                    is Constructor -> m.body
+                    is GetAccessor -> m.body
+                    is SetAccessor -> m.body
+                    else -> null
+                }
+                // Method-body direct decls handled by the existing pipeline; recurse for nested blocks.
+                body?.statements?.forEach { descendBlockRedecl(it, source, fileName) }
+            }
+            // Module/namespace top-level is binder-handled; recurse into its nested blocks.
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { descendBlockRedecl(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** Process ONE block scope: emit TS2451 for same-block let/const redeclarations,
+     *  then recurse into nested scopes. */
+    private fun processBlockRedecl(stmts: List<Statement>, source: String, fileName: String) {
+        val byName = LinkedHashMap<String, MutableList<Identifier>>()
+        for (s in stmts) {
+            if (s is VariableStatement &&
+                (s.declarationList.flags == SyntaxKind.LetKeyword || s.declarationList.flags == SyntaxKind.ConstKeyword)) {
+                for (d in s.declarationList.declarations) {
+                    val nm = d.name as? Identifier ?: continue
+                    byName.getOrPut(nm.text) { mutableListOf() }.add(nm)
+                }
+            }
+        }
+        for ((name, nodes) in byName) {
+            if (nodes.size < 2) continue
+            for (n in nodes) {
+                val (line, character) = getLineAndCharacterOfPosition(source, n.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot redeclare block-scoped variable '$name'.",
+                    category = DiagnosticCategory.Error, code = 2451,
+                    fileName = fileName, line = line, character = character, start = n.pos, length = name.length,
+                ))
+            }
+        }
+        for (s in stmts) descendBlockRedecl(s, source, fileName)
+    }
 
     private fun checkErasableSyntaxOnly() {
         for (result in binderResults) {
