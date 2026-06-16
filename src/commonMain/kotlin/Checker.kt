@@ -88615,6 +88615,7 @@ interface DataView {
         when (stmt) {
             is ClassDeclaration -> {
                 checkClassPropertyOverrides(stmt, source, fileName, enclosingNs)
+                checkClassDeclAbstractAndAccessors(stmt, source, fileName)
                 // Recurse into nested class declarations in member bodies
                 for (member in stmt.members) {
                     when (member) {
@@ -88776,6 +88777,131 @@ interface DataView {
             character = character,
             start = classKwPos,
             length = 5,
+        ))
+    }
+
+    /**
+     * For a NON-abstract, non-ambient class DECLARATION:
+     *  - TS2515 (single) / TS2654 (collapsed, ≥2): unimplemented inherited abstract members
+     *    from an abstract base (squiggle the class name).
+     *  - TS2676: a get/set accessor PAIR must both be abstract or both non-abstract
+     *    (squiggle each accessor name).
+     *  - TS1005: a concrete (non-abstract, non-ambient) accessor with no body.
+     */
+    private fun checkClassDeclAbstractAndAccessors(classDecl: ClassDeclaration, source: String, fileName: String) {
+        val isAmbient = ModifierFlag.Declare in classDecl.modifiers
+        val isAbstract = ModifierFlag.Abstract in classDecl.modifiers
+
+        fun memberName(m: ClassElement): String? = when (m) {
+            is PropertyDeclaration -> (m.name as? Identifier)?.text
+            is MethodDeclaration -> (m.name as? Identifier)?.text
+            is GetAccessor -> (m.name as? Identifier)?.text
+            is SetAccessor -> (m.name as? Identifier)?.text
+            else -> null
+        }
+
+        // --- TS2676: accessor-pair abstractness must agree ---
+        run {
+            val getters = mutableMapOf<String, MutableList<GetAccessor>>()
+            val setters = mutableMapOf<String, MutableList<SetAccessor>>()
+            for (m in classDecl.members) when (m) {
+                is GetAccessor -> (m.name as? Identifier)?.text?.let { getters.getOrPut(it) { mutableListOf() }.add(m) }
+                is SetAccessor -> (m.name as? Identifier)?.text?.let { setters.getOrPut(it) { mutableListOf() }.add(m) }
+                else -> {}
+            }
+            for ((nm, gs) in getters) {
+                val ss = setters[nm] ?: continue
+                val getAbstract = gs.any { ModifierFlag.Abstract in it.modifiers }
+                val setAbstract = ss.any { ModifierFlag.Abstract in it.modifiers }
+                if (getAbstract != setAbstract) {
+                    for (g in gs) emitTS2676(g.name, source, fileName)
+                    for (s in ss) emitTS2676(s.name, source, fileName)
+                }
+            }
+        }
+
+        // --- TS1005: concrete accessor with no body ---
+        if (!isAmbient) {
+            for (m in classDecl.members) {
+                val (nm, hasBody, abstract) = when (m) {
+                    is GetAccessor -> Triple(m.name, m.body != null, ModifierFlag.Abstract in m.modifiers)
+                    is SetAccessor -> Triple(m.name, m.body != null, ModifierFlag.Abstract in m.modifiers)
+                    else -> continue
+                }
+                if (!hasBody && !abstract) {
+                    val semi = source.indexOf(';', nm.pos).let { if (it in nm.pos until classDecl.end) it else -1 }
+                    if (semi >= 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, semi)
+                        diagnostics.add(Diagnostic(
+                            message = "'{' expected.",
+                            category = DiagnosticCategory.Error, code = 1005,
+                            fileName = fileName, line = line, character = character, start = semi, length = 1,
+                        ))
+                    }
+                }
+            }
+        }
+
+        // --- TS2515 / TS2654: unimplemented inherited abstract members ---
+        if (isAbstract || isAmbient) return
+        val derivedName = classDecl.name?.text ?: return
+        val extendsClause = classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return
+        val baseExpr = extendsClause.types.firstOrNull()?.expression as? Identifier ?: return
+        val baseSym = globals[baseExpr.text] ?: return
+        if (!isAbstractClass(baseSym)) return
+
+        val implemented = mutableSetOf<String>()
+        for (m in classDecl.members) {
+            if (m is Constructor) for (p in m.parameters) {
+                if (p.modifiers.any { isParameterPropertyModifier(it) }) (p.name as? Identifier)?.text?.let { implemented.add(it) }
+            }
+            val n = memberName(m) ?: continue
+            if (!isMemberAbstract(m)) implemented.add(n)
+        }
+        val seen = mutableSetOf<String>()
+        val unimplemented = mutableListOf<Pair<String, String>>()
+        val visited = mutableSetOf<Int>()
+        var cur: Symbol? = baseSym
+        while (cur != null && visited.add(cur.id)) {
+            val cd = cur.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: break
+            val cdName = cd.name?.text ?: ""
+            for (m in cd.members) {
+                val n = memberName(m) ?: continue
+                if (n in seen) continue
+                seen.add(n)
+                if (isMemberAbstract(m)) { if (n !in implemented) unimplemented.add(n to cdName) }
+                else implemented.add(n)
+            }
+            val baseExt = cd.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            val baseIdent = baseExt?.types?.firstOrNull()?.expression as? Identifier
+            cur = baseIdent?.let { globals[it.text] }
+        }
+        if (unimplemented.isEmpty()) return
+        val nameNode = classDecl.name ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        val msg = if (unimplemented.size == 1) {
+            val (member, declClass) = unimplemented.first()
+            "Non-abstract class '$derivedName' does not implement inherited abstract member $member from class '$declClass'."
+        } else {
+            val list = unimplemented.joinToString(", ") { "'${it.first}'" }
+            "Non-abstract class '$derivedName' is missing implementations for the following members of '${baseExpr.text}': $list."
+        }
+        diagnostics.add(Diagnostic(
+            message = msg,
+            category = DiagnosticCategory.Error,
+            code = if (unimplemented.size == 1) 2515 else 2654,
+            fileName = fileName, line = line, character = character,
+            start = nameNode.pos, length = derivedName.length,
+        ))
+    }
+
+    private fun emitTS2676(nameNode: NameNode, source: String, fileName: String) {
+        val len = (nameNode as? Identifier)?.text?.length ?: 1
+        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Accessors must both be abstract or non-abstract.",
+            category = DiagnosticCategory.Error, code = 2676,
+            fileName = fileName, line = line, character = character, start = nameNode.pos, length = len,
         ))
     }
 
