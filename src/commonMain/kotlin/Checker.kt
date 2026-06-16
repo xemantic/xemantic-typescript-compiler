@@ -52364,6 +52364,16 @@ interface DataView {
             is CallExpression -> {
                 checkUBDForwardInExpr(expr.expression, blockDecls, source, fileName, inStaticInit)
                 for (arg in expr.arguments) checkUBDForwardInExpr(arg, blockDecls, source, fileName, inStaticInit)
+                // IIFE body runs eagerly — forward refs to LATER block-scoped decls
+                // fire. Generator IIFE bodies don't run on call; an async IIFE runs
+                // its synchronous prefix so its forward refs still fire.
+                val fn = ubdIifeCallee(expr)
+                if (fn != null && !ubdFuncIsGenerator(fn)) {
+                    val body = ubdFuncBody(fn)
+                    val shadowed = mutableSetOf<String>(); collectUbdBodyBlockNames(body, shadowed)
+                    val remaining = if (shadowed.isEmpty()) blockDecls else blockDecls.filterKeys { it !in shadowed }
+                    if (remaining.isNotEmpty()) forEachUbdEvaluatedExpr(body) { checkUBDForwardInExpr(it, remaining, source, fileName, inStaticInit) }
+                }
             }
             is PropertyAccessExpression -> {
                 // TS2729 for forward-referenced receivers: if the base identifier refers
@@ -52710,6 +52720,16 @@ interface DataView {
             is CallExpression -> {
                 checkUBDInInitializer(expr.expression, selfNames, source, fileName)
                 for (arg in expr.arguments) checkUBDInInitializer(arg, selfNames, source, fileName)
+                // IIFE body runs eagerly — a reference to the var being initialized
+                // inside it is a TDZ self-read. Async IIFEs do not flag self-refs
+                // (matches tsc); generator IIFE bodies don't run on call.
+                val fn = ubdIifeCallee(expr)
+                if (fn != null && !ubdFuncIsAsync(fn) && !ubdFuncIsGenerator(fn)) {
+                    val body = ubdFuncBody(fn)
+                    val shadowed = mutableSetOf<String>(); collectUbdBodyBlockNames(body, shadowed)
+                    val remaining = if (shadowed.isEmpty()) selfNames else selfNames.filterKeys { it !in shadowed }
+                    if (remaining.isNotEmpty()) forEachUbdEvaluatedExpr(body) { checkUBDInInitializer(it, remaining, source, fileName) }
+                }
             }
             is NewExpression -> {
                 checkUBDInInitializer(expr.expression, selfNames, source, fileName)
@@ -52749,6 +52769,126 @@ interface DataView {
             is SatisfiesExpression -> checkUBDInInitializer(expr.expression, selfNames, source, fileName)
             // Arrow functions, function expressions — DON'T recurse into bodies (lazy evaluation)
             is ArrowFunction, is FunctionExpression -> {}
+            else -> {}
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // IIFE bodies execute EAGERLY (immediately-invoked arrow/function-expression),
+    // so block-scoped names referenced inside them — the var being initialized
+    // (self) or one declared in a LATER statement — are read in their temporal
+    // dead zone → TS2448/2449/2450. (A non-invoked arrow/fn captures lazily and is
+    // skipped; a GENERATOR IIFE's body does not run until `.next()`, so it is also
+    // skipped; an ASYNC IIFE's synchronous prefix runs, so its forward refs to
+    // LATER decls fire, but tsc does not flag a SELF ref to the var being awaited-
+    // into, so self-ref walking is gated to non-async.)
+    // -----------------------------------------------------------------------
+
+    /** If [call] is an IIFE (callee, unwrapping parens, is an arrow/function expr),
+     *  return that function node; else null. */
+    private fun ubdIifeCallee(call: CallExpression): Expression? {
+        var callee: Expression = call.expression
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        return when (callee) {
+            is ArrowFunction -> callee
+            is FunctionExpression -> callee
+            else -> null
+        }
+    }
+
+    private fun ubdFuncIsAsync(func: Expression): Boolean = when (func) {
+        is ArrowFunction -> ModifierFlag.Async in func.modifiers
+        is FunctionExpression -> ModifierFlag.Async in func.modifiers
+        else -> false
+    }
+
+    private fun ubdFuncIsGenerator(func: Expression): Boolean = when (func) {
+        is ArrowFunction -> func.asteriskToken
+        is FunctionExpression -> func.asteriskToken
+        else -> false
+    }
+
+    private fun ubdFuncBody(func: Expression): Node? = when (func) {
+        is ArrowFunction -> func.body
+        is FunctionExpression -> func.body
+        else -> null
+    }
+
+    /** Collect block-scoped (let/const/class/enum/function) names declared in an IIFE
+     *  body (not crossing further function boundaries) — these SHADOW the outer names,
+     *  so they are excluded from the outer TDZ check (FP-safety). */
+    private fun collectUbdBodyBlockNames(node: Node?, out: MutableSet<String>) {
+        when (node) {
+            is Block -> node.statements.forEach { collectUbdBodyBlockNames(it, out) }
+            is VariableStatement -> {
+                val k = node.declarationList.flags
+                if (k == SyntaxKind.LetKeyword || k == SyntaxKind.ConstKeyword) {
+                    for (d in node.declarationList.declarations) collectVarBindingNames(d.name, out)
+                }
+            }
+            is ClassDeclaration -> node.name?.let { out.add(it.text) }
+            is EnumDeclaration -> out.add(node.name.text)
+            is FunctionDeclaration -> node.name?.let { out.add(it.text) }
+            is IfStatement -> { collectUbdBodyBlockNames(node.thenStatement, out); node.elseStatement?.let { collectUbdBodyBlockNames(it, out) } }
+            is ForStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is ForInStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is ForOfStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is WhileStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is DoStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is LabeledStatement -> collectUbdBodyBlockNames(node.statement, out)
+            is TryStatement -> {
+                node.tryBlock.statements.forEach { collectUbdBodyBlockNames(it, out) }
+                node.catchClause?.block?.statements?.forEach { collectUbdBodyBlockNames(it, out) }
+                node.finallyBlock?.statements?.forEach { collectUbdBodyBlockNames(it, out) }
+            }
+            is SwitchStatement -> for (c in node.caseBlock) {
+                ((c as? CaseClause)?.statements ?: (c as? DefaultClause)?.statements)?.forEach { collectUbdBodyBlockNames(it, out) }
+            }
+            else -> {}
+        }
+    }
+
+    /** Apply [handler] to each eagerly-evaluated expression in an IIFE body. Recurses
+     *  into nested control flow but NOT into nested function bodies (a nested IIFE is
+     *  re-detected by [handler] itself, which re-enters the IIFE branch). */
+    private fun forEachUbdEvaluatedExpr(node: Node?, handler: (Expression) -> Unit) {
+        when (node) {
+            is Block -> node.statements.forEach { forEachUbdEvaluatedExpr(it, handler) }
+            is ExpressionStatement -> handler(node.expression)
+            is VariableStatement -> for (d in node.declarationList.declarations) d.initializer?.let { handler(it) }
+            is ReturnStatement -> node.expression?.let { handler(it) }
+            is ThrowStatement -> node.expression?.let { handler(it) }
+            is IfStatement -> {
+                handler(node.expression)
+                forEachUbdEvaluatedExpr(node.thenStatement, handler)
+                node.elseStatement?.let { forEachUbdEvaluatedExpr(it, handler) }
+            }
+            is ForStatement -> {
+                (node.initializer as? Expression)?.let { handler(it) }
+                (node.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { handler(it) } }
+                node.condition?.let { handler(it) }
+                node.incrementor?.let { handler(it) }
+                forEachUbdEvaluatedExpr(node.statement, handler)
+            }
+            is ForInStatement -> { handler(node.expression); forEachUbdEvaluatedExpr(node.statement, handler) }
+            is ForOfStatement -> { handler(node.expression); forEachUbdEvaluatedExpr(node.statement, handler) }
+            is WhileStatement -> { handler(node.expression); forEachUbdEvaluatedExpr(node.statement, handler) }
+            is DoStatement -> { handler(node.expression); forEachUbdEvaluatedExpr(node.statement, handler) }
+            is SwitchStatement -> {
+                handler(node.expression)
+                for (c in node.caseBlock) {
+                    (c as? CaseClause)?.let { handler(it.expression) }
+                    ((c as? CaseClause)?.statements ?: (c as? DefaultClause)?.statements)?.forEach { forEachUbdEvaluatedExpr(it, handler) }
+                }
+            }
+            is TryStatement -> {
+                node.tryBlock.statements.forEach { forEachUbdEvaluatedExpr(it, handler) }
+                node.catchClause?.block?.statements?.forEach { forEachUbdEvaluatedExpr(it, handler) }
+                node.finallyBlock?.statements?.forEach { forEachUbdEvaluatedExpr(it, handler) }
+            }
+            is LabeledStatement -> forEachUbdEvaluatedExpr(node.statement, handler)
+            // An expression body (arrow `() => expr`).
+            is Expression -> handler(node)
             else -> {}
         }
     }
