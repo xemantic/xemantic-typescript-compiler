@@ -1217,6 +1217,7 @@ class Checker(
         // narrow "≥2 bare-TP value params + function-typed-of-TP params + arrow args"
         // shape (typeParameterFixingWithContextSensitiveArguments2/3).
         checkGenericCallContextualArrowReturns()
+        checkGenericThenChainConstraints()
         // 18. Check unreachable code (TS7027)
         if (options.allowUnreachableCode == false) {
             checkUnreachableCode()
@@ -40919,6 +40920,147 @@ interface DataView {
         if (collectMissingProperties(a, b).isEmpty()) return b  // a <: b → b supertype
         if (collectMissingProperties(b, a).isEmpty()) return a
         return null
+    }
+
+    // -----------------------------------------------------------------------
+    // B462: fluent generic-method-chain constraint checking (TS2741 / TS2739).
+    //
+    // For a chain `new Chain(arg).then(a => new B).then(b => new C)...` where Chain is a
+    // generic class with a single self-fluent method `then<S extends T>(cb: (x: T) => S):
+    // Chain<S>`, walk the chain left-to-right tracking the current type arg T. Each
+    // `.then(arrow)` infers S from the arrow body (a `new X` instance type) and checks the
+    // constraint `S extends T` via missing-required-prop comparison; on failure → TS2741
+    // (one missing) / TS2739 (≥2) at the arrow body, and the result type arg CLAMPS to the
+    // constraint T (so the next link checks against T, not the unsatisfied S). This is the
+    // method-chain analogue of the bare-identifier B460/B461 walker.
+    // -----------------------------------------------------------------------
+    private fun checkGenericThenChainConstraints() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
+            val source = result.sourceFile.text
+            walkThenChains(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun walkThenChains(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is ExpressionStatement -> (stmt.expression as? CallExpression)?.let { processThenChain(it, source, fileName) }
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    (d.initializer as? CallExpression)?.let { processThenChain(it, source, fileName) }
+                }
+                is Block -> walkThenChains(stmt.statements, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkThenChains(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { walkThenChains(it.statements, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    /** FP firewall: the class must be a single-type-param generic with exactly one `then`
+     *  method shaped `then<S extends T>(cb: (x: T) => S): ClassName<S>`. Returns the `then`
+     *  MethodDeclaration (whose cb FunctionType anchors the TS6502 related info), or null. */
+    private fun thenChainMethod(classDecl: ClassDeclaration): MethodDeclaration? {
+        val tps = classDecl.typeParameters ?: return null
+        if (tps.size != 1) return null
+        val classTpName = (tps[0].name as? Identifier)?.text ?: return null
+        val className = classDecl.name?.text ?: return null
+        val thens = classDecl.members.filterIsInstance<MethodDeclaration>()
+            .filter { (it.name as? Identifier)?.text == "then" }
+        if (thens.size != 1) return null
+        val then = thens[0]
+        val sTp = then.typeParameters?.singleOrNull() ?: return null
+        val sName = (sTp.name as? Identifier)?.text ?: return null
+        if (((sTp.constraint as? TypeReference)?.typeName as? Identifier)?.text != classTpName) return null
+        if (then.parameters.singleOrNull()?.type !is FunctionType) return null
+        val ret = then.type as? TypeReference ?: return null
+        if ((ret.typeName as? Identifier)?.text != className) return null
+        if (((ret.typeArguments?.singleOrNull() as? TypeReference)?.typeName as? Identifier)?.text != sName) return null
+        return then
+    }
+
+    private fun processThenChain(outer: CallExpression, source: String, fileName: String) {
+        val segs = mutableListOf<CallExpression>()
+        var cur: Expression = outer
+        while (cur is CallExpression) {
+            val pae = cur.expression as? PropertyAccessExpression ?: return
+            if (pae.name.text != "then") return
+            if ((cur.arguments?.size ?: 0) != 1) return
+            if (!cur.typeArguments.isNullOrEmpty()) return
+            segs.add(cur)
+            var recv: Expression = pae.expression
+            while (recv is ParenthesizedExpression) recv = recv.expression
+            cur = recv
+        }
+        val newExpr = cur as? NewExpression ?: return
+        if (segs.size < 2) return
+        segs.reverse() // left-to-right (innermost first)
+        val className = (newExpr.expression as? Identifier)?.text ?: return
+        val classDecl = globals[className]?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return
+        val then = thenChainMethod(classDecl) ?: return
+        val cbFt = then.parameters[0].type as? FunctionType ?: return
+        val ctorArg = newExpr.arguments?.singleOrNull() ?: return
+        var curT: Type = try { widenType(getTypeOfExpression(ctorArg)) } catch (_: StackOverflowError) { return }
+        if (curT !is Type.Object) return
+        for (seg in segs) {
+            val arrow = seg.arguments!![0] as? ArrowFunction ?: return
+            if (arrow.parameters.size != 1) return
+            val body = arrow.body
+            val sType: Type = when (body) {
+                is NewExpression -> try { getTypeOfExpression(body) } catch (_: StackOverflowError) { return }
+                else -> return // only `new X` bodies handled
+            }
+            if (sType !is Type.Object) return
+            val missing = collectMissingProperties(sType, curT)
+            if (missing.isEmpty()) { curT = sType; continue }
+            val bExpr = body as Expression
+            val start = bExpr.pos
+            val length = (expressionTrueEnd(bExpr) - start).coerceAtLeast(1)
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            // TS6502 "expected type comes from the return type of this signature" → the cb
+            // FunctionType node (matches the B460 anchor convention).
+            val ts6502 = run {
+                val (rl, rc) = getLineAndCharacterOfPosition(source, cbFt.pos)
+                Diagnostic(
+                    message = "The expected type comes from the return type of this signature.",
+                    category = DiagnosticCategory.Message, code = 6502,
+                    fileName = fileName, line = rl, character = rc,
+                    start = cbFt.pos, length = (cbFt.type.end - cbFt.pos).coerceAtLeast(1),
+                )
+            }
+            if (missing.size == 1) {
+                val related = mutableListOf<Diagnostic>()
+                getPropertyOfType(curT, missing[0])?.valueDeclaration?.let { decl ->
+                    val declPos = (decl as? PropertyDeclaration)?.name?.pos ?: decl.pos
+                    val (dl, dc) = getLineAndCharacterOfPosition(source, declPos)
+                    related.add(Diagnostic(
+                        message = "'${missing[0]}' is declared here.",
+                        category = DiagnosticCategory.Message, code = 2728,
+                        fileName = fileName, line = dl, character = dc, start = declPos, length = missing[0].length,
+                    ))
+                }
+                related.add(ts6502)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${missing[0]}' is missing in type '${typeToString(sType)}' but required in type '${typeToString(curT)}'.",
+                    category = DiagnosticCategory.Error, code = 2741,
+                    fileName = fileName, line = line, character = ch, start = start, length = length,
+                    relatedInformation = related,
+                ))
+            } else {
+                // tsc lists the target's missing props in own-before-inherited order; our
+                // collectMissingProperties is base-first, so reverse for the display.
+                val ordered = missing.reversed()
+                diagnostics.add(Diagnostic(
+                    message = formatTs2740Message(typeToString(sType), typeToString(curT), ordered),
+                    category = DiagnosticCategory.Error, code = 2739,
+                    fileName = fileName, line = line, character = ch, start = start, length = length,
+                    relatedInformation = listOf(ts6502),
+                ))
+            }
+            // result type arg clamps to the constraint (curT unchanged)
+        }
     }
 
     private fun resolveTpNode(node: TypeNode?, tpMap: Map<String, Type>): Type? {
