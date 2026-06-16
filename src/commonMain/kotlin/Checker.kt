@@ -78537,6 +78537,28 @@ interface DataView {
         else -> null
     }
 
+    /**
+     * B464: decide whether a captured reference's narrowing should flow from the
+     * closure's [FlowStart] into the enclosing function's flow ([FlowStart.outerFlow]).
+     * Returns the outer flow node to continue from, or null to stop at the
+     * closure boundary (use the declared type).
+     *
+     * Gate (mirrors tsc's "extend flow container" loop in `getFlowTypeOfReference`):
+     *   - `this` / `super` / `arguments` never flow in (a FunctionExpression
+     *     rebinds them; arrows capture lexically but we don't model that here);
+     *   - the root identifier must not be a closure local (shadowing);
+     *   - the root identifier must not be reassigned at/after the closure
+     *     (non-const → `isPastLastAssignment` false).
+     */
+    private fun outerFlowForCapturedName(flowNode: FlowStart, name: String): FlowNode? {
+        val outer = flowNode.outerFlow ?: return null
+        val root = name.substringBefore('.')
+        if (root == "this" || root == "super" || root == "arguments") return null
+        if (root in flowNode.localNames) return null
+        if (root in flowNode.reassignedAfterNames) return null
+        return outer
+    }
+
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNode: FlowNode, name: String,
         seen: MutableSet<Int>, depth: Int,
@@ -78544,7 +78566,13 @@ interface DataView {
         if (depth >= NARROW_MAX_DEPTH) return declaredType
         if (!seen.add(flowNode.id)) return declaredType
         return when (flowNode) {
-            is FlowStart -> declaredType
+            is FlowStart -> {
+                // B464: flow outer narrowing into a closure for a captured const-like
+                // variable (see [outerFlowForCapturedName] / FlowStart doc).
+                val outer = outerFlowForCapturedName(flowNode, name)
+                if (outer != null) narrowTypeFromFlow(declaredType, outer, name, seen, depth + 1)
+                else declaredType
+            }
             is FlowUnreachable -> neverType
             is FlowCondition -> {
                 val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
@@ -93956,6 +93984,51 @@ interface DataView {
         }
     }
 
+    /**
+     * B464: emit TS18048 for `x.prop` where `x` is an identifier captured from an
+     * enclosing function inside a closure (Arrow/FunctionExpression) AND its
+     * flow-narrowed type still includes `undefined`. The closure restriction is
+     * the FP firewall — outside closures the general possibly-undefined emitter
+     * doesn't exist (our narrowing has gaps); inside a closure the narrowing now
+     * flows in from the enclosing scope (B464 infra), so a surviving `undefined`
+     * is a genuine "possibly undefined" the way tsc reports it. Returns true when
+     * a diagnostic was emitted (caller should stop further checks on this access).
+     */
+    private fun emitTs18048ForClosureCapturedUndefinedReceiver(
+        expr: PropertyAccessExpression, source: String, fileName: String,
+    ): Boolean {
+        if (!strictNullChecks) return false
+        if (expr.questionDotToken) return false // optional chain tolerates undefined
+        val recv = expr.expression as? Identifier ?: return false
+        val root = recv.text
+        if (root == "this" || root == "super" || root == "arguments") return false
+        val graph = currentFlowGraph ?: return false
+        // Innermost closure (Arrow/FunctionExpression) lexically containing the receiver.
+        val closure = graph.closureStarts
+            .filter { cs ->
+                val c = cs.container
+                c != null && recv.pos >= c.pos && recv.pos < c.end
+            }
+            .maxByOrNull { it.container!!.pos } ?: return false
+        // Receiver must be CAPTURED — not one of the closure's own params/locals.
+        if (root in closure.localNames) return false
+        val raw = try { getTypeOfExpression(recv) } catch (_: Throwable) { return false }
+        val narrowed = try { getNarrowedTypeForReference(raw, recv) } catch (_: Throwable) { return false }
+        if (narrowed !is Type.Union) return false
+        if (narrowed.types.none { it === undefinedType }) return false
+        // Require a meaningful non-nullish constituent so this isn't a pure
+        // null/undefined/never receiver (those are owned by other paths).
+        if (narrowed.types.all { it === undefinedType || it === nullType || it === neverType }) return false
+        val (line, ch) = getLineAndCharacterOfPosition(source, recv.pos)
+        diagnostics.add(Diagnostic(
+            message = "'$root' is possibly 'undefined'.",
+            category = DiagnosticCategory.Error, code = 18048,
+            fileName = fileName, line = line, character = ch,
+            start = recv.pos, length = root.length,
+        ))
+        return true
+    }
+
     private fun checkSinglePropertyAccess(
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
@@ -94031,6 +94104,12 @@ interface DataView {
         // so reads INSIDE a loop body see narrowing established at loop entry
         // (e.g. `if (foo.a) { for(...) { foo.a.b ... } }` suppresses). ===
         emitTs18048ForOptionalPropertyAccessReceiver(expr, source, fileName)
+
+        // === B464: TS18048 "'x' is possibly 'undefined'." for `x.prop` where `x` is a
+        // captured (closed-over) parameter/variable inside a closure whose narrowing
+        // stays `T | undefined` (e.g. `implicitConstParameters`'s f5: the variable is
+        // reassigned after the closure, so the `if (x)` guard does not flow in). ===
+        if (emitTs18048ForClosureCapturedUndefinedReceiver(expr, source, fileName)) return
 
         // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
         if (expr.expression is Identifier && (expr.expression as Identifier).text == "super") {
@@ -94608,7 +94687,11 @@ interface DataView {
         if (depth >= NARROW_MAX_DEPTH) return declaredType
         if (!seen.add(flowNode.id)) return declaredType
         return when (flowNode) {
-            is FlowStart -> declaredType
+            is FlowStart -> {
+                val outer = outerFlowForCapturedName(flowNode, name)
+                if (outer != null) narrowTypeFromFlowFollowLoopEntry(declaredType, outer, name, seen, depth + 1)
+                else declaredType
+            }
             is FlowUnreachable -> neverType
             is FlowCondition -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(

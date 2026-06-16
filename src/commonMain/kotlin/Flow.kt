@@ -34,8 +34,29 @@ sealed interface FlowNode {
     val id: Int
 }
 
-/** The start of a function's flow (or the file's top-level flow). */
-class FlowStart(override val id: Int, val container: Node?) : FlowNode
+/**
+ * The start of a function's flow (or the file's top-level flow).
+ *
+ * B464 (flow-into-closures): for an ArrowFunction / FunctionExpression body
+ * nested inside another function, [outerFlow] points at the enclosing
+ * function's flow node at the closure's definition point, so the checker can
+ * continue narrowing a captured (closed-over) variable into the closure —
+ * matching tsc's "extend the flow container" loop (checker.ts
+ * `getFlowTypeOfReference`). The continuation is gated on the captured name:
+ *   - it must NOT be a closure local ([localNames]) — a shadowing param/local
+ *     gets its own type, not the outer narrowing;
+ *   - it must NOT be reassigned at or after the closure's position within the
+ *     enclosing function ([reassignedAfterNames]) — tsc's `isPastLastAssignment`
+ *     (a variable reassigned after the closure is non-const, so its narrowing
+ *     does not flow in; the f4-vs-f5 distinction in `implicitConstParameters`).
+ */
+class FlowStart(
+    override val id: Int,
+    val container: Node?,
+    val outerFlow: FlowNode? = null,
+    val reassignedAfterNames: Set<String> = emptySet(),
+    val localNames: Set<String> = emptySet(),
+) : FlowNode
 
 /** Code after return/throw/break/continue — unreachable. */
 class FlowUnreachable(override val id: Int) : FlowNode
@@ -123,6 +144,8 @@ class FlowArrayMutation(
  */
 class FlowGraph(
     val nodeToFlow: Map<Long, FlowNode>,
+    /** B464: closure (Arrow/FunctionExpression) [FlowStart]s carrying [FlowStart.outerFlow]. */
+    val closureStarts: List<FlowStart> = emptyList(),
 )
 
 // ---------------------------------------------------------------------------
@@ -164,6 +187,19 @@ class FlowGraphBuilder {
 
     private var currentFlow: FlowNode = FlowStart(nextId++, null)
 
+    /** Source text — used by B464 to scan for closure-captured-var reassignments. */
+    private var sourceText: String = ""
+
+    /**
+     * Stack of enclosing function-like nodes (innermost last). Used by B464 to
+     * find the enclosing function's source range when building a closure's
+     * [FlowStart] (so we can detect assignments at/after the closure's position).
+     */
+    private val functionLikeStack: ArrayDeque<Node> = ArrayDeque()
+
+    /** B464: closure [FlowStart]s collected during the walk (those with outerFlow). */
+    private val closureStarts: MutableList<FlowStart> = mutableListOf()
+
     /**
      * Stack of break-target labels for unlabeled `break` statements.
      * Pushed when entering a loop or switch, popped when leaving.
@@ -183,9 +219,10 @@ class FlowGraphBuilder {
     private val labeledTargets: MutableMap<String, Pair<FlowBranchLabel, FlowLoopLabel?>> = mutableMapOf()
 
     fun build(sourceFile: SourceFile): FlowGraph {
+        sourceText = sourceFile.text
         currentFlow = newStart(sourceFile)
         bindEachStatement(sourceFile.statements)
-        return FlowGraph(nodeToFlow)
+        return FlowGraph(nodeToFlow, closureStarts.toList())
     }
 
     // ---- factories -------------------------------------------------------
@@ -698,7 +735,26 @@ class FlowGraphBuilder {
         breakTargetStack.clear()
         continueTargetStack.clear()
 
-        currentFlow = newStart(container)
+        // B464: for a closure (ArrowFunction / FunctionExpression) nested inside
+        // another function, capture the enclosing flow + the captured-var gate
+        // info so the checker can flow narrowing into the closure body.
+        val enclosing = functionLikeStack.lastOrNull()
+        currentFlow =
+            if ((container is ArrowFunction || container is FunctionExpression) && enclosing != null) {
+                FlowStart(
+                    id = nextId++,
+                    container = container,
+                    outerFlow = savedFlow,
+                    reassignedAfterNames = collectReassignedNamesInRange(
+                        sourceText, container.pos, enclosing.end,
+                    ),
+                    localNames = collectClosureLocalNames(parameters, body),
+                ).also { closureStarts.add(it) }
+            } else {
+                newStart(container)
+            }
+
+        functionLikeStack.addLast(container)
 
         // Parameters introduce bindings — model as assignments.
         for (param in parameters) {
@@ -713,9 +769,136 @@ class FlowGraphBuilder {
             else -> { /* shouldn't happen */ }
         }
 
+        functionLikeStack.removeLast()
         currentFlow = savedFlow
         breakTargetStack.clear(); breakTargetStack.addAll(savedBreaks)
         continueTargetStack.clear(); continueTargetStack.addAll(savedContinues)
+    }
+
+    /**
+     * B464: collect the names that are reassigned (`x = `, `x += `, `x++`, …)
+     * within the source range [start, end). Used to compute the closure's
+     * "captured var reassigned at/after the closure" set: a captured variable
+     * reassigned at or after the closure's position is non-const, so its outer
+     * narrowing must NOT flow into the closure body (matching tsc's
+     * `isPastLastAssignment`). Pure text scan — false matches inside strings /
+     * comments over-approximate toward "reassigned" (the conservative direction:
+     * narrowing is withheld, so no extra narrowing is performed).
+     */
+    private fun collectReassignedNamesInRange(source: String, start: Int, end: Int): Set<String> {
+        if (start < 0 || start >= source.length) return emptySet()
+        val hi = minOf(end, source.length)
+        if (hi <= start) return emptySet()
+        val result = mutableSetOf<String>()
+        fun isWordChar(c: Char?) = c != null && (c.isLetterOrDigit() || c == '_' || c == '$')
+        fun isWordStart(c: Char) = c.isLetter() || c == '_' || c == '$'
+        var i = start
+        while (i < hi) {
+            val c = source[i]
+            if (isWordStart(c) && !isWordChar(source.getOrNull(i - 1)) && source.getOrNull(i - 1) != '.') {
+                var j = i + 1
+                while (j < hi && isWordChar(source.getOrNull(j))) j++
+                val name = source.substring(i, j)
+                // prefix ++/-- (e.g. `++x`)
+                var b = i - 1
+                while (b >= 0 && (source[b] == ' ' || source[b] == '\t')) b--
+                val prefixInc = b >= 1 &&
+                    ((source[b] == '+' && source[b - 1] == '+') || (source[b] == '-' && source[b - 1] == '-'))
+                // suffix assignment operator / ++/--
+                var p = j
+                while (p < hi && (source[p] == ' ' || source[p] == '\t')) p++
+                val c0 = source.getOrNull(p); val c1 = source.getOrNull(p + 1)
+                val c2 = source.getOrNull(p + 2); val c3 = source.getOrNull(p + 3)
+                val suffixAssigned = when {
+                    (c0 == '+' && c1 == '+') || (c0 == '-' && c1 == '-') -> true
+                    c0 == '=' && c1 != '=' && c1 != '>' -> true
+                    c0 != null && c0 in "+-*/%^" && c1 == '=' -> true
+                    (c0 == '&' || c0 == '|') && c1 == '=' -> true
+                    (c0 == '&' && c1 == '&' || c0 == '|' && c1 == '|' || c0 == '?' && c1 == '?') && c2 == '=' -> true
+                    c0 == '*' && c1 == '*' && c2 == '=' -> true
+                    c0 == '<' && c1 == '<' && c2 == '=' -> true
+                    c0 == '>' && c1 == '>' && (c2 == '=' || (c2 == '>' && c3 == '=')) -> true
+                    else -> false
+                }
+                if (prefixInc || suffixAssigned) result.add(name)
+                i = j
+            } else {
+                i++
+            }
+        }
+        return result
+    }
+
+    /** B464: collect a closure's own binding names (params + body-declared) so a
+     *  same-named shadow does not inherit the enclosing scope's narrowing. */
+    private fun collectClosureLocalNames(parameters: List<Parameter>, body: Node?): Set<String> {
+        val names = mutableSetOf<String>()
+        for (p in parameters) collectBindingNames(p.name, names)
+        if (body is Block) collectBodyDeclaredNames(body.statements, names)
+        return names
+    }
+
+    private fun collectBindingNames(target: Node, into: MutableSet<String>) {
+        when (target) {
+            is Identifier -> into.add(target.text)
+            is ObjectBindingPattern -> target.elements.forEach { collectBindingNames(it.name, into) }
+            is ArrayBindingPattern -> target.elements.forEach {
+                if (it is BindingElement) collectBindingNames(it.name, into)
+            }
+            else -> {}
+        }
+    }
+
+    /** Collect var/let/const/function/class declaration names directly inside the
+     *  given statement list, recursing into nested non-function statements only. */
+    private fun collectBodyDeclaredNames(statements: List<Statement>, into: MutableSet<String>) {
+        for (stmt in statements) collectStmtDeclaredNames(stmt, into)
+    }
+
+    private fun collectStmtDeclaredNames(stmt: Statement, into: MutableSet<String>) {
+        when (stmt) {
+            is VariableStatement -> stmt.declarationList.declarations.forEach { collectBindingNames(it.name, into) }
+            is FunctionDeclaration -> stmt.name?.let { into.add(it.text) }
+            is ClassDeclaration -> stmt.name?.let { into.add(it.text) }
+            is Block -> collectBodyDeclaredNames(stmt.statements, into)
+            is IfStatement -> {
+                collectStmtDeclaredNames(stmt.thenStatement, into)
+                stmt.elseStatement?.let { collectStmtDeclaredNames(it, into) }
+            }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { collectBindingNames(it.name, into) }
+                collectStmtDeclaredNames(stmt.statement, into)
+            }
+            is ForInStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { collectBindingNames(it.name, into) }
+                collectStmtDeclaredNames(stmt.statement, into)
+            }
+            is ForOfStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { collectBindingNames(it.name, into) }
+                collectStmtDeclaredNames(stmt.statement, into)
+            }
+            is WhileStatement -> collectStmtDeclaredNames(stmt.statement, into)
+            is DoStatement -> collectStmtDeclaredNames(stmt.statement, into)
+            is TryStatement -> {
+                collectBodyDeclaredNames(stmt.tryBlock.statements, into)
+                stmt.catchClause?.let { cc ->
+                    (cc.variableDeclaration?.name)?.let { collectBindingNames(it, into) }
+                    collectBodyDeclaredNames(cc.block.statements, into)
+                }
+                stmt.finallyBlock?.let { collectBodyDeclaredNames(it.statements, into) }
+            }
+            is SwitchStatement -> stmt.caseBlock.forEach { clause ->
+                val clauseStmts = when (clause) {
+                    is CaseClause -> clause.statements
+                    is DefaultClause -> clause.statements
+                    else -> emptyList()
+                }
+                collectBodyDeclaredNames(clauseStmts, into)
+            }
+            is LabeledStatement -> collectStmtDeclaredNames(stmt.statement, into)
+            is WithStatement -> collectStmtDeclaredNames(stmt.statement, into)
+            else -> {}
+        }
     }
 
     /**
