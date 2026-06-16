@@ -1600,6 +1600,8 @@ class Checker(
         checkNamespaceEnumUnionAssignments()
         // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
         checkEnumToEnumAssignments()
+        // B463: nominal enum mismatches in class-override / overload / member-access contexts
+        checkEnumNominalClassMismatches()
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
         checkSpreadPropertyOverrides()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
@@ -115713,6 +115715,240 @@ interface DataView {
                 ))
             }
         }
+    }
+
+    /**
+     * B463: nominal enum mismatches in CLASS / OVERLOAD / member-access contexts
+     * (enumAssignmentCompat7). Three FP-safe AST + B425-enum-info checks, all gated to
+     * genuinely-incompatible NAMED enums (different simple name OR different member value),
+     * which can never relate in tsc — so the dedicated walker never double-emits with the
+     * general relation paths (those treat numeric enums as `number` and stay silent here):
+     *   - TS2339: `<ns>.E.X` value-position member access where `X` is not a member of enum
+     *     `E` (and not a runtime/prototype property) → "Property 'X' does not exist on type
+     *     'typeof E'.".
+     *   - TS2416: a class method override whose single param is enum `D` while the base
+     *     method's single param is a DIFFERENT, incompatible enum `B` → the contravariant
+     *     param mismatch chain.
+     *   - TS2394: an overload signature whose return enum differs from the implementation
+     *     signature's return enum → "This overload signature is not compatible with its
+     *     implementation signature." + related TS2750 at the impl signature.
+     */
+    private fun checkEnumNominalClassMismatches() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val enums = LinkedHashMap<String, EnumAsgInfo>()
+            collectEnumsForAsg(stmts, null, enums)
+            if (enums.isEmpty()) continue
+            // An enum merged with a same-name namespace gains the namespace's value
+            // members on its value side — its declared `memberOrder` is then INCOMPLETE,
+            // so piece-A would FP on a legitimate merged-namespace member (mergedDeclarations3).
+            val nsKeys = HashSet<String>()
+            encmCollectNsKeys(stmts, null, nsKeys)
+            val enumsForA = if (nsKeys.isEmpty()) enums else enums.filterKeys { it !in nsKeys }
+            // Piece A — value-position member access of a non-member.
+            encmScanStmts(stmts, source, fileName, enumsForA)
+            // Pieces B/C — class-method overrides + overloaded functions.
+            encmCheckClassesAndOverloads(stmts, source, fileName, enums)
+        }
+    }
+
+    private fun encmScanStmts(stmts: List<Statement>, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
+        for (st in stmts) encmScanStmt(st, source, fileName, enums)
+    }
+
+    private fun encmScanStmt(stmt: Statement, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
+        when (stmt) {
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { encmScanStmts(it.statements, source, fileName, enums) }
+                is Constructor -> m.body?.let { encmScanStmts(it.statements, source, fileName, enums) }
+                is GetAccessor -> m.body?.let { encmScanStmts(it.statements, source, fileName, enums) }
+                is SetAccessor -> m.body?.let { encmScanStmts(it.statements, source, fileName, enums) }
+                is PropertyDeclaration -> m.initializer?.let { encmCheckExpr(it, source, fileName, enums) }
+                else -> {}
+            }
+            is FunctionDeclaration -> stmt.body?.let { encmScanStmts(it.statements, source, fileName, enums) }
+            is ExpressionStatement -> encmCheckExpr(stmt.expression, source, fileName, enums)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { encmCheckExpr(it, source, fileName, enums) }
+            is ReturnStatement -> stmt.expression?.let { encmCheckExpr(it, source, fileName, enums) }
+            is ThrowStatement -> stmt.expression?.let { encmCheckExpr(it, source, fileName, enums) }
+            is Block -> encmScanStmts(stmt.statements, source, fileName, enums)
+            is IfStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); encmScanStmt(stmt.thenStatement, source, fileName, enums); stmt.elseStatement?.let { encmScanStmt(it, source, fileName, enums) } }
+            is ForStatement -> {
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { encmCheckExpr(it, source, fileName, enums) } }
+                (stmt.initializer as? Expression)?.let { encmCheckExpr(it, source, fileName, enums) }
+                stmt.condition?.let { encmCheckExpr(it, source, fileName, enums) }
+                stmt.incrementor?.let { encmCheckExpr(it, source, fileName, enums) }
+                encmScanStmt(stmt.statement, source, fileName, enums)
+            }
+            is ForInStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); encmScanStmt(stmt.statement, source, fileName, enums) }
+            is ForOfStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); encmScanStmt(stmt.statement, source, fileName, enums) }
+            is WhileStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); encmScanStmt(stmt.statement, source, fileName, enums) }
+            is DoStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); encmScanStmt(stmt.statement, source, fileName, enums) }
+            is SwitchStatement -> { encmCheckExpr(stmt.expression, source, fileName, enums); for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; encmScanStmts(cs, source, fileName, enums) } }
+            is TryStatement -> { encmScanStmts(stmt.tryBlock.statements, source, fileName, enums); stmt.catchClause?.let { encmScanStmts(it.block.statements, source, fileName, enums) }; stmt.finallyBlock?.let { encmScanStmts(it.statements, source, fileName, enums) } }
+            is LabeledStatement -> encmScanStmt(stmt.statement, source, fileName, enums)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { encmScanStmts(it.statements, source, fileName, enums) }
+            else -> {}
+        }
+    }
+
+    private fun encmCheckExpr(expr: Expression, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
+        when (expr) {
+            is BinaryExpression -> {
+                var cur: Expression = expr
+                while (cur is BinaryExpression) { encmCheckExpr(cur.right, source, fileName, enums); cur = cur.left }
+                encmCheckExpr(cur, source, fileName, enums)
+            }
+            is ParenthesizedExpression -> encmCheckExpr(expr.expression, source, fileName, enums)
+            is CallExpression -> { encmCheckExpr(expr.expression, source, fileName, enums); expr.arguments.forEach { encmCheckExpr(it, source, fileName, enums) } }
+            is NewExpression -> { encmCheckExpr(expr.expression, source, fileName, enums); expr.arguments?.forEach { encmCheckExpr(it, source, fileName, enums) } }
+            is PropertyAccessExpression -> {
+                // Piece A: `<ns>.<E>.<name>` where the receiver resolves to a collected enum.
+                // Gate to a QUALIFIED receiver (a PropertyAccess like `second.E`): bare-enum
+                // access (`U8.bit_2`) is already owned by the standard checkPropertyAccess path
+                // which emits TS2551/TS2339 with spelling suggestions (exactSpellingSuggestion).
+                val recvKey = if (expr.expression is PropertyAccessExpression) exprDottedName(expr.expression) else null
+                if (recvKey != null) {
+                    val info = enums[recvKey]
+                    if (info != null) {
+                        val mem = expr.name.text
+                        if (mem !in info.memberOrder && mem !in RUNTIME_PROPERTIES) {
+                            val (line, ch) = getLineAndCharacterOfPosition(source, expr.name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$mem' does not exist on type 'typeof ${info.simpleName}'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = ch,
+                                start = expr.name.pos, length = mem.length,
+                            ))
+                        }
+                    }
+                }
+                encmCheckExpr(expr.expression, source, fileName, enums)
+            }
+            is ElementAccessExpression -> { encmCheckExpr(expr.expression, source, fileName, enums); encmCheckExpr(expr.argumentExpression, source, fileName, enums) }
+            is ConditionalExpression -> { encmCheckExpr(expr.condition, source, fileName, enums); encmCheckExpr(expr.whenTrue, source, fileName, enums); encmCheckExpr(expr.whenFalse, source, fileName, enums) }
+            is ArrayLiteralExpression -> expr.elements.forEach { encmCheckExpr(it, source, fileName, enums) }
+            is SpreadElement -> encmCheckExpr(expr.expression, source, fileName, enums)
+            is PrefixUnaryExpression -> encmCheckExpr(expr.operand, source, fileName, enums)
+            is PostfixUnaryExpression -> encmCheckExpr(expr.operand, source, fileName, enums)
+            is AsExpression -> encmCheckExpr(expr.expression, source, fileName, enums)
+            is NonNullExpression -> encmCheckExpr(expr.expression, source, fileName, enums)
+            else -> {}
+        }
+    }
+
+    private fun exprDottedName(e: Expression): String? = when (e) {
+        is Identifier -> e.text
+        is PropertyAccessExpression -> exprDottedName(e.expression)?.let { "$it.${e.name.text}" }
+        else -> null
+    }
+
+    /** B463: collect dotted keys of all (possibly nested) namespace declarations, so piece A
+     *  can skip enums merged with a same-name namespace (whose value members it can't see). */
+    private fun encmCollectNsKeys(stmts: List<Statement>, nsPath: String?, into: MutableSet<String>) {
+        for (st in stmts) if (st is ModuleDeclaration) {
+            val n = (st.name as? Identifier)?.text ?: continue
+            val key = if (nsPath != null) "$nsPath.$n" else n
+            into.add(key)
+            (st.body as? ModuleBlock)?.let { encmCollectNsKeys(it.statements, key, into) }
+        }
+    }
+
+    /** B463 helper: resolve a TypeReference param/return annotation to its dotted enum key. */
+    private fun encmEnumKeyOfType(t: TypeNode?, enums: Map<String, EnumAsgInfo>): String? = enumKeyOfTypeNode(t, enums)
+
+    private fun encmCheckClassesAndOverloads(stmts: List<Statement>, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
+        // Piece B — class-method overrides with incompatible-enum params.
+        val classByName = stmts.filterIsInstance<ClassDeclaration>().associateBy { it.name?.text }
+        for (cls in stmts.filterIsInstance<ClassDeclaration>()) {
+            val baseName = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.firstOrNull()?.expression?.let { (it as? Identifier)?.text } ?: continue
+            val base = classByName[baseName] ?: continue
+            val baseMethods = base.members.filterIsInstance<MethodDeclaration>().associateBy { (it.name as? Identifier)?.text }
+            for (m in cls.members.filterIsInstance<MethodDeclaration>()) {
+                if (m.body == null) continue
+                val mName = (m.name as? Identifier)?.text ?: continue
+                val bm = baseMethods[mName] ?: continue
+                val dParam = m.parameters.singleOrNull() ?: continue
+                val bParam = bm.parameters.singleOrNull() ?: continue
+                val dKey = encmEnumKeyOfType(dParam.type, enums) ?: continue
+                val bKey = encmEnumKeyOfType(bParam.type, enums) ?: continue
+                if (dKey == bKey) continue
+                val dEnum = enums[dKey]!!; val bEnum = enums[bKey]!!
+                // contravariant param: base param must be assignable to derived param, AND
+                // (under @strictFunctionTypes:false, bivariant) derived to base — fire only
+                // when NEITHER relates, i.e. genuinely-incompatible enums.
+                if (enumAsgFailure(bEnum, dEnum) == null || enumAsgFailure(dEnum, bEnum) == null) continue
+                val dDisp = dEnum.qualifiedDisplay; val bDisp = bEnum.qualifiedDisplay
+                val pName = (dParam.name as? Identifier)?.text ?: "param"
+                val bpName = (bParam.name as? Identifier)?.text ?: "param"
+                val dRet = m.type?.let { typeNodeDisplayOrNull(it) } ?: "void"
+                val bRet = bm.type?.let { typeNodeDisplayOrNull(it) } ?: "void"
+                val nameNode = m.name as? Identifier ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$mName' in type '${cls.name?.text}' is not assignable to the same property in base type '$baseName'.",
+                    category = DiagnosticCategory.Error, code = 2416,
+                    fileName = fileName, line = line, character = ch,
+                    start = nameNode.pos, length = mName.length,
+                    messageChain = listOf(
+                        "  Type '($pName: $dDisp) => $dRet' is not assignable to type '($bpName: $bDisp) => $bRet'.",
+                        "    Types of parameters '$pName' and '$bpName' are incompatible.",
+                        "      Type '$bDisp' is not assignable to type '$dDisp'.",
+                    ),
+                ))
+            }
+        }
+        // Piece C — overloaded functions: overload-sig return enum vs impl return enum.
+        val byName = LinkedHashMap<String, MutableList<FunctionDeclaration>>()
+        for (st in stmts) if (st is FunctionDeclaration) {
+            val n = st.name?.text ?: continue
+            byName.getOrPut(n) { mutableListOf() }.add(st)
+        }
+        for ((_, group) in byName) {
+            if (group.size < 2) continue
+            val impl = group.firstOrNull { it.body != null } ?: continue
+            val implKey = encmEnumKeyOfType(impl.type, enums) ?: continue
+            val implEnum = enums[implKey]!!
+            val implName = impl.name as? Identifier ?: continue
+            val (il, ic) = getLineAndCharacterOfPosition(source, implName.pos)
+            for (ov in group) {
+                if (ov.body != null) continue
+                val ovKey = encmEnumKeyOfType(ov.type, enums) ?: continue
+                if (ovKey == implKey) continue
+                val ovEnum = enums[ovKey]!!
+                // overload incompatible with impl iff impl return not assignable to overload return.
+                if (enumAsgFailure(implEnum, ovEnum) == null) continue
+                val ovName = ov.name as? Identifier ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, ovName.pos)
+                diagnostics.add(Diagnostic(
+                    message = "This overload signature is not compatible with its implementation signature.",
+                    category = DiagnosticCategory.Error, code = 2394,
+                    fileName = fileName, line = line, character = ch,
+                    start = ovName.pos, length = ovName.text.length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "The implementation signature is declared here.",
+                        category = DiagnosticCategory.Message, code = 2750,
+                        fileName = fileName, line = il, character = ic,
+                        start = implName.pos, length = implName.text.length,
+                    )),
+                ))
+            }
+        }
+    }
+
+    /** B463: render a TypeNode for the TS2416 sig chain, qualified-name aware. */
+    private fun typeNodeDisplayOrNull(t: TypeNode): String? = when (t) {
+        is TypeReference -> when (val tn = t.typeName) {
+            is Identifier -> tn.text
+            is QualifiedName -> qualifiedNameToDottedString(tn)
+            else -> null
+        }
+        is KeywordTypeNode -> formatTypeForDisplay(t)
+        else -> null
     }
 
     /** B425: recursively collect enum declarations (merging blocks of the same name) keyed by
