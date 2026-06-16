@@ -1509,6 +1509,10 @@ class Checker(
         checkBlockScopedDeclarationsInSingleBody()
         // 62a2. Check block-NESTED let/const redeclarations (TS2451) — binder doesn't bind these
         checkBlockScopedRedeclarations()
+        // 62a3. Check function-scope var-hoist redeclarations (TS2451) — a `var` hoisting
+        //       out of a nested block into a function body whose top declares a same-named
+        //       let/const (binder hoists nested vars into namespace/file scopes but not functions).
+        checkVarHoistRedeclaration()
         // 62b. Check var shadowing outer block-scoped name (TS2481)
         checkOuterScopeVarShadowing()
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
@@ -56610,6 +56614,173 @@ interface DataView {
         for (s in stmts) descendBlockRedecl(s, source, fileName)
     }
 
+    // -----------------------------------------------------------------------
+    // TS2451: function-scope var-hoist redeclaration.
+    // A `var` (or for-init `var`) hoisting OUT of a nested block INTO a function
+    // body whose TOP level declares a same-named `let`/`const` is a block-scoped
+    // redeclaration — both the let/const AND the hoisted var get TS2451.
+    // The binder hoists nested-block vars into NAMESPACE/FILE scopes (so the
+    // duplicate pipeline already fires TS2451 there) and body-top for-init vars
+    // are collected by checkDuplicateDeclarations, but neither covers a function
+    // body's nested-block vars — hence this dedicated function-scope walker.
+    // Companion: checkOuterScopeVarShadowing suppresses its TS2481 for this shape.
+    // -----------------------------------------------------------------------
+    private fun checkVarHoistRedeclaration() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) findFnBodiesForVarHoist(stmt, source, fileName)
+        }
+    }
+
+    /** Traverse to every function-like body and run the body-top-let vs nested-var
+     *  conflict analysis on it; recurse to reach deeper function bodies. */
+    private fun findFnBodiesForVarHoist(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let { processFnBodyVarHoist(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                val body = when (m) {
+                    is MethodDeclaration -> m.body
+                    is Constructor -> m.body
+                    is GetAccessor -> m.body
+                    is SetAccessor -> m.body
+                    else -> null
+                }
+                body?.let { processFnBodyVarHoist(it.statements, source, fileName) }
+            }
+            // Namespace/file scopes are binder-handled; only recurse to reach nested functions.
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+            is Block -> stmt.statements.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+            is IfStatement -> {
+                findFnBodiesForVarHoist(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { findFnBodiesForVarHoist(it, source, fileName) }
+            }
+            is WhileStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is DoStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is ForStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is ForInStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is ForOfStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is LabeledStatement -> findFnBodiesForVarHoist(stmt.statement, source, fileName)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+                stmt.catchClause?.block?.statements?.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                ((clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements)
+                    ?.forEach { findFnBodiesForVarHoist(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun processFnBodyVarHoist(stmts: List<Statement>, source: String, fileName: String) {
+        // 1. body-top let/const name -> declaration nodes
+        val topBlockScoped = LinkedHashMap<String, MutableList<Identifier>>()
+        for (s in stmts) {
+            if (s is VariableStatement &&
+                (s.declarationList.flags == SyntaxKind.LetKeyword || s.declarationList.flags == SyntaxKind.ConstKeyword)) {
+                for (d in s.declarationList.declarations) {
+                    (d.name as? Identifier)?.let { topBlockScoped.getOrPut(it.text) { mutableListOf() }.add(it) }
+                }
+            }
+        }
+        if (topBlockScoped.isNotEmpty()) {
+            // 2. var (incl. for-init var) hoisted from NESTED blocks (body-top vars are
+            //    handled by checkDuplicateDeclarations; only nested-block vars are ours).
+            val hoistedVars = LinkedHashMap<String, MutableList<Identifier>>()
+            for (s in stmts) collectHoistedVarsInNestedBlocks(s, hoistedVars, atBodyTop = true)
+            // 3. emit TS2451 on the let/const AND on the conflicting hoisted var(s).
+            for ((name, varNodes) in hoistedVars) {
+                val letNodes = topBlockScoped[name] ?: continue
+                for (n in letNodes) emitTs2451Redeclare(n, name, source, fileName)
+                for (n in varNodes) emitTs2451Redeclare(n, name, source, fileName)
+            }
+        }
+        // 4. recurse to reach nested function bodies.
+        for (s in stmts) findFnBodiesForVarHoist(s, source, fileName)
+    }
+
+    /** Collect `var`/for-init-`var` binding nodes declared in NESTED blocks (atBodyTop=false).
+     *  Stops at inner function/class/module boundaries (those are separate scopes). */
+    private fun collectHoistedVarsInNestedBlocks(
+        stmt: Statement, out: MutableMap<String, MutableList<Identifier>>, atBodyTop: Boolean,
+    ) {
+        when (stmt) {
+            is VariableStatement -> {
+                if (!atBodyTop && stmt.declarationList.flags == SyntaxKind.VarKeyword) {
+                    for (d in stmt.declarationList.declarations) collectVarBindingNameNodes(d.name, out)
+                }
+            }
+            is Block -> stmt.statements.forEach { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+            is IfStatement -> {
+                collectHoistedVarsInNestedBlocks(stmt.thenStatement, out, atBodyTop = false)
+                stmt.elseStatement?.let { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+            }
+            is WhileStatement -> collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop = false)
+            is DoStatement -> collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop = false)
+            is ForStatement -> {
+                // A body-top for-init var is collected by checkDuplicateDeclarations; only a
+                // NESTED for-init var is ours. The loop body is always nested.
+                val init = stmt.initializer
+                if (!atBodyTop && init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (d in init.declarations) collectVarBindingNameNodes(d.name, out)
+                }
+                collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop = false)
+            }
+            is ForInStatement -> {
+                val init = stmt.initializer
+                if (!atBodyTop && init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (d in init.declarations) collectVarBindingNameNodes(d.name, out)
+                }
+                collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop = false)
+            }
+            is ForOfStatement -> {
+                val init = stmt.initializer
+                if (!atBodyTop && init is VariableDeclarationList && init.flags == SyntaxKind.VarKeyword) {
+                    for (d in init.declarations) collectVarBindingNameNodes(d.name, out)
+                }
+                collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop = false)
+            }
+            is LabeledStatement -> collectHoistedVarsInNestedBlocks(stmt.statement, out, atBodyTop)
+            is TryStatement -> {
+                stmt.tryBlock.statements.forEach { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+                stmt.catchClause?.block?.statements?.forEach { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+                stmt.finallyBlock?.statements?.forEach { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+            }
+            is SwitchStatement -> for (clause in stmt.caseBlock) {
+                ((clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements)
+                    ?.forEach { collectHoistedVarsInNestedBlocks(it, out, atBodyTop = false) }
+            }
+            // Function/class/module bodies are separate scopes — do not descend.
+            else -> {}
+        }
+    }
+
+    /** Collect identifier name->node from a var binding pattern. */
+    private fun collectVarBindingNameNodes(binding: Expression, out: MutableMap<String, MutableList<Identifier>>) {
+        when (binding) {
+            is Identifier -> out.getOrPut(binding.text) { mutableListOf() }.add(binding)
+            is ObjectBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) collectVarBindingNameNodes(el.name, out)
+            }
+            is ArrayBindingPattern -> for (el in binding.elements) {
+                if (el is BindingElement) collectVarBindingNameNodes(el.name, out)
+            }
+            else -> {}
+        }
+    }
+
+    private fun emitTs2451Redeclare(node: Identifier, name: String, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, node.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot redeclare block-scoped variable '$name'.",
+            category = DiagnosticCategory.Error, code = 2451,
+            fileName = fileName, line = line, character = character, start = node.pos, length = name.length,
+        ))
+    }
+
     private fun checkErasableSyntaxOnly() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -67043,8 +67214,9 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            // Walk file-level statements with empty outer scope chain (isTopLevel=true)
-            walkBodyForVarShadowing(result.sourceFile.statements, source, fileName, mutableListOf(), isTopLevel = true)
+            // Walk file-level statements with empty outer scope chain (isTopLevel=true).
+            // bodyTop=null at file scope: a file-top let + nested var is NOT suppressed here.
+            walkBodyForVarShadowing(result.sourceFile.statements, source, fileName, mutableListOf(), isTopLevel = true, bodyTop = null)
         }
     }
 
@@ -67058,7 +67230,8 @@ interface DataView {
         source: String,
         fileName: String,
         outerScopes: MutableList<MutableSet<String>>,
-        isTopLevel: Boolean = false
+        isTopLevel: Boolean = false,
+        bodyTop: Set<String>? = null,
     ) {
         // Collect the let/const names at THIS block level.
         val currentScope = mutableSetOf<String>()
@@ -67068,8 +67241,11 @@ interface DataView {
         //   So don't include currentScope when checking var.
         // - Inside a BLOCK (isTopLevel=false): var+let/const in same block fires TS2481.
         //   Include currentScope when checking var.
+        // [bodyTop]: let/const names at the nearest enclosing FUNCTION/MODULE body top.
+        //   A var matching one of those is a TS2451 redeclaration (handled by the binder
+        //   pipeline / checkVarHoistRedeclaration), so TS2481 is suppressed for it.
         for (stmt in stmts) {
-            walkStmtForVarShadowing(stmt, source, fileName, outerScopes, currentScope, isTopLevel)
+            walkStmtForVarShadowing(stmt, source, fileName, outerScopes, currentScope, isTopLevel, bodyTop)
         }
     }
 
@@ -67118,7 +67294,8 @@ interface DataView {
         fileName: String,
         outerScopes: MutableList<MutableSet<String>>,
         currentScope: MutableSet<String>,
-        isTopLevel: Boolean = false
+        isTopLevel: Boolean = false,
+        bodyTop: Set<String>? = null,
     ) {
         when (stmt) {
             is VariableStatement -> {
@@ -67129,7 +67306,7 @@ interface DataView {
                     // (top-level var+let fires TS2300, not TS2481).
                     for (d in stmt.declarationList.declarations) {
                         checkVarDeclForShadowing(d.name, source, fileName, outerScopes,
-                            extraScope = if (isTopLevel) null else currentScope)
+                            extraScope = if (isTopLevel) null else currentScope, bodyTop = bodyTop)
                     }
                 }
             }
@@ -67145,7 +67322,7 @@ interface DataView {
                     } else {
                         // for (var v = 0; ...) — check for shadowing
                         for (d in init.declarations) {
-                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes, bodyTop = bodyTop)
                         }
                     }
                 }
@@ -67154,7 +67331,7 @@ interface DataView {
                 outerScopes.add(currentScope)
                 outerScopes.add(loopScope)
                 val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
-                for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf())
+                for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf(), bodyTop = bodyTop)
                 outerScopes.removeAt(outerScopes.lastIndex) // remove loopScope
                 outerScopes.removeAt(outerScopes.lastIndex) // remove currentScope
             }
@@ -67169,14 +67346,14 @@ interface DataView {
                     } else {
                         // var: check for shadowing
                         for (d in init.declarations) {
-                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes, bodyTop = bodyTop)
                         }
                     }
                     // Push currentScope as outer before walking body
                     outerScopes.add(currentScope)
                     outerScopes.add(loopScope)
                     val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
-                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf())
+                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf(), bodyTop = bodyTop)
                     outerScopes.removeAt(outerScopes.lastIndex) // remove loopScope
                     outerScopes.removeAt(outerScopes.lastIndex) // remove currentScope
                 }
@@ -67192,14 +67369,14 @@ interface DataView {
                     } else {
                         // var: check for shadowing
                         for (d in init.declarations) {
-                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes)
+                            checkVarDeclForShadowing(d.name, source, fileName, outerScopes, bodyTop = bodyTop)
                         }
                     }
                     // Push currentScope as outer before walking body
                     outerScopes.add(currentScope)
                     outerScopes.add(loopScope)
                     val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
-                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf())
+                    for (s in bodyStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, mutableSetOf(), bodyTop = bodyTop)
                     outerScopes.removeAt(outerScopes.lastIndex) // remove loopScope
                     outerScopes.removeAt(outerScopes.lastIndex) // remove currentScope
                 }
@@ -67207,38 +67384,38 @@ interface DataView {
             is Block -> {
                 // Nested block: add currentScope as outer before recursing
                 outerScopes.add(currentScope)
-                walkBodyForVarShadowing(stmt.statements, source, fileName, outerScopes)
+                walkBodyForVarShadowing(stmt.statements, source, fileName, outerScopes, bodyTop = bodyTop)
                 outerScopes.removeAt(outerScopes.lastIndex)
             }
             is IfStatement -> {
                 // Walk both branches as inner block scopes (even if no braces)
                 outerScopes.add(currentScope)
                 val thenStmts = if (stmt.thenStatement is Block) (stmt.thenStatement as Block).statements else listOf(stmt.thenStatement)
-                walkBodyForVarShadowing(thenStmts, source, fileName, outerScopes)
+                walkBodyForVarShadowing(thenStmts, source, fileName, outerScopes, bodyTop = bodyTop)
                 val elseStmt = stmt.elseStatement
                 if (elseStmt != null) {
                     val elseStmts = if (elseStmt is Block) (elseStmt as Block).statements else listOf(elseStmt)
-                    walkBodyForVarShadowing(elseStmts, source, fileName, outerScopes)
+                    walkBodyForVarShadowing(elseStmts, source, fileName, outerScopes, bodyTop = bodyTop)
                 }
                 outerScopes.removeAt(outerScopes.lastIndex)
             }
             is WhileStatement -> {
                 outerScopes.add(currentScope)
                 val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
-                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes)
+                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes, bodyTop = bodyTop)
                 outerScopes.removeAt(outerScopes.lastIndex)
             }
             is DoStatement -> {
                 outerScopes.add(currentScope)
                 val bodyStmts = if (stmt.statement is Block) (stmt.statement as Block).statements else listOf(stmt.statement)
-                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes)
+                walkBodyForVarShadowing(bodyStmts, source, fileName, outerScopes, bodyTop = bodyTop)
                 outerScopes.removeAt(outerScopes.lastIndex)
             }
             is TryStatement -> {
                 outerScopes.add(currentScope)
-                walkBodyForVarShadowing(stmt.tryBlock.statements, source, fileName, outerScopes)
-                stmt.catchClause?.let { walkBodyForVarShadowing(it.block.statements, source, fileName, outerScopes) }
-                stmt.finallyBlock?.let { walkBodyForVarShadowing(it.statements, source, fileName, outerScopes) }
+                walkBodyForVarShadowing(stmt.tryBlock.statements, source, fileName, outerScopes, bodyTop = bodyTop)
+                stmt.catchClause?.let { walkBodyForVarShadowing(it.block.statements, source, fileName, outerScopes, bodyTop = bodyTop) }
+                stmt.finallyBlock?.let { walkBodyForVarShadowing(it.statements, source, fileName, outerScopes, bodyTop = bodyTop) }
                 outerScopes.removeAt(outerScopes.lastIndex)
             }
             is SwitchStatement -> {
@@ -67249,14 +67426,17 @@ interface DataView {
                         else -> emptyList()
                     }
                     // Switch clauses share one scope (they don't get separate scopes)
-                    for (s in clauseStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, currentScope)
+                    for (s in clauseStmts) walkStmtForVarShadowing(s, source, fileName, outerScopes, currentScope, bodyTop = bodyTop)
                 }
             }
-            is LabeledStatement -> walkStmtForVarShadowing(stmt.statement, source, fileName, outerScopes, currentScope)
-            // Function/class declarations start fresh function scopes — don't recurse with current chain
+            is LabeledStatement -> walkStmtForVarShadowing(stmt.statement, source, fileName, outerScopes, currentScope, isTopLevel, bodyTop)
+            // Function/class declarations start fresh function scopes — bodyTop is recomputed
+            // from the new body's top-level let/const names.
             is FunctionDeclaration -> {
-                // Function body is a new top-level scope (isTopLevel=true)
-                stmt.body?.let { walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf(), isTopLevel = true) }
+                stmt.body?.let {
+                    val newTop = mutableSetOf<String>(); collectLetConstNamesInStmts(it.statements, newTop)
+                    walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf(), isTopLevel = true, bodyTop = newTop)
+                }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) {
@@ -67267,14 +67447,19 @@ interface DataView {
                         is SetAccessor -> member.body
                         else -> null
                     }
-                    // Method bodies are new top-level scopes
-                    body?.let { walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf(), isTopLevel = true) }
+                    body?.let {
+                        val newTop = mutableSetOf<String>(); collectLetConstNamesInStmts(it.statements, newTop)
+                        walkBodyForVarShadowing(it.statements, source, fileName, mutableListOf(), isTopLevel = true, bodyTop = newTop)
+                    }
                 }
             }
             is ModuleDeclaration -> {
                 val body = stmt.body
-                // Module block is a new top-level scope
-                if (body is ModuleBlock) walkBodyForVarShadowing(body.statements, source, fileName, mutableListOf(), isTopLevel = true)
+                // Module block is a new top-level scope; bodyTop = namespace-top let/const.
+                if (body is ModuleBlock) {
+                    val newTop = mutableSetOf<String>(); collectLetConstNamesInStmts(body.statements, newTop)
+                    walkBodyForVarShadowing(body.statements, source, fileName, mutableListOf(), isTopLevel = true, bodyTop = newTop)
+                }
             }
             else -> {}
         }
@@ -67291,11 +67476,17 @@ interface DataView {
         source: String,
         fileName: String,
         outerScopes: MutableList<MutableSet<String>>,
-        extraScope: MutableSet<String>? = null
+        extraScope: MutableSet<String>? = null,
+        bodyTop: Set<String>? = null,
     ) {
         when (binding) {
             is Identifier -> {
                 val name = binding.text
+                // A var matching the nearest FUNCTION/MODULE body-top let/const is a
+                // block-scoped REDECLARATION (TS2451 — emitted by the binder pipeline for
+                // namespace/file scopes, or checkVarHoistRedeclaration for function bodies),
+                // NOT a TS2481 "initialize outer scoped variable" conflict. Suppress here.
+                if (bodyTop != null && name in bodyTop) return
                 var found = false
                 if (extraScope != null && name in extraScope) found = true
                 if (!found) {
@@ -67319,10 +67510,10 @@ interface DataView {
                 }
             }
             is ObjectBindingPattern -> for (el in binding.elements) {
-                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope)
+                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope, bodyTop)
             }
             is ArrayBindingPattern -> for (el in binding.elements) {
-                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope)
+                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope, bodyTop)
             }
             else -> {}
         }
