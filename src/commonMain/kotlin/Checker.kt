@@ -40805,32 +40805,120 @@ interface DataView {
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
             val genFns = mutableMapOf<String, FunctionDeclaration>()
+            // B460b: count declarations per generic-function name (an OVERLOADED callee
+            // re-infers type params including the contextually-typed arrow RETURN, so its
+            // result type is the SUPERTYPE of {anchor, arrow-return} — "fixing type
+            // parameters repeatedly"; a single-decl callee fixes the anchor first).
+            val declCounts = mutableMapOf<String, Int>()
             for (stmt in result.sourceFile.statements) {
                 if (stmt is FunctionDeclaration && !stmt.typeParameters.isNullOrEmpty()) {
                     val nm = stmt.name?.text ?: continue
                     if (nm !in genFns) genFns[nm] = stmt
+                    declCounts[nm] = (declCounts[nm] ?: 0) + 1
                 }
             }
             if (genFns.isEmpty()) continue
-            walkGenericArrowCalls(result.sourceFile.statements, genFns, source, fileName)
+            walkGenericArrowCalls(result.sourceFile.statements, genFns, declCounts, source, fileName)
         }
     }
 
     private fun walkGenericArrowCalls(
-        stmts: List<Statement>, genFns: Map<String, FunctionDeclaration>, source: String, fileName: String,
+        stmts: List<Statement>, genFns: Map<String, FunctionDeclaration>,
+        declCounts: Map<String, Int>, source: String, fileName: String,
     ) {
+        // B460b: per-statement-list var-result-type tracking for the TS2403 redeclaration
+        // case (`var x = foo(...); var x = bar(...)` where foo/bar are these generic-arrow
+        // calls resolving to DIFFERENT result types). Fresh per statement list → FP-safe
+        // (won't cross function/block scopes); `var` is function-scoped so the file-top-level
+        // pair shares one map.
+        val resultTypes = mutableMapOf<String, Pair<Type, Identifier>>()
         for (stmt in stmts) when (stmt) {
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                (d.initializer as? CallExpression)?.let { processGenericArrowCall(it, genFns, source, fileName) }
+                val rt = (d.initializer as? CallExpression)?.let {
+                    processGenericArrowCall(it, genFns, declCounts, source, fileName)
+                }
+                val nameNode = d.name as? Identifier
+                if (rt != null && nameNode != null) {
+                    val prior = resultTypes[nameNode.text]
+                    if (prior != null) {
+                        val firstName = typeToString(prior.first)
+                        val thisName = typeToString(rt)
+                        if (firstName != thisName) emitGenericArrowRedeclare(
+                            prior, firstName, nameNode, thisName, source, fileName,
+                        )
+                    } else {
+                        resultTypes[nameNode.text] = rt to nameNode
+                    }
+                }
             }
             is ExpressionStatement -> (stmt.expression as? CallExpression)?.let {
-                processGenericArrowCall(it, genFns, source, fileName)
+                processGenericArrowCall(it, genFns, declCounts, source, fileName)
             }
-            is Block -> walkGenericArrowCalls(stmt.statements, genFns, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkGenericArrowCalls(it.statements, genFns, source, fileName) }
-            is FunctionDeclaration -> stmt.body?.let { walkGenericArrowCalls(it.statements, genFns, source, fileName) }
+            is Block -> walkGenericArrowCalls(stmt.statements, genFns, declCounts, source, fileName)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkGenericArrowCalls(it.statements, genFns, declCounts, source, fileName) }
+            is FunctionDeclaration -> stmt.body?.let { walkGenericArrowCalls(it.statements, genFns, declCounts, source, fileName) }
             else -> {}
         }
+    }
+
+    /** B460b: TS2403 + TS6203 for a `var` redeclared with a different generic-arrow-call
+     *  result type. */
+    private fun emitGenericArrowRedeclare(
+        prior: Pair<Type, Identifier>, firstName: String,
+        declName: Identifier, thisName: String, source: String, fileName: String,
+    ) {
+        val (line, character) = getLineAndCharacterOfPosition(source, declName.pos)
+        val firstNameNode = prior.second
+        val (fl, fc) = getLineAndCharacterOfPosition(source, firstNameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Subsequent variable declarations must have the same type.  Variable '${declName.text}' must be of type '$firstName', but here has type '$thisName'.",
+            category = DiagnosticCategory.Error, code = 2403,
+            fileName = fileName, line = line, character = character,
+            start = declName.pos, length = declName.text.length,
+            relatedInformation = listOf(Diagnostic(
+                message = "'${declName.text}' was also declared here.",
+                category = DiagnosticCategory.Message, code = 6203,
+                fileName = fileName, line = fl, character = fc,
+                start = firstNameNode.pos, length = firstNameNode.text.length,
+            )),
+        ))
+    }
+
+    /** B460b: the contextually-typed arrow's RETURN type, given the inferred type-param map.
+     *  Bodies handled: a bare param read, `param.prop`, and `param.method()` (no args). */
+    private fun genericArrowReturnType(arrow: ArrowFunction, ft: FunctionType, tpMap: Map<String, Type>): Type? {
+        if (arrow.parameters.size != 1 || ft.parameters.size != 1) return null
+        val arrowParamName = (arrow.parameters[0].name as? Identifier)?.text ?: return null
+        val substParamType = resolveTpNode(ft.parameters[0].type, tpMap) ?: return null
+        return when (val body = arrow.body) {
+            is Identifier -> if (body.text == arrowParamName) substParamType else null
+            is PropertyAccessExpression -> {
+                val recv = body.expression
+                if (recv is Identifier && recv.text == arrowParamName)
+                    getPropertyOfType(substParamType, body.name.text)?.let { getTypeOfSymbol(it) }
+                else null
+            }
+            is CallExpression -> {
+                val pae = body.expression as? PropertyAccessExpression ?: return null
+                val recv = pae.expression
+                if (recv is Identifier && recv.text == arrowParamName && body.arguments.isNullOrEmpty()) {
+                    val mSym = getPropertyOfType(substParamType, pae.name.text) ?: return null
+                    val mType = getTypeOfSymbol(mSym) as? Type.Object ?: return null
+                    mType.callSignatures?.firstOrNull()?.resolvedReturnType
+                } else null
+            }
+            else -> null
+        }
+    }
+
+    /** B460b: the common SUPERTYPE of [a] and [b] for the overloaded-callee result rule —
+     *  whichever the other is assignable to (object types only); null if undecidable. */
+    private fun genericArrowSupertype(a: Type, b: Type): Type? {
+        if (a === b) return a
+        if (a !is Type.Object || b !is Type.Object) return null
+        if (collectMissingProperties(a, b).isEmpty()) return b  // a <: b → b supertype
+        if (collectMissingProperties(b, a).isEmpty()) return a
+        return null
     }
 
     private fun resolveTpNode(node: TypeNode?, tpMap: Map<String, Type>): Type? {
@@ -40844,15 +40932,16 @@ interface DataView {
     }
 
     private fun processGenericArrowCall(
-        call: CallExpression, genFns: Map<String, FunctionDeclaration>, source: String, fileName: String,
-    ) {
-        val callee = call.expression as? Identifier ?: return
-        val fd = genFns[callee.text] ?: return
-        if (!call.typeArguments.isNullOrEmpty()) return // explicit type args: standard path
+        call: CallExpression, genFns: Map<String, FunctionDeclaration>,
+        declCounts: Map<String, Int>, source: String, fileName: String,
+    ): Type? {
+        val callee = call.expression as? Identifier ?: return null
+        val fd = genFns[callee.text] ?: return null
+        if (!call.typeArguments.isNullOrEmpty()) return null // explicit type args: standard path
         val tpNames = fd.typeParameters!!.mapNotNull { (it.name as? Identifier)?.text ?: it.name.text }.toSet()
-        if (tpNames.isEmpty()) return
+        if (tpNames.isEmpty()) return null
         val params = fd.parameters
-        val args = call.arguments ?: return
+        val args = call.arguments ?: return null
         val bareTpParams = mutableListOf<Pair<Int, String>>()
         val fnTypedParams = mutableListOf<Pair<Int, FunctionType>>()
         for ((i, p) in params.withIndex()) {
@@ -40862,38 +40951,48 @@ interface DataView {
                     (t.typeName as? Identifier)?.text in tpNames ->
                     bareTpParams.add(i to (t.typeName as Identifier).text)
                 t is FunctionType -> fnTypedParams.add(i to t)
-                else -> return // unhandled param shape → bail whole call (FP firewall)
+                else -> return null // unhandled param shape → bail whole call (FP firewall)
             }
         }
-        if (bareTpParams.size < 2 || fnTypedParams.isEmpty()) return
+        // B460b: relaxed from `< 2` to `< 1` so a SINGLE-anchor generic fn
+        // (`foo<T>(x: T, cb: (p: T) => T)`) participates. The FP firewall is the
+        // bail-on-any-non-bare-TP-param above + every-TP-inferable below.
+        if (bareTpParams.isEmpty() || fnTypedParams.isEmpty()) return null
         val tpMap = mutableMapOf<String, Type>()
         for ((i, tpName) in bareTpParams) {
-            if (i >= args.size) return
+            if (i >= args.size) return null
             val arg = args[i]
-            if (arg is SpreadElement) return
-            val at = try { widenType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return }
-            if (at === errorType || at === anyType) return
+            if (arg is SpreadElement) return null
+            val at = try { widenType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return null }
+            if (at === errorType || at === anyType) return null
             if (!tpMap.containsKey(tpName)) tpMap[tpName] = at
         }
-        if (!tpNames.all { tpMap.containsKey(it) }) return
+        if (!tpNames.all { tpMap.containsKey(it) }) return null
+        val isOverloaded = (declCounts[callee.text] ?: 1) >= 2
+        // tpMap for the RESULT type: a single-decl callee fixes type params from the
+        // anchors (tpMap as-is); an OVERLOADED callee re-infers the callback's return TP
+        // as the supertype of {anchor, arrow-return} (the "fixing type parameters
+        // repeatedly" rule). Built only when overloaded (avoids extra work otherwise).
+        val resultTpMap = if (isOverloaded) tpMap.toMutableMap() else tpMap
         for ((i, ft) in fnTypedParams) {
             if (i >= args.size) continue
             val arrow = args[i] as? ArrowFunction ?: continue
-            if (arrow.parameters.size != 1 || ft.parameters.size != 1) continue
-            val arrowParamName = (arrow.parameters[0].name as? Identifier)?.text ?: continue
-            val substParamType = resolveTpNode(ft.parameters[0].type, tpMap) ?: continue
             val substRetType = resolveTpNode(ft.type, tpMap) ?: continue
-            val arrowRet: Type = when (val body = arrow.body) {
-                is Identifier -> if (body.text == arrowParamName) substParamType else continue
-                is PropertyAccessExpression -> {
-                    val recv = body.expression
-                    if (recv is Identifier && recv.text == arrowParamName)
-                        getPropertyOfType(substParamType, body.name.text)?.let { getTypeOfSymbol(it) } ?: continue
-                    else continue
-                }
-                else -> continue
-            }
+            val arrowRet = genericArrowReturnType(arrow, ft, tpMap) ?: continue
             if (substRetType !is Type.Object || arrowRet !is Type.Object) continue
+            // Overloaded-result contribution: re-map the callback's return TP to the
+            // supertype of {its anchor value, the arrow return}.
+            if (isOverloaded) {
+                val retTpName = (ft.type as? TypeReference)?.takeIf { it.typeArguments.isNullOrEmpty() }
+                    ?.let { (it.typeName as? Identifier)?.text }?.takeIf { it in tpNames }
+                if (retTpName != null) tpMap[retTpName]?.let { anchor ->
+                    genericArrowSupertype(anchor, arrowRet)?.let { resultTpMap[retTpName] = it }
+                }
+            }
+            // TS2741 fires only for a SINGLE-decl callee (the anchor is fixed first, so the
+            // arrow-return mismatch is observable). An overloaded callee widens the TP to the
+            // supertype, so no mismatch is reported at the arrow.
+            if (isOverloaded) continue
             val missing = collectMissingProperties(arrowRet, substRetType)
             if (missing.size != 1) continue // single-missing only (TS2741); multi defers
             val propName = missing[0]
@@ -40927,6 +41026,9 @@ interface DataView {
                 relatedInformation = related,
             ))
         }
+        // Result type of the whole call (used by the var-redeclaration TS2403 tracker): the
+        // function's declared return type with the (single/overloaded) tpMap substituted.
+        return resolveTpNode(fd.type, resultTpMap)
     }
 
     private fun checkMissingImplInStatements(
