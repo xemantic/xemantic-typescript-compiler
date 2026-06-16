@@ -40777,7 +40777,26 @@ interface DataView {
         statements: List<Statement>,
         source: String,
         fileName: String,
+        atBlockLevel: Boolean = false,
     ) {
+        // B459b: block-NESTED function declarations are NOT bound (B83.5), so the
+        // binder's TS2393 duplicate-implementation pipeline never sees them. At plain
+        // block level, detect functions sharing a name that ALL carry a present body
+        // (≥2) → TS2393 on each. File/namespace level is handled by the binder pipeline
+        // (gated atBlockLevel to avoid double-emit).
+        if (atBlockLevel) {
+            val bodiedByName = mutableMapOf<String, MutableList<FunctionDeclaration>>()
+            for (stmt in statements) {
+                if (stmt is FunctionDeclaration && hasPresentBody(stmt.body)) {
+                    val nm = stmt.name?.text ?: continue
+                    if (nm.isEmpty()) continue
+                    bodiedByName.getOrPut(nm) { mutableListOf() }.add(stmt)
+                }
+            }
+            for ((_, group) in bodiedByName) {
+                if (group.size >= 2) for (fn in group) fn.name?.let { emitTS2393(it, source, fileName) }
+            }
+        }
         // Check file-level function declarations
         for (i in statements.indices) {
             val stmt = statements[i]
@@ -40831,7 +40850,7 @@ interface DataView {
                         checkMissingImplInStatements(body.statements, source, fileName)
                     }
                 }
-                is Block -> checkMissingImplInStatements(stmt.statements, source, fileName)
+                is Block -> checkMissingImplInStatements(stmt.statements, source, fileName, atBlockLevel = true)
                 is IfStatement -> {
                     checkMissingImplInStatements(listOf(stmt.thenStatement), source, fileName)
                     stmt.elseStatement?.let {
@@ -53964,11 +53983,11 @@ interface DataView {
         }
     }
 
-    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbientContext: Boolean = false) {
-        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName, inAmbientContext)
+    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbientContext: Boolean = false, atTopLevel: Boolean = true) {
+        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName, inAmbientContext, atTopLevel)
     }
 
-    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String, inAmbientContext: Boolean = false) {
+    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String, inAmbientContext: Boolean = false, atTopLevel: Boolean = true) {
         when (stmt) {
             is ClassDeclaration -> {
                 checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
@@ -53977,24 +53996,28 @@ interface DataView {
                         is PropertyDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
                         is MethodDeclaration -> {
                             checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
                         }
-                        is Constructor -> m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                        is Constructor -> m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
                         is GetAccessor -> {
                             checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
                         }
                         is SetAccessor -> {
                             checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
                         }
                         else -> {}
                     }
                 }
             }
             is FunctionDeclaration -> {
-                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                stmt.body?.let { checkDupModInStatements(it.statements, source, fileName) }
+                // B459b: a non-top-level (plain-block / function-body) function with
+                // position-illegal modifiers gets TS1184 (walkSiblingsForTopLevel) which
+                // owns the modifier error — tsc skips the modifier-ordering/dup grammar
+                // check (TS1029/TS1030) there, so suppress checkModifiers in that case.
+                if (atTopLevel) checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
+                stmt.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
             }
             is VariableStatement -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             is InterfaceDeclaration -> {
@@ -54014,10 +54037,10 @@ interface DataView {
                 val nowAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
                 (stmt.body as? ModuleBlock)?.let { checkDupModInStatements(it.statements, source, fileName, nowAmbient) }
             }
-            is Block -> checkDupModInStatements(stmt.statements, source, fileName, inAmbientContext)
+            is Block -> checkDupModInStatements(stmt.statements, source, fileName, inAmbientContext, atTopLevel = false)
             is IfStatement -> {
-                checkDupModInStatement(stmt.thenStatement, source, fileName, inAmbientContext)
-                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName, inAmbientContext) }
+                checkDupModInStatement(stmt.thenStatement, source, fileName, inAmbientContext, atTopLevel)
+                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName, inAmbientContext, atTopLevel) }
             }
             is ExportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
             is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
@@ -83264,24 +83287,36 @@ interface DataView {
                 }
             }
             is FunctionDeclaration -> {
-                // B76.2: TS1184 — `export` / `export default` modifiers on
-                // FunctionDeclaration at non-top-level position. Squiggle at
-                // `export` keyword (length 6). FunctionDeclaration.pos is at
-                // `function` (parseExportDeclaration delegated after consuming
-                // `export`), so scan backward to locate the `export`.
-                if (!atTopLevel && ModifierFlag.Export in stmt.modifiers) {
-                    val exportPos = findKeywordPosBackward(source, stmt.pos, "export") ?: stmt.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, exportPos)
-                    diagnostics.add(Diagnostic(
-                        message = "Modifiers cannot appear here.",
-                        category = DiagnosticCategory.Error,
-                        code = 1184,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = exportPos,
-                        length = 6, // "export"
-                    ))
+                // B76.2/B459b: TS1184 — `export`/`declare`/`default` modifiers on a
+                // FunctionDeclaration at non-top-level position (a plain block or a
+                // function body — NOT a namespace/module body, which is atTopLevel).
+                // tsc reports ONE TS1184 at the LEFTMOST modifier keyword and skips the
+                // modifier-ordering grammar check (TS1029, suppressed in
+                // checkDupModInStatement when !atTopLevel). FunctionDeclaration.pos is at
+                // `function`, so scan backward for each present modifier and pick the min.
+                if (!atTopLevel) {
+                    val modPositions = buildList {
+                        if (ModifierFlag.Declare in stmt.modifiers)
+                            findKeywordPosBackward(source, stmt.pos, "declare")?.let { add(it to 7) }
+                        if (ModifierFlag.Export in stmt.modifiers)
+                            findKeywordPosBackward(source, stmt.pos, "export")?.let { add(it to 6) }
+                        if (ModifierFlag.Default in stmt.modifiers)
+                            findKeywordPosBackward(source, stmt.pos, "default")?.let { add(it to 7) }
+                    }
+                    val first = modPositions.minByOrNull { it.first }
+                    if (first != null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, first.first)
+                        diagnostics.add(Diagnostic(
+                            message = "Modifiers cannot appear here.",
+                            category = DiagnosticCategory.Error,
+                            code = 1184,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = first.first,
+                            length = first.second,
+                        ))
+                    }
                 }
                 stmt.body?.let { body ->
                     // Skip recursion when the body is malformed (missing `}` —
