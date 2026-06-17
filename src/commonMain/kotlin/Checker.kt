@@ -36432,6 +36432,7 @@ interface Function {
     arguments: any;
     caller: Function;
     readonly name: string;
+    readonly [Symbol.hasInstance]: (value: any) => boolean;
 }
 interface FunctionConstructor {
     new(...args: string[]): Function;
@@ -104583,6 +104584,12 @@ interface DataView {
             // methods (call/apply/bind) are implicitly available through the apparent type.
             // Lets `() => void` satisfy `interface Callable { call(blah: any) }` etc.
             if (sourceHasCallSigs && targetName in FUNCTION_PROTOTYPE_METHODS) continue
+            // B479: `Function[Symbol.hasInstance]` is provided by Function.prototype, so a
+            // function-typed source satisfies it implicitly (a function IS a Function). Without
+            // this skip, adding `[Symbol.hasInstance]` to the embedded Function interface makes
+            // `() => void` fail to satisfy `Function` (untypedFunctionCallsWithTypeParameters1's
+            // `caller: Function` property).
+            if (sourceHasCallSigs && targetName.contains("hasInstance")) continue
             // B66.4: Function-side runtime properties (prototype/arguments/caller) are
             // implicitly available on any function value via Function.prototype.
             // Lets a function expression / arrow satisfy the `Function` interface.
@@ -123054,6 +123061,7 @@ interface DataView {
         when (expr) {
             is CallExpression -> {
                 checkCallOrNewTypeArgCount(expr.expression, expr.typeArguments, source, fileName, locals)
+                tryEmitUncallableTypeArgs(expr, source, fileName, locals)
                 checkCallTypeArgCountInExpr(expr.expression, source, fileName, locals)
                 for (arg in expr.arguments) checkCallTypeArgCountInExpr(arg, source, fileName, locals)
             }
@@ -123098,6 +123106,143 @@ interface DataView {
         // both K and V default, so the generic overload accepts 0, 1, or 2 type args.
         "WeakMap" -> listOf(0..0, 0..2) to 2
         else -> null
+    }
+
+    /**
+     * B479: explicit type arguments on a call whose VARIABLE callee cannot accept them
+     * (untypedFunctionCallsWithTypeParameters1). Gated to a callee Identifier resolving to a
+     * VARIABLE (named generic functions/classes are handled by [checkCallOrNewTypeArgCount]'s
+     * symbol-decl loop — this is the FP firewall against legitimate generic calls). The
+     * explicit/implicit-`any` var case is owned by the existing isImplicitAnyVarChain TS2347.
+     * Three disjoint outcomes from the callee's resolved type:
+     *   - Function-derived (`Function` / a class `extends Function`) → TS2347 (untyped call).
+     *   - concrete class/interface with NO call signature → TS2349 (not callable) + sub-line.
+     *   - callable with the AST-derived sig type-param count < provided → TS2558 (Expected N).
+     * The expected type-param count is derived from the AST (init fn type-params / annotation
+     * FunctionType or interface call-sig type-params), NOT the resolved signature — so a
+     * generic fn-typed var whose sig type-params we might drop is never FP'd.
+     */
+    private fun tryEmitUncallableTypeArgs(
+        call: CallExpression, source: String, fileName: String, locals: Map<String, Symbol>,
+    ) {
+        val typeArgs = call.typeArguments
+        if (typeArgs.isNullOrEmpty()) return
+        val callee = call.expression as? Identifier ?: return
+        val sym = locals[callee.text] ?: globals[callee.text] ?: return
+        val resolved = if (sym.flags.hasAny(SymbolFlags.Alias))
+            try { resolveAlias(sym) } catch (_: Throwable) { sym } else sym
+        if (!resolved.flags.hasAny(SymbolFlags.Variable)) return
+        val varDecl = resolved.valueDeclaration as? VariableDeclaration ?: return
+        // The any-var case (explicit `: any` or implicit) is owned by the isImplicitAnyVarChain
+        // TS2347 emitter in checkSingleCallExpressionTypes — don't double-handle it here.
+        if (varDecl.type == null && varDecl.initializer == null) return
+        (varDecl.type as? KeywordTypeNode)?.let { if (it.kind == SyntaxKind.AnyKeyword) return }
+        val calleeType = try { getCalleeType(callee) } catch (_: Throwable) { return }
+        if (calleeType === anyType || calleeType === errorType) return
+        val provided = typeArgs.size
+        if (isFunctionDerivedType(calleeType)) {
+            val start = call.pos
+            val length = expressionTrueEnd(call) - start
+            if (length <= 0) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Untyped function calls may not accept type arguments.",
+                category = DiagnosticCategory.Error, code = 2347,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+            ))
+            return
+        }
+        val sigs = try { getCallSignaturesOfType(calleeType) } catch (_: Throwable) { return }
+        if (sigs.isEmpty()) {
+            // Only for a concrete named class/interface instance — avoid FP on partial resolutions.
+            if (calleeType !is Type.Interface) return
+            val start = callee.pos
+            val length = (expressionTrueEnd(callee) - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not callable.",
+                category = DiagnosticCategory.Error, code = 2349,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+                messageChain = listOf("  Type '${typeToString(calleeType)}' has no call signatures."),
+            ))
+            return
+        }
+        // Callable: derive the expected type-param count from the AST. Only the NON-generic
+        // case (expectedTp == 0) is handled here — a GENERIC fn-typed var (e.g.
+        // `var x = <T>() => {}`) is already covered by checkCallOrNewTypeArgCount's
+        // VariableDeclaration init.typeParameters path, so firing here would double-emit
+        // (tooManyTypeParameters1).
+        val expectedTp = varCalleeTypeParamCount(varDecl) ?: return
+        if (expectedTp == 0 && provided > 0) {
+            val firstArg = typeArgs.first()
+            val lastArg = typeArgs.last()
+            val start = firstArg.pos
+            var endPos = lastArg.end
+            while (endPos > start && endPos < source.length) {
+                val ch = source[endPos - 1]
+                if (ch == '>' || ch == ')' || ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') endPos--
+                else break
+            }
+            val length = (endPos - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Expected $expectedTp type arguments, but got $provided.",
+                category = DiagnosticCategory.Error, code = 2558,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+            ))
+        }
+    }
+
+    /** B479: is [type] the lib `Function` interface or a class that (transitively) extends it? */
+    private fun isFunctionDerivedType(type: Type): Boolean {
+        val seen = mutableSetOf<Int>()
+        fun rec(t: Type): Boolean {
+            if (t !is Type.Object || !seen.add(t.id)) return false
+            if (t.symbol?.name == "Function") return true
+            if (t is Type.Interface) {
+                try { resolveBaseTypesLazy(t) } catch (_: Throwable) {}
+                t.baseTypes?.let { for (b in it) if (rec(b)) return true }
+            }
+            return false
+        }
+        return rec(type)
+    }
+
+    /**
+     * B479: the AST-derived call-signature type-parameter count for a fn-typed/interface-typed
+     * VARIABLE callee — `null` when it can't be determined safely (so no TS2558 is emitted).
+     * Reads the var's initializer (arrow/fn-expr type params), or its annotation (FunctionType
+     * type params, or the single call-signature of an interface/object-type literal). An
+     * interface type parameter (`callable2<T>`) is NOT the call signature's — the call sig
+     * `(a: T): T` has 0 type params, which is what tsc counts.
+     */
+    private fun varCalleeTypeParamCount(varDecl: VariableDeclaration): Int? {
+        when (val init = varDecl.initializer) {
+            is ArrowFunction -> if (varDecl.type == null) return init.typeParameters?.size ?: 0
+            is FunctionExpression -> if (varDecl.type == null) return init.typeParameters?.size ?: 0
+            else -> {}
+        }
+        return when (val ann = varDecl.type) {
+            is FunctionType -> ann.typeParameters?.size ?: 0
+            is TypeLiteral -> callSigTypeParamCount(ann.members)
+            is TypeReference -> {
+                val n = (ann.typeName as? Identifier)?.text ?: return null
+                val target = currentFileLocals?.get(n) ?: globals[n] ?: return null
+                val idecl = target.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
+                    ?: return null
+                callSigTypeParamCount(idecl.members)
+            }
+            else -> null
+        }
+    }
+
+    /** The type-param count of the single bare call signature among interface/type-literal
+     *  members (a MethodDeclaration with empty name), or null when there isn't exactly one. */
+    private fun callSigTypeParamCount(members: List<Node>): Int? {
+        val callSigs = members.filterIsInstance<MethodDeclaration>()
+            .filter { (it.name as? Identifier)?.text == "" }
+        if (callSigs.size != 1) return null
+        return callSigs[0].typeParameters?.size ?: 0
     }
 
     private fun checkCallOrNewTypeArgCount(
