@@ -14278,6 +14278,16 @@ class Checker(
                             node.operator != SyntaxKind.ExclamationEqualsEquals &&
                             node.operator != SyntaxKind.LessThanEquals &&
                             node.operator != SyntaxKind.GreaterThanEquals)
+                    // B476: an arrow/fn-expr assigned to a target whose fn-type has ≠1
+                    // ARITY-APPLICABLE call signature (overloaded — e.g. `f2: { (x:string,
+                    // y:number):string; <T,U>(x:T,y:U):T }`) has NO single contextual
+                    // signature, so the params stay implicitly any → TS7006. tsc only
+                    // intersects the overloads under strictFunctionTypes, so this is gated to
+                    // default (non-strict) mode (contextualTypingWithGenericAndNonGenericSignature).
+                    if (node.operator == SyntaxKind.Equals && node.left is Identifier &&
+                        (node.right is ArrowFunction || node.right is FunctionExpression) && !options.strict) {
+                        maybeEmit7006ForOverloadedAssignTarget(node.left as Identifier, node.right, source, fileName)
+                    }
                     walkVarFn7006Expr(node.right, source, fileName, if (isAssign) false else emitOwn)
                 }
             }
@@ -14299,6 +14309,32 @@ class Checker(
             }
             else -> {}
         }
+    }
+
+    /**
+     * B476: for an assignment `<id> = <arrow/fn-expr>`, emit TS7006 for the RHS function's
+     * unannotated params when the target's fn-type has ≠1 arity-applicable call signature —
+     * an overloaded contextual type provides no single signature, so the params are
+     * implicitly any. Gated to non-strict mode by the caller (tsc only intersects overloads
+     * under strictFunctionTypes). Exactly one applicable signature → suppressed (handled by
+     * the caller's legacy no-emit). Non-fn-type / unresolvable targets → no emit.
+     */
+    private fun maybeEmit7006ForOverloadedAssignTarget(
+        target: Identifier, rhs: Expression, source: String, fileName: String,
+    ) {
+        val params = when (rhs) {
+            is ArrowFunction -> rhs.parameters
+            is FunctionExpression -> rhs.parameters
+            else -> return
+        }
+        if (params.none { it.type == null && it.initializer == null && !it.dotDotDotToken }) return
+        val reqArity = params.count { !it.dotDotDotToken && it.initializer == null }
+        val lhsType = try { getTypeOfExpression(target) } catch (_: Throwable) { return }
+        val obj = lhsType as? Type.Object ?: return
+        val sigs = try { resolveStructuredTypeMembers(obj); obj.callSignatures } catch (_: Throwable) { null } ?: return
+        if (sigs.isEmpty()) return
+        val applicable = sigs.count { it.parameters.size >= reqArity }
+        if (applicable != 1) emitVarFn7006Params(params, source, fileName)
     }
 
     private fun isAnyKeywordType(t: TypeNode?): Boolean =
@@ -80851,7 +80887,23 @@ interface DataView {
         resolveStructuredTypeMembers(ctx)
         val ctxSigs = ctx.callSignatures
         if (ctxSigs.isNullOrEmpty()) return
-        val ctxSig = ctxSigs[0] // Use first call signature
+        // B476: an OVERLOADED contextual type (≥2 call signatures) provides a single
+        // contextual signature only when exactly one is arity-applicable; otherwise tsc
+        // (in non-strict mode — it intersects under strictFunctionTypes, which we don't
+        // model) supplies NO contextual signature, so the params stay implicitly any. Pick
+        // the single applicable signature, or bail when there are 0 or ≥2 — matching tsc's
+        // getContextualCallSignature. Single-signature types keep the legacy [0] path.
+        val ctxSig = if (ctxSigs.size == 1) {
+            ctxSigs[0]
+        } else {
+            val reqArity = astParams.count {
+                (it.name as? Identifier)?.text != "this" && !it.dotDotDotToken && it.initializer == null
+            }
+            val applicable = ctxSigs.filter { it.parameters.size >= reqArity }
+            if (applicable.size == 1) applicable[0]
+            else if (!options.strict) return
+            else ctxSigs[0]
+        }
         val ctxParams = ctxSig.parameters
         for ((i, param) in params.withIndex()) {
             if (i >= ctxParams.size) break
