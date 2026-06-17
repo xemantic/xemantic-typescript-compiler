@@ -79649,9 +79649,9 @@ interface DataView {
             is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
             else -> return t
         } ?: return t
-        val (params, returnTypeNode) = when (decl) {
-            is FunctionDeclaration -> decl.parameters to decl.type
-            is MethodDeclaration -> decl.parameters to decl.type
+        val (params, returnTypeNode, typeParams) = when (decl) {
+            is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
             else -> return t
         }
         val predicate = returnTypeNode as? TypePredicate ?: return t
@@ -79670,7 +79670,31 @@ interface DataView {
         val arg = expr.arguments.getOrNull(paramIdx) ?: return t
         // 17.34b: path-based comparison so `predFn(A._a)` matches when name="A._a".
         if (getReferencePath(arg) != name) return t
-        val targetType = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+        // B481: GENERIC type-guard inference. For `isPlainResponse<T>(value: T | {data:T}): value is T`,
+        // the predicate target `T` is a function type-param; resolving it without bindings yields
+        // errorType (T not in scope at the call site) → the old code bailed → no narrowing →
+        // FP TS2339 in the false branch (`value.data`). Infer the predicate fn's type params by
+        // STRUCTURALLY matching the predicate-position parameter's annotation against the actual
+        // narrowed type `t`, push the bindings into `currentTypeAliasArgs` (consulted at the top of
+        // TypeReference resolution), and resolve the target with them. FP-safe: narrowing only
+        // refines a union (removes members) → suppresses downstream errors, never adds them.
+        val tpNames = typeParams?.mapNotNull { (it.name as? Identifier)?.text }?.toSet() ?: emptySet()
+        val paramAnnotation: TypeNode? = params.getOrNull(paramIdx)?.type
+        val targetType: Type = if (tpNames.isNotEmpty() && paramAnnotation != null) {
+            val bindings = mutableMapOf<String, Type>()
+            collectPredicateTpBindings(paramAnnotation, t, tpNames, bindings)
+            if (bindings.isEmpty()) {
+                try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+            } else {
+                val saved = currentTypeAliasArgs
+                currentTypeAliasArgs = (saved ?: emptyMap()) + bindings
+                val resolved = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { null }
+                currentTypeAliasArgs = saved
+                resolved ?: return t
+            }
+        } else {
+            try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+        }
         if (targetType === errorType || targetType === anyType) return t
         if (t is Type.Union) {
             val filtered = if (isMatch) {
@@ -79685,6 +79709,61 @@ interface DataView {
             matches == isMatch -> t
             isMatch -> targetType
             else -> neverType
+        }
+    }
+
+    /**
+     * B481: focused structural unifier for a generic type-guard. Matches the
+     * predicate-position parameter's annotation [annotation] against the actual
+     * narrowed type [actual], binding each type-param name in [tps] to a concrete
+     * type in [out] (first structural binding wins; bare-TP union members are
+     * skipped — they are ambiguous, but the same TP almost always also appears in
+     * an object/array position that yields a clean binding, e.g. `T | { data: T }`).
+     * Deliberately partial and conservative: any position it can't resolve is left
+     * unbound, and narrowing simply falls back to no-op for an unbound predicate.
+     */
+    private fun collectPredicateTpBindings(
+        annotation: TypeNode, actual: Type, tps: Set<String>, out: MutableMap<String, Type>,
+    ) {
+        when (annotation) {
+            is ParenthesizedType -> collectPredicateTpBindings(annotation.type, actual, tps, out)
+            is TypeReference -> {
+                val nm = (annotation.typeName as? Identifier)?.text
+                if (nm != null && nm in tps && annotation.typeArguments.isNullOrEmpty()) {
+                    if (nm !in out && actual !== errorType && actual !== anyType) out[nm] = actual
+                }
+            }
+            is ArrayType -> {
+                // `T[]` ↔ Array<elem> — bind T from the element type.
+                val elem = (actual as? Type.Reference)?.takeIf { it.target.symbol?.name == "Array" }
+                    ?.resolvedTypeArguments?.getOrNull(0)
+                if (elem != null) collectPredicateTpBindings(annotation.elementType, elem, tps, out)
+            }
+            is TypeLiteral -> {
+                for (m in annotation.members) {
+                    if (m !is PropertyDeclaration) continue
+                    val pn = (m.name as? Identifier)?.text ?: m.name?.let { getPropertyKeyName(it) } ?: continue
+                    val pt = m.type ?: continue
+                    val propSym = getPropertyOfType(actual, pn) ?: continue
+                    val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { continue }
+                    collectPredicateTpBindings(pt, propType, tps, out)
+                }
+            }
+            is UnionType -> {
+                // For each NON-bare-TP annotation member, recurse against every actual
+                // constituent; the structural getPropertyOfType lookups skip the ones
+                // that don't fit, so the binding lands from the matching constituent.
+                val actuals = if (actual is Type.Union) actual.types else listOf(actual)
+                for (mem in annotation.types) {
+                    val unwrapped = (mem as? ParenthesizedType)?.type ?: mem
+                    val isBareTp = unwrapped is TypeReference &&
+                        (unwrapped.typeName as? Identifier)?.text in tps &&
+                        unwrapped.typeArguments.isNullOrEmpty()
+                    if (isBareTp) continue
+                    for (a in actuals) collectPredicateTpBindings(unwrapped, a, tps, out)
+                }
+            }
+            else -> {}
         }
     }
 
