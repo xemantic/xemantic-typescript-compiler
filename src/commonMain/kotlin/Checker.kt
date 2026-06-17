@@ -1607,6 +1607,9 @@ class Checker(
         checkEnumNominalClassMismatches()
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
         checkSpreadPropertyOverrides()
+        // B473: TS2741/2739/2740 — `arr.push({ p: [<objLit>] })` where the element type of `p`
+        // is a discriminated union and an element selects one member but misses its required props
+        checkArrayPushDiscriminatedUnionElements()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -116543,6 +116546,167 @@ interface DataView {
      * String-valued / un-evaluable enums set `values = null` → conservatively assignable (FN, no
      * FP). Squiggle = the LHS identifier (assignment target).
      */
+    /**
+     * B473: object-literal ARRAY ELEMENT contextually typed against a discriminated-union
+     * array property, missing a required property of the discriminant-SELECTED member.
+     *
+     * `foo.push({ types: [{ type: "A" }] })` where `foo: Wrapper[]`, `Wrapper.types: ValidType[]`,
+     * `ValidType = TypeA | TypeB`, and `{ type: "A" }` selects `TypeA` (by its `type` discriminant)
+     * but is missing `TypeA`'s required `param` → TS2741 at the element.
+     *
+     * Dedicated walker (NOT the per-property arg-check loop, which is `!isRestParam`-gated and so
+     * never reaches a `push`/rest-position object-literal arg). Reuses the FP-safe
+     * `collectMissingProperties`. FP firewall: fires ONLY for a `<recv:T[]>.push(<objLit>)` call
+     * whose objLit has an array-literal property whose element type is a 2+-member object union
+     * carrying a SHARED literal discriminant, an element selecting EXACTLY ONE member, with
+     * genuinely-missing required props. Those positions emit nothing today → zero double-emit.
+     */
+    private fun checkArrayPushDiscriminatedUnionElements() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            pdduScanStmts(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun pdduScanStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (st in stmts) pdduScanStmt(st, source, fileName)
+    }
+
+    private fun pdduScanStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> pdduCheckExpr(stmt.expression, source, fileName)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { pdduCheckExpr(it, source, fileName) }
+            is ReturnStatement -> stmt.expression?.let { pdduCheckExpr(it, source, fileName) }
+            is Block -> pdduScanStmts(stmt.statements, source, fileName)
+            is IfStatement -> { pdduCheckExpr(stmt.expression, source, fileName); pdduScanStmt(stmt.thenStatement, source, fileName); stmt.elseStatement?.let { pdduScanStmt(it, source, fileName) } }
+            is ForStatement -> pdduScanStmt(stmt.statement, source, fileName)
+            is ForInStatement -> pdduScanStmt(stmt.statement, source, fileName)
+            is ForOfStatement -> pdduScanStmt(stmt.statement, source, fileName)
+            is WhileStatement -> pdduScanStmt(stmt.statement, source, fileName)
+            is DoStatement -> pdduScanStmt(stmt.statement, source, fileName)
+            is FunctionDeclaration -> stmt.body?.let { pdduScanStmts(it.statements, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { pdduScanStmts(it.statements, source, fileName) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
+                is Constructor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
+                is GetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
+                is SetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun pdduCheckExpr(expr: Expression, source: String, fileName: String) {
+        val call = expr as? CallExpression ?: return
+        val callee = call.expression as? PropertyAccessExpression ?: return
+        if ((callee.name as? Identifier)?.text != "push") return
+        val arg = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
+        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return }
+        if (recvType !is Type.Reference || recvType.target?.symbol?.name != "Array") return
+        val elem = recvType.resolvedTypeArguments?.getOrNull(0) as? Type.Object ?: return
+        try { resolveStructuredTypeMembers(elem) } catch (_: StackOverflowError) { return }
+        for (prop in arg.properties) {
+            val pa = prop as? PropertyAssignment ?: continue
+            val pname = (pa.name as? Identifier)?.text ?: continue
+            val arrLit = pa.initializer as? ArrayLiteralExpression ?: continue
+            val tprop = elem.members?.get(pname) ?: continue
+            // Resolve the element-union ALIAS NAME from the property's declared annotation
+            // (`types: ValidType[]`) so the message reads "…not assignable to type 'ValidType'."
+            val tannot = (tprop.declarations.firstOrNull() as? PropertyDeclaration)?.type ?: continue
+            val (union, aliasName) = arrayElementUnionAlias(tannot, fileName) ?: continue
+            for (el in arrLit.elements) {
+                val elObj = el as? ObjectLiteralExpression ?: continue
+                pdduCheckElement(elObj, union, aliasName, source, fileName)
+            }
+        }
+    }
+
+    /** Literal-preserving display of an object literal (`{ type: "A"; }`) for B473 messages —
+     *  the contextual element type keeps the discriminant literal, unlike widened
+     *  `getTypeOfObjectLiteral`. */
+    private fun pdduDisplaySource(objLit: ObjectLiteralExpression): String {
+        val parts = objLit.properties.mapNotNull { p ->
+            val pa = p as? PropertyAssignment ?: return@mapNotNull null
+            val nm = (pa.name as? Identifier)?.text
+                ?: (pa.name as? StringLiteralNode)?.text
+                ?: (pa.name as? NumericLiteralNode)?.text ?: return@mapNotNull null
+            val vt = try { literalTypeOfExpression(pa.initializer) ?: getTypeOfExpression(pa.initializer) }
+                catch (_: StackOverflowError) { return@mapNotNull null }
+            "$nm: ${typeToString(vt)}"
+        }
+        return if (parts.isEmpty()) "{}" else "{ ${parts.joinToString("; ")}; }"
+    }
+
+    private fun pdduCheckElement(elObj: ObjectLiteralExpression, union: Type.Union, aliasName: String, source: String, fileName: String) {
+        val constituents = union.types.filterIsInstance<Type.Object>()
+        if (constituents.size < 2) return
+        for (c in constituents) try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return }
+        // Discriminant candidates: a property name that is a literal type in EVERY constituent.
+        val discNames = constituents[0].members?.keys?.filter { name ->
+            constituents.all { c ->
+                val s = c.members?.get(name) ?: return@all false
+                val t = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { null }
+                t is Type.StringLiteral || t is Type.NumberLiteral
+            }
+        } ?: return
+        for (dname in discNames) {
+            val dpa = elObj.properties.filterIsInstance<PropertyAssignment>()
+                .firstOrNull { (it.name as? Identifier)?.text == dname } ?: continue
+            val dval = literalTypeOfExpression(dpa.initializer) ?: continue
+            if (dval !is Type.StringLiteral && dval !is Type.NumberLiteral) continue
+            val matches = constituents.filter { c ->
+                val s = c.members?.get(dname) ?: return@filter false
+                val t = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { return@filter false }
+                try { checkTypeRelatedTo(dval, t, assignableRelation) } catch (_: StackOverflowError) { false }
+            }
+            if (matches.size != 1) continue
+            val selected = matches[0]
+            val elObjType = try { getTypeOfObjectLiteral(elObj) } catch (_: StackOverflowError) { return }
+            val missing = try { collectMissingProperties(elObjType, selected) } catch (_: StackOverflowError) { return }
+            if (missing.isEmpty()) return
+            // tsc reports the element as "not assignable to <unionAlias>" with a chain explaining
+            // the discriminant-SELECTED member's missing props; the source display preserves the
+            // discriminant literal (contextually typed): `{ type: "A"; }`, not widened `string`.
+            val displaySource = pdduDisplaySource(elObj)
+            val selectedName = typeToString(selected)
+            val start = elObj.pos
+            val length = expressionTrueEnd(elObj) - start
+            if (length <= 0) return
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            val chain = if (missing.size == 1)
+                mutableListOf("  Property '${missing[0]}' is missing in type '$displaySource' but required in type '$selectedName'.")
+            else mutableListOf("  " + formatTs2740Message(displaySource, selectedName, missing))
+            val related = mutableListOf<Diagnostic>()
+            val firstMissingSym = selected.members?.get(missing[0])
+            val firstDecl = firstMissingSym?.declarations?.firstOrNull()
+            if (firstDecl != null) {
+                val declPos = when (firstDecl) {
+                    is PropertyDeclaration -> firstDecl.name.pos
+                    else -> firstDecl.pos
+                }
+                val (dl, dc) = getLineAndCharacterOfPosition(source, declPos)
+                related.add(Diagnostic(
+                    message = "'${missing[0]}' is declared here.",
+                    category = DiagnosticCategory.Message, code = 2728,
+                    fileName = fileName, line = dl, character = dc,
+                    start = declPos, length = missing[0].length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$aliasName'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = start, length = length,
+                messageChain = chain,
+                relatedInformation = related,
+            ))
+            return
+        }
+    }
+
     private fun checkEnumToEnumAssignments() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
