@@ -94546,6 +94546,28 @@ interface DataView {
         return result
     }
 
+    /**
+     * B475: when an arrow / function expression is contextually typed by a single-call-
+     * signature function type [ctx], fill [currentLocalTypes] for each UNANNOTATED
+     * Identifier parameter from the contextual signature's parameter types. Used by the
+     * arithmetic walker so an object-literal value `s: t => t * t` contextually typed by an
+     * index signature `[s: string]: (s: string) => number` resolves `t` as `string`, making
+     * `t * t` an invalid arithmetic operand (TS2362/TS2363). Annotated params are left to
+     * [populateParameterLocalTypes]; rest/binding-pattern params are skipped.
+     */
+    private fun applyContextualParamTypesForArrow(parameters: List<Parameter>, ctx: Type?) {
+        val fnType = ctx as? Type.Object ?: return
+        val sig = try { fnType.callSignatures?.singleOrNull() } catch (_: Throwable) { null } ?: return
+        for ((i, param) in parameters.withIndex()) {
+            if (param.type != null || param.dotDotDotToken) continue
+            val name = (param.name as? Identifier)?.text ?: continue
+            if (currentLocalTypes[name] != null) continue
+            val sigParam = sig.parameters.getOrNull(i) ?: continue
+            val pType = try { getTypeOfSymbol(sigParam) } catch (_: Throwable) { continue }
+            if (pType !== anyType && pType !== errorType) currentLocalTypes[name] = pType
+        }
+    }
+
     private fun populateParameterLocalTypes(parameters: List<Parameter>) {
         for (param in parameters) {
             val paramName = param.name
@@ -117638,6 +117660,24 @@ interface DataView {
     private fun checkArithmeticInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
+                // B475: an object-literal assigned to a typed target (`x = { s: t => t*t }`
+                // where `x: I` / `I` has an index signature `[s:string]: (s:string)=>number`)
+                // contextually types each property value. Set the LHS type as the contextual
+                // type for the RHS object literal so unannotated arrow params (`t`) resolve
+                // from the index-sig / named-property value type → arithmetic checks fire
+                // (objectLitIndexerContextualType). Plain `=` is not arithmetic, so this
+                // does not skip any operator check.
+                if (expr.operator == SyntaxKind.Equals && expr.right is ObjectLiteralExpression) {
+                    checkArithmeticInExpr(expr.left, source, fileName)
+                    val lhsType = try { getTypeOfExpression(expr.left) } catch (_: Throwable) { null }
+                    val saved = contextualType
+                    if (lhsType != null && lhsType !== anyType && lhsType !== errorType) {
+                        contextualType = lhsType
+                    }
+                    try { checkArithmeticInExpr(expr.right, source, fileName) }
+                    finally { contextualType = saved }
+                    return
+                }
                 // B64.4-style iterative left-spine flatten. Run `checkBinaryOperatorTypes`
                 // for each BinaryExpression on the spine — preserves the per-node
                 // diagnostic emission while avoiding StackOverflow on deep chains.
@@ -117680,28 +117720,40 @@ interface DataView {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = currentLocalTypes.toMutableMap()
                 val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
+                val ctxFn = contextualType
                 try {
                     populateParameterLocalTypes(expr.parameters)
+                    applyContextualParamTypesForArrow(expr.parameters, ctxFn)
                 } finally {
                     currentTypeParamScope = savedScope
                 }
+                // The body is not contextually typed by the param fn type — clear context so
+                // a nested object literal in the body doesn't inherit it (B475).
+                val savedCtx = contextualType
+                contextualType = null
                 when (val body = expr.body) {
                     is Block -> checkArithmeticInStatements(body.statements, source, fileName)
                     is Expression -> checkArithmeticInExpr(body, source, fileName)
                     else -> {}
                 }
+                contextualType = savedCtx
                 currentLocalTypes = savedLocalTypes
             }
             is FunctionExpression -> {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = currentLocalTypes.toMutableMap()
                 val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
+                val ctxFn = contextualType
                 try {
                     populateParameterLocalTypes(expr.parameters)
+                    applyContextualParamTypesForArrow(expr.parameters, ctxFn)
                 } finally {
                     currentTypeParamScope = savedScope
                 }
+                val savedCtx = contextualType
+                contextualType = null
                 checkArithmeticInStatements(expr.body.statements, source, fileName)
+                contextualType = savedCtx
                 currentLocalTypes = savedLocalTypes
             }
             is TemplateExpression -> expr.templateSpans.forEach { checkArithmeticInExpr(it.expression, source, fileName) }
@@ -117710,9 +117762,31 @@ interface DataView {
             is NonNullExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is SatisfiesExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is ObjectLiteralExpression -> {
+                // B475: when this object literal is contextually typed (e.g. it is the RHS of
+                // a typed assignment), propagate each property's contextual VALUE type into
+                // the property initializer so a nested arrow's unannotated params resolve.
+                val ctxObj = contextualType
                 for (prop in expr.properties) {
                     when (prop) {
-                        is PropertyAssignment -> checkArithmeticInExpr(prop.initializer, source, fileName)
+                        is PropertyAssignment -> {
+                            val propName = when (val n = prop.name) {
+                                is Identifier -> n.text
+                                is StringLiteralNode -> n.text
+                                is NumericLiteralNode -> n.text
+                                else -> null
+                            }
+                            val propCtx = if (ctxObj != null && propName != null)
+                                try { lookupPropertyTypeForCtx(ctxObj, propName) } catch (_: Throwable) { null }
+                            else null
+                            if (propCtx != null) {
+                                val saved = contextualType
+                                contextualType = propCtx
+                                try { checkArithmeticInExpr(prop.initializer, source, fileName) }
+                                finally { contextualType = saved }
+                            } else {
+                                checkArithmeticInExpr(prop.initializer, source, fileName)
+                            }
+                        }
                         is SpreadAssignment -> checkArithmeticInExpr(prop.expression, source, fileName)
                         else -> {}
                     }
