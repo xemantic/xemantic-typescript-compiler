@@ -14312,12 +14312,16 @@ class Checker(
     }
 
     /**
-     * B476: for an assignment `<id> = <arrow/fn-expr>`, emit TS7006 for the RHS function's
-     * unannotated params when the target's fn-type has ≠1 arity-applicable call signature —
-     * an overloaded contextual type provides no single signature, so the params are
-     * implicitly any. Gated to non-strict mode by the caller (tsc only intersects overloads
-     * under strictFunctionTypes). Exactly one applicable signature → suppressed (handled by
-     * the caller's legacy no-emit). Non-fn-type / unresolvable targets → no emit.
+     * B476/B478: for an assignment `<id> = <arrow/fn-expr>`, emit TS7006 for the RHS
+     * function's unannotated params when the target provides NO single contextual signature,
+     * so the params are implicitly any:
+     *   - target type is `any` (an untyped `let`/`var` — uncalledFunctionChecksInConditional2),
+     *   - target fn-type has ≠1 arity-applicable call signature (overloaded —
+     *     contextualTypingWithGenericAndNonGenericSignature).
+     * Exactly one applicable signature → suppressed (the caller's legacy no-emit). Gated to
+     * non-strict mode by the caller (tsc only intersects overloads under strictFunctionTypes).
+     * Non-fn OBJECT targets → no emit (conservative — a non-callable target is a separate
+     * assignability error and the contextual-sig question is moot).
      */
     private fun maybeEmit7006ForOverloadedAssignTarget(
         target: Identifier, rhs: Expression, source: String, fileName: String,
@@ -14330,6 +14334,11 @@ class Checker(
         if (params.none { it.type == null && it.initializer == null && !it.dotDotDotToken }) return
         val reqArity = params.count { !it.dotDotDotToken && it.initializer == null }
         val lhsType = try { getTypeOfExpression(target) } catch (_: Throwable) { return }
+        if (lhsType === anyType) {
+            // Untyped / `any` target provides no contextual signature → params implicitly any.
+            emitVarFn7006Params(params, source, fileName)
+            return
+        }
         val obj = lhsType as? Type.Object ?: return
         val sigs = try { resolveStructuredTypeMembers(obj); obj.callSignatures } catch (_: Throwable) { null } ?: return
         if (sigs.isEmpty()) return
