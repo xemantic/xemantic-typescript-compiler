@@ -79664,8 +79664,33 @@ interface DataView {
             rightIsRef && !leftIsRef -> expr.left
             else -> return t
         }
-        val literalType = literalTypeOfExpression(other) ?: return t
+        // B469: `x === myNull` where `myNull` is a const/var typed exactly `null`
+        // (or `undefined`) narrows like `x === null`. tsc treats a reference to a
+        // value whose declared type is the `null`/`undefined` literal type the same
+        // as the keyword itself for equality narrowing (controlFlowNullTypeAndLiteral).
+        val literalType = literalTypeOfExpression(other)
+            ?: constNullishAnnotationType(other) ?: return t
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * B469: resolve a bare Identifier whose declared type annotation is exactly the
+     * `null` or `undefined` keyword type to [nullType] / [undefinedType]. Returns null
+     * for any other shape (FP-safe: only the two nullish-keyword annotations qualify).
+     * AST-only (reads the declaration's type-node kind) — no type resolution, so it is
+     * cheap enough to call inside equality narrowing.
+     */
+    private fun constNullishAnnotationType(expr: Expression): Type? {
+        if (expr !is Identifier) return null
+        val sym = currentFileLocals?.get(expr.text) ?: globals[expr.text] ?: return null
+        val decl = sym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+            ?: return null
+        val ann = decl.type ?: return null
+        return when (ann.kind) {
+            SyntaxKind.NullKeyword -> nullType
+            SyntaxKind.UndefinedKeyword -> undefinedType
+            else -> null
+        }
     }
 
     /**
@@ -98085,11 +98110,18 @@ interface DataView {
             val source = result.sourceFile.text
             currentFileLocals = result.locals
             currentCheckFileName = fileName
+            // B469: activate flow narrowing during the call-type walk so a reference
+            // argument whose declared type is narrowed by a preceding guard
+            // (`if (obj.val === null) f(obj.val)`) is checked against its NARROWED type,
+            // not the declared union. Without this, a `T | null` property-access arg
+            // FP-fired TS2345 in the `!== null` (narrowed-to-T) branch too.
+            currentFlowGraph = result.flowGraph
             try {
                 checkCallTypesInStatements(result.sourceFile.statements, source, fileName)
             } catch (_: StackOverflowError) {
                 // Safety net for deeply nested ASTs
             }
+            currentFlowGraph = null
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -102467,9 +102499,16 @@ interface DataView {
                 // call-return path, which would cascade `void` into currentLocalTypes /
                 // var-init inference (the `isFromCall` rule).
                 val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
-                if (propTypeContainsLiteral(paramType)) {
+                val ctxApplied = if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
                 } else widened
+                // B469: narrow a reference argument by the flow graph. PropertyAccess
+                // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
+                // args do not (getTypeOfIdentifier never consults narrowing), so narrow
+                // them explicitly here. Only Union types can be refined.
+                if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
+                    getNarrowedTypeForReference(ctxApplied, arg)
+                } else ctxApplied
             } finally {
                 if (useCtx) contextualType = savedContextual
             }
