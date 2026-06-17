@@ -71990,6 +71990,9 @@ interface DataView {
             if (tryEmitLiteralUnionDidYouMean(init, ann, name, source, fileName)) return
         } }
 
+        // B470: `const x: { [k:string]: typeof v } = {...}` inside a block narrowing `v`.
+        if (tryEmitTypeofIndexSigNarrowing(decl, source, fileName)) return
+
         // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
         // property NAME with no outer chain and no TS6500 (`{valueOf: 1}` →
@@ -104410,6 +104413,132 @@ interface DataView {
      * `{ [s:string]:number } = { p: "" }`. Tightly gated (see inline) to bound the
      * ~228-index-sig-fixture FP surface.
      */
+    /** B470: recursively find a `type <name> = ...` declaration anywhere in [stmts]
+     *  (including inside block/if/for/while bodies — the binder does NOT bind
+     *  block-scoped type aliases, B83.5). Used by [tryEmitTypeofIndexSigNarrowing]. */
+    private fun findTypeAliasDeclInStatements(stmts: List<Statement>, name: String): TypeAliasDeclaration? {
+        for (s in stmts) {
+            when (s) {
+                is TypeAliasDeclaration -> if ((s.name as? Identifier)?.text == name) return s
+                is Block -> findTypeAliasDeclInStatements(s.statements, name)?.let { return it }
+                is IfStatement -> {
+                    (s.thenStatement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                    (s.elseStatement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                }
+                is ForStatement -> (s.statement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                is ForInStatement -> (s.statement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                is ForOfStatement -> (s.statement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                is WhileStatement -> (s.statement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                is DoStatement -> (s.statement as? Block)?.let { findTypeAliasDeclInStatements(it.statements, name)?.let { r -> return r } }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /**
+     * B470: control-flow analysis of `typeof v` in an INDEX-SIGNATURE value position.
+     * `const x: { [k:string]: typeof v } = { ... }` (inline or via a possibly
+     * block-scoped type alias) declared inside a block narrowing `v` — tsc captures
+     * `v`'s NARROWED type as the index value type, so a property value not assignable
+     * to it fires TS2322 at the value. Done as a DEDICATED local walker (the alias
+     * body containing `typeof v` is cached/eagerly resolved without flow, so the
+     * standard path never sees the narrowed value). FP firewall: corpus-rare shape;
+     * narrowing must change `v` to a PRIMITIVE; only primitive property values that
+     * PASS the un-narrowed relation but FAIL the narrowed one fire. Returns true
+     * (suppressing the standard var-decl path) only when it emits.
+     */
+    private fun tryEmitTypeofIndexSigNarrowing(
+        decl: VariableDeclaration, source: String, fileName: String,
+    ): Boolean {
+        if (currentFlowGraph == null) return false
+        val init = decl.initializer as? ObjectLiteralExpression ?: return false
+        val ann = decl.type ?: return false
+        // `flowAnchor` is the node whose recorded flow narrows the typeof var. The binder
+        // records flow at TypeAliasDeclaration nodes precisely for typeof-CFA (Flow.kt),
+        // so for an alias annotation the alias DECL is the anchor; for an inline TypeLiteral
+        // the var-decl is the anchor (only recorded if the binder tracks it).
+        val flowAnchor: Node
+        val typeLiteral: TypeLiteral = when (ann) {
+            is TypeLiteral -> { flowAnchor = decl; ann }
+            is TypeReference -> {
+                val nm = (ann.typeName as? Identifier)?.text ?: return false
+                if (!ann.typeArguments.isNullOrEmpty()) return false
+                // Resolve the alias decl — block-scoped aliases aren't bound, so scan AST.
+                val fileStmts = binderResults.firstOrNull { it.sourceFile.fileName == currentCheckFileName }
+                    ?.sourceFile?.statements ?: return false
+                val aliasDecl = findTypeAliasDeclInStatements(fileStmts, nm) ?: return false
+                flowAnchor = aliasDecl
+                aliasDecl.type as? TypeLiteral ?: return false
+            }
+            else -> return false
+        }
+        val idxSig = typeLiteral.members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+            val pType = sig.parameters.firstOrNull()?.type?.kind
+            (pType == SyntaxKind.StringKeyword || pType == SyntaxKind.NumberKeyword) &&
+                sig.type is TypeQuery && (sig.type as TypeQuery).exprName is Identifier
+        } ?: return false
+        val keyIsNumber = idxSig.parameters.first().type?.kind == SyntaxKind.NumberKeyword
+        val varName = ((idxSig.type as TypeQuery).exprName as Identifier).text
+        val varSym = currentFileLocals?.get(varName) ?: globals[varName] ?: return false
+        val declaredVar = try { getTypeOfSymbol(varSym) } catch (_: Throwable) { return false }
+        if (declaredVar !is Type.Union) return false
+        val flow = getFlowAt(flowAnchor) ?: return false
+        val narrowed = try {
+            narrowTypeFromFlow(declaredVar, flow, varName, mutableSetOf(), 0)
+        } catch (_: Throwable) { return false }
+        if (narrowed === declaredVar || !isSimpleCheckableType(narrowed)) return false
+        var emitted = false
+        for (p in init.properties) {
+            if (p !is PropertyAssignment) continue
+            if (keyIsNumber) {
+                val pn = p.name
+                val isNumericKey = pn is NumericLiteralNode ||
+                    (pn is Identifier && pn.text.toDoubleOrNull() != null)
+                if (!isNumericKey) continue
+            }
+            val valType = try { getTypeOfExpression(p.initializer) } catch (_: StackOverflowError) { continue }
+            if (valType === anyType || valType === errorType || valType === unknownType) continue
+            if (!isSimpleCheckableType(valType)) continue
+            if (!checkTypeRelatedTo(valType, declaredVar, assignableRelation)) continue
+            if (checkTypeRelatedTo(valType, narrowed, assignableRelation)) continue
+            // tsc squiggles the property NAME (not the value) for an index-value mismatch,
+            // with a related TS6501 pointing at the index signature.
+            val nameNode = p.name
+            val pos = nameNode.pos
+            val spanLen = when (nameNode) {
+                is Identifier -> nameNode.text.length
+                is StringLiteralNode -> nameNode.text.length + 2
+                is NumericLiteralNode -> nameNode.text.length
+                else -> 1
+            }.coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+            val related: List<Diagnostic> = run {
+                val idxPos = idxSig.pos
+                if (idxPos < 0) return@run emptyList()
+                val (declFile, declSource) = resolveDeclarationSourceFile(idxPos)
+                if (declFile == null || declSource == null) return@run emptyList()
+                val isLib = isLibFileName(declFile)
+                val (dl, dc) = if (isLib) Pair<Int?, Int?>(null, null)
+                    else getLineAndCharacterOfPosition(declSource, idxPos).let { Pair<Int?, Int?>(it.first, it.second) }
+                listOf(Diagnostic(
+                    message = "The expected type comes from this index signature.",
+                    category = DiagnosticCategory.Message, code = 6501,
+                    fileName = declFile, line = dl, character = dc, start = idxPos, length = 1,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(getWidenedLiteralType(valType))}' is not assignable to type '${typeToString(narrowed)}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = pos, length = spanLen,
+                relatedInformation = related,
+            ))
+            emitted = true
+        }
+        return emitted
+    }
+
     private fun checkLiteralValuesAgainstIndexSignatures(
         sourceLiteral: Expression,
         targetType: Type,
