@@ -37405,6 +37405,19 @@ interface DataView {
                 name = (typeName.right as? Identifier)?.text ?: return
                 forTypePosition = true
                 if (name.isEmpty()) return
+                // B480: skip the member-arity check when the qualifier's LEFTMOST segment
+                // is UNRESOLVED. tsc owns that position with TS2503 ("Cannot find namespace")
+                // and does NOT additionally check the member's type-arg arity against a
+                // same-named lib generic. Without this guard `StrIter.Iterator` (StrIter
+                // unresolved) wrongly matched the lib `Iterator<T>` → spurious TS2314
+                // (recursiveConditionalCrash4). Mirrors the TS2503 resolution gate
+                // (`scope.has(name)`, line ~20803).
+                var leftmost: Node = typeName.left
+                while (leftmost is QualifiedName) leftmost = leftmost.left
+                val leftName = (leftmost as? Identifier)?.text
+                if (leftName != null && leftName.isNotEmpty() &&
+                    (leftName[0] in 'A'..'Z' || leftName[0] in 'a'..'z' || leftName[0] == '_' || leftName[0] == '$') &&
+                    leftName !in KEYWORD_IDENTIFIERS && !scope.has(leftName)) return
             }
             else -> return
         }
