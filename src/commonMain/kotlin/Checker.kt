@@ -1132,6 +1132,8 @@ class Checker(
         checkExportAssignmentInEsModule()
         // 14. Check unresolved module specifiers (TS2307)
         checkUnresolvedModules()
+        // 14·B472. TS2339 for a missing member of a `.`/`..` dir-index default import.
+        checkDotDirIndexDefaultImports()
         // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
         checkDeclarationEmitNameability()
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
@@ -5377,7 +5379,20 @@ class Checker(
      * TS2307), and a `./`-prefixed @filename key must still match an unprefixed normalized path.
      * Missing any of these would FP TS2307 on a module TypeScript actually resolves.
      */
-    private fun resolveRelativeIncludingIndex(specifier: String, contextFileName: String): String? {
+    /**
+     * B472: the bare `.` / `..` package-index specifiers mean "this/parent directory's
+     * index"; normalize them to `./` / `../` so the relative resolvers treat them as
+     * directory-index imports. Corpus-FP-safe: `importWithTrailingSlash` is the ONLY
+     * corpus test importing from exactly `.` or `..`.
+     */
+    private fun normalizeDotDirSpecifier(specifier: String): String = when (specifier) {
+        "." -> "./"
+        ".." -> "../"
+        else -> specifier
+    }
+
+    private fun resolveRelativeIncludingIndex(specifierIn: String, contextFileName: String): String? {
+        val specifier = normalizeDotDirSpecifier(specifierIn)
         if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null
         val rawDir = contextFileName.substringBeforeLast('/', "")
         val dir = if (rawDir.isEmpty() && contextFileName.startsWith("/")) "" else rawDir
@@ -5395,7 +5410,13 @@ class Checker(
             else -> normalized
         }
         val exts = listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".json", ".mts", ".cts", ".mjs", ".cjs", ".d.mts", ".d.cts")
-        for (s in listOf(stem, "$stem/index")) {
+        // B472: a bare `.`/`..` specifier names the DIRECTORY itself (its index), never a
+        // sibling FILE whose stem equals the dir (`.` from /a/x.ts → /a/index.ts, NOT the
+        // file /a.ts). So skip the `stem`-as-file attempt for those — try `<stem>/index`
+        // only. Corpus-FP-safe: only importWithTrailingSlash imports from exactly `.`/`..`.
+        val stems = if (specifierIn == "." || specifierIn == "..") listOf("$stem/index")
+            else listOf(stem, "$stem/index")
+        for (s in stems) {
             for (e in exts) {
                 val cand = "$s$e"
                 if (cand in fileResults) return cand
@@ -6198,7 +6219,11 @@ class Checker(
 
     /** Resolve a module specifier (relative OR bare via node_modules walk) to a loaded file, or null. */
     private fun resolveSpecifierAnywhere(specifier: String, contextFile: String): String? {
-        if (specifier.startsWith("./") || specifier.startsWith("../")) {
+        // B472: route the bare `.`/`..` package-index specifiers through the relative
+        // resolvers WITHOUT pre-normalizing, so resolveRelativeIncludingIndex's
+        // dir-index-only rule (keyed on the original `.`/`..`) applies.
+        if (specifier == "." || specifier == ".." ||
+            specifier.startsWith("./") || specifier.startsWith("../")) {
             return resolveRelativeIncludingIndex(specifier, contextFile)
                 ?: resolveModuleSpecifierStrictRelative(specifier, contextFile)
         }
@@ -30627,6 +30652,84 @@ class Checker(
      * Check for TS2307: "Cannot find module 'X' or its corresponding type declarations."
      * Emitted when an import module specifier doesn't resolve to a known file.
      */
+    /**
+     * B472: TS2339 for a missing member access on a DEFAULT import bound to a `.`/`..`
+     * package-index specifier (`import a from "."` resolving to `<dir>/index.ts` whose
+     * `export default` is an OBJECT LITERAL). A dedicated walker — NOT an un-gating of the
+     * shared member-access TS2339 path (CLAUDE.md B152/B153: un-gating import-receiver
+     * member access is FP-risky and was reverted). Corpus-FP-safe by construction:
+     * `importWithTrailingSlash` is the ONLY corpus test importing from exactly `.`/`..`,
+     * and we only fire for a property genuinely ABSENT from the resolved default object
+     * literal's keys. The display matches tsc (`{ aIndex: number; }`).
+     */
+    private fun checkDotDirIndexDefaultImports() {
+        if (binderResults.size <= 1 && !isMultiFileSource) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            // Collect `.`/`..` DEFAULT imports → (resolved object type, declared key set).
+            val dirDefaults = mutableMapOf<String, Pair<Type, Set<String>>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                if (spec != "." && spec != "..") continue
+                val name = stmt.importClause?.name?.text ?: continue // default import only
+                val target = resolveSpecifierAnywhere(spec, fileName) ?: continue
+                val targetResult = fileResults[target] ?: continue
+                val ea = targetResult.sourceFile.statements.filterIsInstance<ExportAssignment>()
+                    .firstOrNull { !it.isExportEquals } ?: continue
+                val objLit = ea.expression as? ObjectLiteralExpression ?: continue
+                val keys = objLit.properties.mapNotNull { p ->
+                    when (p) {
+                        is PropertyAssignment -> (p.name as? Identifier)?.text
+                        is ShorthandPropertyAssignment -> p.name.text
+                        is MethodDeclaration -> (p.name as? Identifier)?.text
+                        is GetAccessor -> (p.name as? Identifier)?.text
+                        is SetAccessor -> (p.name as? Identifier)?.text
+                        else -> null
+                    }
+                }.toSet()
+                val objType = try { inferTypeFromInitializer(objLit) } catch (_: Throwable) { continue }
+                if (objType === anyType || objType === errorType) continue
+                dirDefaults[name] = objType to keys
+            }
+            if (dirDefaults.isEmpty()) continue
+            val source = result.sourceFile.text
+            fun checkAccess(pa: PropertyAccessExpression) {
+                val recv = pa.expression
+                if (recv is Identifier) {
+                    dirDefaults[recv.text]?.let { (objType, keys) ->
+                        val prop = pa.name.text
+                        if (prop !in keys && prop !in RUNTIME_PROPERTIES) {
+                            val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$prop' does not exist on type '${typeToString(objType)}'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = ch,
+                                start = pa.name.pos, length = prop.length,
+                            ))
+                        }
+                    }
+                }
+            }
+            // Minimal expression visitor over the file's top-level statements — the
+            // corpus shape is `a.a;` expression statements; recurse the common containers.
+            fun visitExpr(e: Expression?) {
+                when (e) {
+                    is PropertyAccessExpression -> { checkAccess(e); visitExpr(e.expression) }
+                    is ElementAccessExpression -> { visitExpr(e.expression); visitExpr(e.argumentExpression) }
+                    is CallExpression -> { visitExpr(e.expression); e.arguments.forEach { visitExpr(it) } }
+                    is BinaryExpression -> { visitExpr(e.left); visitExpr(e.right) }
+                    is ParenthesizedExpression -> visitExpr(e.expression)
+                    else -> {}
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExpressionStatement) visitExpr(stmt.expression)
+            }
+        }
+    }
+
     private fun checkUnresolvedModules() {
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
 
@@ -30678,6 +30781,13 @@ class Checker(
                 val moduleName = when (specifier) {
                     is StringLiteralNode -> specifier.text
                     else -> continue
+                }
+                // B472: the bare `.`/`..` package-index specifiers resolve to the importing
+                // file's directory index — never TS2307 when they resolve (corpus-FP-safe:
+                // only importWithTrailingSlash imports from exactly `.`/`..`).
+                if ((moduleName == "." || moduleName == "..") &&
+                    resolveSpecifierAnywhere(moduleName, fileName) != null) {
+                    continue
                 }
                 if (isMultiFile) {
                     val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
