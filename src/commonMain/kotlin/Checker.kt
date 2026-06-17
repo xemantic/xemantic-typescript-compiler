@@ -52349,6 +52349,14 @@ interface DataView {
         var sameScopeAssignments = 0
         val capturedReads = mutableListOf<Int>()
         var suppressed = false
+        /** B467: source position of the LAST UNCONDITIONAL (function-body-level) `x = …`
+         *  assignment. A captured read PAST a definite assignment has the known
+         *  last-assigned type (no implicit-any) — tsc's `isPastLastAssignment`
+         *  (narrowingPastLastAssignment f6/f11). CONDITIONAL assignments (inside
+         *  if/loop/switch/try) do NOT count: a captured read past them still sees an
+         *  indeterminate (implicit-any) type → flagged (controlFlowNoImplicitAny f9/f10). */
+        var lastAssignmentPos = -1
+        var conditionalDepth = 0
     }
 
     private fun ulProcessScope(stmts: List<Statement>, source: String, fileName: String) {
@@ -52364,7 +52372,15 @@ interface DataView {
                     // B358b: a NEVER-assigned captured read fires too (the type cannot
                     // be determined at the capture either way) — implicitAnyDeclare-
                     // VariablesWithoutTypeAndInit's `var y; function f() { y }`.
-                    if (st.suppressed || st.capturedReads.isEmpty()) continue
+                    if (st.suppressed) continue
+                    // B467: a captured read PAST the last same-scope assignment has the
+                    // known last-assigned type (tsc's isPastLastAssignment) — drop it.
+                    // When there IS a last assignment, only flag reads before it; when the
+                    // var is never assigned, every captured read still counts.
+                    val flaggedReads = if (st.lastAssignmentPos >= 0)
+                        st.capturedReads.filter { it < st.lastAssignmentPos }
+                    else st.capturedReads
+                    if (flaggedReads.isEmpty()) continue
                     val (dl, dc) = getLineAndCharacterOfPosition(source, nameNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "Variable '${nameNode.text}' implicitly has type 'any' in some locations where its type cannot be determined.",
@@ -52372,7 +52388,7 @@ interface DataView {
                         fileName = fileName, line = dl, character = dc,
                         start = nameNode.pos, length = nameNode.text.length,
                     ))
-                    for (pos in st.capturedReads.distinct().sorted()) {
+                    for (pos in flaggedReads.distinct().sorted()) {
                         val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
                         diagnostics.add(Diagnostic(
                             message = "Variable '${nameNode.text}' implicitly has an 'any' type.",
@@ -52409,8 +52425,10 @@ interface DataView {
             }
             is IfStatement -> {
                 ulScanExpr(stmt.expression, name, inNested, st)
+                st.conditionalDepth++
                 ulScanStmt(stmt.thenStatement, name, inNested, st)
                 stmt.elseStatement?.let { ulScanStmt(it, name, inNested, st) }
+                st.conditionalDepth--
             }
             is Block -> stmt.statements.forEach { ulScanStmt(it, name, inNested, st) }
             is ReturnStatement -> stmt.expression?.let { ulScanExpr(it, name, inNested, st) }
@@ -52418,12 +52436,12 @@ interface DataView {
                 if (stmt.parameters.any { (it.name as? Identifier)?.text == name }) { st.suppressed = true; return }
                 stmt.body?.statements?.forEach { ulScanStmt(it, name, inNested = true, st) }
             }
-            is WhileStatement -> { ulScanExpr(stmt.expression, name, inNested, st); ulScanStmt(stmt.statement, name, inNested, st) }
+            is WhileStatement -> { ulScanExpr(stmt.expression, name, inNested, st); st.conditionalDepth++; ulScanStmt(stmt.statement, name, inNested, st); st.conditionalDepth-- }
             is ForStatement -> {
                 (stmt.initializer as? Expression)?.let { ulScanExpr(it, name, inNested, st) }
                 stmt.condition?.let { ulScanExpr(it, name, inNested, st) }
                 stmt.incrementor?.let { ulScanExpr(it, name, inNested, st) }
-                ulScanStmt(stmt.statement, name, inNested, st)
+                st.conditionalDepth++; ulScanStmt(stmt.statement, name, inNested, st); st.conditionalDepth--
             }
             else -> {
                 // Any unmodeled statement KIND containing the name suppresses (default-
@@ -52960,6 +52978,9 @@ interface DataView {
                 if (expr.operator == SyntaxKind.Equals && lhs is Identifier && lhs.text == name) {
                     if (inNested) { st.suppressed = true; return }  // captured WRITE → suppress
                     st.sameScopeAssignments++
+                    // Only UNCONDITIONAL (function-body-level) assignments are "definite"
+                    // for the isPastLastAssignment filter (controlFlowNoImplicitAny f9/f10).
+                    if (st.conditionalDepth == 0 && lhs.pos > st.lastAssignmentPos) st.lastAssignmentPos = lhs.pos
                     ulScanExpr(expr.right, name, inNested, st)
                 } else {
                     ulScanExpr(expr.left, name, inNested, st)
@@ -78899,6 +78920,9 @@ interface DataView {
         if (root == "this" || root == "super" || root == "arguments") return null
         if (root in flowNode.localNames) return null
         if (root in flowNode.reassignedAfterNames) return null
+        // B467: a captured `var` (function-scoped/hoisted) does not get closure narrowing
+        // in tsc — the closure uses the declared type (narrowingPastLastAssignment f13).
+        if (root in flowNode.enclosingVarDecls) return null
         return outer
     }
 
@@ -94355,7 +94379,17 @@ interface DataView {
             .maxByOrNull { it.container!!.pos } ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
         if (root in closure.localNames) return false
-        val raw = try { getTypeOfExpression(recv) } catch (_: Throwable) { return false }
+        var raw = try { getTypeOfExpression(recv) } catch (_: Throwable) { return false }
+        // B467: a function-body `var`/`let` captured in a nested closure does not resolve
+        // its declared annotation type through the closure scope (getTypeOfExpression →
+        // any), unlike a parameter. When the receiver is a captured `var` with a known
+        // annotation in the enclosing function, recover the declared type directly.
+        if (raw === anyType) {
+            closure.enclosingVarDecls[root]?.type?.let { tn ->
+                val t = try { getTypeFromTypeNode(tn) } catch (_: Throwable) { null }
+                if (t != null && t !== errorType) raw = t
+            }
+        }
         val narrowed = try { getNarrowedTypeForReference(raw, recv) } catch (_: Throwable) { return false }
         if (narrowed !is Type.Union) return false
         if (narrowed.types.none { it === undefinedType }) return false

@@ -56,6 +56,13 @@ class FlowStart(
     val outerFlow: FlowNode? = null,
     val reassignedAfterNames: Set<String> = emptySet(),
     val localNames: Set<String> = emptySet(),
+    /** B467: `var`-declared names in the ENCLOSING function scope → their declaration.
+     *  tsc does not flow narrowing into a closure for a captured `var` (function-scoped/
+     *  hoisted, so the positional `isPastLastAssignment` guarantee doesn't hold) — see
+     *  `narrowingPastLastAssignment` f13. let/const/param captures still narrow. The
+     *  declaration is retained so the checker can recover the captured var's declared
+     *  annotation type (which getTypeOfExpression cannot resolve across the closure). */
+    val enclosingVarDecls: Map<String, VariableDeclaration> = emptyMap(),
 ) : FlowNode
 
 /** Code after return/throw/break/continue — unreachable. */
@@ -749,6 +756,7 @@ class FlowGraphBuilder {
                         sourceText, container.pos, enclosing.end,
                     ),
                     localNames = collectClosureLocalNames(parameters, body),
+                    enclosingVarDecls = collectEnclosingVarDecls(enclosing),
                 ).also { closureStarts.add(it) }
             } else {
                 newStart(container)
@@ -836,6 +844,66 @@ class FlowGraphBuilder {
         for (p in parameters) collectBindingNames(p.name, names)
         if (body is Block) collectBodyDeclaredNames(body.statements, names)
         return names
+    }
+
+    /** B467: `var`-declared (function-scoped, hoisted) names → declaration anywhere in the
+     *  enclosing function body — NOT descending into nested function-likes (var is bounded
+     *  by the enclosing function). Used to withhold closure narrowing for captured `var`s
+     *  and to recover their declared annotation type. Only simple Identifier `var x: T`
+     *  declarations are recorded (binding patterns don't carry a single annotation). */
+    private fun collectEnclosingVarDecls(enclosing: Node): Map<String, VariableDeclaration> {
+        val body: Block? = when (enclosing) {
+            is FunctionDeclaration -> enclosing.body
+            is FunctionExpression -> enclosing.body
+            is MethodDeclaration -> enclosing.body
+            is Constructor -> enclosing.body
+            is GetAccessor -> enclosing.body
+            is SetAccessor -> enclosing.body
+            is ArrowFunction -> enclosing.body as? Block
+            else -> null
+        }
+        if (body == null) return emptyMap()
+        val decls = mutableMapOf<String, VariableDeclaration>()
+        collectVarDeclsInStmts(body.statements, decls)
+        return decls
+    }
+
+    private fun collectVarDeclsInStmts(statements: List<Statement>, into: MutableMap<String, VariableDeclaration>) {
+        for (stmt in statements) collectVarDeclsInStmt(stmt, into)
+    }
+
+    private fun collectVarDeclsInStmt(stmt: Statement, into: MutableMap<String, VariableDeclaration>) {
+        fun varList(l: VariableDeclarationList?) {
+            if (l != null && l.flags == SyntaxKind.VarKeyword) for (d in l.declarations) {
+                (d.name as? Identifier)?.let { if (it.text !in into) into[it.text] = d }
+            }
+        }
+        when (stmt) {
+            is VariableStatement -> varList(stmt.declarationList)
+            is Block -> collectVarDeclsInStmts(stmt.statements, into)
+            is IfStatement -> { collectVarDeclsInStmt(stmt.thenStatement, into); stmt.elseStatement?.let { collectVarDeclsInStmt(it, into) } }
+            is ForStatement -> { varList(stmt.initializer as? VariableDeclarationList); collectVarDeclsInStmt(stmt.statement, into) }
+            is ForInStatement -> { varList(stmt.initializer as? VariableDeclarationList); collectVarDeclsInStmt(stmt.statement, into) }
+            is ForOfStatement -> { varList(stmt.initializer as? VariableDeclarationList); collectVarDeclsInStmt(stmt.statement, into) }
+            is WhileStatement -> collectVarDeclsInStmt(stmt.statement, into)
+            is DoStatement -> collectVarDeclsInStmt(stmt.statement, into)
+            is TryStatement -> {
+                collectVarDeclsInStmts(stmt.tryBlock.statements, into)
+                stmt.catchClause?.let { collectVarDeclsInStmts(it.block.statements, into) }
+                stmt.finallyBlock?.let { collectVarDeclsInStmts(it.statements, into) }
+            }
+            is SwitchStatement -> stmt.caseBlock.forEach { clause ->
+                val cs = when (clause) {
+                    is CaseClause -> clause.statements
+                    is DefaultClause -> clause.statements
+                    else -> emptyList()
+                }
+                collectVarDeclsInStmts(cs, into)
+            }
+            is LabeledStatement -> collectVarDeclsInStmt(stmt.statement, into)
+            is WithStatement -> collectVarDeclsInStmt(stmt.statement, into)
+            else -> {} // do NOT descend into FunctionDeclaration/ClassDeclaration (var scope boundary)
+        }
     }
 
     private fun collectBindingNames(target: Node, into: MutableSet<String>) {
