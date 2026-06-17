@@ -72786,7 +72786,20 @@ interface DataView {
                 // assignable to type 'Boolean'`, not `'true'`.
                 val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
                     else getWidenedLiteralType(sourceType)
-                val displaySource = typeToString(displaySourceType)
+                // B471: a bare class identifier in value position is its CONSTRUCTOR
+                // (`typeof C`), but getTypeOfExpression resolves it to the instance type
+                // (display `C`). When the init is a pure class identifier whose display
+                // collapsed to the bare class name, render the source as `typeof C`
+                // (matches tsc — `var x: number = C` → "Type 'typeof C' ..."). typeName1.
+                val displaySource = run {
+                    val base = typeToString(displaySourceType)
+                    if (init is Identifier && base == init.text) {
+                        val s = currentFileLocals?.get(init.text) ?: globals[init.text]
+                        if (s != null && s.flags.hasAny(SymbolFlags.Class) &&
+                            !s.flags.hasAny(SymbolFlags.Variable)
+                        ) "typeof ${init.text}" else base
+                    } else base
+                }
                 // Use annotation text for display (handles generics correctly); B119
                 // unfolds a primitive-resolving type-alias reference to the primitive.
                 val displayTarget = displayTargetAnnotation(typeAnnotation, targetType)
@@ -87647,6 +87660,89 @@ interface DataView {
         }
     }
 
+    /**
+     * B471: TS2411 for a NAMED data property whose declared type is not assignable to the
+     * applicable index-signature value type, INSIDE an inline anonymous object type literal
+     * (`var x: { z: I; [s: string]: { x; y } }` — `z`'s type `I` must be assignable to the
+     * string-index value `{x;y}`). The existing TS2411 machinery in [checkIndexSigInStatement]
+     * only covers class/interface declaration bodies; inline `TypeLiteral` annotations in
+     * variable declarations returned early without this check. Recurses through nested
+     * object types (array elements, union/intersection members, property/index value types)
+     * so `{ ...; w: { z: I; [s:string]: {x;y} } }[][]` also fires (typeName1's x12).
+     *
+     * FP firewall: only PropertyDeclaration members (no methods/accessors); both the
+     * property type and the index value type must resolve to a concrete non-any/non-error
+     * Type; emission only on a definitive relation failure. A numeric-named property is
+     * checked against the number index (if present), else the string index.
+     */
+    private fun checkInlineTypeLiteralIndexProperties(typeNode: TypeNode?, source: String, fileName: String, depth: Int = 0) {
+        if (typeNode == null || depth > 8) return
+        when (typeNode) {
+            is TypeLiteral -> {
+                val members = typeNode.members
+                val strSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+                    sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
+                }
+                val numSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+                    sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
+                }
+                val strType = strSig?.type?.let { try { getTypeFromTypeNode(it) } catch (_: Throwable) { null } }
+                val numType = numSig?.type?.let { try { getTypeFromTypeNode(it) } catch (_: Throwable) { null } }
+                for (member in members) {
+                    if (member !is PropertyDeclaration) continue
+                    val nameNode = member.name
+                    val isNumeric: Boolean
+                    val propName: String
+                    val displayName: String
+                    val nameLen: Int
+                    when (nameNode) {
+                        is Identifier -> {
+                            if (nameNode.text.startsWith("#")) continue
+                            isNumeric = false; propName = nameNode.text; displayName = nameNode.text; nameLen = nameNode.text.length
+                        }
+                        is NumericLiteralNode -> { isNumeric = true; propName = nameNode.text; displayName = nameNode.text; nameLen = nameNode.text.length }
+                        is StringLiteralNode -> {
+                            isNumeric = isCanonicalNumericPropertyName(nameNode.text)
+                            propName = nameNode.text; displayName = "\"${nameNode.text}\""; nameLen = nameNode.text.length + 2
+                        }
+                        else -> continue
+                    }
+                    val propTypeNode = member.type ?: continue
+                    // Pick the applicable index sig: numeric-named → number index if present, else string.
+                    val (idxType, idxKind) = if (isNumeric && numType != null) numType to "number"
+                        else if (strType != null) strType to "string"
+                        else null to ""
+                    if (idxType != null && idxType !== anyType && idxType !== errorType) {
+                        val propType = try { getTypeFromTypeNode(propTypeNode) } catch (_: Throwable) { null }
+                        if (propType != null && propType !== anyType && propType !== errorType &&
+                            !checkTypeRelatedTo(propType, idxType, assignableRelation)
+                        ) {
+                            val propDisp = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
+                            val idxDisp = typeToString(idxType)
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$displayName' of type '$propDisp' is not assignable to '$idxKind' index type '$idxDisp'.",
+                                category = DiagnosticCategory.Error, code = 2411,
+                                fileName = fileName, line = line, character = character,
+                                start = nameNode.pos, length = nameLen,
+                            ))
+                        }
+                    }
+                    // Recurse into the property's own type (nested object types).
+                    checkInlineTypeLiteralIndexProperties(propTypeNode, source, fileName, depth + 1)
+                }
+                strSig?.type?.let { checkInlineTypeLiteralIndexProperties(it, source, fileName, depth + 1) }
+                numSig?.type?.let { checkInlineTypeLiteralIndexProperties(it, source, fileName, depth + 1) }
+            }
+            is ArrayType -> checkInlineTypeLiteralIndexProperties(typeNode.elementType, source, fileName, depth + 1)
+            is ParenthesizedType -> checkInlineTypeLiteralIndexProperties(typeNode.type, source, fileName, depth + 1)
+            is UnionType -> typeNode.types.forEach { checkInlineTypeLiteralIndexProperties(it, source, fileName, depth + 1) }
+            is IntersectionType -> typeNode.types.forEach { checkInlineTypeLiteralIndexProperties(it, source, fileName, depth + 1) }
+            is TupleType -> typeNode.elements.forEach { checkInlineTypeLiteralIndexProperties(it, source, fileName, depth + 1) }
+            else -> {}
+        }
+    }
+
     private fun checkIndexSigInStatement(stmt: Statement, source: String, fileName: String) {
         // 17.159: Handle TypeAliasDeclaration whose body is a TypeLiteral — surface
         // index-sig diagnostics for `type X<T> = { [k: T]: ... }` patterns. The
@@ -87664,6 +87760,8 @@ interface DataView {
         // is checked independently.
         if (stmt is VariableStatement) {
             for (decl in stmt.declarationList.declarations) {
+                // B471: TS2411 property-vs-own-index-value for inline object types (recursive).
+                checkInlineTypeLiteralIndexProperties(decl.type, source, fileName)
                 val literal = decl.type as? TypeLiteral ?: continue
                 checkIndexSigsInMembers(literal.members, emptySet(), source, fileName)
                 emitTs2374DuplicateIndexSigs(literal.members, source, fileName, tightEndFallback = true)
@@ -109867,7 +109965,16 @@ interface DataView {
                         }
                     }
                 }
-                val parts = mutableListOf<String>()
+                // B471: tsc renders an anonymous object type's members in a CANONICAL
+                // order regardless of source order: call signatures, then construct
+                // signatures, then index signatures, then properties (and named methods,
+                // in source order). A call sig is a `MethodDeclaration` with name "",
+                // a construct sig is name "new" (see "Interface call/construct signatures"
+                // gotcha). Source order is NOT preserved (typeName1).
+                val callSigParts = mutableListOf<String>()
+                val ctorSigParts = mutableListOf<String>()
+                val indexParts = mutableListOf<String>()
+                val propParts = mutableListOf<String>()
                 for (member in typeNode.members) {
                     when (member) {
                         is PropertyDeclaration -> {
@@ -109875,9 +109982,9 @@ interface DataView {
                             val propType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
                             if (member.questionToken) {
                                 // Optional properties display as `name?: type | undefined`
-                                parts.add("$propName?: $propType | undefined")
+                                propParts.add("$propName?: $propType | undefined")
                             } else {
-                                parts.add("$propName: $propType")
+                                propParts.add("$propName: $propType")
                             }
                         }
                         is IndexSignature -> {
@@ -109885,21 +109992,30 @@ interface DataView {
                             val paramName = (param?.name as? Identifier)?.text ?: "key"
                             val paramType = param?.type?.let { formatTypeForDisplay(it) } ?: "string"
                             val valueType = member.type?.let { formatTypeForDisplay(it) } ?: continue
-                            parts.add("[$paramName: $paramType]: $valueType")
+                            indexParts.add("[$paramName: $paramType]: $valueType")
                         }
                         is MethodDeclaration -> {
                             val methodName = (member.name as? Identifier)?.text ?: continue
                             val params = member.parameters.joinToString(", ") { formatParameterDecl(it) }
                             val retType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
-                            // 17.215: include `?` for optional method declarations
-                            // (e.g. `k?(a: any): any` in `interface { k?(a: any): any }`).
-                            val opt = if (member.questionToken) "?" else ""
-                            parts.add("$methodName$opt($params): $retType")
+                            when (methodName) {
+                                // Call signature: `(params): ret`.
+                                "" -> callSigParts.add("($params): $retType")
+                                // Construct signature: `new (params): ret` (space after `new`).
+                                "new" -> ctorSigParts.add("new ($params): $retType")
+                                else -> {
+                                    // 17.215: include `?` for optional method declarations
+                                    // (e.g. `k?(a: any): any` in `interface { k?(a: any): any }`).
+                                    val opt = if (member.questionToken) "?" else ""
+                                    propParts.add("$methodName$opt($params): $retType")
+                                }
+                            }
                         }
                         else -> return null // unsupported member type
                     }
                 }
-                "{ ${parts.joinToString("; ")}; }"
+                val parts = callSigParts + ctorSigParts + indexParts + propParts
+                if (parts.isEmpty()) "{}" else "{ ${parts.joinToString("; ")}; }"
             }
             is TypeQuery -> {
                 val name = when (val expr = typeNode.exprName) {
