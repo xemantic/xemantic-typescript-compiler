@@ -1545,9 +1545,7 @@ class Checker(
         checkCallExpressionTypes()
         // 64d. Check arithmetic operator types (TS2362/TS2363)
         checkArithmeticOperandTypes()
-        // 64d2. Check object-rest source types (TS2700)
-        checkObjectRestSpreadTypes()
-        // 64d2a. Check object-SPREAD source types (TS2698)
+        // 64d2a. Check object-SPREAD source types (TS2698) + object-REST source types (TS2700, folded in)
         checkObjectSpreadInvalidTypes()
         // 64d2a2 (B245). Namespace-import member writes (TS2540/TS2339)
         checkNamespaceImportMemberWrites()
@@ -111348,92 +111346,6 @@ interface DataView {
     // not a false positive) and never on a mis-resolved-to-`any`/error source.
     // -----------------------------------------------------------------------
 
-    private fun checkObjectRestSpreadTypes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            try {
-                checkObjectRestInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
-        }
-        currentFileLocals = null
-        currentCheckFileName = null
-    }
-
-    private fun checkObjectRestInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkObjectRestInStatement(stmt, source, fileName)
-    }
-
-    private fun checkObjectRestInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
-                val pattern = decl.name as? ObjectBindingPattern ?: continue
-                val rest = pattern.elements.firstOrNull { it.dotDotDotToken } ?: continue
-                val init = decl.initializer ?: continue
-                val srcType = try { getTypeOfExpression(init) } catch (_: Throwable) { continue }
-                if (!isValidSpreadSourceType(srcType) && spreadSourceHasNullish(srcType)) {
-                    val name = rest.name
-                    val start = name.pos
-                    val length = expressionTrueEnd(name) - start
-                    if (length <= 0) continue
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Rest types may only be created from object types.",
-                        category = DiagnosticCategory.Error,
-                        code = 2700,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                }
-            }
-            is Block -> checkObjectRestInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkObjectRestInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkObjectRestInStatement(it, source, fileName) }
-            }
-            is ForStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkObjectRestInStatements(it.statements, source, fileName) }
-            is LabeledStatement -> checkObjectRestInStatement(stmt.statement, source, fileName)
-            else -> {}
-        }
-    }
-
-    /** A type is a valid object-rest/spread source iff it is object-like /
-     *  instantiable / any / unknown. Primitive intrinsics (incl.
-     *  null/undefined/void/never/literals) are not.
-     *
-     *  Union vs intersection differ to match TypeScript: a UNION source is
-     *  spread per-constituent with null/undefined filtered out first, so it is
-     *  valid when ANY constituent is object-like (`{n} | undefined` is fine —
-     *  only an all-nullish union like `null | undefined` is invalid). An
-     *  INTERSECTION must have EVERY member valid, so `({n}&{s}) & undefined` is
-     *  invalid. (Combined with the [spreadSourceHasNullish] gate, this only ever
-     *  emits on a nullish-containing source.) */
-    private fun isValidSpreadSourceType(type: Type): Boolean = when {
-        type === anyType || type === errorType || type === unknownType -> true
-        type is Type.Union -> type.types.any { isValidSpreadSourceType(it) }
-        type is Type.Intersection -> type.types.all { isValidSpreadSourceType(it) }
-        type is Type.Object || type is Type.Interface || type is Type.Reference || type is Type.TypeParam -> true
-        else -> false
-    }
-
-    /** True if [type] is, or (union/intersection) contains, null/undefined. */
-    private fun spreadSourceHasNullish(type: Type): Boolean = when {
-        type === nullType || type === undefinedType -> true
-        type is Type.Union -> type.types.any { spreadSourceHasNullish(it) }
-        type is Type.Intersection -> type.types.any { spreadSourceHasNullish(it) }
-        else -> false
-    }
 
     // -----------------------------------------------------------------------
     // TS2698: "Spread types may only be created from object types." — an object
@@ -111474,7 +111386,15 @@ interface DataView {
         when (stmt) {
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
                 (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
-                d.initializer?.let { spread2698Expr(it, source, fileName, anns) }
+                // Object-REST TS2700: `var {...r} = init` where `init` resolves to a
+                // non-object source (primitive/literal/enum/indexed-access/keyof/union
+                // with an invalid non-nullish member/intersection with an invalid
+                // member). Shares this traversal's annotation map + type-param scope so
+                // function-local typed sources (`T["b"]`, `keyof T`) resolve correctly.
+                val restEl = (d.name as? ObjectBindingPattern)?.elements?.firstOrNull { it.dotDotDotToken }
+                val initE = d.initializer
+                if (restEl != null && initE != null) rest2700Check(restEl, initE, anns, source, fileName)
+                initE?.let { spread2698Expr(it, source, fileName, anns) }
             }
             is ExpressionStatement -> spread2698Expr(stmt.expression, source, fileName, anns)
             is ReturnStatement -> stmt.expression?.let { spread2698Expr(it, source, fileName, anns) }
@@ -111629,6 +111549,43 @@ interface DataView {
             message = "Spread types may only be created from object types.",
             category = DiagnosticCategory.Error,
             code = 2698,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** Object-REST TS2700: resolve a `var {...r} = init` source type (preferring the
+     *  init-identifier's annotation in the active type-param scope, with the enum
+     *  fallback) and emit at the rest element name when it is definitely non-object.
+     *  Reuses the FP-safe [isDefinitelyInvalidSpreadType] (mis-resolution → FN, never FP). */
+    private fun rest2700Check(rest: BindingElement, init: Expression, anns: Map<String, TypeNode>, source: String, fileName: String) {
+        val annType: TypeNode? = (init as? Identifier)?.let { anns[it.text] }
+        if (annType is TypeReference) {
+            val nm = (annType.typeName as? Identifier)?.text
+            if (nm != null) {
+                val s = currentFileLocals?.get(nm) ?: globals[nm]
+                if (s != null && s.flags.hasAny(SymbolFlags.Enum)) { rest2700Emit(rest, source, fileName); return }
+            }
+        }
+        val t = try {
+            if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(init)
+        } catch (_: Throwable) { return }
+        if (isDefinitelyInvalidSpreadType(t)) rest2700Emit(rest, source, fileName)
+    }
+
+    private fun rest2700Emit(rest: BindingElement, source: String, fileName: String) {
+        val name = rest.name
+        val start = name.pos
+        val length = expressionTrueEnd(name) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Rest types may only be created from object types.",
+            category = DiagnosticCategory.Error,
+            code = 2700,
             fileName = fileName,
             line = line,
             character = character,
