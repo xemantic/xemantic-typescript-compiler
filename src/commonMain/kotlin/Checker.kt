@@ -1547,6 +1547,8 @@ class Checker(
         checkArithmeticOperandTypes()
         // 64d2a. Check object-SPREAD source types (TS2698) + object-REST source types (TS2700, folded in)
         checkObjectSpreadInvalidTypes()
+        // 64d2a1 (B484). Generic-function-type bipartition TS2322 (noStrictGenericChecks)
+        checkGenericFnTypeBipartition()
         // 64d2a2 (B245). Namespace-import member writes (TS2540/TS2339)
         checkNamespaceImportMemberWrites()
         // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
@@ -111591,6 +111593,174 @@ interface DataView {
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // B484 (noStrictGenericChecks): generic-function-type bipartition TS2322.
+    // Assigning `b: B` to `a: A` where A = `<T,U>(x:T,y:U)=>…` and B = `<S>(x:S,y:S)=>…`
+    // is an error: instantiating A's distinct fresh T,U forces B's single S to equal
+    // BOTH → conflict at the second param. tsc reports
+    //   "Type 'B' is not assignable to type 'A'."
+    //     "  Types of parameters 'y' and 'y' are incompatible."
+    //     "    Type 'U' is not assignable to type 'T'."
+    //     "      'T' could be instantiated with an arbitrary type which could be unrelated to 'U'."
+    //   + related TS2208 at U's decl ("might need an `extends T` constraint.").
+    // Our relation engine passes this (TypeParam-vs-TypeParam relates via apparent {}),
+    // so this is a DEDICATED AST-level walker. FP-safe BY CONSTRUCTION: it fires ONLY
+    // when a SOURCE type-param maps (per param position) to two DISTINCT TARGET type-
+    // params — always a genuine assignability failure. AST-only (no type engine), so
+    // no relation cache / inference coupling. Corpus-rare shape (assignment between two
+    // bare generic-fn-type-alias variables).
+    // -----------------------------------------------------------------------
+
+    private class GfbConflict(val leafLeft: String, val leafRight: String, val srcParamName: String, val tgtParamName: String)
+
+    private fun checkGenericFnTypeBipartition() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                gfbStmts(result.sourceFile.statements, source, fileName, mutableMapOf())
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun gfbStmts(stmts: List<Statement>, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
+        for (s in stmts) gfbStmt(s, source, fileName, anns)
+    }
+
+    private fun gfbStmt(stmt: Statement, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
+            }
+            is ExpressionStatement -> gfbCheckExpr(stmt.expression, anns, source, fileName)
+            is FunctionDeclaration -> gfbFuncLike(stmt.parameters, stmt.body, source, fileName, anns)
+            is Block -> gfbStmts(stmt.statements, source, fileName, HashMap(anns))
+            is IfStatement -> {
+                gfbStmt(stmt.thenStatement, source, fileName, HashMap(anns))
+                stmt.elseStatement?.let { gfbStmt(it, source, fileName, HashMap(anns)) }
+            }
+            is ForStatement -> gfbStmt(stmt.statement, source, fileName, HashMap(anns))
+            is ForInStatement -> gfbStmt(stmt.statement, source, fileName, HashMap(anns))
+            is ForOfStatement -> gfbStmt(stmt.statement, source, fileName, HashMap(anns))
+            is WhileStatement -> gfbStmt(stmt.statement, source, fileName, HashMap(anns))
+            is DoStatement -> gfbStmt(stmt.statement, source, fileName, HashMap(anns))
+            is LabeledStatement -> gfbStmt(stmt.statement, source, fileName, anns)
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { gfbStmts(it.statements, source, fileName, HashMap(anns)) }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> gfbFuncLike(m.parameters, m.body, source, fileName, anns)
+                is Constructor -> gfbFuncLike(m.parameters, m.body, source, fileName, anns)
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun gfbFuncLike(params: List<Parameter>, body: Node?, source: String, fileName: String, parentAnns: Map<String, TypeNode>) {
+        val anns = HashMap(parentAnns)
+        for (p in params) (p.name as? Identifier)?.let { id -> p.type?.let { anns[id.text] = it } }
+        when (body) {
+            is Block -> gfbStmts(body.statements, source, fileName, anns)
+            is Expression -> gfbCheckExpr(body, anns, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun gfbCheckExpr(expr: Expression, anns: Map<String, TypeNode>, source: String, fileName: String) {
+        val bin = expr as? BinaryExpression ?: return
+        if (bin.operator != SyntaxKind.Equals) return
+        val lhs = bin.left as? Identifier ?: return
+        val rhs = bin.right as? Identifier ?: return
+        val tgtAnn = anns[lhs.text] as? TypeReference ?: return
+        val srcAnn = anns[rhs.text] as? TypeReference ?: return
+        val tgtAliasName = (tgtAnn.typeName as? Identifier)?.text ?: return
+        val srcAliasName = (srcAnn.typeName as? Identifier)?.text ?: return
+        val targetFt = gfbResolveAliasFt(tgtAliasName) ?: return
+        val sourceFt = gfbResolveAliasFt(srcAliasName) ?: return
+        val conflict = gfbDetectConflict(sourceFt, targetFt) ?: return
+        gfbEmit(lhs, srcAliasName, tgtAliasName, conflict, targetFt, source, fileName)
+    }
+
+    /** Resolve a single-name type alias `type X = <…>(…)=>…` (NO own type params)
+     *  to its body FunctionType (the type params live on the FunctionType). */
+    private fun gfbResolveAliasFt(name: String): FunctionType? {
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return null
+        if (!decl.typeParameters.isNullOrEmpty()) return null
+        var body: TypeNode = decl.type
+        if (body is ParenthesizedType) body = body.type
+        val ft = body as? FunctionType ?: return null
+        return if (ft.typeParameters.isNullOrEmpty()) null else ft
+    }
+
+    private fun gfbDetectConflict(sourceFt: FunctionType, targetFt: FunctionType): GfbConflict? {
+        val sNames = (sourceFt.typeParameters ?: return null).map { it.name.text }.toSet()
+        val tNames = (targetFt.typeParameters ?: return null).map { it.name.text }.toSet()
+        if (sNames.isEmpty() || tNames.isEmpty()) return null
+        val sParams = sourceFt.parameters
+        val tParams = targetFt.parameters
+        val n = minOf(sParams.size, tParams.size)
+        val map = HashMap<String, String>()  // source-TP-name -> first target-TP-name it unified with
+        for (i in 0 until n) {
+            val sTp = gfbParamBareTp(sParams[i], sNames) ?: continue
+            val tTp = gfbParamBareTp(tParams[i], tNames) ?: continue
+            val prior = map[sTp]
+            if (prior == null) map[sTp] = tTp
+            else if (prior != tTp) return GfbConflict(
+                leafLeft = tTp, leafRight = prior,
+                srcParamName = (sParams[i].name as? Identifier)?.text ?: "",
+                tgtParamName = (tParams[i].name as? Identifier)?.text ?: "",
+            )
+        }
+        return null
+    }
+
+    /** The bare type-param name a parameter's annotation references, when it is exactly
+     *  `name: TP` for one of [tpNames] — else null. */
+    private fun gfbParamBareTp(param: Parameter, tpNames: Set<String>): String? {
+        val tr = param.type as? TypeReference ?: return null
+        if (!tr.typeArguments.isNullOrEmpty()) return null
+        val nm = (tr.typeName as? Identifier)?.text ?: return null
+        return if (nm in tpNames) nm else null
+    }
+
+    private fun gfbEmit(
+        lhs: Identifier, srcAliasName: String, tgtAliasName: String,
+        conflict: GfbConflict, targetFt: FunctionType, source: String, fileName: String,
+    ) {
+        val start = lhs.pos
+        val length = expressionTrueEnd(lhs) - start
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // TS2208 at the target's leafLeft type-param declaration.
+        val tpDecl = targetFt.typeParameters?.firstOrNull { it.name.text == conflict.leafLeft }
+        val related = if (tpDecl != null) {
+            val (tl, tc) = getLineAndCharacterOfPosition(source, tpDecl.name.pos)
+            listOf(Diagnostic(
+                message = "This type parameter might need an `extends ${conflict.leafRight}` constraint.",
+                category = DiagnosticCategory.Message, code = 2208,
+                fileName = fileName, line = tl, character = tc,
+                start = tpDecl.name.pos, length = tpDecl.name.text.length,
+            ))
+        } else emptyList()
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcAliasName' is not assignable to type '$tgtAliasName'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf(
+                "  Types of parameters '${conflict.srcParamName}' and '${conflict.tgtParamName}' are incompatible.",
+                "    Type '${conflict.leafLeft}' is not assignable to type '${conflict.leafRight}'.",
+                "      '${conflict.leafRight}' could be instantiated with an arbitrary type which could be unrelated to '${conflict.leafLeft}'.",
+            ),
+            relatedInformation = related,
         ))
     }
 
