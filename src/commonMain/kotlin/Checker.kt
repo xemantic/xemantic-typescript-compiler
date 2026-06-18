@@ -72255,6 +72255,10 @@ interface DataView {
 
         // B482: nested weak-type mismatch (`let weak: Weak & Spoiler = propertiesWrong`).
         if (tryEmitNestedWeakVarDecl(decl, name, source, fileName)) return
+        // B482: deep object-literal-leaf weak mismatch (`{ variables: { overrides: false } }`).
+        if (tryEmitObjectLiteralWeakLeaves(decl, source, fileName)) return
+        // B482: top-level weak target (`let x: { nope?: any } = "A"` / `= E.A` / `= {} as C2`).
+        if (tryEmitTopLevelWeakVarDecl(decl, name, source, fileName)) return
 
         // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
@@ -78963,7 +78967,7 @@ interface DataView {
     private fun tryEmitWeakTypeAssignment(
         argType: Type, targetType: Type, start: Int, length: Int,
         source: String, fileName: String, displayType: Type = argType,
-        targetDisplay: String? = null,
+        targetDisplay: String? = null, srcDisplayOverride: String? = null,
     ): Boolean {
         if (length <= 0) return false
         val tgtProps = weakTargetProperties(targetType) ?: return false
@@ -78971,10 +78975,13 @@ interface DataView {
         val tgtNames = tgtProps.map { it.name }.filter { it.isNotEmpty() }.toSet()
         if (tgtNames.isEmpty()) return false
         val srcNames = weakSourcePropertyNames(argType) ?: return false
+        // An EMPTY source (`{}`) is vacuously assignable to an all-optional weak
+        // target — tsc emits nothing (`var x: AllOptional = {}`). Guard against it.
+        if (srcNames.isEmpty()) return false
         if (tgtNames.any { it in srcNames }) return false
         val callSigs = getCallSignaturesOfType(argType)
         val constructSigs = getConstructSignaturesOfType(argType)
-        val srcStr = weakFunctionDisplay(argType) ?: typeToString(displayType)
+        val srcStr = srcDisplayOverride ?: weakFunctionDisplay(argType) ?: typeToString(displayType)
         val tgtStr = targetDisplay ?: typeToString(targetType)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         if (callSigs.isNotEmpty() || constructSigs.isNotEmpty()) {
@@ -79002,6 +79009,26 @@ interface DataView {
         is Type.Intersection -> type.types.firstNotNullOfOrNull { getPropertyAcrossType(it, name) }
         is Type.Object -> { resolveStructuredTypeMembers(type); type.members?.get(name) }
         else -> null
+    }
+
+    /**
+     * B482: collect the property [name]'s types across ALL intersection constituents
+     * that declare it (in order). For a single object type returns a one-element list.
+     * Used to render the COMBINED display of an intersection-property's value type
+     * (`A1.x & B1.x` → `{ a?: string | undefined; } & { b?: string | undefined; }`),
+     * which `getPropertyAcrossType` (first-constituent-only) cannot produce.
+     */
+    private fun collectPropertyTypesAcross(type: Type, name: String): List<Type> = when (type) {
+        is Type.Intersection -> type.types.flatMap { collectPropertyTypesAcross(it, name) }
+        is Type.Object -> {
+            resolveStructuredTypeMembers(type)
+            val sym = type.members?.get(name)
+            if (sym != null) {
+                val t = try { getTypeOfSymbol(sym) } catch (_: Throwable) { null }
+                if (t != null) listOf(t) else emptyList()
+            } else emptyList()
+        }
+        else -> emptyList()
     }
 
     /**
@@ -79037,6 +79064,11 @@ interface DataView {
             val sInnerNames = weakSourcePropertyNames(sPropType) ?: continue
             if (tInnerNames.any { it in sInnerNames }) continue
             val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
+            // The inner target value type must show the COMBINED intersection
+            // (`{ a?: ...; } & { b?: ...; }`), not just the first constituent.
+            val tPropTypes = collectPropertyTypesAcross(targetType, sProp.name)
+            val tPropDisplay = if (tPropTypes.size > 1)
+                tPropTypes.joinToString(" & ") { typeToString(it) } else typeToString(tPropType)
             val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
             diagnostics.add(Diagnostic(
                 message = "Type '${typeToString(srcType)}' is not assignable to type '$tgtDisplay'.",
@@ -79045,8 +79077,194 @@ interface DataView {
                 start = name.pos, length = name.text.length,
                 messageChain = listOf(
                     "  Types of property '${sProp.name}' are incompatible.",
-                    "    Type '${typeToString(sPropType)}' has no properties in common with type '${typeToString(tPropType)}'.",
+                    "    Type '${typeToString(sPropType)}' has no properties in common with type '$tPropDisplay'.",
                 )))
+            return true
+        }
+        return false
+    }
+
+    /**
+     * B482: classify a var-decl initializer as a weak-type SOURCE. Returns
+     * `(typeForSourceNames, displayString)` or null when we cannot confidently
+     * classify (so the top-level weak check bails — never FPs). The first element
+     * feeds [weakSourcePropertyNames]; the second is the rendered source display.
+     */
+    private fun topLevelWeakSource(init: Expression): Pair<Type, String>? {
+        // (1) `expr as T` (not `as const`): use the cast target's type + alias display.
+        if (init is AsExpression) {
+            val t = init.type
+            if (!(t is TypeReference && (t.typeName as? Identifier)?.text == "const")) {
+                val st = try { getTypeFromTypeNode(t) } catch (_: Throwable) { return null }
+                if (st === errorType || st === anyType) return null
+                return st to (formatTypeForDisplay(t) ?: typeToString(st))
+            }
+        }
+        // (2) enum-member access `E.A` (typed as anyType by getTypeOfExpression):
+        // use the enum's primitive base for source-name enumeration, display the enum.
+        enumMemberWeakSource(init)?.let { return it }
+        // (3) a primitive literal: wrapper apparent type for names, literal for display.
+        literalTypeOfExpression(init)?.let { lit ->
+            val base: Type = when {
+                lit is Type.StringLiteral -> stringType
+                lit is Type.NumberLiteral -> numberType
+                lit is Type.BigIntLiteral -> bigintType
+                lit === trueType || lit === falseType -> booleanType
+                else -> return null
+            }
+            return base to typeToString(lit)
+        }
+        return null
+    }
+
+    /** B482: `E.A` where E is an enum → (string/number base for names, enum name). */
+    private fun enumMemberWeakSource(init: Expression): Pair<Type, String>? {
+        if (init !is PropertyAccessExpression) return null
+        val baseId = init.expression as? Identifier ?: return null
+        val sym = currentFileLocals?.get(baseId.text) ?: globals[baseId.text] ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Enum)) return null
+        val member = sym.exports?.get(init.name.text) ?: return null
+        val memberDecl = member.declarations.firstOrNull { it is EnumMember } as? EnumMember
+        val isString = memberDecl?.initializer is StringLiteralNode
+        return (if (isString) stringType else numberType) to baseId.text
+    }
+
+    /**
+     * B482: TOP-LEVEL weak-type mismatch in `let x: W = src` where W is a WEAK type
+     * (all-optional object/intersection, no signatures/index) and `src` shares NO
+     * property with it → TS2559 (or TS2560 for callable sources) at the var name.
+     * Pre-empts the primitive→object / object-literal→intersection TS2322. Returns
+     * true if emitted.
+     */
+    private fun tryEmitTopLevelWeakVarDecl(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        val ann = decl.type ?: return false
+        val init = decl.initializer ?: return false
+        val targetType = try { getTypeFromTypeNode(ann) } catch (_: Throwable) { return false }
+        if (targetType === errorType || targetType === anyType) return false
+        val tgtProps = weakTargetProperties(targetType) ?: return false
+        if (tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) return false
+        val (argType, srcDisplay) = topLevelWeakSource(init) ?: return false
+        val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
+        return tryEmitWeakTypeAssignment(argType, targetType, name.pos, name.text.length,
+            source, fileName, displayType = argType, targetDisplay = tgtDisplay,
+            srcDisplayOverride = srcDisplay)
+    }
+
+    /**
+     * B482: descend a fresh object-literal var-decl initializer (`const x: T = {...}`)
+     * and, at any NON-object-literal leaf value whose target property type is WEAK and
+     * shares no property with the value, emit TS2559 at the property KEY + related
+     * TS6500 pointing at the property's declaration. Handles the multi-level cases
+     * (`{ variables: { overrides: false } }`) the one-level [tryEmitNestedWeakVarDecl]
+     * cannot. Returns true if a diagnostic was emitted (pre-empting the var-decl TS2322).
+     */
+    private fun tryEmitObjectLiteralWeakLeaves(
+        decl: VariableDeclaration, source: String, fileName: String,
+    ): Boolean {
+        val ann = decl.type ?: return false
+        val init = decl.initializer as? ObjectLiteralExpression ?: return false
+        return descendObjectLiteralWeak(init, ann, source, fileName)
+    }
+
+    /**
+     * B482: find the VALUE type-node + declaration-name of property [name] as declared
+     * in annotation [ann], descending through intersections / type-literals / aliases /
+     * interfaces. Annotation-based (not resolved-Type-based) so that an intersection
+     * whose OTHER constituent fails to resolve (`Partial<…>` → errorType) does not poison
+     * the lookup of the present constituent.
+     */
+    private fun findWeakPropAnnotation(ann: TypeNode, name: String): Pair<TypeNode, Identifier>? {
+        when (ann) {
+            is ParenthesizedType -> return findWeakPropAnnotation(ann.type, name)
+            is IntersectionType -> {
+                for (m in ann.types) findWeakPropAnnotation(m, name)?.let { return it }
+                return null
+            }
+            is TypeLiteral -> {
+                for (member in ann.members) {
+                    if (member is PropertyDeclaration) {
+                        val mn = member.name as? Identifier ?: continue
+                        if (mn.text == name) return (member.type ?: continue) to mn
+                    }
+                }
+                return null
+            }
+            is TypeReference -> {
+                val tn = ann.typeName as? Identifier ?: return null
+                val sym = currentFileLocals?.get(tn.text) ?: globals[tn.text] ?: return null
+                val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                if (aliasDecl != null) return findWeakPropAnnotation(aliasDecl.type, name)
+                for (d in sym.declarations) {
+                    if (d is InterfaceDeclaration) {
+                        for (member in d.members) {
+                            if (member is PropertyDeclaration) {
+                                val mn = member.name as? Identifier ?: continue
+                                if (mn.text == name) return (member.type ?: continue) to mn
+                            }
+                        }
+                    }
+                }
+                return null
+            }
+            else -> return null
+        }
+    }
+
+    /**
+     * B482: descend a fresh object-literal var-decl initializer against its annotation
+     * TYPE-NODE ([parentAnn]); at any NON-object-literal leaf value whose target property
+     * type is WEAK and shares no property with the value, emit TS2559 at the property KEY
+     * + related TS6500 (the property's declaration + the enclosing annotation display).
+     * Returns true if a diagnostic was emitted (pre-empting the var-decl TS2322).
+     */
+    private fun descendObjectLiteralWeak(
+        objLit: ObjectLiteralExpression, parentAnn: TypeNode, source: String, fileName: String,
+    ): Boolean {
+        for (p in objLit.properties) {
+            if (p !is PropertyAssignment) continue
+            val pn = p.name as? Identifier ?: continue
+            val (vAnn, _) = findWeakPropAnnotation(parentAnn, pn.text) ?: continue
+            val v = p.initializer
+            if (v is ObjectLiteralExpression) {
+                if (descendObjectLiteralWeak(v, vAnn, source, fileName)) return true
+                continue
+            }
+            // LEAF: target prop type must be weak + value shares no property.
+            val tPropType = try { getTypeFromTypeNode(vAnn) } catch (_: Throwable) { continue }
+            if (tPropType === anyType || tPropType === errorType) continue
+            val tInner = weakTargetProperties(tPropType) ?: continue
+            if (tInner.isEmpty() || !tInner.all { isOptionalProperty(it) }) continue
+            val tInnerNames = tInner.map { it.name }.filter { it.isNotEmpty() }.toSet()
+            if (tInnerNames.isEmpty()) continue
+            val vType = literalTypeOfExpression(v)
+                ?: try { getTypeOfExpression(v) } catch (_: Throwable) { continue }
+            if (vType === anyType || vType === errorType) continue
+            val srcNames = weakSourcePropertyNames(vType) ?: continue
+            if (srcNames.isEmpty()) continue
+            if (tInnerNames.any { it in srcNames }) continue
+            val (kl, kc) = getLineAndCharacterOfPosition(source, pn.pos)
+            // TS6500: point at the property's declaration name, naming the ENCLOSING
+            // annotation type (rendered syntactically so a Partial<…> member displays
+            // correctly even though it does not resolve to a Type).
+            val declName = findWeakPropAnnotation(parentAnn, pn.text)?.second
+            val enclosingDisplay = formatTypeForDisplay(parentAnn) ?: typeToString(tPropType)
+            val related = declName?.let { nm ->
+                val (dl, dc) = getLineAndCharacterOfPosition(source, nm.pos)
+                Diagnostic(
+                    message = "The expected type comes from property '${pn.text}' which is declared here on type '$enclosingDisplay'",
+                    category = DiagnosticCategory.Message, code = 6500,
+                    fileName = fileName, line = dl, character = dc,
+                    start = nm.pos, length = nm.text.length,
+                )
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(vType)}' has no properties in common with type '${typeToString(tPropType)}'.",
+                category = DiagnosticCategory.Error, code = 2559,
+                fileName = fileName, line = kl, character = kc,
+                start = pn.pos, length = pn.text.length,
+                relatedInformation = listOfNotNull(related)))
             return true
         }
         return false
@@ -110634,8 +110852,14 @@ interface DataView {
                             val propName = (member.name as? Identifier)?.text ?: continue
                             val propType = member.type?.let { formatTypeForDisplay(it) } ?: "any"
                             if (member.questionToken) {
-                                // Optional properties display as `name?: type | undefined`
-                                propParts.add("$propName?: $propType | undefined")
+                                // Optional properties display as `name?: type | undefined`,
+                                // EXCEPT `any`/`unknown` which absorb undefined — tsc renders
+                                // `name?: any` (not `any | undefined`). B482-WEAK.
+                                if (propType == "any" || propType == "unknown") {
+                                    propParts.add("$propName?: $propType")
+                                } else {
+                                    propParts.add("$propName?: $propType | undefined")
+                                }
                             } else {
                                 propParts.add("$propName: $propType")
                             }
