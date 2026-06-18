@@ -1018,6 +1018,10 @@ class Checker(
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
         checkJsDocTypeNameResolution()
+        // B481c: TS2339 for a property access on a generic fn's `TP | object` param
+        // inside a single-return body (no narrowing possible) where the bare type-param
+        // member lacks the property (e.g. `value.hasOwnProperty` on `T | { data: T }`).
+        checkTypeParamUnionMemberAccess()
         // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
         // constructor-style `function NAME() { … }` in a checkJs JS file.
         checkJsConstructorThisReads()
@@ -16958,6 +16962,86 @@ class Checker(
                 ))
             }
         }
+    }
+
+    /**
+     * B481c: TS2339 for a property access on a generic function's `TP | <object>`
+     * parameter inside a SINGLE-RETURN body, where the bare type-param member lacks
+     * the property. tsc gives an unconstrained type parameter NO apparent members (not
+     * even Object.prototype's), so `value.hasOwnProperty('data')` on `value: T | { data: T }`
+     * is TS2339 — the `{ data: T }` member has `hasOwnProperty` (object → prototype) but the
+     * bare `T` member does not, so the union access fails on `T`. FP firewall: gated to a
+     * SINGLE-return (or single-return-of-`!call`) body — no narrowing guard can interfere —
+     * the receiver is exactly a `TP | object` param, and the TP is unconstrained OR its
+     * constraint also lacks the property. Corpus-rare; the standard checkPropertyAccess path
+     * emits nothing here (`hasOwnProperty` ∈ OBJECT_PROTOTYPE_PROPERTIES), so no double-emit.
+     */
+    private fun checkTypeParamUnionMemberAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration) {
+                    checkTpUnionMemberAccessInFn(stmt.typeParameters, stmt.parameters, stmt.body, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun checkTpUnionMemberAccessInFn(
+        typeParameters: List<TypeParameter>?, params: List<Parameter>, body: Block?,
+        source: String, fileName: String,
+    ) {
+        if (typeParameters.isNullOrEmpty() || body == null) return
+        val stmts = body.statements
+        if (stmts.size != 1) return
+        val ret = stmts[0] as? ReturnStatement ?: return
+        var expr: Expression = ret.expression ?: return
+        while (true) {
+            expr = when (val e = expr) {
+                is ParenthesizedExpression -> e.expression
+                is PrefixUnaryExpression -> if (e.operator == SyntaxKind.Exclamation) e.operand else return
+                else -> break
+            }
+        }
+        val access: PropertyAccessExpression = when (val e = expr) {
+            is CallExpression -> e.expression as? PropertyAccessExpression ?: return
+            is PropertyAccessExpression -> e
+            else -> return
+        }
+        val recv = access.expression as? Identifier ?: return
+        val propName = access.name.text
+        val param = params.firstOrNull { (it.name as? Identifier)?.text == recv.text } ?: return
+        val ann = param.type as? UnionType ?: return
+        val tpNames = typeParameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        val tpConstraints = typeParameters.associate { (it.name as? Identifier)?.text to it.constraint }
+        var failingTpName: String? = null
+        for (mem in ann.types) {
+            val m = (mem as? ParenthesizedType)?.type ?: mem
+            if (m is TypeReference && m.typeArguments.isNullOrEmpty()) {
+                val nm = (m.typeName as? Identifier)?.text
+                if (nm != null && nm in tpNames) {
+                    val cons = tpConstraints[nm]
+                    if (cons == null) { failingTpName = nm; break }
+                    val consType = try { getTypeFromTypeNode(cons) } catch (_: StackOverflowError) { null }
+                    if (consType != null && consType !== errorType &&
+                        getPropertyOfType(consType, propName) == null) {
+                        failingTpName = nm; break
+                    }
+                }
+            }
+        }
+        if (failingTpName == null) return
+        val unionDisplay = formatTypeForDisplay(ann) ?: return
+        val (line, ch) = getLineAndCharacterOfPosition(source, access.name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$unionDisplay'.",
+            category = DiagnosticCategory.Error, code = 2339,
+            fileName = fileName, line = line, character = ch,
+            start = access.name.pos, length = propName.length,
+            messageChain = listOf("  Property '$propName' does not exist on type '$failingTpName'."),
+        ))
     }
 
     private fun checkJsConstructorThisReads() {
