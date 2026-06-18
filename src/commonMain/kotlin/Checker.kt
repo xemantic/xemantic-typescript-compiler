@@ -29097,10 +29097,14 @@ class Checker(
                 val hasNamespace2 = "namespace" in kinds
                 val hasType = "type" in kinds
 
-                // TS2451: type alias + let/const (no other kinds) — TypeScript treats
-                // this combination as block-scoped redeclaration. e.g. `type foo = 5;`
-                // + `const foo = 5;` at file scope.
-                if (hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2) {
+                // TS2451: type alias + let/const (no other kinds). This is a JS-ONLY
+                // rule: in a `.js` file a `type X` alias is illegal (TS8008) so it does
+                // NOT occupy the TYPE space, and tsc treats `type X` + `const X` as a
+                // value-side block-scoped redeclaration (jsdocTypedefNoCrash2). In a
+                // `.ts`/`.tsx` file a type alias and a value const legally COEXIST
+                // (different declaration spaces) — NO error (longObjectInstantiationChain1's
+                // `type merge<…>` + `declare const merge`). So gate to JS-like files.
+                if (hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2 && isJsLikeFileName(fileName)) {
                     for (decl in group) {
                         val start = decl.nameNode.pos
                         val nameLen = if (decl.nameNode is Identifier) (decl.nameNode as Identifier).text.length
