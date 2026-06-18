@@ -78036,7 +78036,15 @@ interface DataView {
                                 md.typeParameters!![i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                                 md.typeParameters!![i].default?.let { tp.default = getTypeFromTypeNode(it) }
                             }
-                            returnType = md.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                            // Infer the return type from a VALUE-returning body when there's
+                            // no annotation (matches getTypeOfMemberDecl/buildMethodType so the
+                            // structural-comparison path agrees with the direct override check).
+                            // Keep the anyType default for no-return / unresolvable bodies — do
+                            // NOT infer `void` here (B420: `() => void` vs `() => any` regresses
+                            // accessor/override assignability in getAndSetNotIdenticalType2/3 etc.).
+                            returnType = md.type?.let { getTypeFromTypeNode(it) }
+                                ?: md.body?.let { b -> if (bodyHasReturnValue(b)) inferReturnTypeFromBody(b) else null }
+                                ?: anyType
                             paramSymbols = getParameterSymbols(md.parameters)
                             for ((pi, param) in paramSymbols.withIndex()) {
                                 if (pi < md.parameters.size) {
@@ -92375,6 +92383,21 @@ interface DataView {
                     is TypeOfExpression -> stringType
                     is VoidExpression -> undefinedType
                     is DeleteExpression -> booleanType
+                    // `return <expr> as T` — the asserted type IS the inferred return
+                    // type. The earlier comment claimed this was "handled by
+                    // getTypeOfExpression's AsExpression branch", but the `when` had no
+                    // AsExpression arm, so `return 10 as number | string` silently
+                    // inferred `any`. Completing it lets the override-mismatch check
+                    // (checkClassPropertyOverrides) see `fn(): number | string` and fire
+                    // the TS2416 fn-return chain (baseClassImprovedMismatchErrors).
+                    // Only return a CONCRETE result so the `?: anyType` fallback is
+                    // unchanged for unresolvable cast targets.
+                    is AsExpression -> {
+                        try {
+                            val t = getTypeFromTypeNode(expr.type)
+                            if (t !== anyType && t !== errorType) t else null
+                        } catch (_: Throwable) { null }
+                    }
                     // B96-UNBLOCKER: `return [123]` infers the array-literal type
                     // (`number[]`) so an object-literal method value can be checked
                     // against a typed target member's return type. Only return a
