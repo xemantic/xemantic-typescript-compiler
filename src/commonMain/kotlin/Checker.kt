@@ -72253,6 +72253,9 @@ interface DataView {
         // B470: `const x: { [k:string]: typeof v } = {...}` inside a block narrowing `v`.
         if (tryEmitTypeofIndexSigNarrowing(decl, source, fileName)) return
 
+        // B482: nested weak-type mismatch (`let weak: Weak & Spoiler = propertiesWrong`).
+        if (tryEmitNestedWeakVarDecl(decl, name, source, fileName)) return
+
         // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
         // property NAME with no outer chain and no TS6500 (`{valueOf: 1}` →
@@ -78854,6 +78857,199 @@ interface DataView {
             return type.types.firstNotNullOfOrNull { getPropertyOfType(it, name) }
         }
         return null
+    }
+
+    // -----------------------------------------------------------------------
+    // B482: weak-type rule (TS2559 / TS2560)
+    // -----------------------------------------------------------------------
+
+    /**
+     * B482: collect a WEAK-type-candidate target's combined property symbols.
+     * Returns null when [type] cannot be a weak type — it has call/construct/index
+     * signatures, or it (an intersection constituent) is not a plain object/interface.
+     * Returns the combined property symbols (excluding the empty-named signature
+     * placeholders and Object.prototype members) otherwise — possibly empty.
+     */
+    private fun weakTargetProperties(type: Type): List<Symbol>? = when {
+        type is Type.Reference -> null
+        type is Type.Object -> {
+            resolveStructuredTypeMembers(type)
+            when {
+                getCallSignaturesOfType(type).isNotEmpty() -> null
+                getConstructSignaturesOfType(type).isNotEmpty() -> null
+                type.stringIndexInfo != null || type.numberIndexInfo != null -> null
+                else -> (type.properties ?: emptyList()).filter {
+                    it.name.isNotEmpty() && it.name !in OBJECT_PROTOTYPE_PROPERTIES
+                }
+            }
+        }
+        type is Type.Intersection -> {
+            val all = mutableListOf<Symbol>()
+            var bail = false
+            for (c in type.types) {
+                val p = weakTargetProperties(c)
+                if (p == null) { bail = true; break }
+                all.addAll(p)
+            }
+            if (bail) null else all
+        }
+        else -> null
+    }
+
+    /**
+     * B482: the set of property names a SOURCE value "has" for the weak-type
+     * common-property check. CONSERVATIVE — returns null (→ no diagnostic) for any
+     * source whose property set we cannot confidently enumerate (union / intersection
+     * / type-param / Reference / any / unknown / nullish), so a missed property never
+     * causes a false TS2559/TS2560. Primitives use their wrapper apparent type;
+     * callable objects additionally "have" the Function-interface members.
+     */
+    private fun weakSourcePropertyNames(type: Type): Set<String>? {
+        if (type.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or
+                TypeFlags.Never or TypeFlags.Any or TypeFlags.Unknown)) return null
+        return when {
+            type is Type.Union || type is Type.Intersection || type is Type.TypeParam -> null
+            type is Type.Reference -> null // generic instantiation — members may be lazy
+            type is Type.Object -> {
+                resolveStructuredTypeMembers(type)
+                val names = (type.properties ?: emptyList()).map { it.name }
+                    .filter { it.isNotEmpty() }.toMutableSet()
+                if (getCallSignaturesOfType(type).isNotEmpty() ||
+                    getConstructSignaturesOfType(type).isNotEmpty()) {
+                    names.addAll(FUNCTION_TYPE_PROPERTIES)
+                }
+                names
+            }
+            type.flags.hasAny(TypeFlags.StringLike or TypeFlags.NumberLike or
+                TypeFlags.BooleanLike or TypeFlags.BigIntLike or TypeFlags.ESSymbolLike) -> {
+                val app = getApparentType(type)
+                if (app is Type.Object) {
+                    resolveStructuredTypeMembers(app)
+                    (app.properties ?: emptyList()).map { it.name }.filter { it.isNotEmpty() }.toSet()
+                } else emptySet() // wrapper unresolvable — its props never collide with user weak props
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * B482: emit TS2559/TS2560 when [argType] is assigned to a WEAK [targetType]
+     * (all-optional object, no signatures/index) with which it shares NO property
+     * name. Non-callable source → TS2559; callable source → TS2560 + related
+     * TS6212 (call sig) / TS6213 (construct sig). Returns true when emitted.
+     */
+    /**
+     * B482: render a SOURCE function-value's display for the weak message. Our
+     * `inferReturnTypeFromBody` lacks an object-literal branch (a named function
+     * `getDefaultSettings(){ return {timeout:1000} }` resolves to `() => any`),
+     * while the arrow path infers it. Recover the object-literal return locally
+     * for display only (no type-graph change). Returns null when not applicable.
+     */
+    private fun weakFunctionDisplay(argType: Type): String? {
+        if (argType !is Type.Object) return null
+        val sig = argType.callSignatures?.firstOrNull() ?: return null
+        if (sig.resolvedReturnType != null && sig.resolvedReturnType !== anyType) return null
+        val fnDecl = argType.symbol?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration
+        val body = fnDecl?.body ?: return null
+        val objLit = body.statements.firstNotNullOfOrNull {
+            (it as? ReturnStatement)?.expression as? ObjectLiteralExpression
+        } ?: return null
+        val ret = try { widenType(getTypeOfObjectLiteral(objLit)) } catch (_: Throwable) { return null }
+        if (ret !is Type.Object) return null
+        return signatureToString(Signature(parameters = sig.parameters,
+            resolvedReturnType = ret, typeParameters = sig.typeParameters), isConstruct = false)
+    }
+
+    private fun tryEmitWeakTypeAssignment(
+        argType: Type, targetType: Type, start: Int, length: Int,
+        source: String, fileName: String, displayType: Type = argType,
+        targetDisplay: String? = null,
+    ): Boolean {
+        if (length <= 0) return false
+        val tgtProps = weakTargetProperties(targetType) ?: return false
+        if (tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) return false
+        val tgtNames = tgtProps.map { it.name }.filter { it.isNotEmpty() }.toSet()
+        if (tgtNames.isEmpty()) return false
+        val srcNames = weakSourcePropertyNames(argType) ?: return false
+        if (tgtNames.any { it in srcNames }) return false
+        val callSigs = getCallSignaturesOfType(argType)
+        val constructSigs = getConstructSignaturesOfType(argType)
+        val srcStr = weakFunctionDisplay(argType) ?: typeToString(displayType)
+        val tgtStr = targetDisplay ?: typeToString(targetType)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        if (callSigs.isNotEmpty() || constructSigs.isNotEmpty()) {
+            val (relMsg, relCode) = if (constructSigs.isNotEmpty() && callSigs.isEmpty())
+                "Did you mean to use 'new' with this expression?" to 6213
+            else "Did you mean to call this expression?" to 6212
+            diagnostics.add(Diagnostic(
+                message = "Value of type '$srcStr' has no properties in common with type '$tgtStr'. Did you mean to call it?",
+                category = DiagnosticCategory.Error, code = 2560,
+                fileName = fileName, line = line, character = character, start = start, length = length,
+                relatedInformation = mutableListOf(Diagnostic(
+                    message = relMsg, category = DiagnosticCategory.Message, code = relCode,
+                    fileName = fileName, line = line, character = character, start = start, length = length))))
+        } else {
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcStr' has no properties in common with type '$tgtStr'.",
+                category = DiagnosticCategory.Error, code = 2559,
+                fileName = fileName, line = line, character = character, start = start, length = length))
+        }
+        return true
+    }
+
+    /** B482: look up a property by name across an intersection's constituents. */
+    private fun getPropertyAcrossType(type: Type, name: String): Symbol? = when (type) {
+        is Type.Intersection -> type.types.firstNotNullOfOrNull { getPropertyAcrossType(it, name) }
+        is Type.Object -> { resolveStructuredTypeMembers(type); type.members?.get(name) }
+        else -> null
+    }
+
+    /**
+     * B482: NESTED weak-type mismatch in a var-decl `let x: T = src`. When a property
+     * P present in BOTH the (object) source and target has a WEAK target value type
+     * that shares NO property with the source's value type, tsc reports TS2322 with the
+     * chain "Types of property 'P' are incompatible." → "Type 'S' has no properties in
+     * common with type 'W'." (the relation passes vacuously, since the weak value is
+     * all-optional, so we add the diagnostic). One level deep. Returns true if emitted.
+     */
+    private fun tryEmitNestedWeakVarDecl(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        val ann = decl.type ?: return false
+        val init = decl.initializer ?: return false
+        val targetType = try { getTypeFromTypeNode(ann) } catch (_: Throwable) { return false }
+        if (targetType === errorType || targetType === anyType) return false
+        val srcType = try { getTypeOfExpression(init) } catch (_: Throwable) { return false }
+        if (srcType !is Type.Object || srcType === errorType || srcType === anyType) return false
+        resolveStructuredTypeMembers(srcType)
+        val srcProps = srcType.properties ?: return false
+        for (sProp in srcProps) {
+            if (sProp.name.isEmpty() || sProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            val tProp = getPropertyAcrossType(targetType, sProp.name) ?: continue
+            val tPropType = try { getTypeOfSymbol(tProp) } catch (_: Throwable) { continue }
+            val sPropType = try { getTypeOfSymbol(sProp) } catch (_: Throwable) { continue }
+            if (tPropType === anyType || tPropType === errorType ||
+                sPropType === anyType || sPropType === errorType) continue
+            val tInner = weakTargetProperties(tPropType) ?: continue
+            if (tInner.isEmpty() || !tInner.all { isOptionalProperty(it) }) continue
+            val tInnerNames = tInner.map { it.name }.filter { it.isNotEmpty() }.toSet()
+            if (tInnerNames.isEmpty()) continue
+            val sInnerNames = weakSourcePropertyNames(sPropType) ?: continue
+            if (tInnerNames.any { it in sInnerNames }) continue
+            val tgtDisplay = formatTypeForDisplay(ann) ?: typeToString(targetType)
+            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(srcType)}' is not assignable to type '$tgtDisplay'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = name.pos, length = name.text.length,
+                messageChain = listOf(
+                    "  Types of property '${sProp.name}' are incompatible.",
+                    "    Type '${typeToString(sPropType)}' has no properties in common with type '${typeToString(tPropType)}'.",
+                )))
+            return true
+        }
+        return false
     }
 
     /**
@@ -103018,6 +103214,31 @@ interface DataView {
             // element against the parameter's array element type. Catches
             // `foo([1, "a"])` where foo takes `number[]`.
             val isRestParam = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            // B482: weak-type rule. A WEAK target (all-optional object, no
+            // signatures/index) is vacuously assignable from any source; tsc
+            // additionally requires the source to share ≥1 property name. When it
+            // shares none, emit TS2559 (non-callable) / TS2560 (callable) and skip
+            // the rest of this arg's checks (the relation passes vacuously). For a
+            // rest parameter the effective target is the array element type
+            // (`changes.push(error)`). Placed early so the intervening fn-vs-fn /
+            // excess-property blocks don't `continue` past it.
+            val weakTarget = if (isRestParam && paramType is Type.Reference &&
+                paramType.target?.symbol?.name == "Array")
+                (paramType.resolvedTypeArguments?.firstOrNull() ?: paramType)
+            else paramType
+            // `expressionTrueEnd` has no AsExpression case (→ overshoots by one token);
+            // for a simple `x as Name` cast the squiggle ends after the type name.
+            val weakArgEnd = if (arg is AsExpression) {
+                val t = arg.type
+                if (t is TypeReference && t.typeName is Identifier && t.typeArguments.isNullOrEmpty())
+                    (t.typeName as Identifier).let { it.pos + it.text.length }
+                else expressionTrueEnd(arg)
+            } else expressionTrueEnd(arg)
+            if (tryEmitWeakTypeAssignment(argType, weakTarget, arg.pos,
+                    weakArgEnd - arg.pos, source, fileName,
+                    displayType = literalTypeOfExpression(arg) ?: argType)) {
+                continue
+            }
             if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
                 paramType.target?.symbol?.name == "Array") {
                 checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
@@ -117012,47 +117233,87 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            pdduScanStmts(result.sourceFile.statements, source, fileName)
+            pdduScanStmts(result.sourceFile.statements, source, fileName, mutableMapOf())
         }
     }
 
-    private fun pdduScanStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (st in stmts) pdduScanStmt(st, source, fileName)
+    private fun pdduScanStmts(stmts: List<Statement>, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
+        for (st in stmts) {
+            // Accumulate local var annotations so a later `recv.push(arg)` in the
+            // same scope can resolve `recv`/`arg` (function-body locals aren't bound).
+            if (st is VariableStatement) for (d in st.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text; val t = d.type
+                if (n != null && t != null) localAnns[n] = t
+            }
+            pdduScanStmt(st, source, fileName, localAnns)
+        }
     }
 
-    private fun pdduScanStmt(stmt: Statement, source: String, fileName: String) {
+    private fun pdduChildScope(params: List<Parameter>, localAnns: Map<String, TypeNode>): MutableMap<String, TypeNode> {
+        val child = HashMap(localAnns)
+        for (p in params) { val n = (p.name as? Identifier)?.text; val t = p.type; if (n != null && t != null) child[n] = t }
+        return child
+    }
+
+    private fun pdduScanStmt(stmt: Statement, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
         when (stmt) {
-            is ExpressionStatement -> pdduCheckExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { pdduCheckExpr(it, source, fileName) }
-            is ReturnStatement -> stmt.expression?.let { pdduCheckExpr(it, source, fileName) }
-            is Block -> pdduScanStmts(stmt.statements, source, fileName)
-            is IfStatement -> { pdduCheckExpr(stmt.expression, source, fileName); pdduScanStmt(stmt.thenStatement, source, fileName); stmt.elseStatement?.let { pdduScanStmt(it, source, fileName) } }
-            is ForStatement -> pdduScanStmt(stmt.statement, source, fileName)
-            is ForInStatement -> pdduScanStmt(stmt.statement, source, fileName)
-            is ForOfStatement -> pdduScanStmt(stmt.statement, source, fileName)
-            is WhileStatement -> pdduScanStmt(stmt.statement, source, fileName)
-            is DoStatement -> pdduScanStmt(stmt.statement, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { pdduScanStmts(it.statements, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { pdduScanStmts(it.statements, source, fileName) }
+            is ExpressionStatement -> pdduCheckExpr(stmt.expression, source, fileName, localAnns)
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { pdduCheckExpr(it, source, fileName, localAnns) }
+            is ReturnStatement -> stmt.expression?.let { pdduCheckExpr(it, source, fileName, localAnns) }
+            is Block -> pdduScanStmts(stmt.statements, source, fileName, HashMap(localAnns))
+            is IfStatement -> { pdduCheckExpr(stmt.expression, source, fileName, localAnns); pdduScanStmt(stmt.thenStatement, source, fileName, localAnns); stmt.elseStatement?.let { pdduScanStmt(it, source, fileName, localAnns) } }
+            is ForStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
+            is ForInStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
+            is ForOfStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
+            is WhileStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
+            is DoStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
+            is FunctionDeclaration -> stmt.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(stmt.parameters, localAnns)) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { pdduScanStmts(it.statements, source, fileName, HashMap(localAnns)) }
             is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
-                is Constructor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
-                is GetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
-                is SetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName) }
+                is MethodDeclaration -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
+                is Constructor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
+                is GetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, HashMap(localAnns)) }
+                is SetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
                 else -> {}
             }
             else -> {}
         }
     }
 
-    private fun pdduCheckExpr(expr: Expression, source: String, fileName: String) {
+    /** Resolve an expression's type, falling back to a local annotation map for
+     *  function-body locals/params that the standalone walker can't bind. */
+    private fun pdduResolveType(expr: Expression, localAnns: Map<String, TypeNode>): Type? {
+        val t = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { return null }
+        if (t !== anyType && t !== errorType) return t
+        val ann = (expr as? Identifier)?.let { localAnns[it.text] } ?: return t
+        return try { getTypeFromTypeNode(ann) } catch (_: Throwable) { t }
+    }
+
+    private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
         val call = expr as? CallExpression ?: return
         val callee = call.expression as? PropertyAccessExpression ?: return
         if ((callee.name as? Identifier)?.text != "push") return
-        val arg = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
-        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return }
+        val theArg = call.arguments.singleOrNull() ?: return
+        val recvType = pdduResolveType(callee.expression, localAnns) ?: return
         if (recvType !is Type.Reference || recvType.target?.symbol?.name != "Array") return
-        val elem = recvType.resolvedTypeArguments?.getOrNull(0) as? Type.Object ?: return
+        val elemRaw = recvType.resolvedTypeArguments?.getOrNull(0) ?: return
+        // B482: a non-object-literal weak-mismatch arg (`changes.push(error)`) — the
+        // array-method arg-check never reaches `checkArgumentsAgainstSignature`.
+        if (theArg !is ObjectLiteralExpression) {
+            val argType = pdduResolveType(theArg, localAnns) ?: return
+            if (argType !== anyType && argType !== errorType) {
+                // Prefer the receiver annotation's element alias name for the target
+                // display (`ChangeOptions` rather than the expanded intersection).
+                val tgtDisplay = ((callee.expression as? Identifier)?.let { localAnns[it.text] } as? ArrayType)
+                    ?.let { formatTypeForDisplay(it.elementType) }
+                tryEmitWeakTypeAssignment(argType, elemRaw, theArg.pos,
+                    expressionTrueEnd(theArg) - theArg.pos, source, fileName,
+                    displayType = literalTypeOfExpression(theArg) ?: argType, targetDisplay = tgtDisplay)
+            }
+            return
+        }
+        val arg = theArg
+        val elem = elemRaw as? Type.Object ?: return
         try { resolveStructuredTypeMembers(elem) } catch (_: StackOverflowError) { return }
         for (prop in arg.properties) {
             val pa = prop as? PropertyAssignment ?: continue
