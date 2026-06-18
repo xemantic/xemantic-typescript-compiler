@@ -107350,6 +107350,32 @@ interface DataView {
                 // `Type '"hi"' is not assignable to type 'number'.`. Same-base mismatches
                 // (`'hi'` vs `'bye'` — both string literals) keep both literals.
                 val displayTargetParam = widenLiteralForDifferentBaseDisplay(targetParamType, sourceParamType)
+                // B481b: BOTH params optional (`n?: number` vs `b?: boolean`). TypeScript
+                // widens each optional param to `T | undefined` and produces a TWO-level
+                // union sub-chain: the union-vs-union relation, then the failing member
+                // (the non-undefined constituent) vs the target's `T | undefined`. Gated to
+                // both-optional + neither display already mentioning undefined (strictNull-on
+                // params already carry it → fall through to the bare form unchanged).
+                run {
+                    val srcOpt = (sourceParams[i].valueDeclaration as? Parameter)?.questionToken == true
+                    val tgtOpt = (targetParams[i].valueDeclaration as? Parameter)?.questionToken == true
+                    val aBase = typeToString(displayTargetParam)
+                    val bBase = typeToString(sourceParamType)
+                    if (srcOpt && tgtOpt && !aBase.contains("undefined") && !bBase.contains("undefined")) {
+                        // The deepest line drills the source's non-undefined failing member
+                        // (`aBase`) against the target. tsc keeps `| undefined` on the target
+                        // when `aBase` is atomic (e.g. `number`), but STRIPS it when `aBase`
+                        // is `boolean` — internally `boolean` = `true | false`, so tsc recurses
+                        // into its members and elaborates each against the best-matching single
+                        // target constituent (dropping `undefined`).
+                        val deepestTarget = if (aBase == "boolean") bBase else "$bBase | undefined"
+                        return listOf(
+                            "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
+                            "    Type '$aBase | undefined' is not assignable to type '$bBase | undefined'.",
+                            "      Type '$aBase' is not assignable to type '$deepestTarget'.",
+                        )
+                    }
+                }
                 return listOf(
                     "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",
                     "    Type '${typeToString(displayTargetParam)}' is not assignable to type '${typeToString(sourceParamType)}'.",
