@@ -72945,7 +72945,8 @@ interface DataView {
             // Fires even when assignability passes (e.g., {b: 0, a: 0} → {b: number}).
             if (canUse && init is ObjectLiteralExpression) {
                 val displayTarget = excessPropDisplayTarget(targetType, typeAnnotation)
-                if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName)) {
+                if (checkExcessProperties(init, sourceType, targetType, displayTarget, source, fileName,
+                        topLevelRelatedOnly = true)) {
                     return // TS2353 emitted — skip TS2741/TS2322
                 }
             }
@@ -74165,6 +74166,16 @@ interface DataView {
                 // "expected type comes from property" related info. (asyncFunctionReturn-
                 // ExpressionErrorSpans.) Additive; runs against the async-unwrapped target.
                 if (expr is ObjectLiteralExpression && effObjTarget !== targetType &&
+                    effObjTarget is Type.Object &&
+                    !(effObjTarget is Type.Reference && effObjTarget.target?.symbol?.name == "Array") &&
+                    checkNestedObjLitPropTypes(expr, effObjTarget, source, fileName)) {
+                    return
+                }
+                // B482ext: SYNC object-literal return — per-property TYPE mismatch at the key
+                // (`return { ...v, hi: true }` vs `{ hi?: string[] }` → TS2322 at `hi` + TS6500),
+                // mirroring the async path above. The general relation path below would emit a
+                // coarse whole-object chain at the `return` keyword instead.
+                if (expr is ObjectLiteralExpression && effObjTarget === targetType &&
                     effObjTarget is Type.Object &&
                     !(effObjTarget is Type.Reference && effObjTarget.target?.symbol?.name == "Array") &&
                     checkNestedObjLitPropTypes(expr, effObjTarget, source, fileName)) {
@@ -75425,7 +75436,14 @@ interface DataView {
                                 // was `A | null | undefined`, we still get the property chain
                                 // against the underlying `A`.
                                 val ttForChain = ttForDisplay
-                                if (sourceType is Type.Object && ttForChain is Type.Object) {
+                                // B482ext: an INTERSECTION source vs an Object target also goes
+                                // through the chain helper (`getIntersectionPropertyElaborationChain`
+                                // merges the constituents' members) — mirrors the var-decl path.
+                                // `x = y` where `x: { a?: string }`, `y: T & { a: boolean }` →
+                                // "Types of property 'a' are incompatible. Type 'boolean' is not
+                                // assignable to type 'string'.".
+                                if ((sourceType is Type.Object || sourceType is Type.Intersection) &&
+                                    ttForChain is Type.Object) {
                                     lastChainMissingPropSymbol = null
                                     val propElab = getPropertyElaborationChain(sourceType, ttForChain)
                                     if (propElab != null) chain.addAll(propElab)
@@ -106879,7 +106897,12 @@ interface DataView {
                     }
                     continue
                 }
-                if (!isSimpleCheckableType(valueType) || !isSimpleCheckableType(tgtMemberType)) continue
+                // B482ext: require a SIMPLE source value (primitive/literal) — such a value
+                // can never have deeper structure, so a flat per-property line is always
+                // tsc-correct even against a non-simple target (e.g. `hi: true` vs `string[]`
+                // → "Type 'boolean' is not assignable to type 'string[]'." at the key). A
+                // non-simple source still needs the deeper-chain path → keep skipping it.
+                if (!isSimpleCheckableType(valueType)) continue
                 if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
                 if (checkTypeRelatedTo(valueType, tgtMemberType, assignableRelation)) continue
                 val keyPos = nameNode.pos
@@ -107243,6 +107266,12 @@ interface DataView {
         // (nestedFreshLiteral), so the flag is set only at the call-arg sites.
         buildNestedRelated: Boolean = false,
         parentRelated: Diagnostic? = null,
+        // B482ext: var-decl/assignment path — attach the TS6500 "expected type comes
+        // from property" related info ONLY to a DEPTH-1 nested excess (the immediate
+        // child of the top-level literal). tsc gives it for `let obj: {a:{x}}&… =
+        // {a:{x,EXCESS}}` (intersectionPropertyCheck) but NOT for a depth-2 nested
+        // excess (`{nested:{prop:{EXCESS}}}` → nestedFreshLiteral, related-free).
+        topLevelRelatedOnly: Boolean = false,
     ): Boolean {
         if (sourceType !is Type.Object) return false
         val sourceProps = sourceType.properties ?: return false
@@ -107360,7 +107389,12 @@ interface DataView {
                 // B220: TS6500 for the nested emission — only when THIS level's
                 // target is not a union (tsc's getPropertyOfType-on-union rule;
                 // nonObjectUnionNestedExcessPropertyCheck must stay related-free).
-                val nextRelated: Diagnostic? = if (buildNestedRelated && targetType !is Type.Union) {
+                // B482ext: the var-decl/assignment path builds the related only at the
+                // TOP level (parentRelated == null) so depth-1 children get it but
+                // grandchildren don't (the intersectionPropertyCheck vs nestedFreshLiteral
+                // distinction). The call-arg path (buildNestedRelated) builds at all levels.
+                val nextRelated: Diagnostic? = if ((buildNestedRelated ||
+                        (topLevelRelatedOnly && parentRelated == null)) && targetType !is Type.Union) {
                     val ownerSym = when (targetType) {
                         is Type.Intersection -> targetType.types.firstNotNullOfOrNull {
                             (it as? Type.Object)?.members?.get(propName)
@@ -107375,7 +107409,7 @@ interface DataView {
                         )
                     }
                 } else null
-                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName, buildNestedRelated, nextRelated)) {
+                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName, buildNestedRelated, nextRelated, topLevelRelatedOnly)) {
                     emitted = true
                 }
             }
