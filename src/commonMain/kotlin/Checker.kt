@@ -942,6 +942,10 @@ class Checker(
         if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
             checkPropertyInitialization()
         }
+        // 6a. TS2540 for `const x = cond ? a : b; x.p = v` where p is readonly in a
+        // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
+        // (readonly is structural).
+        checkTernaryUnionReadonlyWrites()
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
@@ -48698,6 +48702,174 @@ interface DataView {
             start = pos,
             length = length,
         ))
+    }
+
+    /**
+     * `readonlyPropertySubtypeRelationDirected`: a local `const x = cond ? a : b`
+     * whose branch identifiers are object-typed (via TypeLiteral annotations) gives
+     * `x` a UNION type; writing `x.p` where `p` is readonly in ANY union constituent
+     * (the inverse of the intersection ALL-rule) → TS2540. `getTypeOfExpression(x)`
+     * returns anyType for such an inferred local const (the documented gap), and
+     * populating local-const types broadly is FP-risky, so this is a dedicated
+     * AST-shape walker. FP-safe: the readonly-in-a-union-constituent rule is exactly
+     * tsc's; the gate (const = ternary of two object-annotated identifiers, prop
+     * present in BOTH branches and readonly in ≥1) is corpus-rare and never
+     * double-emits with [isReadonlyPropertyAccess] (which bails on the anyType receiver).
+     */
+    private fun checkTernaryUnionReadonlyWrites() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                ternaryReadonlyScan(result.sourceFile.statements, source, fileName, emptyMap())
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** (readonly-prop-names, all-prop-names) for an object TypeLiteral. A getter with
+     *  no paired setter counts as readonly, matching tsc. */
+    private fun typeLiteralReadonlyProps(tl: TypeLiteral): Pair<Set<String>, Set<String>> {
+        val readonly = mutableSetOf<String>()
+        val all = mutableSetOf<String>()
+        val getters = mutableSetOf<String>()
+        val setters = mutableSetOf<String>()
+        for (m in tl.members) when (m) {
+            is PropertyDeclaration -> {
+                val n = (m.name as? Identifier)?.text ?: continue
+                all.add(n)
+                if (ModifierFlag.Readonly in m.modifiers) readonly.add(n)
+            }
+            is GetAccessor -> (m.name as? Identifier)?.text?.let { all.add(it); getters.add(it) }
+            is SetAccessor -> (m.name as? Identifier)?.text?.let { all.add(it); setters.add(it) }
+            else -> {}
+        }
+        for (g in getters) if (g !in setters) readonly.add(g)
+        return readonly to all
+    }
+
+    private fun ternaryReadonlyScan(
+        statements: List<Statement>, source: String, fileName: String,
+        outerAnnots: Map<String, TypeLiteral>,
+    ) {
+        // Object-typed const annotations visible in this scope (outer + own). A name
+        // re-declared in this scope is ambiguous → dropped (conservative).
+        val annots = HashMap(outerAnnots)
+        val ownSeen = HashSet<String>()
+        for (stmt in statements) {
+            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    if (!ownSeen.add(n)) { annots.remove(n); continue }
+                    (d.type as? TypeLiteral)?.let { annots[n] = it }
+                }
+            }
+        }
+        // Ternary consts: `const x = cond ? A : B` with A,B object-annotated identifiers.
+        val ternaryReadonly = HashMap<String, Set<String>>()
+        for (stmt in statements) {
+            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                for (d in stmt.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    if (d.type != null) continue // annotated → use its declared type, not inferred union
+                    val cond = d.initializer as? ConditionalExpression ?: continue
+                    val a = (cond.whenTrue as? Identifier)?.let { annots[it.text] } ?: continue
+                    val b = (cond.whenFalse as? Identifier)?.let { annots[it.text] } ?: continue
+                    val (ra, allA) = typeLiteralReadonlyProps(a)
+                    val (rb, allB) = typeLiteralReadonlyProps(b)
+                    val common = allA intersect allB
+                    val unionReadonly = common.filter { it in ra || it in rb }.toSet()
+                    if (unionReadonly.isNotEmpty()) ternaryReadonly[n] = unionReadonly
+                }
+            }
+        }
+        if (ternaryReadonly.isNotEmpty()) {
+            for (stmt in statements) ternaryReadonlyScanWrites(stmt, ternaryReadonly, source, fileName)
+        }
+        for (stmt in statements) ternaryReadonlyRecurse(stmt, source, fileName, annots)
+    }
+
+    /** Emit TS2540 for `name.prop (= | compound-assign) value` where prop is union-readonly.
+     *  Descends control-flow but NOT function-likes (those are separate scopes handled
+     *  by [ternaryReadonlyRecurse]). */
+    private fun ternaryReadonlyScanWrites(stmt: Statement, map: Map<String, Set<String>>, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> {
+                val e = stmt.expression
+                if (e is BinaryExpression && isAssignmentOperator(e.operator)) {
+                    val lhs = unwrapParens(e.left)
+                    if (lhs is PropertyAccessExpression) {
+                        val recv = lhs.expression
+                        if (recv is Identifier && lhs.name.text in (map[recv.text] ?: emptySet())) {
+                            emitTS2540(lhs.name.text, lhs.name.pos, lhs.name.text.length, source, fileName)
+                        }
+                    }
+                }
+            }
+            is Block -> for (s in stmt.statements) ternaryReadonlyScanWrites(s, map, source, fileName)
+            is IfStatement -> {
+                ternaryReadonlyScanWrites(stmt.thenStatement, map, source, fileName)
+                stmt.elseStatement?.let { ternaryReadonlyScanWrites(it, map, source, fileName) }
+            }
+            is ForStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            is ForInStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            is ForOfStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            is WhileStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            is DoStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) ternaryReadonlyScanWrites(s, map, source, fileName)
+                stmt.catchClause?.block?.statements?.forEach { ternaryReadonlyScanWrites(it, map, source, fileName) }
+                stmt.finallyBlock?.statements?.forEach { ternaryReadonlyScanWrites(it, map, source, fileName) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
+                is CaseClause -> c.statements.forEach { ternaryReadonlyScanWrites(it, map, source, fileName) }
+                is DefaultClause -> c.statements.forEach { ternaryReadonlyScanWrites(it, map, source, fileName) }
+                else -> {}
+            }
+            is LabeledStatement -> ternaryReadonlyScanWrites(stmt.statement, map, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Recurse into nested scopes (function-likes, class member bodies, control-flow,
+     *  namespaces) carrying the visible object-const annotations. */
+    private fun ternaryReadonlyRecurse(stmt: Statement, source: String, fileName: String, annots: Map<String, TypeLiteral>) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let { ternaryReadonlyScan(it.statements, source, fileName, annots) }
+            is ClassDeclaration -> for (m in stmt.members) {
+                val body = when (m) {
+                    is MethodDeclaration -> m.body
+                    is Constructor -> m.body
+                    is GetAccessor -> m.body
+                    is SetAccessor -> m.body
+                    else -> null
+                }
+                body?.let { ternaryReadonlyScan(it.statements, source, fileName, annots) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { ternaryReadonlyScan(it.statements, source, fileName, annots) }
+            is Block -> ternaryReadonlyScan(stmt.statements, source, fileName, annots)
+            is IfStatement -> {
+                ternaryReadonlyRecurse(stmt.thenStatement, source, fileName, annots)
+                stmt.elseStatement?.let { ternaryReadonlyRecurse(it, source, fileName, annots) }
+            }
+            is ForStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            is ForInStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            is ForOfStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            is WhileStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            is DoStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            is TryStatement -> {
+                for (s in stmt.tryBlock.statements) ternaryReadonlyRecurse(s, source, fileName, annots)
+                stmt.catchClause?.block?.statements?.forEach { ternaryReadonlyRecurse(it, source, fileName, annots) }
+                stmt.finallyBlock?.statements?.forEach { ternaryReadonlyRecurse(it, source, fileName, annots) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
+                is CaseClause -> c.statements.forEach { ternaryReadonlyRecurse(it, source, fileName, annots) }
+                is DefaultClause -> c.statements.forEach { ternaryReadonlyRecurse(it, source, fileName, annots) }
+                else -> {}
+            }
+            is LabeledStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            else -> {}
+        }
     }
 
     /**
