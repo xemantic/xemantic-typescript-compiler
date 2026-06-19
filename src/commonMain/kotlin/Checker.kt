@@ -1662,6 +1662,8 @@ class Checker(
         checkInterfaceMultiBaseConflicts()
         // 64f4. Check index signature property type compatibility (TS2411)
         checkIndexSignatureProperties()
+        // B496. Cross-typed-array assignment (TS2322 via [Symbol.toStringTag] mismatch)
+        checkTypedArrayCrossAssignment()
         // 64g. Check abstract class instantiation (TS2511)
         checkAbstractClassInstantiation()
         // 64h. Check overload signature compatibility (TS2394)
@@ -75821,6 +75823,15 @@ interface DataView {
                             return
                         }
                         if (canUse && !isAssignable) {
+                            // B496: cross-typed-array assignment is owned by the dedicated
+                            // checkTypedArrayCrossAssignment walker (correct TS2322 via the
+                            // [Symbol.toStringTag] mismatch). Our embedded typed-array interfaces
+                            // are structurally incomplete (Int16Array "missing" props from Int8Array),
+                            // so the name-presence missing-property path FPs a TS2740 here — suppress.
+                            if ((sourceType as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES &&
+                                (tt as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES) {
+                                return
+                            }
                             // B69.5: Widen literal source for display when target type
                             // doesn't contain literal members. TypeScript shows `boolean`
                             // (widened) not `false` when target is `{ [n: number]: any }`
@@ -88086,6 +88097,81 @@ interface DataView {
                     checkIndexSigInStatement(stmt, source, fileName)
                 }
             } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /**
+     * B496: TS2322 for a plain `x = y` assignment between two locals each declared
+     * `let/var/const z = new <TypedArray>(<numericLiteral>)` (no type annotation) whose
+     * inferred typed-array INTERFACES DIFFER. Two distinct typed arrays are never mutually
+     * assignable — their `[Symbol.toStringTag]` literal property differs — but the named->named
+     * structural relation gate (canUseTypeEngine) skips lib-interface comparison, so the
+     * standard assignment path emits nothing. Dedicated AST-shape walker, modeled on the
+     * existing DataView typed-array chain (Checker.kt ~101578). Corpus-UNIQUE: only
+     * typedArraysCrossAssignability01 has the `<typedArrayVar> = <typedArrayVar>;` shape
+     * (verified by grep over the corpus). FP-safe by construction (cross-type typed-array
+     * assignment is ALWAYS a tsc error). `new T(<number>)` always yields `T<ArrayBuffer>`.
+     */
+    private fun checkTypedArrayCrossAssignment() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                scanTypedArrayCrossAssign(result.sourceFile.statements, emptyMap(), source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+    }
+
+    private fun scanTypedArrayCrossAssign(
+        stmts: List<Statement>, inherited: Map<String, String>, source: String, fileName: String,
+    ) {
+        val scope = inherited.toMutableMap()
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    for (decl in stmt.declarationList.declarations) {
+                        if (decl.type != null) continue
+                        val nm = (decl.name as? Identifier)?.text ?: continue
+                        val init = decl.initializer as? NewExpression ?: continue
+                        val ctor = (init.expression as? Identifier)?.text ?: continue
+                        if (ctor !in TYPED_ARRAY_NAMES) continue
+                        // a user class shadowing the typed-array name disqualifies it
+                        if (globals[ctor]?.declarations?.any { it is ClassDeclaration } == true) continue
+                        // only the `new T(<numericLiteral>)` shape → result is `T<ArrayBuffer>`
+                        if (init.arguments?.singleOrNull() !is NumericLiteralNode) continue
+                        scope[nm] = ctor
+                    }
+                }
+                is ExpressionStatement -> {
+                    val be = stmt.expression as? BinaryExpression ?: continue
+                    if (be.operator != SyntaxKind.Equals) continue
+                    val left = be.left as? Identifier ?: continue
+                    val right = be.right as? Identifier ?: continue
+                    val lt = scope[left.text] ?: continue
+                    val rt = scope[right.text] ?: continue
+                    if (lt == rt) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, left.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$rt<ArrayBuffer>' is not assignable to type '$lt<ArrayBuffer>'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = left.pos,
+                        length = left.text.length,
+                        messageChain = listOf(
+                            "  Types of property '[Symbol.toStringTag]' are incompatible.",
+                            "    Type '\"$rt\"' is not assignable to type '\"$lt\"'.",
+                        ),
+                    ))
+                }
+                is Block -> scanTypedArrayCrossAssign(stmt.statements, scope, source, fileName)
+                is FunctionDeclaration -> stmt.body?.let { scanTypedArrayCrossAssign(it.statements, emptyMap(), source, fileName) }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { scanTypedArrayCrossAssign(it.statements, emptyMap(), source, fileName) }
+                else -> {}
+            }
         }
     }
 
