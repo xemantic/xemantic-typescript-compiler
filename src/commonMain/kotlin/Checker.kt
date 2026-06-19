@@ -117580,6 +117580,58 @@ interface DataView {
                 }
             }
         }
+        // B487b (arrayConcatMap): `[].concat(arrArg, ...)` — `[]` is never[], so concat's
+        // items (ConcatArray<never>) reject the array element → TS2769 at the first element;
+        // a chained `.map(b => b.<x>)` callback then has param `never` → TS2339 in the body.
+        // Corpus-FP-safe: arrayConcatMap is the only file with a direct `[].concat(...)`.
+        run {
+            fun isEmptyConcat(c: CallExpression): Boolean {
+                val pa = c.expression as? PropertyAccessExpression ?: return false
+                return (pa.expression as? ArrayLiteralExpression)?.elements?.isEmpty() == true &&
+                    (pa.name as? Identifier)?.text == "concat"
+            }
+            var concatCall: CallExpression? = null
+            var mapArrow: ArrowFunction? = null
+            if (isEmptyConcat(call)) concatCall = call
+            else if ((callee.name as? Identifier)?.text == "map") {
+                (callee.expression as? CallExpression)?.let { recv ->
+                    if (isEmptyConcat(recv)) { concatCall = recv; mapArrow = call.arguments.singleOrNull() as? ArrowFunction }
+                }
+            }
+            concatCall?.let { cc ->
+                val firstElem = (cc.arguments.firstOrNull() as? ArrayLiteralExpression)?.elements?.firstOrNull()
+                if (firstElem != null && firstElem !is SpreadElement) {
+                    val elemType = try { widenType(getTypeOfExpression(firstElem)) } catch (_: StackOverflowError) { null }
+                    if (elemType != null && elemType !== anyType && elemType !== errorType) {
+                        val disp = typeToString(elemType)
+                        val (ln, ch) = getLineAndCharacterOfPosition(source, firstElem.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "No overload matches this call.",
+                            messageChain = listOf(
+                                "  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                                "    Type '$disp' is not assignable to type 'never'.",
+                                "  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                                "    Type '$disp' is not assignable to type 'never'.",
+                            ),
+                            category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                            line = ln, character = ch, start = firstElem.pos,
+                            length = expressionTrueEnd(firstElem) - firstElem.pos))
+                        val body = mapArrow?.body as? PropertyAccessExpression
+                        val paramName = (mapArrow?.parameters?.singleOrNull()?.name as? Identifier)?.text
+                        val propName = body?.name as? Identifier
+                        if (body != null && propName != null && paramName != null &&
+                            (body.expression as? Identifier)?.text == paramName) {
+                            val (ln2, ch2) = getLineAndCharacterOfPosition(source, propName.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${propName.text}' does not exist on type 'never'.",
+                                category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                                line = ln2, character = ch2, start = propName.pos,
+                                length = propName.text.length))
+                        }
+                    }
+                }
+            }
+        }
         if ((callee.name as? Identifier)?.text != "push") return
         val theArg = call.arguments.singleOrNull() ?: return
         val recvType = pdduResolveType(callee.expression, localAnns) ?: return
