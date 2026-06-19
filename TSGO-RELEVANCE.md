@@ -96,8 +96,19 @@ Add entries as ` - \`name_ts\` — reason `.
 
 Tests where tsgo's behavior differs from the tsc baseline we diff against, so the
 **tsc baseline is the wrong target** (don't chase it as-is). Add entries as
-` - \`name_ts\` — reason `. *(None catalogued yet — populate as concrete tsgo
-behavioral differences are confirmed against tsgo baselines.)*
+` - \`name_ts\` — reason `.
+
+ - `defaultBestCommonTypesHaveDecls_ts` — its `concat<T>(x:T, y:T): T` called
+   `concat(1, "")` expects **TS2345 `'""' is not assignable to '1'`** (the old
+   "best common type" inference, per the test's own name). MODERN tsc/tsgo infers
+   `T = 1 | ""` (union) and reports **NO error** — exactly what the still-passing
+   `fixTypeParameterInSignatureWithRestParameters_ts` (`bar<T>(item1:T,item2:T)`,
+   `bar(1,"")` → OK) and `genericRestArgs_ts` (`makeArrayG<T>(...items:T[])`,
+   `makeArrayG(1,"")` → OK) encode. Round-200 verified: a `tryEmitFixedConflictBareTpTs2345`
+   that produces the stale error flips this test but REGRESSES those two → net -1.
+   The test's OTHER two errors (TS2339 `.length` on `{}` / `Object`) ARE modern and
+   were emittable FP-safe via a dedicated `{}`/`Object`-annotated-var walker (verified
+   net-zero), but the stale TS2345 makes the whole test unflippable. Do NOT re-attempt.
 
 ## How to use
 
