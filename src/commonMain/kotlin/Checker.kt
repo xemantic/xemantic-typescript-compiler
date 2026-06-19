@@ -1199,6 +1199,9 @@ class Checker(
         // 8a-ter. B494: TS2339 for absent members of `import * as foo from "<bare>"` where
         // <bare> is a single non-augmentation ambient `declare module "<bare>"` definition.
         checkAmbientModuleNamespaceImportMembers()
+        // 8a-quater. B495: TS2322 for `const x: any[] = [] as Homomorphic<T>` where T's
+        // constraint union contains a readonly tuple (readonly mapped result ↛ mutable array).
+        checkHomomorphicMappedCastToArray()
         // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
         // module-local namespace shadowing any file-level namespace of the same name.
         checkAmbientModuleLocalNamespaceMemberRefs()
@@ -32821,6 +32824,71 @@ class Checker(
                     category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                     line = line, character = character, start = pa.name.pos, length = member.length,
                 ))
+            }
+        }
+    }
+
+    /**
+     * B495: TS2322 for `const x: any[] = <expr> as Homo<T>` inside a generic function where
+     * `Homo` is a HOMOMORPHIC mapped type (`{ [P in keyof X]: ... }`) and `T`'s constraint is a
+     * UNION containing a `readonly [...]` tuple. A homomorphic mapped type over a constraint whose
+     * union has a readonly-tuple member yields a READONLY result, which is not assignable to a
+     * MUTABLE `any[]` target (a `readonly any[]` target — test2 line 14 — IS fine, so the gate
+     * requires a non-readonly `ArrayType`). Pure AST — no mapped-type evaluation: homomorphism is
+     * the syntactic `keyof <alias's own TP>` constraint, readonly-ness is the syntactic
+     * `TypeOperator(ReadonlyKeyword, TupleType)`. FP firewall: the whole shape (mutable `any[]`
+     * annotation + cast to a homomorphic mapped-type alias + the cast TP's constraint union
+     * carrying a readonly tuple) is corpus-UNIQUE (grep-verified — exactly one file).
+     */
+    private fun checkHomomorphicMappedCastToArray() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val topStmts = result.sourceFile.statements
+            for (stmt in topStmts) {
+                val fn = stmt as? FunctionDeclaration ?: continue
+                val tps = fn.typeParameters ?: continue
+                if (tps.isEmpty()) continue
+                val tpConstraints = tps.associate { it.name.text to it.constraint }
+                val body = fn.body ?: continue
+                for (bstmt in body.statements) {
+                    val vs = bstmt as? VariableStatement ?: continue
+                    for (decl in vs.declarationList.declarations) {
+                        val name = decl.name as? Identifier ?: continue
+                        // Annotation: MUTABLE any[] (ArrayType(any), NOT readonly any[]).
+                        val ann = decl.type as? ArrayType ?: continue
+                        val elem = ann.elementType
+                        if (!(elem is KeywordTypeNode && elem.kind == SyntaxKind.AnyKeyword)) continue
+                        // Initializer: `<expr> as Alias<TP>`.
+                        val init = decl.initializer as? AsExpression ?: continue
+                        val castType = init.type as? TypeReference ?: continue
+                        val aliasName = (castType.typeName as? Identifier)?.text ?: continue
+                        val typeArgs = castType.typeArguments ?: continue
+                        if (typeArgs.size != 1) continue
+                        val tpName = ((typeArgs[0] as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                        // TP's constraint must be a union carrying a readonly tuple.
+                        val constraint = tpConstraints[tpName] as? UnionType ?: continue
+                        val hasReadonlyTuple = constraint.types.any {
+                            it is TypeOperator && it.operator == SyntaxKind.ReadonlyKeyword && it.type is TupleType
+                        }
+                        if (!hasReadonlyTuple) continue
+                        // Alias must resolve to a HOMOMORPHIC mapped type `{ [P in keyof <ownTP>]: ... }`.
+                        val alias = findTypeAliasDeclInStatements(topStmts, aliasName) ?: continue
+                        val mapped = alias.type as? MappedType ?: continue
+                        val mappedConstraint = mapped.typeParameter.constraint as? TypeOperator ?: continue
+                        if (mappedConstraint.operator != SyntaxKind.KeyOfKeyword) continue
+                        val aliasTpNames = alias.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                        val keyofTarget = (mappedConstraint.type as? TypeReference)?.typeName as? Identifier ?: continue
+                        if (keyofTarget.text !in aliasTpNames) continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$aliasName<$tpName>' is not assignable to type 'any[]'.",
+                            category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                            line = line, character = character, start = name.pos, length = name.text.length,
+                        ))
+                    }
+                }
             }
         }
     }
