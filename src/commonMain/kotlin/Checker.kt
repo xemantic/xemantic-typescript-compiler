@@ -72884,12 +72884,19 @@ interface DataView {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                 val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                // tsc picks the message by which length bound the array source violates. A
+                // plain array (minLength 0, unbounded) violates a NON-empty tuple's REQUIRED
+                // count → "Target requires N element(s) but source may have fewer."; an EMPTY
+                // tuple (`[]`) is only a MAX bound → "Target allows only 0 ... source may have
+                // more." (We don't model optional/rest tuple elements, so size == required.)
+                val tupleMsg = if (n == 0) "  Target allows only 0 element(s) but source may have more."
+                    else "  Target requires $n element(s) but source may have fewer."
                 diagnostics.add(Diagnostic(
                     message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                     category = DiagnosticCategory.Error, code = 2322,
                     fileName = fileName, line = line, character = character,
                     start = name.pos, length = name.text.length,
-                    messageChain = listOf("  Target allows only $n element(s) but source may have more."),
+                    messageChain = listOf(tupleMsg),
                 ))
                 return
             }
@@ -73263,9 +73270,28 @@ interface DataView {
                     // deeper lines come from getPropertyElaborationChain.
                     if (chain.isEmpty() && sourceType is Type.Object &&
                         targetType is Type.Union) {
-                        val best = findBestUnionConstituent(sourceType, targetType)
+                        // namespaceDisambiguationInUnion: when ≥2 Object constituents display with
+                        // the SAME simple name (different namespaces — `Foo.Yep | Bar.Yep`), tsc
+                        // reports against the LAST failing one and shows it UNqualified (`Yep`, no
+                        // ambiguity in the single-member chain line). The general best-match picker
+                        // keeps the FIRST on a tie and shows the qualified alias display. FP-safe:
+                        // gated to a union whose Object constituents collide on simple name.
+                        val collisionConstituent = run {
+                            val objConsts = targetType.types.filterIsInstance<Type.Object>()
+                            val collidingNames = objConsts.groupingBy { typeToString(it).substringAfterLast(".") }
+                                .eachCount().filterValues { it >= 2 }.keys
+                            if (collidingNames.isEmpty()) null
+                            else targetType.types.lastOrNull { c ->
+                                c is Type.Object &&
+                                    typeToString(c).substringAfterLast(".") in collidingNames &&
+                                    !checkTypeRelatedTo(sourceType, c, assignableRelation)
+                            } as? Type.Object
+                        }
+                        val best = collisionConstituent ?: findBestUnionConstituent(sourceType, targetType)
                         if (best != null && best is Type.Object) {
-                            val outerLine = "  Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(best)}'."
+                            val bestDisp = if (collisionConstituent != null)
+                                typeToString(best).substringAfterLast(".") else typeToString(best)
+                            val outerLine = "  Type '${typeToString(sourceType)}' is not assignable to type '$bestDisp'."
                             chain.add(outerLine)
                             val deeper = getPropertyElaborationChain(sourceType, best)
                             if (deeper != null) chain.addAll(deeper.map { "  $it" })
@@ -110816,9 +110842,20 @@ interface DataView {
                 else "$elementType[]"
             }
             is UnionType -> {
+                // namespaceDisambiguationInUnion: tsc qualifies a union member with its
+                // namespace ONLY when its simple (last) name COLLIDES with another member's
+                // in the SAME union (`Foo.Yep | Bar.Yep`, not `Yep | Yep`). Detect TypeReference
+                // members sharing a last-name and render those fully-qualified. FP-safe: only
+                // affects unions with ≥2 members having an identical last segment (very rare).
+                val refLastNames = typeNode.types.mapNotNull { (it as? TypeReference)?.let { r -> getTypeReferenceLastName(r.typeName) } }
+                val collidingNames = refLastNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
                 // Function/constructor types in unions need parens: `number | (new () => T)`.
                 val memberStrs = typeNode.types.map { m ->
-                    val s = formatTypeForDisplay(m) ?: return null
+                    val s = if (m is TypeReference && m.typeArguments.isNullOrEmpty() &&
+                        m.typeName is QualifiedName &&
+                        getTypeReferenceLastName(m.typeName) in collidingNames) {
+                        formatTypeReferenceName(m.typeName) ?: (formatTypeForDisplay(m) ?: return null)
+                    } else formatTypeForDisplay(m) ?: return null
                     if (typeNodeRendersAsFunctionLike(m)) "($s)" else s
                 }
                 memberStrs.joinToString(" | ")
@@ -110847,7 +110884,17 @@ interface DataView {
                 "($inner)"
             }
             is TupleType -> {
-                val elements = typeNode.elements.map { formatTypeForDisplay(it) }
+                // namespaceDisambiguationInUnion: qualify colliding same-named TypeReference
+                // elements (`[Foo.Yep, Bar.Yep]`, not `[Yep, Yep]`) — same rule as UnionType.
+                val refLastNames = typeNode.elements.mapNotNull { (it as? TypeReference)?.let { r -> getTypeReferenceLastName(r.typeName) } }
+                val collidingNames = refLastNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+                val elements = typeNode.elements.map { el ->
+                    if (el is TypeReference && el.typeArguments.isNullOrEmpty() &&
+                        el.typeName is QualifiedName &&
+                        getTypeReferenceLastName(el.typeName) in collidingNames) {
+                        formatTypeReferenceName(el.typeName) ?: formatTypeForDisplay(el)
+                    } else formatTypeForDisplay(el)
+                }
                 if (elements.any { it == null }) return null
                 "[${elements.joinToString(", ")}]"
             }
