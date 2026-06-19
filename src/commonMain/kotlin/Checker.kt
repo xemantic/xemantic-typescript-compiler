@@ -117550,6 +117550,36 @@ interface DataView {
     private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
         val call = expr as? CallExpression ?: return
         val callee = call.expression as? PropertyAccessExpression ?: return
+        // B487 (invalidSplice): a FRESH empty array literal `[]` is `never[]`, so the
+        // value-item args of a mutating method (`[].splice(start, deleteCount, ...items)`)
+        // are checked against `never` → TS2345 at the FIRST value item (tsc reports only
+        // the first). AST-shape gated (the empty `[]` receiver), so it bypasses our
+        // B87.6 `[]`→any[] typing. Corpus-FP-safe: the only other direct `[].<method>`
+        // calls are `[].concat(...)` (a TS2769 overload shape, not handled here) and
+        // `[].push.apply(...)` (callee is `[].push.apply`, name "apply" → not matched).
+        run {
+            val recvLit = callee.expression as? ArrayLiteralExpression
+            if (recvLit != null && recvLit.elements.isEmpty()) {
+                val firstValueIdx = when ((callee.name as? Identifier)?.text) {
+                    "splice" -> 2
+                    else -> -1
+                }
+                if (firstValueIdx in 0 until call.arguments.size) {
+                    val a = call.arguments[firstValueIdx]
+                    if (a !is SpreadElement) {
+                        val at = literalTypeOfExpression(a) ?: pdduResolveType(a, localAnns)
+                        if (at != null && at !== anyType && at !== errorType) {
+                            val (ln, ch) = getLineAndCharacterOfPosition(source, a.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Argument of type '${typeToString(at)}' is not assignable to parameter of type 'never'.",
+                                category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                                line = ln, character = ch, start = a.pos,
+                                length = expressionTrueEnd(a) - a.pos))
+                        }
+                    }
+                }
+            }
+        }
         if ((callee.name as? Identifier)?.text != "push") return
         val theArg = call.arguments.singleOrNull() ?: return
         val recvType = pdduResolveType(callee.expression, localAnns) ?: return
