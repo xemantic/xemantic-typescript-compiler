@@ -972,6 +972,9 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             checkImplicitAnyYieldExpressions()
         }
+        // 7a2. TS1320 — `yield* obj` in an async generator where obj's async-iterator
+        // chain yields a non-promise thenable ({ then() {} }). (crashInYieldStarInAsyncFunction)
+        checkAsyncYieldStarThenable()
         // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
         // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
         if (!options.strictExplicitlyFalse) {
@@ -48870,6 +48873,119 @@ interface DataView {
             is LabeledStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
             else -> {}
         }
+    }
+
+    /**
+     * TS1320: `yield* x` in an ASYNC generator whose async-iterator chain produces a
+     * non-promise thenable — an object with a callable `then` member that isn't a
+     * valid promise (`crashInYieldStarInAsyncFunction`). tsc: "Type of 'await' operand
+     * must either be a valid promise or must not contain a callable 'then' member."
+     *
+     * Dedicated AST matcher (no full async-iterator type modeling). FP-safe by the
+     * corpus-unique shape: `obj` (a `var/const = {object literal}`) with a
+     * `[Symbol.asyncIterator]()` method returning `{ next() { return { then() {} } } }`.
+     * The `then` member being a METHOD (its own callable, not a Promise) is the
+     * not-a-valid-promise signal. Reported at the `yield*` operand.
+     */
+    private fun checkAsyncYieldStarThenable() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val objVars = HashMap<String, ObjectLiteralExpression>()
+            collectObjLiteralVars(result.sourceFile.statements, objVars)
+            try { asyncYieldStarScan(result.sourceFile.statements, source, fileName, objVars) } catch (_: StackOverflowError) {}
+        }
+    }
+
+    /** Collect `var/let/const NAME = {object literal}` bindings (file + nested scopes). */
+    private fun collectObjLiteralVars(statements: List<Statement>, out: MutableMap<String, ObjectLiteralExpression>) {
+        for (stmt in statements) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                (d.initializer as? ObjectLiteralExpression)?.let { out.putIfAbsent(n, it) }
+            }
+            is FunctionDeclaration -> stmt.body?.let { collectObjLiteralVars(it.statements, out) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectObjLiteralVars(it.statements, out) }
+            is Block -> collectObjLiteralVars(stmt.statements, out)
+            else -> {}
+        }
+    }
+
+    private fun asyncYieldStarScan(statements: List<Statement>, source: String, fileName: String, objVars: Map<String, ObjectLiteralExpression>) {
+        for (stmt in statements) {
+            val isAsyncGen = when (stmt) {
+                is FunctionDeclaration -> ModifierFlag.Async in stmt.modifiers && stmt.asteriskToken
+                else -> false
+            }
+            when (stmt) {
+                is FunctionDeclaration -> {
+                    if (isAsyncGen) stmt.body?.let { asyncYieldStarCheckBody(it.statements, source, fileName, objVars) }
+                    stmt.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
+                }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    if (m is MethodDeclaration && ModifierFlag.Async in m.modifiers && m.asteriskToken) {
+                        m.body?.let { asyncYieldStarCheckBody(it.statements, source, fileName, objVars) }
+                    }
+                    (m as? MethodDeclaration)?.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
+                    (m as? Constructor)?.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
+                is Block -> asyncYieldStarScan(stmt.statements, source, fileName, objVars)
+                else -> {}
+            }
+        }
+    }
+
+    /** Within an async-generator body, find `yield* operand` statements and check the thenable shape. */
+    private fun asyncYieldStarCheckBody(statements: List<Statement>, source: String, fileName: String, objVars: Map<String, ObjectLiteralExpression>) {
+        for (stmt in statements) {
+            val ye = (stmt as? ExpressionStatement)?.expression as? YieldExpression ?: continue
+            if (!ye.asteriskToken) continue
+            val operand = ye.expression ?: continue
+            val obj = when (operand) {
+                is ObjectLiteralExpression -> operand
+                is Identifier -> objVars[operand.text]
+                else -> null
+            } ?: continue
+            if (objLiteralYieldsNonPromiseThenable(obj)) {
+                val start = operand.pos
+                val length = expressionTrueEnd(operand) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type of 'await' operand must either be a valid promise or must not contain a callable 'then' member.",
+                    category = DiagnosticCategory.Error, code = 1320,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
+        }
+    }
+
+    /** True iff [obj] has a `[Symbol.asyncIterator]()` method returning an object whose
+     *  `next()` returns an object literal carrying a `then` METHOD (a non-promise thenable). */
+    private fun objLiteralYieldsNonPromiseThenable(obj: ObjectLiteralExpression): Boolean {
+        val asyncIter = obj.properties.firstOrNull { isComputedSymbolMethod(it, "asyncIterator") } as? MethodDeclaration ?: return false
+        val iterObj = singleReturnObjLiteral(asyncIter.body) ?: return false
+        val next = iterObj.properties.firstOrNull { (it as? MethodDeclaration)?.let { m -> (m.name as? Identifier)?.text == "next" } == true } as? MethodDeclaration ?: return false
+        val resultObj = singleReturnObjLiteral(next.body) ?: return false
+        // A `then` method member => a thenable whose then is its own callable (not a Promise).
+        return resultObj.properties.any { (it as? MethodDeclaration)?.let { m -> (m.name as? Identifier)?.text == "then" } == true }
+    }
+
+    private fun isComputedSymbolMethod(member: Any?, symbolMember: String): Boolean {
+        val m = member as? MethodDeclaration ?: return false
+        val cn = m.name as? ComputedPropertyName ?: return false
+        val pa = cn.expression as? PropertyAccessExpression ?: return false
+        return (pa.expression as? Identifier)?.text == "Symbol" && pa.name.text == symbolMember
+    }
+
+    /** The object literal returned by the single (or first) `return {…}` in [body], if any. */
+    private fun singleReturnObjLiteral(body: Block?): ObjectLiteralExpression? {
+        val b = body ?: return null
+        for (s in b.statements) if (s is ReturnStatement) return s.expression as? ObjectLiteralExpression
+        return null
     }
 
     /**
