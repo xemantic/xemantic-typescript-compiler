@@ -81765,6 +81765,17 @@ interface DataView {
                 else -> break
             }
         }
+        // B490b (genericAssignmentCompatWithInterfaces1 a2): an IIFE with an EXPLICIT
+        // return annotation resolves to that return type — the general path below returns
+        // anyType for a fn-expr/arrow callee. Gated to an explicit annotation (un-annotated
+        // IIFEs stay anyType, no body inference) to bound the blast radius to the rare
+        // `function(): T {…}()` / `((…) => T)()` shape.
+        if (callee is FunctionExpression && callee.type != null) {
+            return try { getTypeFromTypeNode(callee.type!!) } catch (_: StackOverflowError) { anyType }
+        }
+        if (callee is ArrowFunction && callee.type != null) {
+            return try { getTypeFromTypeNode(callee.type!!) } catch (_: StackOverflowError) { anyType }
+        }
         val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
@@ -108175,13 +108186,30 @@ interface DataView {
                 else -> continue
             }
             val targetProp = targetType.members?.get(propName) ?: continue
-            val targetPropType = getTypeOfSymbol(targetProp)
+            // B490: instantiate the property type through a generic target (`I<string>`'s
+            // `x` is `Comparable<string>`, not `Comparable<T>`) — getPropertyTypeForRelation
+            // falls back to getTypeOfSymbol for non-Reference targets (no behavior change
+            // for non-generic interfaces).
+            val targetPropType = getPropertyTypeForRelation(targetType, targetProp)
             if (targetPropType === anyType || targetPropType === errorType) continue
             val sourceProp = sourceType.members?.get(propName) ?: continue
-            val sourcePropType = getTypeOfSymbol(sourceProp)
+            val sourcePropType = getPropertyTypeForRelation(sourceType, sourceProp)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
-            if (!isSimpleCheckableType(targetPropType) || !isSimpleCheckableType(sourcePropType)) continue
             if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+            // B490 (genericAssignmentCompatWithInterfaces1): tsc reports a fresh object
+            // literal's property mismatch ELEMENTWISE (at the property key, with the
+            // value-type-vs-property-type elaboration chain), NOT as a collapsed whole-
+            // object error at the var name. The original gate only handled SIMPLE
+            // (primitive) property types; broaden to OBJECT property types via the same
+            // elaboration chain the collapsed path uses — only when that chain is non-empty
+            // (a real per-property elaboration), so we never emit a bare object-type error
+            // where the engine can't explain the mismatch.
+            val bothSimple = isSimpleCheckableType(targetPropType) && isSimpleCheckableType(sourcePropType)
+            val objChain: List<String>? = if (!bothSimple) {
+                if (sourcePropType is Type.Object && targetPropType is Type.Object) {
+                    getPropertyElaborationChain(sourcePropType, targetPropType)?.takeIf { it.isNotEmpty() } ?: continue
+                } else continue
+            } else null
             val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
@@ -108214,6 +108242,7 @@ interface DataView {
                 character = kchar,
                 start = keyPos,
                 length = keyLen,
+                messageChain = objChain ?: emptyList(),
                 relatedInformation = related,
             ))
             emitted = true
