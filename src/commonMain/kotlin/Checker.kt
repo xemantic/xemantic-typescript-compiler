@@ -1642,6 +1642,8 @@ class Checker(
         checkPropertyOverride()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
+        // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
+        checkGenericDefaultsValidation()
         // B247b: object-literal accessor-pair implied getter return type
         checkObjectLiteralAccessorImpliedReturn()
         // B249: binding pattern destructuring an inferred-unknown generic call result
@@ -37701,10 +37703,16 @@ interface DataView {
         // Non-generic local types (0 type params) used with type args → TS2315, not TS2314
         if (info.maxTotal == 0) return
 
-        // Skip types with default type params — they need TS2707 not TS2314
-        if (info.minRequired != info.maxTotal) return
-
         val providedCount = typeRef.typeArguments?.size ?: 0
+
+        // B498: types with default type params → TS2707 "requires between N and M" when the
+        // provided count is OUTSIDE [minRequired, maxTotal] (additive — was skipped before).
+        if (info.minRequired != info.maxTotal) {
+            if (providedCount in info.minRequired..info.maxTotal) return
+            emitTs2707BetweenArity(typeRef, typeName, name, info, source, fileName)
+            return
+        }
+
         if (providedCount == info.maxTotal) return // correct count
 
         // Compute squiggle position
@@ -37746,6 +37754,42 @@ interface DataView {
             character = character,
             start = start,
             length = length,
+        ))
+    }
+
+    /**
+     * B498: TS2707 "Generic type 'X<...>' requires between N and M type arguments." for a
+     * TypeReference to a generic type WITH defaults whose provided type-arg count is outside
+     * [minRequired, maxTotal]. Squiggle mirrors the TS2314 wrong-count position logic.
+     */
+    private fun emitTs2707BetweenArity(
+        typeRef: TypeReference, typeName: Node, name: String, info: TypeParamInfo,
+        source: String, fileName: String,
+    ) {
+        val providedCount = typeRef.typeArguments?.size ?: 0
+        val nameSpan: Int = if (typeName is QualifiedName) {
+            val right = typeName.right
+            if (right is Identifier) right.pos + right.text.length - typeName.pos else name.length
+        } else name.length
+        val start = typeName.pos
+        val length: Int = when {
+            providedCount == 0 && typeRef.typeArguments == null -> nameSpan
+            providedCount == 0 -> {
+                val ltIdx = source.indexOf("<>", start)
+                if (ltIdx >= 0) ltIdx + 2 - start else nameSpan
+            }
+            else -> {
+                val lastArgEnd = typeRef.typeArguments!!.last().end
+                val gtIdx = source.indexOf('>', lastArgEnd - 1)
+                if (gtIdx >= 0) gtIdx + 1 - start else nameSpan
+            }
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Generic type '${info.displayName}' requires between ${info.minRequired} and ${info.maxTotal} type arguments.",
+            category = DiagnosticCategory.Error, code = 2707,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
         ))
     }
 
@@ -93936,6 +93980,234 @@ interface DataView {
         }
         currentFileLocals = null
         currentCheckFileName = null
+    }
+
+    /**
+     * B498: generic type-parameter DEFAULTS validation (genericDefaultsErrors), all
+     * SELF-CONTAINED (AST + the existing assignability engine for the constraint check):
+     *  - TS2706: a TP without a default that FOLLOWS a TP with a default.
+     *  - TS2716: a TP whose default references the TP itself (directly).
+     *  - TS2344: a TP `<X extends C = D>` whose default D does not satisfy constraint C.
+     * Walks every TP list (functions / interfaces / classes / type-aliases / methods).
+     */
+    private fun checkGenericDefaultsValidation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                walkGenericDefaults(result.sourceFile.statements, source, fileName)
+            } catch (_: StackOverflowError) {}
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun walkGenericDefaults(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            val tps: List<TypeParameter>?
+            val enclosingName: String?
+            when (stmt) {
+                is FunctionDeclaration -> { tps = stmt.typeParameters; enclosingName = (stmt.name as? Identifier)?.text }
+                is InterfaceDeclaration -> { tps = stmt.typeParameters; enclosingName = stmt.name?.text }
+                is ClassDeclaration -> { tps = stmt.typeParameters; enclosingName = (stmt.name as? Identifier)?.text }
+                is TypeAliasDeclaration -> { tps = stmt.typeParameters; enclosingName = stmt.name.text }
+                else -> { tps = null; enclosingName = null }
+            }
+            if (!tps.isNullOrEmpty()) checkTpListDefaults(tps, enclosingName, source, fileName)
+            when (stmt) {
+                is FunctionDeclaration -> stmt.body?.let { walkGenericDefaults(it.statements, source, fileName) }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    if (m is MethodDeclaration) {
+                        if (!m.typeParameters.isNullOrEmpty()) checkTpListDefaults(m.typeParameters!!, null, source, fileName)
+                        m.body?.let { walkGenericDefaults(it.statements, source, fileName) }
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkGenericDefaults(it.statements, source, fileName) }
+                is Block -> walkGenericDefaults(stmt.statements, source, fileName)
+                is ExpressionStatement -> (stmt.expression as? CallExpression)?.let { checkGenericDefaultParamCall(it, source, fileName) }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * B498: TS2345 for a call `f<…explicitTypeArgs…>(args)` to a single-decl generic
+     * FunctionDeclaration where a parameter is typed as a bare type-parameter `U` whose
+     * value resolves (via the explicit args + default chain, e.g. `<T, U = T>` called
+     * `f<number>(…)` → U=number) to a concrete PRIMITIVE that the arg violates.
+     * FP firewall: explicit type args required; single fn decl; bare-TP param; the resolved
+     * param type must be a simple primitive (`isSimpleCheckableType`); arg type concrete.
+     */
+    private fun checkGenericDefaultParamCall(call: CallExpression, source: String, fileName: String) {
+        val callee = call.expression as? Identifier ?: return
+        val typeArgs = call.typeArguments ?: return
+        if (typeArgs.isEmpty()) return
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
+        val fnDecls = sym.declarations.filterIsInstance<FunctionDeclaration>()
+        if (fnDecls.size != 1) return
+        val tps = fnDecls[0].typeParameters ?: return
+        if (typeArgs.size > tps.size) return
+        // Map each TP name to its supplied/explicit-or-default TypeNode.
+        val map = mutableMapOf<String, TypeNode>()
+        for ((i, tp) in tps.withIndex()) {
+            val provided = typeArgs.getOrNull(i)
+            if (provided != null) map[tp.name.text] = provided
+            else map[tp.name.text] = tp.default ?: return
+        }
+        // Resolve a TP to a concrete TypeNode, following bare-TP-ref default chains.
+        fun resolveTpNode(start: String): TypeNode? {
+            var node: TypeNode? = map[start]
+            var guard = 0
+            while (node is TypeReference && guard++ < 10) {
+                val nm = (node.typeName as? Identifier)?.text ?: break
+                if (nm in map && map[nm] !== node) node = map[nm] else break
+            }
+            return node
+        }
+        val params = fnDecls[0].parameters
+        for ((i, param) in params.withIndex()) {
+            val ptpName = ((param.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            if (ptpName !in map) continue
+            val resolvedNode = resolveTpNode(ptpName) ?: continue
+            // Avoid re-resolving to another TP (would not be a concrete primitive anyway).
+            val pType = try { getTypeFromTypeNode(resolvedNode) } catch (_: StackOverflowError) { continue }
+            if (!isSimpleCheckableType(pType)) continue
+            val argExpr = call.arguments?.getOrNull(i) ?: continue
+            val argType = try { getTypeOfExpression(argExpr) } catch (_: StackOverflowError) { continue }
+            if (argType === anyType || argType === errorType) continue
+            if (checkTypeRelatedTo(argType, pType, assignableRelation)) continue
+            val argDisp = typeToString(getWidenedLiteralType(argType))
+            val pDisp = typeToString(pType)
+            val start = argExpr.pos
+            val len = (expressionTrueEnd(argExpr) - start).coerceAtLeast(1)
+            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argDisp' is not assignable to parameter of type '$pDisp'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = line, character = ch,
+                start = start, length = len,
+            ))
+        }
+    }
+
+    private fun checkTpListDefaults(tps: List<TypeParameter>, enclosingName: String?, source: String, fileName: String) {
+        // TS2706: required type parameter following an optional (default-bearing) one.
+        var seenDefault = false
+        for (tp in tps) {
+            if (tp.default != null) {
+                seenDefault = true
+            } else if (seenDefault) {
+                val (line, ch) = getLineAndCharacterOfPosition(source, tp.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Required type parameters may not follow optional type parameters.",
+                    category = DiagnosticCategory.Error, code = 2706,
+                    fileName = fileName, line = line, character = ch,
+                    start = tp.name.pos, length = tp.name.text.length,
+                ))
+            }
+        }
+        // Build the TP scope so default/constraint TypeNodes resolve to the sibling TPs.
+        val savedScope = currentTypeParamScope
+        val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
+        for (tp in tps) {
+            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                val p = Type.TypeParam()
+                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                p
+            }
+            tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { errorType } }
+            scope[tp.name.text] = typeParam
+        }
+        currentTypeParamScope = if (scope.isEmpty()) null else scope
+        try {
+            for (tp in tps) {
+                val defNode = tp.default ?: continue
+                // TS2716: circular default. NOTE tsc does NOT flag a DIRECT self-ref
+                // `<T = T>` (genericDefaults baseline) nor `<T extends C = T>` (the
+                // constraint breaks the cycle) — only a default that references the
+                // ENCLOSING generic type by name WITHOUT type args (`interface
+                // SelfReference<T = SelfReference>` — the bare ref re-applies T's own
+                // default → infinite). Gated to a TP with NO constraint (a constraint
+                // provides a non-circular fallback).
+                val bareEnclosingSelfRef = enclosingName != null && tp.constraint == null &&
+                    (defNode as? TypeReference)?.let {
+                        (it.typeName as? Identifier)?.text == enclosingName && it.typeArguments == null
+                    } == true
+                if (bareEnclosingSelfRef) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, defNode.pos)
+                    val len = (typeNodeTrueEnd(defNode, source) - defNode.pos).coerceAtLeast(1)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter '${tp.name.text}' has a circular default.",
+                        category = DiagnosticCategory.Error, code = 2716,
+                        fileName = fileName, line = line, character = ch,
+                        start = defNode.pos, length = len,
+                    ))
+                    continue
+                }
+                // TS2344: default does not satisfy constraint.
+                val cNode = tp.constraint ?: continue
+                val dType = try { getTypeFromTypeNode(defNode) } catch (_: StackOverflowError) { continue }
+                val cType = try { getTypeFromTypeNode(cNode) } catch (_: StackOverflowError) { continue }
+                if (dType === anyType || dType === errorType || cType === anyType || cType === errorType) continue
+                if (checkTypeRelatedTo(dType, cType, assignableRelation)) continue
+                // A default that is a TYPE PARAMETER satisfies the constraint when its OWN
+                // constraint does (`<T extends string = T>` — T trivially satisfies `string`;
+                // mirrors the existing type-arg TS2344 logic ~94442). Without this the
+                // relation engine's TypeParam-source path under-resolves and FPs.
+                if (dType is Type.TypeParam && dType.constraint != null && dType.constraint !== errorType &&
+                    checkTypeRelatedTo(dType.constraint!!, cType, assignableRelation)) continue
+                val dDisp = formatTypeForDisplay(defNode) ?: typeToString(dType)
+                val cDisp = formatTypeForDisplay(cNode) ?: typeToString(cType)
+                val chain = mutableListOf<String>()
+                val related = mutableListOf<Diagnostic>()
+                // B214 rule applied to default-vs-constraint: TS2208 keys on the SOURCE
+                // (the default) when it is an unconstrained TP; the could-line keys on the
+                // TARGET (the constraint) when IT is an unconstrained TP.
+                when {
+                    dType is Type.TypeParam && dType.constraint == null -> {
+                        val dName = ((defNode as? TypeReference)?.typeName as? Identifier)?.text
+                        val tpNameNode = tps.firstOrNull { it.name.text == dName }?.name
+                        if (tpNameNode != null) {
+                            val (tl, tc) = getLineAndCharacterOfPosition(source, tpNameNode.pos)
+                            related.add(Diagnostic(
+                                message = "This type parameter might need an `extends $cDisp` constraint.",
+                                category = DiagnosticCategory.Message, code = 2208,
+                                fileName = fileName, line = tl, character = tc,
+                                start = tpNameNode.pos, length = tpNameNode.text.length,
+                            ))
+                        }
+                    }
+                    cType is Type.TypeParam && cType.constraint == null ->
+                        chain.add("  '$cDisp' could be instantiated with an arbitrary type which could be unrelated to '$dDisp'.")
+                    dType is Type.TypeParam && dType.constraint != null ->
+                        chain.add("  Type '${typeToString(dType.constraint!!)}' is not assignable to type '$cDisp'.")
+                    else -> {}
+                }
+                val len = (typeNodeTrueEnd(defNode, source) - defNode.pos).coerceAtLeast(1)
+                val (line, ch) = getLineAndCharacterOfPosition(source, defNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$dDisp' does not satisfy the constraint '$cDisp'.",
+                    category = DiagnosticCategory.Error, code = 2344,
+                    fileName = fileName, line = line, character = ch,
+                    start = defNode.pos, length = len, messageChain = chain,
+                    relatedInformation = related,
+                ))
+            }
+        } finally {
+            currentTypeParamScope = savedScope
+        }
+    }
+
+    /** True end of a TypeNode for squiggle length (avoids the .end next-token overshoot). */
+    private fun typeNodeTrueEnd(node: TypeNode, source: String): Int {
+        var e = node.end
+        while (e > node.pos && source.getOrNull(e - 1)?.let {
+            it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ',' || it == '>' || it == ')' || it == ';' || it == '='
+        } == true) e--
+        return e
     }
 
     private fun checkConstraintsInStatements(stmts: List<Statement>, source: String, fileName: String) {
