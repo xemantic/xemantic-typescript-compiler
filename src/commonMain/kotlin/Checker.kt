@@ -1196,6 +1196,9 @@ class Checker(
         checkDefaultImports()
         // 8a-bis. B235: TS2339 for absent members of `await import('<esm-pkg>')` namespaces.
         checkDynamicImportNamespaceMembers()
+        // 8a-ter. B494: TS2339 for absent members of `import * as foo from "<bare>"` where
+        // <bare> is a single non-augmentation ambient `declare module "<bare>"` definition.
+        checkAmbientModuleNamespaceImportMembers()
         // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
         // module-local namespace shadowing any file-level namespace of the same name.
         checkAmbientModuleLocalNamespaceMemberRefs()
@@ -32710,6 +32713,111 @@ class Checker(
                 val (line, character) = getLineAndCharacterOfPosition(source, pa.name.pos)
                 diagnostics.add(Diagnostic(
                     message = "Property '$member' does not exist on type 'typeof import(\"${info.first}\")'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = character, start = pa.name.pos, length = member.length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * B494: TS2339 for `import * as foo from "<bare>"; foo.<absent>` where `<bare>` is a
+     * SINGLE, non-augmentation ambient `declare module "<bare>"` DEFINITION (script-file,
+     * enumerable body) and `<absent>` is not declared in that body. Mirrors
+     * [checkDynamicImportNamespaceMembers] (the `await import(...)` namespace shape) but for
+     * the static namespace-import shape. Sidesteps the documented gap that `resolveAlias`
+     * never resolves a namespace-import alias to an ambient `declare module` Module symbol
+     * (CLAUDE.md B152b) by reading the ambient body AST directly — same approach as the
+     * existing dynamic-import / module.exports-deep-read walkers.
+     *
+     * FP firewall (corpus-verified): fires only when (a) exactly ONE `declare module "spec"`
+     * exists across all files (no cross-file merge/augmentation), (b) its declaring file is a
+     * SCRIPT file (no top-level import/export → a DEFINITION, not an augmentation), (c) the
+     * body is enumerable (no `export =`, no `export * from`), (d) the specifier does NOT
+     * resolve to a real typed `.ts`/`.tsx`/`.d.ts` module (an untyped `.js` sibling or no
+     * resolution is fine — the ambient wins), and (e) the access is a top-level bare
+     * `ExpressionStatement` property access (the same narrow shape the dynamic-import walker
+     * uses). Body names are over-collected (every top-level decl, exported or not) so a
+     * missed export can only UNDER-fire (FN), never FP.
+     */
+    private fun checkAmbientModuleNamespaceImportMembers() {
+        val isMultiFile = binderResults.size > 1 || isMultiFileSource
+        if (!isMultiFile) return
+        // 1. Collect ambient `declare module "spec"` declarations across all files.
+        data class AmbDef(val exports: Set<String>, val enumerable: Boolean, val isAugmentation: Boolean)
+        val defs = mutableMapOf<String, MutableList<AmbDef>>()
+        for (result in binderResults) {
+            // A `declare module "X"` is an AUGMENTATION (not a standalone definition) when its
+            // file is an external module (has any top-level import/export).
+            val isModuleFile = result.sourceFile.statements.any {
+                it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment || it is ImportEqualsDeclaration
+            }
+            for (stmt in result.sourceFile.statements) {
+                val md = stmt as? ModuleDeclaration ?: continue
+                val spec = (md.name as? StringLiteralNode)?.text ?: continue
+                val body = md.body as? ModuleBlock
+                val names = mutableSetOf<String>()
+                var enumerable = body != null
+                if (body != null) {
+                    for (ts in body.statements) {
+                        when (ts) {
+                            is FunctionDeclaration -> ts.name?.let { names.add(it.text) }
+                            is ClassDeclaration -> ts.name?.let { names.add(it.text) }
+                            is InterfaceDeclaration -> ts.name?.let { names.add(it.text) }
+                            is TypeAliasDeclaration -> names.add(ts.name.text)
+                            is EnumDeclaration -> ts.name?.let { names.add(it.text) }
+                            is ModuleDeclaration -> (ts.name as? Identifier)?.let { names.add(it.text) }
+                            is VariableStatement -> ts.declarationList.declarations.forEach { dd ->
+                                (dd.name as? Identifier)?.let { names.add(it.text) }
+                            }
+                            is ImportEqualsDeclaration -> names.add(ts.name.text)
+                            is ExportAssignment -> enumerable = false // export = / export default → opaque
+                            is ExportDeclaration -> {
+                                if (ts.moduleSpecifier != null) enumerable = false // re-export → opaque
+                                else (ts.exportClause as? NamedExports)?.elements?.forEach { names.add(it.name.text) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                defs.getOrPut(spec) { mutableListOf() }.add(AmbDef(names, enumerable, isModuleFile))
+            }
+        }
+        // 2. Keep only single, non-augmentation, enumerable specs that don't resolve to a real typed module.
+        val authoritative = mutableMapOf<String, Set<String>>()
+        for ((spec, list) in defs) {
+            if (list.size != 1) continue
+            val d = list[0]
+            if (d.isAugmentation || !d.enumerable) continue
+            val resolved = resolveModuleSpecifier(spec)
+            if (resolved != null && (resolved.endsWith(".ts") || resolved.endsWith(".tsx") || resolved.endsWith(".d.ts"))) continue
+            authoritative[spec] = d.exports
+        }
+        if (authoritative.isEmpty()) return
+        // 3. For each non-.d.ts/.js file, find `import * as foo from "spec"` and check `foo.<member>` accesses.
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val nsImports = mutableMapOf<String, Pair<String, Set<String>>>()
+            for (stmt in result.sourceFile.statements) {
+                val imp = stmt as? ImportDeclaration ?: continue
+                val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val exports = authoritative[spec] ?: continue
+                val nb = imp.importClause?.namedBindings as? NamespaceImport ?: continue
+                nsImports[nb.name.text] = spec to exports
+            }
+            if (nsImports.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                val recv = pa.expression as? Identifier ?: continue
+                val (spec, exports) = nsImports[recv.text] ?: continue
+                val member = pa.name.text
+                if (member in exports || member in RUNTIME_PROPERTIES) continue
+                if (member.isEmpty() || member[0].isDigit()) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$member' does not exist on type 'typeof import(\"$spec\")'.",
                     category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                     line = line, character = character, start = pa.name.pos, length = member.length,
                 ))
