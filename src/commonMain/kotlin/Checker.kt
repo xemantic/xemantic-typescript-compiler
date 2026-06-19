@@ -74050,6 +74050,65 @@ interface DataView {
         }
     }
 
+    /**
+     * B491: the single return EXPRESSION of an un-annotated arrow / function
+     * expression (`() => "b"` → `"b"`; `function(){ return x }` → `x`; `() =>
+     * ({a}) ` → the parenthesized object literal). Returns null for a typed
+     * (annotated-return) fn, a multi-statement body, or a non-fn expression.
+     */
+    private fun singleReturnExprOf(e: Expression?): Expression? {
+        val fn = e ?: return null
+        val body: Node? = when (fn) {
+            is ArrowFunction -> if (fn.type != null) null else fn.body
+            is FunctionExpression -> if (fn.type != null) null else fn.body
+            else -> return null
+        }
+        var r: Expression? = when (body) {
+            is Expression -> body
+            is Block -> (body.statements.singleOrNull() as? ReturnStatement)?.expression
+            else -> null
+        }
+        while (r is ParenthesizedExpression) r = r.expression
+        return r
+    }
+
+    /**
+     * B491 (deepElaborationsIntoArrowExpressions): for a RETURN statement whose
+     * value is an array literal (`return [{a: ''}]` vs `Foo[]`) or an arrow/fn-
+     * expr returning an object literal (`return () => ({a: ''})` vs `() => Foo`),
+     * drill to the leaf property mismatch at the inner key (+ TS6500), mirroring
+     * the var-decl array/object drill, instead of the coarse whole-value error at
+     * the `return` keyword. Returns true when a leaf diagnostic was emitted.
+     */
+    private fun tryDrillReturnArrowOrArray(
+        expr: Expression?, targetType: Type, source: String, fileName: String,
+    ): Boolean {
+        if (expr == null) return false
+        // Case 3: return [ {...}, ... ] vs Foo[] — reuse the var-decl array-element drill.
+        if (expr is ArrayLiteralExpression) {
+            val before = diagnostics.size
+            try { checkArrayLiteralElementExcessProps(expr, targetType, source, fileName) }
+            catch (_: StackOverflowError) {}
+            return diagnostics.size > before
+        }
+        // Case 2: return () => ({...}) vs () => Foo — drill the arrow's returned
+        // object literal against the target function type's return type.
+        if (expr is ArrowFunction || expr is FunctionExpression) {
+            if (targetType !is Type.Object) return false
+            val sig = targetType.callSignatures?.singleOrNull() ?: return false
+            if (!sig.typeParameters.isNullOrEmpty()) return false
+            val retTarget = sig.resolvedReturnType ?: return false
+            if (retTarget === anyType || retTarget === errorType) return false
+            val retObj = retTarget as? Type.Object ?: return false
+            if (retObj is Type.Reference && retObj.target.symbol?.name == "Array") return false
+            if (retObj is Type.Interface && retObj.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return false
+            val objLit = singleReturnExprOf(expr) as? ObjectLiteralExpression ?: return false
+            try { resolveStructuredTypeMembers(retObj) } catch (_: StackOverflowError) { return false }
+            return checkNestedObjLitPropTypes(objLit, retObj, source, fileName)
+        }
+        return false
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -74205,6 +74264,18 @@ interface DataView {
                     effObjTarget is Type.Object &&
                     !(effObjTarget is Type.Reference && effObjTarget.target?.symbol?.name == "Array") &&
                     checkNestedObjLitPropTypes(expr, effObjTarget, source, fileName)) {
+                    return
+                }
+                // B491 (deepElaborationsIntoArrowExpressions): drill into a RETURNED
+                // arrow's object-literal body (`return () => ({a: ''})` vs `() => Foo`)
+                // or a RETURNED array literal (`return [{a: ''}]` vs `Foo[]`) to report
+                // the leaf property mismatch at the inner key + TS6500, instead of the
+                // coarse whole-value error at the `return` keyword. Mirrors the var-decl
+                // array/object drill. Runs before the general relation path so it pre-empts
+                // the coarse TS2322. Gated to the exact expr shapes (array literal /
+                // arrow / fn-expr) — disjoint from the object-literal branches above.
+                if ((expr is ArrayLiteralExpression || expr is ArrowFunction || expr is FunctionExpression) &&
+                    tryDrillReturnArrowOrArray(expr, effObjTarget, source, fileName)) {
                     return
                 }
                 // B96: deep per-property disambiguation of `return { ... }` against a
@@ -108196,6 +108267,55 @@ interface DataView {
             val sourcePropType = getPropertyTypeForRelation(sourceType, sourceProp)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
             if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+            // B491 (deepElaborationsIntoArrowExpressions): the property value is an
+            // arrow/fn returning a single expression and the target member is a
+            // function type whose return is a simple/literal type that the arrow's
+            // return violates (`{ y: () => "b" }` vs `{ y(): "a" }`). tsc reports at
+            // the arrow's RETURN expression (`"b"`) with TS6502 ("the expected type
+            // comes from the return type of this signature"), NOT at the property key
+            // with a coarse fn-vs-fn chain. Drill there; suppress the coarse key emit.
+            var drilledArrowReturn = false
+            run {
+                val targetSig = (targetPropType as? Type.Object)?.callSignatures?.singleOrNull()
+                    ?.takeIf { it.typeParameters.isNullOrEmpty() } ?: return@run
+                val targetRet = targetSig.resolvedReturnType ?: return@run
+                if (targetRet === anyType || targetRet === errorType) return@run
+                if (!isSimpleCheckableType(targetRet)) return@run
+                val arrowRet = singleReturnExprOf(propNode.initializer) ?: return@run
+                val srcRet = (literalTypeOfExpression(arrowRet)
+                    ?: try { getTypeOfExpression(arrowRet) } catch (_: StackOverflowError) { return@run })
+                if (srcRet === anyType || srcRet === errorType) return@run
+                if (checkTypeRelatedTo(srcRet, targetRet, assignableRelation)) return@run
+                val start = arrowRet.pos
+                val length = (expressionTrueEnd(arrowRet) - start).coerceAtLeast(1)
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                val related = mutableListOf<Diagnostic>()
+                val methodDecl = targetProp.declarations.firstOrNull()
+                if (methodDecl != null) {
+                    val mpos = when (methodDecl) {
+                        is MethodDeclaration -> methodDecl.name.pos
+                        is PropertyDeclaration -> methodDecl.name.pos
+                        else -> methodDecl.pos
+                    }
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, mpos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Message, code = 6502,
+                        fileName = fileName, line = rl, character = rc,
+                        start = mpos, length = 1,
+                    ))
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(srcRet)}' is not assignable to type '${typeToString(targetRet)}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = l, character = c,
+                    start = start, length = length,
+                    relatedInformation = related,
+                ))
+                emitted = true
+                drilledArrowReturn = true
+            }
+            if (drilledArrowReturn) continue
             // B490 (genericAssignmentCompatWithInterfaces1): tsc reports a fresh object
             // literal's property mismatch ELEMENTWISE (at the property key, with the
             // value-type-vs-property-type elaboration chain), NOT as a collapsed whole-
