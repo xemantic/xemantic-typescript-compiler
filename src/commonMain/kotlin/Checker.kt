@@ -101750,7 +101750,56 @@ interface DataView {
             ))
             return
         }
-        val args = expr.arguments ?: return
+        // B497: `new <recv>[]` where the empty `[]` element access (OmittedExpression
+        // argument, the TS1011 shape) has a receiver resolving to a value-position CLASS
+        // (`typeof X`). The omitted index is `any`-typed; `typeof X` has no index signature
+        // → TS7053. Matches tsc's `new M.T[]` recovery. noImplicitAny-gated (default-on).
+        run {
+            val ce = expr.expression as? ElementAccessExpression ?: return@run
+            if (ce.argumentExpression !is OmittedExpression) return@run
+            if (options.strictExplicitlyFalse && !options.noImplicitAny && !options.strict) return@run
+            val display = typeofClassValueDisplay(ce.expression) ?: return@run
+            val start = ce.expression.pos
+            val end = ce.argumentExpression.pos + 1  // OmittedExpression.pos = the `]`
+            if (end <= start) return@run
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '$display'.",
+                category = DiagnosticCategory.Error, code = 7053,
+                fileName = fileName, line = line, character = character,
+                start = start, length = end - start,
+            ))
+            return
+        }
+        // B497: `new <non-constructable-literal-or-instance>` — a primitive-literal callee
+        // (`new 53()`→Number, `new ''()`→String) or a `new`-expression callee whose returned
+        // INSTANCE type has no construct signatures (`new new Date`→Date) is not constructable.
+        // These non-Identifier callees fall through getCalleeType (anyType) / the args-required
+        // early return below, so handle them here. FP-safe: `new <primitive-literal>` and
+        // `new <non-constructable-instance>` are ALWAYS tsc errors.
+        run {
+            val ce = expr.expression
+            val typeName: String = when (ce) {
+                is NumericLiteralNode -> "Number"
+                is StringLiteralNode -> "String"
+                is NewExpression -> {
+                    val inst = try { getReturnTypeOfNewExpression(ce) } catch (_: StackOverflowError) { return@run }
+                    if (inst is Type.Interface && getConstructSignaturesOfType(inst).isEmpty())
+                        inst.symbol?.name ?: return@run
+                    else return@run
+                }
+                else -> return@run
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not constructable.",
+                category = DiagnosticCategory.Error, code = 2351,
+                fileName = fileName, line = line, character = character,
+                start = ce.pos, length = expressionTrueEnd(ce) - ce.pos,
+                messageChain = listOf("  Type '$typeName' has no construct signatures."),
+            ))
+            return
+        }
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
         // B60.15: union callee for `new` — mirror of B60.14 for TS2349 with three cases:
@@ -101827,6 +101876,9 @@ interface DataView {
                 }
             }
         }
+        // B497: the args-required early return was moved BELOW the union-callee branch
+        // (above) so a NO-ARGS union callee (`new union;`) is still constructability-checked.
+        val args = expr.arguments ?: return
         // Get construct signatures
         val signatures = getConstructSignaturesOfType(calleeType)
         if (signatures.isEmpty()) {
@@ -102569,6 +102621,33 @@ interface DataView {
     /**
      * Get the type of a callee expression for call/new checking.
      */
+    /**
+     * B497: resolve a value-position reference to a CLASS to its `typeof <Name>` display.
+     * `Foo` (Identifier→class) → "typeof Foo"; `M.T` (namespace.exported-class) → "typeof T"
+     * (tsc renders the LAST segment, not the qualified name). Returns null otherwise.
+     */
+    private fun typeofClassValueDisplay(recv: Expression): String? {
+        return when (recv) {
+            is Identifier -> {
+                val sym = currentFileLocals?.get(recv.text) ?: globals[recv.text] ?: return null
+                if (sym.declarations.any { it is ClassDeclaration }) "typeof ${recv.text}" else null
+            }
+            is PropertyAccessExpression -> {
+                val nsName = (recv.expression as? Identifier)?.text ?: return null
+                val nsSym = currentFileLocals?.get(nsName) ?: globals[nsName] ?: return null
+                // The binder puts ALL namespace members in `exports` (not just exported
+                // ones), so require the class decl to carry the `export` modifier — a
+                // NON-exported `M.ClassA` is itself a TS2339 error (no typeof-class), and
+                // tsc emits no TS7053 there (cannotInvokeNewOnErrorExpression).
+                val member = nsSym.exports?.get(recv.name.text) ?: return null
+                val classDecl = member.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                    ?: return null
+                if (ModifierFlag.Export in classDecl.modifiers) "typeof ${recv.name.text}" else null
+            }
+            else -> null
+        }
+    }
+
     private fun getCalleeType(expr: Expression): Type {
         return when (expr) {
             is Identifier -> {
