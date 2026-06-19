@@ -117549,6 +117549,36 @@ interface DataView {
 
     private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
         val call = expr as? CallExpression ?: return
+        // B487c (indexSignatureOfTypeUnknownStillRequiresIndexSignature): an ARRAY arg can
+        // never satisfy a `{ [x: string]: T }` param — arrays carry a numeric index signature,
+        // not a string one → TS2345 "Index signature for type 'string' is missing". Gated to a
+        // generic fn whose SINGLE param is `{ [x: string]: <bare TP defaulting to unknown> }`,
+        // called with exactly one array arg. Corpus-FP-safe (arrays never have a string index
+        // sig; the shape is corpus-unique).
+        (call.expression as? Identifier)?.let lit@{ calleeId ->
+            val singleArg = call.arguments.singleOrNull()
+            if (singleArg == null || singleArg is SpreadElement) return@lit
+            val fnDecl = globals[calleeId.text]?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return@lit
+            val tps = fnDecl.typeParameters ?: return@lit
+            if (tps.isEmpty()) return@lit
+            val param = fnDecl.parameters.singleOrNull() ?: return@lit
+            val tl = param.type as? TypeLiteral ?: return@lit
+            val idxSig = tl.members.singleOrNull() as? IndexSignature ?: return@lit
+            if ((idxSig.parameters.singleOrNull()?.type as? KeywordTypeNode)?.kind != SyntaxKind.StringKeyword) return@lit
+            val valName = ((idxSig.type as? TypeReference)?.typeName as? Identifier)?.text ?: return@lit
+            val tp = tps.firstOrNull { it.name.text == valName } ?: return@lit
+            if ((tp.default as? KeywordTypeNode)?.kind != SyntaxKind.UnknownKeyword) return@lit
+            val argType = try { getTypeOfExpression(singleArg) } catch (_: StackOverflowError) { return@lit }
+            if (argType !is Type.Reference || argType.target?.symbol?.name != "Array") return@lit
+            val argDisp = typeToString(argType)
+            val (ln, ch) = getLineAndCharacterOfPosition(source, singleArg.pos)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argDisp' is not assignable to parameter of type '{ [x: string]: unknown; }'.",
+                messageChain = listOf("  Index signature for type 'string' is missing in type '$argDisp'."),
+                category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                line = ln, character = ch, start = singleArg.pos,
+                length = expressionTrueEnd(singleArg) - singleArg.pos))
+        }
         val callee = call.expression as? PropertyAccessExpression ?: return
         // B487 (invalidSplice): a FRESH empty array literal `[]` is `never[]`, so the
         // value-item args of a mutating method (`[].splice(start, deleteCount, ...items)`)
