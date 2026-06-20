@@ -29083,11 +29083,15 @@ class Checker(
                 if (hasClass && hasFunc) {
                     val funcDecls = group.filter { it.kind == "function" }
                     val classDecls = group.filter { it.kind == "class" }
-                    val nonDeclFuncs = funcDecls.filter { decl ->
+                    // Inside a `declare namespace` (or .d.ts ambient context) the class and
+                    // function members are IMPLICITLY ambient even without their own `declare`
+                    // modifier — tsc never emits TS2813/TS2814 there (the messages literally say
+                    // "non-ambient" / "with bodies"), so the class+function overload merge is legal.
+                    val nonDeclFuncs = if (isAmbientContext) emptyList() else funcDecls.filter { decl ->
                         val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
                         ModifierFlag.Declare !in funcStmt.modifiers
                     }
-                    val nonAmbientClasses = classDecls.filter { decl ->
+                    val nonAmbientClasses = if (isAmbientContext) emptyList() else classDecls.filter { decl ->
                         val classStmt = decl.stmt as? ClassDeclaration ?: return@filter false
                         ModifierFlag.Declare !in classStmt.modifiers
                     }
@@ -29151,7 +29155,7 @@ class Checker(
                     // function provides implementation — e.g. targetTypeTest1.ts).
                     // Only emit TS2300 for non-declare class + non-declare function (handled above via
                     // nonAmbientClasses check) or non-declare class + non-declare function without body.
-                    val allClassesDeclare = classDecls.all { decl ->
+                    val allClassesDeclare = isAmbientContext || classDecls.all { decl ->
                         val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
                         ModifierFlag.Declare in classStmt.modifiers
                     }
@@ -84292,6 +84296,22 @@ interface DataView {
     }
 
     /** Get the return type of a new expression by resolving the construct signature. */
+    /** B511: find a `ClassDeclaration` named `callee.name` inside the namespace that
+     *  `callee.expression` (a single Identifier) resolves to — used to recover a clodule
+     *  class declaration the binder dropped when a same-named function overwrote it. */
+    private fun findNamespaceMemberClassDecl(callee: PropertyAccessExpression): ClassDeclaration? {
+        val nsName = (callee.expression as? Identifier)?.text ?: return null
+        val memberName = callee.name.text
+        val nsSym = currentFileLocals?.get(nsName) ?: globals[nsName] ?: return null
+        for (decl in nsSym.declarations) {
+            val body = (decl as? ModuleDeclaration)?.body as? ModuleBlock ?: continue
+            for (stmt in body.statements) {
+                if (stmt is ClassDeclaration && stmt.name?.text == memberName) return stmt
+            }
+        }
+        return null
+    }
+
     private fun getReturnTypeOfNewExpression(expr: NewExpression): Type {
         // Unwrap value-preserving wrappers: `new (Foo)()`, `new Foo!()`,
         // `new (Foo satisfies T)()` should resolve like `new Foo()`.
@@ -84326,7 +84346,20 @@ interface DataView {
                 val sym = try { resolveQualifiedValueSymbol(callee) } catch (_: StackOverflowError) { null }
                 if (sym != null && sym.flags.hasAny(SymbolFlags.Class)) {
                     try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { return anyType }
-                } else return anyType
+                } else {
+                    // B511: a clodule `declare namespace M { class C; function C }` — class+function
+                    // don't merge in our binder (canMerge lacks the combo → last-wins, the FUNCTION
+                    // overwrites the class symbol). But `new M.C()` uses the CLASS construct side, so
+                    // resolve the instance from the lost class DECLARATION (AST-scan the namespace).
+                    // FP-safe: only fires when the qualified value isn't a class yet a same-named
+                    // ClassDeclaration exists in the namespace body (the genuine clodule shape).
+                    val classDecl = findNamespaceMemberClassDecl(callee)
+                    if (classDecl?.name != null) {
+                        val classSym = Symbol(SymbolFlags.Class, classDecl.name!!.text)
+                        classSym.declarations.add(classDecl)
+                        try { getDeclaredTypeOfSymbol(classSym) } catch (_: StackOverflowError) { return anyType }
+                    } else return anyType
+                }
             }
             else -> return anyType
         }
@@ -102770,7 +102803,7 @@ interface DataView {
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
-            val paramType = getTypeOfSymbol(params[i])
+            val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
@@ -102800,7 +102833,7 @@ interface DataView {
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
-            val paramType = getTypeOfSymbol(params[i])
+            val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
@@ -102841,7 +102874,7 @@ interface DataView {
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
-            val paramType = getTypeOfSymbol(params[i])
+            val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
@@ -102981,7 +103014,7 @@ interface DataView {
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
-            val paramType = getTypeOfSymbol(params[i])
+            val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
@@ -103112,6 +103145,34 @@ interface DataView {
      * call in `checkArgumentsAgainstOverloads`) keeps the default (contravariant)
      * to avoid mis-matching overloads.
      */
+    /**
+     * Rest-aware effective parameter type for the argument at index [i] of [params].
+     * For an index landing on (or past, when the last param is rest) a REST parameter
+     * `...args: E[]`, returns the ELEMENT type `E` — args bind to the element, not the
+     * array wrapper. The overload arg-check helpers (allArgumentsMatch /
+     * getFirstArgumentError / getFirstFailingArgPosition / countFailingArgDiagnostics /
+     * getUnionMemberFailureSubline) must use this, mirroring the main
+     * checkArgumentsAgainstSignature `isRestParam` handling — otherwise a call like
+     * `f("yo")` against an overload `(...args: any[])` FP-fails ("string not assignable
+     * to any[]"). Non-rest params return their declared type unchanged.
+     */
+    private fun restAwareParamType(params: List<Symbol>, i: Int): Type? {
+        if (params.isEmpty()) return null
+        val direct = if (i < params.size) params[i] else null
+        // Determine the governing param: the i-th, or — when i is past the param list —
+        // the last param IF it is rest (extra args bind to the trailing rest).
+        val governing = direct ?: params.last().takeIf { lastIsRest ->
+            params.last().declarations.any { it is Parameter && it.dotDotDotToken }
+        }
+        if (governing == null) return null
+        val isRest = governing.declarations.any { it is Parameter && it.dotDotDotToken }
+        val t = getTypeOfSymbol(governing)
+        if (isRest && t is Type.Reference && t.target?.symbol?.name == "Array") {
+            return t.resolvedTypeArguments?.firstOrNull() ?: t
+        }
+        return t
+    }
+
     private fun allArgumentsMatch(
         args: List<Expression>,
         sig: Signature,
@@ -103129,7 +103190,7 @@ interface DataView {
         for ((i, arg) in args.withIndex()) {
             if (i >= params.size) break
             if (arg is SpreadElement) continue
-            val paramType = getTypeOfSymbol(params[i])
+            val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             // 17.137a: Free Type.TypeParam accepts any arg under TypeScript's
             // inference semantics (T would simply be inferred as the arg type).
