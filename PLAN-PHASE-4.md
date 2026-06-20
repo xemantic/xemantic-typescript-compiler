@@ -118,7 +118,20 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
-**Session 2026-06-20 (round 213, multi-iteration session, ≥30 iterations per user request, addressing blockers) — +2 net (300→298 failing, 9786→9788 passing), B513 (`computedPropertiesInDestructuring1` + `_ES6`), ZERO regressions (exact failing-set diff via `scripts/fail_set.py`).**
+**Session 2026-06-20 (round 213, multi-iteration session, ≥30 iterations per user request, addressing blockers) — +3 net (300→297 failing, 9786→9789 passing), TWO self-contained additive features: B513 (`computedPropertiesInDestructuring1` + `_ES6`) and B514 (`typeofInternalModules`), ZERO regressions each (exact failing-set diff via `scripts/fail_set.py`).**
+
+After landing B513 (below), re-confirmed the contained pool still exhausted and triaged the remaining over_emit/pure_missing/NONE candidates exhaustively — all multi-piece (incompatibleTypes/baseClassImprovedMismatchErrors = B486 override-chain 3-piece; noImplicitAnyLoopCrash = evolving-any-in-loop + TS2556/2488; indexSignatureInOtherFile1 = symbol-member-vs-string-index TS2411 cross-file; controlFlowArrayErrors = full evolving-array CFA; the 5 "missing-the-following-properties" leaf tests = deep elaboration machinery, high-regression-risk for 0 flips). Picked the most-bounded remaining target — `typeofInternalModules` (single-file, AST-based, fixed-message, 4 pieces but all narrow) — and it flipped on the FIRST build.
+
+**B514 (+1, `typeofInternalModules`)** — namespace-`typeof` assignability (TS2741) + `typeof <type-only namespace alias>` value-use (TS2708). The existing cross-file `moduleAliasTypeofShape`/`tryEmitModuleNamespaceTs2741` is keyed on a `require` specifier (`getImportEqualsSpecifier`), so it returns null for an INTERNAL namespace alias (`import importInst = Outer.instantiated`). New walker `checkNamespaceTypeofAssignability` (Checker.kt, wired in init after `checkTypeUsedAsValue`):
+  - models `typeof <namespace>` as the namespace's VALUE-export shape (`namespaceTypeofShape`: exported class/function/enum/var + INSTANTIATED sub-namespace via the existing `isNamespaceInstantiated`; interfaces / uninstantiated sub-namespaces are type-only → EXCLUDED);
+  - resolves internal aliases (`import A = X.Y`) and value-position namespace refs (`A` / `A.B` / alias) via `resolveNamespaceEntity` / `resolveValueToNamespace` (pure AST walk over the namespace tree — no binder symbol resolution, which would conflate the merged namespace symbols);
+  - **TS2741** for assignment `x = Y` where `x: typeof N1` (var annotation is a `TypeQuery` resolving to a namespace) and the FIRST value member required by N1 is missing from `typeof Y` — squiggle the LHS identifier (`x5`, len 2) + TS2728 "'C' is declared here." at the missing member's decl pos. Display for an aliased namespace-typeof uses the RESOLVED namespace's simple name (`typeof instantiated`, NOT `typeof importInst`);
+  - **TS2708** "Cannot use namespace 'A' as a value." for `typeof A` / `typeof A.B` where A (the leftmost ident of the typeof operand) aliases an UNINSTANTIATED namespace.
+  Narrowly gated (internal aliases only — `aliases.isEmpty() → continue`) → no relation-engine blast. FP surface = ~21 corpus files with internal import-equals aliases + typeof; full-suite exact failing-set diff = ONLY typeofInternalModules flipped, ZERO regressions. New CLAUDE.md gotcha (extended the `typeof <moduleAlias>` note).
+
+---
+
+**B513 detail (the first feature this round):** +2 net (300→298), `computedPropertiesInDestructuring1` + `_ES6`, ZERO regressions.
 
 Process: full suite → 300 baseline. Re-confirmed the contained pool exhausted (find_candidates EXTRA/MISSING/SWAP fresh=0/0/0; NONE fresh=7 all deep type-engine; OUTPUT fresh=1 systemModule17 tsgo-irrelevant) and the pure_fp/over_emit `+Nextra` lanes all multi-piece (incompatibleTypes=B486 override-chain 3-piece; discriminateWithOptionalProperty4=discriminated-union narrowing + TS18048; defaultArgsInFunctionExpressions=fn-expr return inference from default args; inferFromGenericFunctionReturnTypes1=B481 generic-compose). Per the mandate to address blockers, BUILT the self-contained **B513 computed-property-destructuring feature** (the round-212-noted 5-code feature, purely additive — we emitted NOTHING for these 2 tests).
 

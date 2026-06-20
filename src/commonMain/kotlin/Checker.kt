@@ -1273,6 +1273,9 @@ class Checker(
         }
         // 19. Check type used as value (TS2693)
         checkTypeUsedAsValue()
+        // 19c. B514: namespace-`typeof` assignability (TS2741) + `typeof <type-only
+        // namespace alias>` value-use (TS2708) — internal namespace aliases.
+        checkNamespaceTypeofAssignability()
         // 20. Check always-truthy expressions (TS2872)
         checkAlwaysTruthy()
         // 20a. Check uncalled function in conditional position (TS2774)
@@ -34319,6 +34322,155 @@ class Checker(
             relatedInformation = listOfNotNull(related),
         ))
         return true
+    }
+
+    // -----------------------------------------------------------------------
+    // B514: namespace-`typeof` assignability (TS2741) + `typeof <type-only
+    // namespace alias>` value-use (TS2708) — single-file, AST-based.
+    //
+    // For internal namespace aliases (`import A = Outer.instantiated`) the
+    // existing cross-file [moduleAliasTypeofShape] doesn't apply. tsc models
+    // `typeof <namespace>` as the namespace's VALUE-export shape and reports:
+    //   - TS2741 for `x = Y` where `x: typeof N1`, Y is a namespace value, and a
+    //     value member required by `typeof N1` is missing from `typeof Y`;
+    //   - TS2708 "Cannot use namespace 'A' as a value." for `typeof A`/`typeof
+    //     A.B` where `A` aliases an UNINSTANTIATED (type-only) namespace.
+    // Narrowly gated (internal-namespace aliases only) → no relation-engine blast.
+    // -----------------------------------------------------------------------
+
+    private fun checkNamespaceTypeofAssignability() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            // alias name -> resolved target namespace decl (internal aliases only).
+            val aliases = mutableMapOf<String, ModuleDeclaration>()
+            for (s in top) {
+                if (s is ImportEqualsDeclaration) {
+                    val ref = s.moduleReference
+                    if (ref is Identifier || ref is QualifiedName) {
+                        resolveNamespaceEntity(ref, top)?.let { aliases[s.name.text] = it }
+                    }
+                }
+            }
+            if (aliases.isEmpty()) continue
+            // var name -> typeof-namespace annotation target (resolved namespace + display).
+            val varTypeofNs = mutableMapOf<String, Pair<ModuleDeclaration, String>>()
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val tq = d.type as? TypeQuery ?: continue
+                    val leftmost = leftmostEntityIdent(tq.exprName) ?: continue
+                    // `typeof <ns>` where the whole exprName is a single namespace ref.
+                    val ns = resolveValueToNamespace(tq.exprName, top, aliases) ?: continue
+                    if (tq.exprName !is Identifier) continue // only `typeof N` (not `typeof N.member`) is a namespace-typeof target
+                    varTypeofNs[nm] = ns to "typeof ${(ns.name as? Identifier)?.text ?: nm}"
+                    leftmost // silence unused
+                }
+            }
+            // TS2708: `typeof <alias-to-uninstantiated-namespace>` in var annotations.
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val tq = d.type as? TypeQuery ?: continue
+                    val leftIdent = leftmostEntityIdent(tq.exprName) ?: continue
+                    val aliasNs = aliases[leftIdent.text] ?: continue
+                    if (isNamespaceInstantiated(aliasNs)) continue // instantiated → has a value, OK
+                    val (line, character) = getLineAndCharacterOfPosition(source, leftIdent.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot use namespace '${leftIdent.text}' as a value.",
+                        category = DiagnosticCategory.Error, code = 2708, fileName = fileName,
+                        line = line, character = character, start = leftIdent.pos, length = leftIdent.text.length,
+                    ))
+                }
+            }
+            // TS2741: assignment `x = Y` where x is a typeof-namespace var.
+            for (s in top) {
+                if (s !is ExpressionStatement) continue
+                val be = s.expression as? BinaryExpression ?: continue
+                if (be.operator != SyntaxKind.Equals) continue
+                val lhs = be.left as? Identifier ?: continue
+                val (targetNs, targetDisplay) = varTypeofNs[lhs.text] ?: continue
+                val srcNs = resolveValueToNamespace(be.right, top, aliases) ?: continue
+                val sourceDisplay = "typeof ${(srcNs.name as? Identifier)?.text ?: "?"}"
+                val targetMembers = namespaceTypeofShape(targetNs)
+                val sourceMembers = namespaceTypeofShape(srcNs)
+                val missing = targetMembers.entries.firstOrNull { it.key !in sourceMembers } ?: continue
+                val declPos = missing.value
+                val related: Diagnostic? = if (declPos != null && declPos >= 0) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, declPos)
+                    Diagnostic(
+                        message = "'${missing.key}' is declared here.",
+                        category = DiagnosticCategory.Message, code = 2728,
+                        fileName = fileName, line = l, character = c, start = declPos, length = missing.key.length,
+                    )
+                } else null
+                val (line, character) = getLineAndCharacterOfPosition(source, lhs.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${missing.key}' is missing in type '$sourceDisplay' but required in type '$targetDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2741, fileName = fileName,
+                    line = line, character = character, start = lhs.pos, length = lhs.text.length,
+                    relatedInformation = listOfNotNull(related),
+                ))
+            }
+        }
+    }
+
+    /** Resolve an EntityName (`A` / `A.B.C`) to a top-level/nested namespace decl. */
+    private fun resolveNamespaceEntity(name: Node, top: List<Statement>): ModuleDeclaration? = when (name) {
+        is Identifier -> top.firstOrNull { it is ModuleDeclaration && (it.name as? Identifier)?.text == name.text } as? ModuleDeclaration
+        is QualifiedName -> {
+            val parent = resolveNamespaceEntity(name.left, top)
+            val body = parent?.body as? ModuleBlock
+            body?.statements?.firstOrNull { it is ModuleDeclaration && (it.name as? Identifier)?.text == name.right.text } as? ModuleDeclaration
+        }
+        else -> null
+    }
+
+    /** Resolve a VALUE expression (`A` / `A.B` / `alias`) to a namespace decl (via the
+     *  alias map for the leftmost identifier, or a top-level namespace). */
+    private fun resolveValueToNamespace(expr: Node, top: List<Statement>, aliases: Map<String, ModuleDeclaration>): ModuleDeclaration? = when (expr) {
+        is Identifier -> aliases[expr.text] ?: resolveNamespaceEntity(expr, top)
+        is PropertyAccessExpression -> {
+            val parent = resolveValueToNamespace(expr.expression, top, aliases)
+            val body = parent?.body as? ModuleBlock
+            body?.statements?.firstOrNull { it is ModuleDeclaration && (it.name as? Identifier)?.text == expr.name.text } as? ModuleDeclaration
+        }
+        is QualifiedName -> {
+            val parent = resolveValueToNamespace(expr.left, top, aliases)
+            val body = parent?.body as? ModuleBlock
+            body?.statements?.firstOrNull { it is ModuleDeclaration && (it.name as? Identifier)?.text == expr.right.text } as? ModuleDeclaration
+        }
+        else -> null
+    }
+
+    private fun leftmostEntityIdent(name: Node): Identifier? = when (name) {
+        is Identifier -> name
+        is QualifiedName -> leftmostEntityIdent(name.left)
+        is PropertyAccessExpression -> leftmostEntityIdent(name.expression)
+        else -> null
+    }
+
+    /** The VALUE-export shape of a namespace (name -> decl pos): exported class /
+     *  function / enum / var / INSTANTIATED sub-namespace. */
+    private fun namespaceTypeofShape(ns: ModuleDeclaration): LinkedHashMap<String, Int?> {
+        val members = linkedMapOf<String, Int?>()
+        val body = ns.body as? ModuleBlock ?: return members
+        for (s in body.statements) {
+            when (s) {
+                is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers) s.name?.let { members[it.text] = it.pos }
+                is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers) s.name?.let { members[it.text] = it.pos }
+                is EnumDeclaration -> if (ModifierFlag.Export in s.modifiers) members[s.name.text] = s.name.pos
+                is VariableStatement -> if (ModifierFlag.Export in s.modifiers)
+                    for (d in s.declarationList.declarations) (d.name as? Identifier)?.let { members[it.text] = it.pos }
+                is ModuleDeclaration -> if (ModifierFlag.Export in s.modifiers && isNamespaceInstantiated(s))
+                    (s.name as? Identifier)?.let { members[it.text] = it.pos }
+                else -> {}
+            }
+        }
+        return members
     }
 
     /** B154: if [spec] (resolved relative to [contextFile]) names a module whose DEFAULT
