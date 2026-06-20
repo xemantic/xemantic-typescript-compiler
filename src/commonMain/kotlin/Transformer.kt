@@ -262,7 +262,7 @@ class Transformer(
     // target < ES2022; consulted by the `expr.#x` read/write/call rewrites.
     // kind 'f' = field (stateVar = WeakMap var); 'm' = method (stateVar = the captured
     // function var, brandVar = the WeakSet brand).
-    private data class PrivateEnvEntry(val kind: Char, val stateVar: String, val brandVar: String? = null)
+    private data class PrivateEnvEntry(val kind: Char, val stateVar: String, val brandVar: String? = null, val isStatic: Boolean = false)
 
     private val privateFieldEnvStack = mutableListOf<Map<String, PrivateEnvEntry?>>()
 
@@ -9362,7 +9362,9 @@ class Transformer(
                     val entry = lookupPrivateEnv(pCallee.name.text) ?: return@run
                     if (entry.kind != 'm' || entry.brandVar == null) return@run
                     requireHelper("__classPrivateFieldGet")
-                    val recv = transformExpression(pCallee.expression)
+                    // B502: a STATIC private method call `Class.#m()` uses the class-alias temp
+                    // (entry.brandVar) as both receiver and state → `…(_a, _a, "m", _m).call(_a)`.
+                    val recv = if (entry.isStatic) syntheticId(entry.brandVar) else transformExpression(pCallee.expression)
                     return CallExpression(
                         expression = PropertyAccessExpression(
                             expression = CallExpression(
@@ -14027,6 +14029,34 @@ class Transformer(
             }
         }
 
+        // B502: STATIC private METHODS (declaration path, target < ES2022) downlevel to a
+        // trailing `_a = Foo, _Foo_m = function _Foo_m() {…}` and call rewrites of the form
+        // `__classPrivateFieldGet(_a, _a, "m", _Foo_m).call(_a)`. Statics have no brand WeakSet
+        // — the class value itself (captured as the class-alias temp `_a`) IS both the receiver
+        // and the private-environment state (kind "m"). The alias is allocated here so the
+        // member-body call rewrites can see it via the private env; it becomes `classTempVar`
+        // below (shared with any static-prop/`this` alias need).
+        val staticPrivateMethodVars = mutableListOf<Pair<MethodDeclaration, String>>()
+        var staticMethodAlias: String? = null
+        if (needsPrivateFieldDownlevel && name != null && !isClassExpression && !useDefineForClassFields) {
+            val staticPrivMethods = members.filterIsInstance<MethodDeclaration>().filter {
+                (it.name as? Identifier)?.text?.startsWith("#") == true &&
+                    it.body != null && ModifierFlag.Static in it.modifiers &&
+                    !it.asteriskToken && ModifierFlag.Async !in it.modifiers
+            }
+            if (staticPrivMethods.isNotEmpty()) {
+                val alias = nextTempVarName()
+                staticMethodAlias = alias
+                hoistedVarScopes.lastOrNull()?.add(alias)
+                if (functionScopeDepth == 0) computedPropHoistNames.add(alias)
+                for (m in staticPrivMethods) {
+                    val sv = "_${name.text}_${(m.name as Identifier).text.removePrefix("#")}"
+                    staticPrivateMethodVars.add(m to sv)
+                    privateMethodCaptured.add(m)
+                }
+            }
+        }
+
         // B339: push the private-field environment for this class so member-body
         // `expr.#x` reads/writes/calls rewrite to __classPrivateFieldGet/Set against the
         // WeakMap/brand vars. Undownleveled '#' members map to null (blocks outer-class matches).
@@ -14047,6 +14077,12 @@ class Transformer(
             brandVar?.let { bv ->
                 for ((m, sv) in privateMethodVars) {
                     privateEnv[(m.name as Identifier).text] = PrivateEnvEntry('m', sv, bv)
+                }
+            }
+            // B502: static private methods — receiver and state are both the class-alias temp.
+            staticMethodAlias?.let { alias ->
+                for ((m, sv) in staticPrivateMethodVars) {
+                    privateEnv[(m.name as Identifier).text] = PrivateEnvEntry('m', sv, alias, isStatic = true)
                 }
             }
         }
@@ -14561,7 +14597,7 @@ class Transformer(
             val staticBlockNeedsAlias = staticBlocks.any { b ->
                 b.body.statements.any { containsThisInStmt(it) }
             } || staticBlocksWithSuper.isNotEmpty()
-            classTempVar = if (staticPropsWithThis.isNotEmpty() || staticBlockNeedsAlias) {
+            classTempVar = staticMethodAlias ?: if (staticPropsWithThis.isNotEmpty() || staticBlockNeedsAlias) {
                 val tv = nextTempVarName()
                 hoistedVarScopes.lastOrNull()?.add(tv)
                 tv
@@ -14620,6 +14656,36 @@ class Transformer(
                     var fnBody = m.body?.let { transformBlock(it, isFunctionScope = true) }
                         ?: Block(statements = emptyList(), pos = -1, end = -1)
                     val tv = classTempVar
+                    if (tv != null && name != null) {
+                        fnBody = fnBody.copy(statements = fnBody.statements.map {
+                            replaceIdentifierInStmt(it, name.text, tv)
+                        })
+                    }
+                    aliasAndPrivate.add(BinaryExpression(
+                        left = syntheticId(sv),
+                        operator = Equals,
+                        right = FunctionExpression(
+                            name = syntheticId(sv),
+                            parameters = transformParameters(m.parameters),
+                            body = fnBody,
+                            pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    ))
+                }
+            }
+            // B502: static private method function vars hoist AFTER the class-alias temp and
+            // emit as `_Foo_m = function _Foo_m() {…}` in the same trailing comma statement
+            // (after `_a = Foo`). No brand WeakSet — the class alias is the private env.
+            if (!isClassExpression && staticPrivateMethodVars.isNotEmpty()) {
+                for ((_, sv) in staticPrivateMethodVars) {
+                    hoistedVarScopes.lastOrNull()?.add(sv)
+                    if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
+                }
+                for ((m, sv) in staticPrivateMethodVars) {
+                    var fnBody = m.body?.let { transformBlock(it, isFunctionScope = true) }
+                        ?: Block(statements = emptyList(), pos = -1, end = -1)
+                    val tv = staticMethodAlias
                     if (tv != null && name != null) {
                         fnBody = fnBody.copy(statements = fnBody.statements.map {
                             replaceIdentifierInStmt(it, name.text, tv)
