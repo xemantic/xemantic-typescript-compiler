@@ -9057,6 +9057,90 @@ class Transformer(
         }
     }
 
+    /**
+     * B504: does a destructuring-ASSIGNMENT target (an array/object literal in LHS position)
+     * contain an object-rest binding (`{ ...x }`) at any nesting level? Array-rest
+     * (`[...rest]`) alone does NOT count — it downlevels natively. The top-level
+     * `{ ...rest } = expr` case is owned by `transformObjectRestDestructuringAssignment`;
+     * this detects the NESTED case (`[{ ...x }] = …`, corpus-unique: nestedObjectRest).
+     */
+    private fun targetHasNestedObjectRest(expr: Expression): Boolean = when (expr) {
+        is ObjectLiteralExpression ->
+            expr.properties.any { it is SpreadAssignment } ||
+            expr.properties.any { p ->
+                val v = (p as? PropertyAssignment)?.initializer
+                v != null && targetHasNestedObjectRest(v)
+            }
+        is ArrayLiteralExpression -> expr.elements.any { el ->
+            when (el) {
+                is ObjectLiteralExpression -> targetHasNestedObjectRest(el)
+                is ArrayLiteralExpression -> targetHasNestedObjectRest(el)
+                is SpreadElement -> targetHasNestedObjectRest(el.expression)
+                is BinaryExpression -> el.operator == Equals && targetHasNestedObjectRest(el.left)
+                else -> false
+            }
+        }
+        else -> false
+    }
+
+    /** Flatten a comma-expression chain back to a list of operands. */
+    private fun flattenCommaExpr(e: Expression): List<Expression> {
+        val out = mutableListOf<Expression>()
+        fun rec(x: Expression) {
+            if (x is BinaryExpression && x.operator == Comma) { rec(x.left); out.add(x.right) }
+            else out.add(x)
+        }
+        rec(e)
+        return out
+    }
+
+    /**
+     * B504: flatten a destructuring-assignment target that contains nested object-rest
+     * into a list of comma-operand assignment expressions, destructured from `source`.
+     * `[{ ...x }]` against `_a` → `[_t] = _a` (native array destructure into temp) then
+     * `x = __rest(_t, [])`. Object patterns delegate to the existing rest-assignment
+     * transform. Allocated element temps are hoisted as `var`.
+     */
+    private fun flattenRestAssignmentTarget(pattern: Expression, source: Expression): List<Expression> {
+        when (pattern) {
+            is ArrayLiteralExpression -> {
+                val newElements = mutableListOf<Expression>()
+                val deferred = mutableListOf<Pair<String, Expression>>()
+                for (el in pattern.elements) {
+                    val sub: Expression? = when (el) {
+                        is ObjectLiteralExpression -> el
+                        is ArrayLiteralExpression -> el
+                        else -> null
+                    }
+                    if (sub != null && targetHasNestedObjectRest(sub)) {
+                        val temp = nextTempVarName()
+                        hoistedVarScopes.lastOrNull()?.add(temp)
+                        newElements.add(syntheticId(temp))
+                        deferred.add(temp to sub)
+                    } else {
+                        newElements.add(transformExpression(el))
+                    }
+                }
+                val result = mutableListOf<Expression>()
+                result.add(BinaryExpression(
+                    left = ArrayLiteralExpression(elements = newElements, pos = -1, end = -1),
+                    operator = Equals, right = source, pos = -1, end = -1,
+                ))
+                for ((temp, sub) in deferred) {
+                    result.addAll(flattenRestAssignmentTarget(sub, syntheticId(temp)))
+                }
+                return result
+            }
+            is ObjectLiteralExpression -> {
+                val fake = BinaryExpression(left = pattern, operator = Equals, right = source, pos = -1, end = -1)
+                return flattenCommaExpr(transformObjectRestDestructuringAssignment(fake, pattern))
+            }
+            else -> return listOf(BinaryExpression(
+                left = transformExpression(pattern), operator = Equals, right = source, pos = -1, end = -1,
+            ))
+        }
+    }
+
     private fun transformBinaryExpression(root: BinaryExpression): Expression {
         // Handle object destructuring assignment with rest: { a, ...rest } = expr
         // e.g., ({ ...bar } = {}) → (bar = __rest({}, []))
@@ -9066,6 +9150,16 @@ class Transformer(
             val objLit = rawLeft as? ObjectLiteralExpression
             if (objLit != null && objLit.properties.any { it is SpreadAssignment }) {
                 return transformObjectRestDestructuringAssignment(root, objLit)
+            }
+            // B504: nested object-rest inside an array-pattern assignment target
+            // (`[{ ...x }] = expr`) — flatten via temps + __rest (corpus-unique: nestedObjectRest).
+            if (rawLeft is ArrayLiteralExpression && targetHasNestedObjectRest(rawLeft)) {
+                val source = transformExpression(root.right)
+                val parts = flattenRestAssignmentTarget(rawLeft, source)
+                requireHelper("__rest")
+                return parts.reduce { acc, e ->
+                    BinaryExpression(left = acc, operator = Comma, right = e, pos = -1, end = -1)
+                }
             }
         }
 
@@ -11122,6 +11216,42 @@ class Transformer(
                     statement = Block(statements = newBodyStmts, multiLine = true, pos = -1, end = -1),
                 )
             }
+        }
+        // B504: `for ([{ ...y }] of expr) body` — an assignment-target binding containing
+        // nested object-rest. Introduce a fresh loop var and move the destructuring into the
+        // body (corpus-unique: nestedObjectRest). tsc allocates the inner-destructure temp(s)
+        // BEFORE the loop var, so flatten against a placeholder first, then patch in the loop var.
+        if (i is ArrayLiteralExpression && options.effectiveTarget < ScriptTarget.ES2018 &&
+            targetHasNestedObjectRest(i)) {
+            val placeholder = syntheticId("__src__")
+            val parts = flattenRestAssignmentTarget(i, placeholder)  // allocates inner temp(s)
+            val loopVar = nextTempVarName()
+            // The placeholder only appears as the source of the top-level `[temps] = placeholder`,
+            // which is parts[0].right — patch it to the loop var.
+            val patched = parts.mapIndexed { idx, p ->
+                if (idx == 0 && p is BinaryExpression) p.copy(right = syntheticId(loopVar)) else p
+            }
+            requireHelper("__rest")
+            val destructure = patched.reduce { acc, e ->
+                BinaryExpression(left = acc, operator = Comma, right = e, pos = -1, end = -1)
+            }
+            val newInit = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(name = syntheticId(loopVar), pos = -1, end = -1)),
+                flags = LetKeyword, pos = -1, end = -1,
+            )
+            val origBody = transformStatementSingle(stmt.statement)
+            val newBodyStmts = mutableListOf<Statement>(
+                ExpressionStatement(expression = destructure, pos = -1, end = -1)
+            )
+            when (origBody) {
+                is Block -> newBodyStmts.addAll(origBody.statements)
+                else -> newBodyStmts.add(origBody)
+            }
+            return stmt.copy(
+                initializer = newInit,
+                expression = transformExpression(stmt.expression),
+                statement = Block(statements = newBodyStmts, multiLine = true, pos = -1, end = -1),
+            )
         }
         val init = when (i) {
             is VariableDeclarationList -> transformVariableDeclarationList(i)
