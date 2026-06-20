@@ -11593,7 +11593,7 @@ class Transformer(
             name = decl.name,
             typeParameters = decl.typeParameters,
             heritageClauses = decl.heritageClauses,
-            members = decl.members,
+            membersIn = decl.members,
             modifiers = decl.modifiers,
         )
 
@@ -11830,7 +11830,7 @@ class Transformer(
             name = decl.name,
             typeParameters = decl.typeParameters,
             heritageClauses = decl.heritageClauses,
-            members = rewrittenMembers,
+            membersIn = rewrittenMembers,
             modifiers = decl.modifiers,
         )
 
@@ -12380,7 +12380,7 @@ class Transformer(
             name = decl.name,
             typeParameters = decl.typeParameters,
             heritageClauses = decl.heritageClauses,
-            members = decl.members,
+            membersIn = decl.members,
             modifiers = decl.modifiers,
         )
 
@@ -13165,7 +13165,7 @@ class Transformer(
                 name = expr.name,
                 typeParameters = expr.typeParameters,
                 heritageClauses = expr.heritageClauses,
-                members = expr.members,
+                membersIn = expr.members,
                 modifiers = expr.modifiers,
                 isClassExpression = true,
             )
@@ -13255,7 +13255,7 @@ class Transformer(
             name = expr.name,
             typeParameters = expr.typeParameters,
             heritageClauses = expr.heritageClauses,
-            members = expr.members,
+            membersIn = expr.members,
             modifiers = expr.modifiers,
             trailingVarName = tempName,
             isClassExpression = true,
@@ -13637,7 +13637,7 @@ class Transformer(
         name: Identifier?,
         typeParameters: List<TypeParameter>?,
         heritageClauses: List<HeritageClause>?,
-        members: List<ClassElement>,
+        membersIn: List<ClassElement>,
         modifiers: Set<ModifierFlag>,
         trailingVarName: String? = null, // override for trailing-statement LHS (class expression temp var)
         // B340: true when called from transformClassExpression — private state vars route
@@ -13649,6 +13649,68 @@ class Transformer(
         // class expression gets BARE `_<field>` names (tsc getPrivateIdentifierEnvironment).
         assignedName: String? = null,
     ): ClassTransformResult {
+
+        // Auto-accessor (non-decorator) downlevel: a PUBLIC instance `accessor x` field is
+        // native only at ES2022+. Below that, tsc lowers it to a private WeakMap-backed storage
+        // field `#x_accessor_storage` plus a public getter/setter pair; the synthesized private
+        // field + its `this.#x_accessor_storage` accesses then flow through the existing
+        // private-field WeakMap downlevel below. Decorated accessors are handled by the
+        // ES-decorator path (transformEsDecoratedClass*), which never reaches transformClassBody.
+        // Static/private-named auto-accessors use a different (descriptor/brand) lowering and are
+        // intentionally left for the existing paths — only the public-instance case is expanded here.
+        val members: List<ClassElement> = if (options.effectiveTarget < ScriptTarget.ES2022) {
+            membersIn.flatMap { member ->
+                val accName = (member as? PropertyDeclaration)?.takeIf {
+                    ModifierFlag.Accessor in it.modifiers &&
+                        ModifierFlag.Static !in it.modifiers &&
+                        ModifierFlag.Declare !in it.modifiers &&
+                        it.decorators.isNullOrEmpty()
+                }?.name as? Identifier
+                if (accName != null && !accName.text.startsWith("#")) {
+                    val prop = member as PropertyDeclaration
+                    val storageName = "#${accName.text}_accessor_storage"
+                    fun storageAccess() = PropertyAccessExpression(
+                        expression = syntheticId("this"),
+                        name = syntheticId(storageName),
+                        pos = -1, end = -1,
+                    )
+                    val storageField = PropertyDeclaration(
+                        name = syntheticId(storageName),
+                        initializer = prop.initializer,
+                        pos = -1, end = -1,
+                    )
+                    val getter = GetAccessor(
+                        name = accName.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+                        parameters = emptyList(),
+                        body = Block(
+                            statements = listOf(ReturnStatement(expression = storageAccess(), pos = -1, end = -1)),
+                            multiLine = false, pos = -1, end = -1,
+                        ),
+                        leadingComments = prop.leadingComments,
+                        trailingComments = prop.trailingComments,
+                        pos = -1, end = -1,
+                    )
+                    val setter = SetAccessor(
+                        name = accName.copy(pos = -1, end = -1, leadingComments = null, trailingComments = null),
+                        parameters = listOf(Parameter(name = syntheticId("value"), pos = -1, end = -1)),
+                        body = Block(
+                            statements = listOf(ExpressionStatement(
+                                expression = BinaryExpression(
+                                    left = storageAccess(),
+                                    operator = Equals,
+                                    right = syntheticId("value"),
+                                    pos = -1, end = -1,
+                                ),
+                                pos = -1, end = -1,
+                            )),
+                            multiLine = false, pos = -1, end = -1,
+                        ),
+                        pos = -1, end = -1,
+                    )
+                    listOf(storageField, getter, setter)
+                } else listOf(member)
+            }
+        } else membersIn
 
         val isDerived = heritageClauses?.any {
             it.token == ExtendsKeyword
