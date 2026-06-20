@@ -2284,6 +2284,54 @@ class Checker(
     }
 
     /**
+     * B503: True iff the target module has at least one export and ALL of its exports are
+     * type-only (interfaces, type aliases, uninstantiated namespaces). A namespace import
+     * (`import * as X from "m"`) of such a module is type-only — the runtime module object
+     * would be empty — so tsc elides the require even when the name `X` is also a runtime
+     * value via a same-name merged local namespace (the namespace owns the value side, so a
+     * value-reference check cannot detect this — see namespaceMergedWithImportAliasNoCrash).
+     *
+     * CONSERVATIVE: returns false (→ keep the require, the safe/current behavior) on any
+     * uncertainty — unresolvable module, `export =`/`export default`, `export {…}`/`export *`
+     * re-exports, or an unrecognized exported declaration. Only a module whose every export is
+     * a directly-declared type-only entity yields true.
+     */
+    fun moduleHasOnlyTypeOnlyExports(moduleSpecifier: String, sourceFileName: String): Boolean {
+        fileResults[sourceFileName] ?: return false
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return false
+        val targetResult = fileResults[targetFile] ?: return false
+        var sawExport = false
+        for (stmt in targetResult.sourceFile.statements) {
+            when (stmt) {
+                // `export =` / `export default` — a runtime export shape; keep.
+                is ExportAssignment -> return false
+                // `export { … }` / `export * from …` re-exports — can re-export values; keep.
+                is ExportDeclaration -> return false
+                is InterfaceDeclaration -> if (ModifierFlag.Export in stmt.modifiers) sawExport = true
+                is TypeAliasDeclaration -> if (ModifierFlag.Export in stmt.modifiers) sawExport = true
+                is ClassDeclaration -> if (ModifierFlag.Export in stmt.modifiers) return false
+                is FunctionDeclaration -> if (ModifierFlag.Export in stmt.modifiers) return false
+                is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) return false
+                is EnumDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    val isConstEnum = ModifierFlag.Const in stmt.modifiers
+                    val erasable = isConstEnum && !options.preserveConstEnums &&
+                        !options.isolatedModules && !options.verbatimModuleSyntax
+                    if (!erasable) return false else sawExport = true
+                }
+                is ModuleDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    val instantiated = binderResults.firstNotNullOfOrNull { br ->
+                        br.moduleInstanceStates[nodeKey(stmt)]
+                    } == ModuleInstanceState.Instantiated
+                    if (instantiated) return false else sawExport = true
+                }
+                is ImportEqualsDeclaration -> if (ModifierFlag.Export in stmt.modifiers) return false
+                else -> {}
+            }
+        }
+        return sawExport
+    }
+
+    /**
      * Get the constant value of an enum member node.
      */
     fun getEnumMemberValue(memberNode: Node): ConstantValue? {

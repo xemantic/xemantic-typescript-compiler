@@ -2269,6 +2269,15 @@ class Transformer(
                             // while from "foo"`, reservedWords2) can never be referenced:
                             // tsc elides the whole import.
                             if (localName.isEmpty()) continue
+                            // B503: a namespace import of a module with NO value exports is
+                            // type-only (the runtime module object is empty) — tsc elides the
+                            // require even when `localName` is a runtime value via a same-name
+                            // merged local namespace (namespaceMergedWithImportAliasNoCrash).
+                            // NOT under isolatedModules: per-file emit can't prove a module's
+                            // exports are type-only there, so tsc keeps the require (the existing
+                            // isolatedModules branch below relies on this — isolatedModulesReExportType).
+                            if (!options.isolatedModules &&
+                                (moduleSpecifier as? StringLiteralNode)?.text?.let { checker?.moduleHasOnlyTypeOnlyExports(it, currentFileName) } == true) continue
                             if (options.esModuleInterop) {
                                 needsImportStar = true
                                 result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
