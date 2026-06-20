@@ -227,6 +227,7 @@ class Transformer(
     // B339: set when a private-field read/write is downleveled to the helper form.
     private var needsClassPrivateFieldGetHelper = false
     private var needsClassPrivateFieldSetHelper = false
+    private var needsClassPrivateFieldInHelper = false
 
     // B345: set when the ES-decorators (TC39, !experimentalDecorators) class transform emits
     // __esDecorate / __runInitializers calls.
@@ -276,6 +277,15 @@ class Transformer(
     private fun lookupPrivateFieldVar(name: String): String? =
         lookupPrivateEnv(name)?.takeIf { it.kind == 'f' }?.stateVar
 
+    /** True for a `var _x;` hoist prologue statement — a VariableStatement whose declarations
+     * are all uninitialized `var` bindings (e.g. the private-field WeakMap hoists `var _A_x;`).
+     * tsc emits the tslib helper import AFTER these. */
+    private fun isLeadingVarHoistStatement(stmt: Statement): Boolean {
+        if (stmt !is VariableStatement) return false
+        if (stmt.declarationList.flags != VarKeyword) return false
+        return stmt.declarationList.declarations.all { it.initializer == null }
+    }
+
     // Set to true when an `import X = require("mod")` is rewritten under
     // module:node*/nodenext + ESM file (per package.json `type: module`). Causes the
     // `import { createRequire as _createRequire } from "module"; const __require = _createRequire(import.meta.url);`
@@ -302,6 +312,7 @@ class Transformer(
             "__setFunctionName" -> if (!needsSetFunctionNameHelper) { needsSetFunctionNameHelper = true; helperUsageOrder.add(name) }
             "__classPrivateFieldGet" -> if (!needsClassPrivateFieldGetHelper) { needsClassPrivateFieldGetHelper = true; helperUsageOrder.add(name) }
             "__classPrivateFieldSet" -> if (!needsClassPrivateFieldSetHelper) { needsClassPrivateFieldSetHelper = true; helperUsageOrder.add(name) }
+            "__classPrivateFieldIn" -> if (!needsClassPrivateFieldInHelper) { needsClassPrivateFieldInHelper = true; helperUsageOrder.add(name) }
             "__esDecorate" -> if (!needsEsDecorateHelper) { needsEsDecorateHelper = true; helperUsageOrder.add(name) }
             "__runInitializers" -> if (!needsRunInitializersHelper) { needsRunInitializersHelper = true; helperUsageOrder.add(name) }
             "__asyncValues" -> if (!needsAsyncValuesHelper) { needsAsyncValuesHelper = true; helperUsageOrder.add(name) }
@@ -429,6 +440,7 @@ class Transformer(
         needsSetFunctionNameHelper = false
         needsClassPrivateFieldGetHelper = false
         needsClassPrivateFieldSetHelper = false
+        needsClassPrivateFieldInHelper = false
         pendingClassExprBindingName = null
         helperUsageOrder.clear()
         topLevelNumericConstants.clear()
@@ -615,6 +627,7 @@ class Transformer(
                     "__setFunctionName" -> helpers.add(RawStatement(code = SET_FUNCTION_NAME_HELPER))
                     "__classPrivateFieldGet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_GET_HELPER))
                     "__classPrivateFieldSet" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_SET_HELPER))
+                    "__classPrivateFieldIn" -> helpers.add(RawStatement(code = CLASS_PRIVATE_FIELD_IN_HELPER))
                     "__esDecorate" -> helpers.add(RawStatement(code = ES_DECORATE_HELPER))
                     "__runInitializers" -> helpers.add(RawStatement(code = RUN_INITIALIZERS_HELPER))
                     "__asyncValues" -> helpers.add(RawStatement(code = ASYNC_VALUES_HELPER))
@@ -793,8 +806,14 @@ class Transformer(
                     "__esDecorate" -> tslibNames.add("__esDecorate")
                     "__runInitializers" -> tslibNames.add("__runInitializers")
                     "__asyncValues" -> tslibNames.add("__asyncValues")
+                    "__classPrivateFieldGet" -> tslibNames.add("__classPrivateFieldGet")
+                    "__classPrivateFieldSet" -> tslibNames.add("__classPrivateFieldSet")
+                    "__classPrivateFieldIn" -> tslibNames.add("__classPrivateFieldIn")
                 }
             }
+            // tsc emits the named tslib import list sorted by helper name (verified across all
+            // corpus baselines). De-dupe + sort so the import matches regardless of usage order.
+            tslibNames.sort()
             if (tslibNames.isNotEmpty()) {
                 val tslibImport = ImportDeclaration(
                     importClause = ImportClause(
@@ -829,7 +848,17 @@ class Transformer(
                     assertClause = null,
                     pos = -1, end = -1,
                 )
-                listOf(tslibImport) + withHelpers
+                // tsc places the tslib helper import AFTER leading private-field WeakMap var
+                // hoists (`var _A_x;`) — `var _A_x; import {...} from "tslib"; let A = ...`.
+                // Gate to private-field-helper usage so other ESM importHelpers outputs keep
+                // the import first.
+                if (needsClassPrivateFieldGetHelper || needsClassPrivateFieldSetHelper || needsClassPrivateFieldInHelper) {
+                    var n = 0
+                    while (n < withHelpers.size && isLeadingVarHoistStatement(withHelpers[n])) n++
+                    withHelpers.take(n) + tslibImport + withHelpers.drop(n)
+                } else {
+                    listOf(tslibImport) + withHelpers
+                }
             } else withHelpers
         } else withHelpers
 
@@ -9115,6 +9144,28 @@ class Transformer(
                             syntheticId(wmVar),
                             transformExpression(root.right),
                             StringLiteralNode(text = "f", pos = -1, end = -1),
+                        ),
+                        pos = -1, end = -1,
+                    )
+                }
+            }
+        }
+
+        // Private-field IN downlevel — `#x in obj` → `__classPrivateFieldIn(state, obj)`
+        // (tsc classPrivateFields, target < ES2022). The left operand is a bare private-name
+        // Identifier; `state` is the field's WeakMap (kind 'f') or the method/accessor brand.
+        if (root.operator == SyntaxKind.InKeyword) {
+            val privName = (root.left as? Identifier)?.text
+            if (privName != null && privName.startsWith("#")) {
+                val entry = lookupPrivateEnv(privName)
+                if (entry != null) {
+                    val stateVar = if (entry.kind == 'f') entry.stateVar else (entry.brandVar ?: entry.stateVar)
+                    requireHelper("__classPrivateFieldIn")
+                    return CallExpression(
+                        expression = helperExpr("__classPrivateFieldIn"),
+                        arguments = listOf(
+                            syntheticId(stateVar),
+                            transformExpression(root.right),
                         ),
                         pos = -1, end = -1,
                     )
@@ -18221,6 +18272,13 @@ class Transformer(
     if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
     return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+"""
+
+        /** `__classPrivateFieldIn` helper — private-field `#x in obj` downlevel (target < ES2022). */
+        val CLASS_PRIVATE_FIELD_IN_HELPER = """var __classPrivateFieldIn = (this && this.__classPrivateFieldIn) || function (state, receiver) {
+    if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) throw new TypeError("Cannot use 'in' operator on a non-object");
+    return typeof state === "function" ? receiver === state : state.has(receiver);
 };
 """
 
