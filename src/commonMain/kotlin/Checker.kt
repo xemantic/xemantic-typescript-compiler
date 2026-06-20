@@ -1477,6 +1477,10 @@ class Checker(
         checkBindingPatternComputedIndexSig()
         checkDestructuredLateBoundNames()
         checkLateBoundDestructuringKeys()
+        // 45b''. B513: computed-property destructuring key type-checking
+        // (TS2537/TS2538 + routed TS2349/TS2339/TS2365). Gated `!noImplicitAny
+        // && !strict` (the flagged case is owned by checkLateBoundDestructuringKeys).
+        checkComputedDestructuringKeyTypes()
         // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
         if (options.erasableSyntaxOnly) {
             checkErasableSyntaxOnly()
@@ -58601,6 +58605,333 @@ interface DataView {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // B513: computed-property destructuring key type-checking.
+    //
+    // For a computed key `[expr]` in a destructuring BINDING pattern (var-decl,
+    // function parameter) or destructuring ASSIGNMENT target, tsc type-checks the
+    // key expression against the receiver object type:
+    //   - a string/numeric LITERAL key (`["bar"]`, `[11]`) is a STATIC property
+    //     name → resolves to the property (no error here);
+    //   - a non-literal `string`/`number`-typed key (`[foo]` foo:let-string,
+    //     `[foo2()]` returning string) needs a matching index signature; a
+    //     receiver lacking it → TS2537 "Type '<recv>' has no matching index
+    //     signature for type 'string'." at the key expr;
+    //   - a key expression that ITSELF has a type error (`[foo()]` foo not
+    //     callable → TS2349, `[foo.toExponential()]` → TS2339, `[(1 + {})]` →
+    //     TS2365) yields an error/any key type → TS2538 "Type 'any' cannot be
+    //     used as an index type." at the whole key expr (and the underlying
+    //     expression errors fire by routing the key through the real expression
+    //     checkers).
+    //
+    // GATING (load-bearing, avoids double-emit with the sibling walkers):
+    //   - `!noImplicitAny && !strict` — the flagged case is owned by B233
+    //     (`checkLateBoundDestructuringKeys`).
+    //   - const-literal / well-known-symbol keys are SKIPPED — they resolve to a
+    //     property name (the absent-literal case is owned by B226).
+    //   - empty `{}` / union / class-instance / Reference / tuple receivers are
+    //     SKIPPED — `{}` is owned by B9.4; the others are conservative FP gates.
+    //   - only positively-identified widened let/var literal-init Identifier keys
+    //     fire (an Identifier not in `widenedKeys` is skipped — bounds FP).
+    // -----------------------------------------------------------------------
+
+    private fun checkComputedDestructuringKeyTypes() {
+        if (options.noImplicitAny || options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // Per-file key classification maps (file-wide scan; covers nested decls).
+            val propertyNameKeys = mutableSetOf<String>()      // const-literal / Symbol() → resolves to a name
+            val widenedKeys = mutableMapOf<String, Type>()      // let/var literal-init → widened string/number
+            collectComputedKeyNames(result.sourceFile.statements, propertyNameKeys, widenedKeys)
+            for (stmt in result.sourceFile.statements) {
+                walkComputedDestructStmt(stmt, source, fileName, propertyNameKeys, widenedKeys)
+            }
+        }
+    }
+
+    /** File-wide scan classifying var names usable as a computed-destructuring key:
+     *  const + string/numeric literal (or `Symbol()`) initializer → resolves to a
+     *  property name (skip); let/var + string/numeric literal initializer → widened
+     *  string/number (a candidate for TS2537). A name seen in both / ambiguously is
+     *  dropped from both (conservative). Recurses into blocks and function bodies. */
+    private fun collectComputedKeyNames(
+        stmts: List<Statement>,
+        propertyNameKeys: MutableSet<String>,
+        widenedKeys: MutableMap<String, Type>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> {
+                    val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                    for (d in stmt.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        if (d.type != null) continue
+                        when (val init = d.initializer) {
+                            is StringLiteralNode -> if (isConst) propertyNameKeys.add(n) else widenedKeys[n] = stringType
+                            is NumericLiteralNode -> if (isConst) propertyNameKeys.add(n) else widenedKeys[n] = numberType
+                            is CallExpression ->
+                                if (isConst && (init.expression as? Identifier)?.text == "Symbol") propertyNameKeys.add(n)
+                            else -> {}
+                        }
+                    }
+                }
+                is Block -> collectComputedKeyNames(stmt.statements, propertyNameKeys, widenedKeys)
+                is FunctionDeclaration -> stmt.body?.let { collectComputedKeyNames(it.statements, propertyNameKeys, widenedKeys) }
+                is IfStatement -> {}
+                else -> {}
+            }
+        }
+    }
+
+    private fun walkComputedDestructStmt(
+        stmt: Statement, source: String, fileName: String,
+        propertyNameKeys: Set<String>, widenedKeys: Map<String, Type>,
+    ) {
+        when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val pat = d.name
+                if (pat is ObjectBindingPattern || pat is ArrayBindingPattern) {
+                    val recv = when {
+                        d.type != null -> tryGetTypeFromTypeNode(d.type!!)
+                        d.initializer != null -> tryWidenOfExpr(d.initializer!!)
+                        else -> null
+                    }
+                    processDestructPattern(pat, recv, source, fileName, propertyNameKeys, widenedKeys)
+                }
+            }
+            is ExpressionStatement -> walkComputedDestructAssignment(stmt.expression, source, fileName, propertyNameKeys, widenedKeys)
+            is Block -> for (s in stmt.statements) walkComputedDestructStmt(s, source, fileName, propertyNameKeys, widenedKeys)
+            is IfStatement -> {
+                walkComputedDestructStmt(stmt.thenStatement, source, fileName, propertyNameKeys, widenedKeys)
+                stmt.elseStatement?.let { walkComputedDestructStmt(it, source, fileName, propertyNameKeys, widenedKeys) }
+            }
+            is FunctionDeclaration -> {
+                processFunctionParamPatterns(stmt.parameters, source, fileName, propertyNameKeys, widenedKeys)
+                stmt.body?.let { for (s in it.statements) walkComputedDestructStmt(s, source, fileName, propertyNameKeys, widenedKeys) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun processFunctionParamPatterns(
+        params: List<Parameter>, source: String, fileName: String,
+        propertyNameKeys: Set<String>, widenedKeys: Map<String, Type>,
+    ) {
+        for (p in params) {
+            val pat = p.name
+            if (pat is ObjectBindingPattern || pat is ArrayBindingPattern) {
+                val recv = p.type?.let { tryGetTypeFromTypeNode(it) }
+                processDestructPattern(pat, recv, source, fileName, propertyNameKeys, widenedKeys)
+            }
+        }
+    }
+
+    /** Process an assignment expression `<target> = <value>` whose LHS is an
+     *  object/array literal used as a destructuring assignment target. */
+    private fun walkComputedDestructAssignment(
+        exprIn: Expression, source: String, fileName: String,
+        propertyNameKeys: Set<String>, widenedKeys: Map<String, Type>,
+    ) {
+        // `({[foo]: bar} = …)` is an ExpressionStatement wrapping a
+        // ParenthesizedExpression around the assignment — unwrap it.
+        var expr = exprIn
+        while (expr is ParenthesizedExpression) expr = expr.expression
+        if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+            val lhs = expr.left
+            if (lhs is ObjectLiteralExpression || lhs is ArrayLiteralExpression) {
+                val recv = tryWidenOfExpr(expr.right)
+                processDestructPattern(lhs, recv, source, fileName, propertyNameKeys, widenedKeys)
+            }
+        }
+    }
+
+    /** Recursively process a destructuring pattern node against [receiver] (the type
+     *  of the value being destructured at this nesting level). The pattern is either a
+     *  binding pattern (Object/ArrayBindingPattern) or an assignment target
+     *  (Object/ArrayLiteralExpression). */
+    private fun processDestructPattern(
+        pattern: Node, receiver: Type?, source: String, fileName: String,
+        propertyNameKeys: Set<String>, widenedKeys: Map<String, Type>,
+    ) {
+        when (pattern) {
+            is ObjectBindingPattern -> for (el in pattern.elements) {
+                (el.propertyName as? ComputedPropertyName)?.let {
+                    checkComputedDestructKey(it, receiver, source, fileName, propertyNameKeys, widenedKeys)
+                }
+                val nested = el.name
+                if (nested is ObjectBindingPattern || nested is ArrayBindingPattern) {
+                    val nrecv = (el.propertyName as? Identifier)?.text?.let { propTypeOfReceiver(receiver, it) }
+                    processDestructPattern(nested, nrecv, source, fileName, propertyNameKeys, widenedKeys)
+                }
+            }
+            is ArrayBindingPattern -> pattern.elements.forEachIndexed { i, el ->
+                if (el is BindingElement) {
+                    val nested = el.name
+                    if (nested is ObjectBindingPattern || nested is ArrayBindingPattern) {
+                        processDestructPattern(nested, arrayElementTypeOf(receiver, i), source, fileName, propertyNameKeys, widenedKeys)
+                    }
+                }
+            }
+            is ObjectLiteralExpression -> for (p in pattern.properties) {
+                if (p is PropertyAssignment) {
+                    (p.name as? ComputedPropertyName)?.let {
+                        checkComputedDestructKey(it, receiver, source, fileName, propertyNameKeys, widenedKeys)
+                    }
+                    val v = p.initializer
+                    if (v is ObjectLiteralExpression || v is ArrayLiteralExpression) {
+                        val nrecv = (p.name as? Identifier)?.text?.let { propTypeOfReceiver(receiver, it) }
+                        processDestructPattern(v, nrecv, source, fileName, propertyNameKeys, widenedKeys)
+                    }
+                }
+            }
+            is ArrayLiteralExpression -> pattern.elements.forEachIndexed { i, el ->
+                if (el is ObjectLiteralExpression || el is ArrayLiteralExpression) {
+                    processDestructPattern(el, arrayElementTypeOf(receiver, i), source, fileName, propertyNameKeys, widenedKeys)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Core check for a single computed-destructuring key against [receiver]. */
+    private fun checkComputedDestructKey(
+        computed: ComputedPropertyName, receiver: Type?, source: String, fileName: String,
+        propertyNameKeys: Set<String>, widenedKeys: Map<String, Type>,
+    ) {
+        val keyExpr = computed.expression
+        // (1) A string/numeric literal key is a static property name → resolves.
+        if (keyExpr is StringLiteralNode || keyExpr is NumericLiteralNode || keyExpr is NoSubstitutionTemplateLiteralNode) return
+        // (2) `Symbol.xxx` (well-known symbol) → resolves as a symbol member.
+        if (keyExpr is PropertyAccessExpression && (keyExpr.expression as? Identifier)?.text == "Symbol") return
+        // The receiver must be a plain anonymous (non-named, non-tuple, non-Reference,
+        // NON-empty) object type for the index-signature check to be meaningful and
+        // FP-safe (class instances / unions / arrays / `{}` are skipped).
+        if (receiver !is Type.Object || receiver is Type.Interface || receiver is Type.Reference) return
+        if (receiver.tupleElementTypes != null) return
+        try { resolveStructuredTypeMembers(receiver) } catch (_: Throwable) {}
+        val recvEmpty = receiver.properties.isNullOrEmpty() &&
+            receiver.stringIndexInfo == null && receiver.numberIndexInfo == null
+        if (recvEmpty) return // owned by B9.4
+        if (!receiver.callSignatures.isNullOrEmpty() || !receiver.constructSignatures.isNullOrEmpty()) return
+
+        // (3) Determine the key kind / whether the key expression itself errored.
+        val (keyStart, keyLen) = computedKeySpan(computed, keyExpr, source)
+        if (keyLen <= 0) return
+        if (keyExpr is Identifier) {
+            if (keyExpr.text in propertyNameKeys) return
+            val kt = widenedKeys[keyExpr.text] ?: return // not a positively-identified widened key
+            emitComputedKeyIndexDiag(kt, receiver, keyStart, keyLen, source, fileName)
+            return
+        }
+        // (4) Call / property-access / binary / parenthesized keys: route through the
+        // real expression checkers so TS2349/TS2339/TS2365 fire, then classify.
+        val before = diagnostics.size
+        try {
+            checkCallTypesInExpr(keyExpr, source, fileName)
+            checkPropertyAccessInExpr(keyExpr, source, fileName, null)
+            checkArithmeticInExpr(keyExpr, source, fileName)
+        } catch (_: Throwable) { /* best-effort */ }
+        // checkArithmeticInExpr deliberately SKIPS `+` with a non-wrapper object
+        // operand (it defers object operands to other checks). For a computed
+        // destructuring key tsc DOES report TS2365 there (`[(1 + {})]`), so emit it
+        // narrowly here (reusing the real emitter + widened display) when routing
+        // produced nothing. Bounded to this key context → no broad `+` FP surface.
+        if (diagnostics.size == before) emitPlusObjectTs2365ForKey(keyExpr, source, fileName)
+        if (diagnostics.size > before) {
+            // The key expression errored → its type is error/any → TS2538.
+            val (line, character) = getLineAndCharacterOfPosition(source, keyStart)
+            diagnostics.add(Diagnostic(
+                message = "Type 'any' cannot be used as an index type.",
+                category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                line = line, character = character, start = keyStart, length = keyLen,
+            ))
+            return
+        }
+        val kt = try { getTypeOfExpression(keyExpr) } catch (_: Throwable) { return }
+        when {
+            kt.flags.hasAny(TypeFlags.Literal) || kt.flags.hasAny(TypeFlags.ESSymbolLike) -> return
+            kt.flags.hasAny(TypeFlags.String) -> emitComputedKeyIndexDiag(stringType, receiver, keyStart, keyLen, source, fileName)
+            kt.flags.hasAny(TypeFlags.Number) -> emitComputedKeyIndexDiag(numberType, receiver, keyStart, keyLen, source, fileName)
+            else -> return
+        }
+    }
+
+    /** For a computed key that is a `+`/`+=` BinaryExpression (possibly parenthesized)
+     *  with a non-wrapper object operand and a non-string other operand — the shape
+     *  the shared arithmetic checker skips — emit TS2365 with the widened operand
+     *  display (`1 + {}` → "number" and "{}"), reusing the real emitter. */
+    private fun emitPlusObjectTs2365ForKey(keyExpr: Expression, source: String, fileName: String) {
+        var e: Expression = keyExpr
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e !is BinaryExpression) return
+        if (e.operator != SyntaxKind.Plus && e.operator != SyntaxKind.PlusEquals) return
+        val lt = try { getTypeOfExpression(e.left) } catch (_: Throwable) { return }
+        val rt = try { getTypeOfExpression(e.right) } catch (_: Throwable) { return }
+        if (lt === anyType || rt === anyType || lt === errorType || rt === errorType) return
+        // Fire only when one side is a non-wrapper object and the other is not
+        // string-like (string concatenation with an object is valid).
+        val leftObj = isNonWrapperObjectType(lt)
+        val rightObj = isNonWrapperObjectType(rt)
+        if (!leftObj && !rightObj) return
+        if (isStringLikeType(lt) || isStringLikeType(rt)) return
+        emitTs2365(e, e.operator, lt, rt, source, fileName, arithWidenedDisplay(lt), arithWidenedDisplay(rt))
+    }
+
+    /** Emit TS2537 if [receiver] lacks a matching index signature for the widened
+     *  [keyType] (string → string index; number → number index, falling back to
+     *  string index). */
+    private fun emitComputedKeyIndexDiag(
+        keyType: Type, receiver: Type.Object, keyStart: Int, keyLen: Int,
+        source: String, fileName: String,
+    ) {
+        val keyKind = if (keyType.flags.hasAny(TypeFlags.Number)) "number" else "string"
+        val matched = when (keyKind) {
+            "number" -> receiver.numberIndexInfo != null || receiver.stringIndexInfo != null
+            else -> receiver.stringIndexInfo != null
+        }
+        if (matched) return
+        val recvDisplay = try { typeToString(receiver) } catch (_: Throwable) { return }
+        val (line, character) = getLineAndCharacterOfPosition(source, keyStart)
+        diagnostics.add(Diagnostic(
+            message = "Type '$recvDisplay' has no matching index signature for type '$keyKind'.",
+            category = DiagnosticCategory.Error, code = 2537, fileName = fileName,
+            line = line, character = character, start = keyStart, length = keyLen,
+        ))
+    }
+
+    /** The (start, length) source span of a computed key's inner expression
+     *  (`[expr]` → the `expr` slice, trailing trivia trimmed). */
+    private fun computedKeySpan(computed: ComputedPropertyName, keyExpr: Expression, source: String): Pair<Int, Int> {
+        val keyStart = keyExpr.pos
+        val closeAfter = matchClosingBracket(source, computed.pos) // position AFTER `]`
+        if (closeAfter <= computed.pos || closeAfter - 1 <= keyStart) return keyStart to 0
+        val text = source.substring(keyStart, closeAfter - 1)
+        return keyStart to text.trimEnd().length
+    }
+
+    private fun arrayElementTypeOf(t: Type?, index: Int): Type? {
+        if (t == null) return null
+        if (t is Type.Object && t.tupleElementTypes != null) return t.tupleElementTypes!!.getOrNull(index)
+        if (t is Type.Reference && (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray"))
+            return t.resolvedTypeArguments?.getOrNull(0)
+        return null
+    }
+
+    private fun propTypeOfReceiver(recv: Type?, name: String): Type? {
+        if (recv !is Type.Object) return null
+        try { resolveStructuredTypeMembers(recv) } catch (_: Throwable) {}
+        val sym = recv.properties?.firstOrNull { it.name == name } ?: recv.members?.get(name) ?: return null
+        return try { getTypeOfSymbol(sym) } catch (_: Throwable) { null }
+    }
+
+    private fun tryGetTypeFromTypeNode(node: TypeNode): Type? =
+        try { getTypeFromTypeNode(node).takeIf { it !== anyType && it !== errorType } } catch (_: Throwable) { null }
+
+    private fun tryWidenOfExpr(expr: Expression): Type? =
+        try { widenType(getTypeOfExpression(expr)).takeIf { it !== anyType && it !== errorType } } catch (_: Throwable) { null }
 
     /**
      * B226: object-destructuring with a COMPUTED (late-bound) key against a NON-empty
