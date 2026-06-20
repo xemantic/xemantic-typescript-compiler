@@ -1,3 +1,7 @@
+## Round 202 (trimmed from STATUS.md 2026-06-20 round 207)
+
+_Round 202 (2026-06-19, multi-iteration session): **+2 net (318→316 failing), B494 (`maxNodeModuleJsDepthDefaultsToZero`) + B495 (`mappedTypeUnionConstrainTupleTreatedAsArrayLike`), ZERO regressions.** B494 — TS2339 for `import * as foo from "shortid"; foo.<absent>` via new dedicated walker `checkAmbientModuleNamespaceImportMembers` (reads ambient module body exports directly; sidesteps the B152b resolveAlias gap). B495 — TS2322 `HomomorphicMappedType<T>` ↛ `any[]` for `const arr: any[] = [] as Homo<T>` where T's constraint union has a `readonly [...]` member; dedicated walker `checkHomomorphicMappedCastToArray` (pure AST, corpus-unique). Both surfaced via a skeptical triage Workflow + a NONE-tracer Workflow._
+
 ## Round 200 (trimmed from STATUS.md 2026-06-20 round 205)
 
 
