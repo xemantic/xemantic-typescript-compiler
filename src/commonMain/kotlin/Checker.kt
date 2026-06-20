@@ -114,6 +114,17 @@ class Checker(
          *  a type-level cycle — degrade to errorType instead of unbounded
          *  recursion. Not cached; the outer resolution stores the real type. */
         val nodeTypeResolutionInProgress = HashSet<TypeNode>()
+        /** Type ids whose [resolveStructuredTypeMembers] is currently in progress.
+         *  Mutually-recursive heritage (`interface A extends B`, `interface B extends
+         *  A`) re-enters member resolution for a type whose member table is not yet
+         *  planted (it is set only at the END of resolveInterfaceMembersCore), so the
+         *  `properties != null` guard does not yet hold and resolution recurses into a
+         *  StackOverflowError that callers silently swallow. Re-entry on an in-progress
+         *  type returns early instead — the OUTER resolution completes and plants the
+         *  full table; the re-entrant inner request sees the (still-resolving) type as
+         *  member-less, which is correct for the circular-base error inputs that
+         *  trigger it. */
+        val memberResolutionInProgress = HashSet<Int>()
         /** Cache of symbol ID → declared type (for classes/interfaces). */
         val declaredTypes = HashMap<Int, Type>()
         // Type relation instances
@@ -195,6 +206,7 @@ class Checker(
     private val symbolTypes get() = state.symbolTypes
     private val symbolTypeResolutionInProgress get() = state.symbolTypeResolutionInProgress
     private val nodeTypeResolutionInProgress get() = state.nodeTypeResolutionInProgress
+    private val memberResolutionInProgress get() = state.memberResolutionInProgress
     private val declaredTypes get() = state.declaredTypes
     private val subtypeRelation get() = state.subtypeRelation
     private val assignableRelation get() = state.assignableRelation
@@ -79733,10 +79745,25 @@ interface DataView {
      */
     private fun resolveStructuredTypeMembers(type: Type.Object) {
         if (type.properties != null) return // already resolved
-        when (type) {
-            is Type.Interface -> resolveInterfaceMembers(type)
-            is Type.Reference -> resolveReferenceMembers(type)
-            else -> resolveAnonymousTypeMembers(type)
+        // Cycle guard: mutually-recursive heritage (`interface A extends B`,
+        // `interface B extends A`) re-enters here for a type whose member table is
+        // not yet planted (it is assigned only at the end of resolution), so the
+        // `properties != null` check above does not yet hold. Without this, the
+        // resolveStructuredTypeMembers <-> resolveInterfaceMembers <->
+        // resolveReferenceMembers chain recurses into a StackOverflowError that the
+        // callers silently swallow. Break the cycle here: the OUTER resolution
+        // completes and plants the full table; the re-entrant inner request returns
+        // with the type still member-less, which is correct for the circular-base
+        // error inputs that produce these cycles.
+        if (!memberResolutionInProgress.add(type.id)) return
+        try {
+            when (type) {
+                is Type.Interface -> resolveInterfaceMembers(type)
+                is Type.Reference -> resolveReferenceMembers(type)
+                else -> resolveAnonymousTypeMembers(type)
+            }
+        } finally {
+            memberResolutionInProgress.remove(type.id)
         }
     }
 
