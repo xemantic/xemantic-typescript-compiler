@@ -92700,7 +92700,17 @@ interface DataView {
     }
 
     /** Collect inherited property names from base class chain (extends only). */
-    private fun collectInheritedPropertyNames(symbol: Symbol, names: MutableSet<String>) {
+    private fun collectInheritedPropertyNames(
+        symbol: Symbol, names: MutableSet<String>,
+        // Cycle guard (keyed on symbol id): a cyclic `extends` chain
+        // (`class A extends B`, `class B extends A`, or `class A extends A`)
+        // would otherwise recurse until a StackOverflowError. Re-entry on an
+        // already-seen symbol simply stops — its members were already collected.
+        // Default-valued so the external caller is unchanged; recursion threads
+        // the same set down.
+        visited: MutableSet<Int> = HashSet(),
+    ) {
+        if (!visited.add(symbol.id)) return
         for (decl in symbol.declarations) {
             if (decl !is ClassDeclaration) continue
             for (member in decl.members) {
@@ -92722,7 +92732,7 @@ interface DataView {
                         else -> null
                     } ?: continue
                     val baseSymbol = globals[baseName] ?: continue
-                    collectInheritedPropertyNames(baseSymbol, names)
+                    collectInheritedPropertyNames(baseSymbol, names, visited)
                 }
             }
         }
