@@ -230,6 +230,13 @@ class Checker(
      *  path). */
     private var currentClassForThis: ClassDeclaration? = null
 
+    /** B-readonlyMembers: true when the const-assignment walker is positioned DIRECTLY in the
+     *  constructor body (or a direct property initializer) of [currentClassForThis] — NOT nested
+     *  inside any function/arrow. tsc allows writing an OWN readonly DATA property only here
+     *  (a get-only accessor is never writable, even here); a write nested in a function/arrow,
+     *  or in any method body, is TS2540. */
+    private var currentThisMemberIsCtorDirect: Boolean = false
+
     /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
     private var argCountSuperCtor: FuncParamInfo? = null
 
@@ -47855,6 +47862,7 @@ interface DataView {
                 // can resolve `this` to the class instance type in the readonly check
                 // (getTypeOfExpression(this) does not yield the class type — B101).
                 val savedClassForThis = currentClassForThis
+                val savedCtorDirect = currentThisMemberIsCtorDirect
                 try {
                     for (member in stmt.members) {
                         val memberStatic = when (member) {
@@ -47865,6 +47873,9 @@ interface DataView {
                             else -> false
                         }
                         currentClassForThis = if (memberStatic) null else stmt
+                        // tsc allows an OWN readonly data property to be written ONLY directly in the
+                        // constructor body or a (non-static) property initializer of the declaring class.
+                        currentThisMemberIsCtorDirect = !memberStatic && member is Constructor
                         val body = when (member) {
                             is MethodDeclaration -> member.body
                             is Constructor -> member.body
@@ -47875,11 +47886,16 @@ interface DataView {
                         // Pass outer constNames so class/enum assignments in methods are caught
                         body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
                         if (member is PropertyDeclaration) {
+                            // A property initializer is its OWN control-flow container in tsc
+                            // (getControlFlowContainer returns the PropertyDeclaration), so a
+                            // readonly `this.X` write there is NOT a ctor-direct write → TS2540.
+                            currentThisMemberIsCtorDirect = false
                             member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
                         }
                     }
                 } finally {
                     currentClassForThis = savedClassForThis
+                    currentThisMemberIsCtorDirect = savedCtorDirect
                 }
             }
             is ModuleDeclaration -> {
@@ -47893,6 +47909,15 @@ interface DataView {
             is ExportAssignment -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
             else -> {}
         }
+    }
+
+    /** The ARROW callee of an immediately-invoked call `(() => …)()` (unwrapping parens), or null.
+     *  Function-expression IIFEs are excluded: they rebind `this`, so `this.X` inside them is not
+     *  the enclosing class's property (handled separately by nulling currentClassForThis). */
+    private fun immediatelyInvokedArrowCallee(call: CallExpression): ArrowFunction? {
+        var callee: Expression = call.expression
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        return callee as? ArrowFunction
     }
 
     private fun checkConstAssignmentInExpr(
@@ -47953,7 +47978,20 @@ interface DataView {
                 checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
             }
             is CallExpression -> {
-                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+                // tsc's getControlFlowContainer is TRANSPARENT to an immediately-invoked arrow
+                // (`(() => { ... })()`): its body runs during construction, so an OWN readonly
+                // DATA write inside it stays legal in the ctor (currentThisMemberIsCtorDirect
+                // preserved). A NON-invoked arrow / function expression IS a control-flow boundary.
+                val iifeArrow = immediatelyInvokedArrowCallee(expr)
+                if (iifeArrow != null) {
+                    when (val body = iifeArrow.body) {
+                        is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
+                        is Expression -> checkConstAssignmentInExpr(body, source, fileName, constNames)
+                        else -> {}
+                    }
+                } else {
+                    checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
+                }
                 expr.arguments.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
             }
             is NewExpression -> {
@@ -47986,14 +48024,27 @@ interface DataView {
                 checkConstAssignmentInExpr(expr.whenFalse, source, fileName, constNames)
             }
             is ArrowFunction -> {
+                // A nested arrow preserves `this` but is no longer the ctor's direct body —
+                // an OWN readonly data write inside it is TS2540.
+                val savedCtorDirect = currentThisMemberIsCtorDirect
+                currentThisMemberIsCtorDirect = false
                 when (val body = expr.body) {
                     is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
                     is Expression -> checkConstAssignmentInExpr(body, source, fileName, constNames)
                     else -> {}
                 }
+                currentThisMemberIsCtorDirect = savedCtorDirect
             }
             is FunctionExpression -> {
+                // A function expression REBINDS `this` (not the class instance), so `this.X`
+                // inside it must not be flagged against the enclosing class.
+                val savedThisCls = currentClassForThis
+                val savedCtorDirect = currentThisMemberIsCtorDirect
+                currentClassForThis = null
+                currentThisMemberIsCtorDirect = false
                 checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableMapOf())
+                currentClassForThis = savedThisCls
+                currentThisMemberIsCtorDirect = savedCtorDirect
             }
             // TS1538: braced `\u{...}` regex escapes require the u/v flag. This
             // per-file walker already reaches every expression position; reuse it.
@@ -48799,8 +48850,8 @@ interface DataView {
         if (objExpr is Identifier && objExpr.text == "this") {
             val cls = currentClassForThis
             val clsName = (cls?.name as? Identifier)?.text
-            if (cls != null && clsName != null) {
-                val isOwnMember = cls.members.any { m ->
+            if (cls != null) {
+                val ownMembers = cls.members.filter { m ->
                     when (m) {
                         is PropertyDeclaration -> (m.name as? Identifier)?.text == propName
                         is GetAccessor -> (m.name as? Identifier)?.text == propName
@@ -48808,7 +48859,21 @@ interface DataView {
                         else -> false
                     }
                 }
-                if (!isOwnMember) {
+                if (ownMembers.isNotEmpty()) {
+                    // OWN member of the enclosing class. A get-only accessor (no matching setter)
+                    // is read-only EVERYWHERE; a `readonly` data property may be written only in the
+                    // ctor's direct body / property initializer (currentThisMemberIsCtorDirect).
+                    val hasSetter = ownMembers.any { it is SetAccessor }
+                    val getOnlyAccessor = !hasSetter && ownMembers.any { it is GetAccessor } &&
+                        ownMembers.none { it is PropertyDeclaration }
+                    if (getOnlyAccessor) return true
+                    val readonlyData = !hasSetter &&
+                        ownMembers.any { it is PropertyDeclaration && ModifierFlag.Readonly in it.modifiers }
+                    if (readonlyData) return !currentThisMemberIsCtorDirect
+                    return false
+                }
+                // NOT an own member → inherited readonly member (always read-only, no ctor exception).
+                if (clsName != null) {
                     val classSym = globals[clsName] ?: (if (fileName != null) fileResults[fileName]?.locals?.get(clsName) else null)
                     if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
                         val classType = try { getDeclaredTypeOfSymbol(classSym) } catch (_: StackOverflowError) { null }
@@ -48862,7 +48927,10 @@ interface DataView {
                 return seen
             }
             val prop = getPropertyOfType(objectType, propName) ?: return false
-            return isReadonlySymbol(prop)
+            // A get-only accessor (no setter) is read-only too — `isReadonlyAccessOrModifier`
+            // covers accessors that `isReadonlySymbol` (modifier-only) misses (e.g. an object
+            // literal `{ get a() {} }`). Keep the Readonly<T> side-channel via the id check.
+            return isReadonlyAccessOrModifier(prop) || prop.id in mappedReadonlyMemberIds
         } catch (_: StackOverflowError) {
             return false
         }
@@ -49359,6 +49427,64 @@ interface DataView {
         } catch (_: StackOverflowError) {}
     }
 
+    /**
+     * TS2542 for an ELEMENT-access write `obj[key] = v` that resolves through a `readonly`
+     * index signature (string-literal key → string index; numeric-literal key → number index,
+     * falling back to the string index). Skips when the key names an explicit member.
+     */
+    private fun emitTS2542IfReadonlyIndexElementWrite(expr: ElementAccessExpression, source: String, fileName: String) {
+        try {
+            val arg = expr.argumentExpression
+            val isNumericKey = arg is NumericLiteralNode
+            val isStringKey = arg is StringLiteralNode
+            if (!isNumericKey && !isStringKey) return
+            val objType = getTypeOfExpression(expr.expression)
+            if (objType === anyType || objType === errorType) return
+            // ReadonlyArray/Array element writes are owned by `tryEmitReadonlyArrayElementWrite`
+            // (B435, the assignability walker) — skip them here to avoid a duplicate TS2542.
+            val recvSymName = when (objType) {
+                is Type.Reference -> objType.target.symbol?.name
+                is Type.Interface -> objType.symbol?.name
+                is Type.Object -> objType.symbol?.name
+                else -> null
+            }
+            if (recvSymName == "Array" || recvSymName == "ReadonlyArray") return
+            // Explicit member named by the key resolves via that member, not the index sig.
+            val keyName = when (arg) {
+                is StringLiteralNode -> arg.text
+                is NumericLiteralNode -> arg.text
+                else -> return
+            }
+            if (getPropertyOfType(objType, keyName) != null) return
+            val stringIdx = when (objType) {
+                is Type.Interface -> objType.stringIndexInfo
+                is Type.Object -> objType.stringIndexInfo
+                else -> null
+            }
+            val numberIdx = when (objType) {
+                is Type.Interface -> objType.numberIndexInfo
+                is Type.Object -> objType.numberIndexInfo
+                else -> null
+            }
+            // A numeric key uses the number index sig if present, else the string index sig.
+            val idx: IndexInfo? = if (isNumericKey) (numberIdx ?: stringIdx) else stringIdx
+            if (idx == null || !idx.isReadonly) return
+            val start = expr.expression.pos
+            val length = expressionTrueEnd(expr) - start
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Index signature in type '${typeToString(objType)}' only permits reading.",
+                category = DiagnosticCategory.Error,
+                code = 2542,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        } catch (_: StackOverflowError) {}
+    }
+
     /** Check if an assignment target is a readonly property and emit TS2540. */
     private fun checkReadonlyAssignmentTarget(target: Expression, source: String, fileName: String) {
         val unwrapped = unwrapParens(target)
@@ -49380,8 +49506,13 @@ interface DataView {
                         ((objSymbol.flags.hasAny(SymbolFlags.Module) && isConstExport(objSymbol, arg.text)) ||
                          isAliasConstExport(objSymbol, arg.text, fileName))) {
                         emitTS2540(arg.text, arg.pos, (arg.rawText ?: arg.text).length + 2, source, fileName)
+                        return
                     }
                 }
+                // Readonly index-signature write: `xx["foo"] = v` / `yy[1] = v` where the matching
+                // (string- or number-) index signature is `readonly` → TS2542 (mirrors the
+                // PropertyAccess case in emitTS2542IfReadonlyIndexWrite).
+                emitTS2542IfReadonlyIndexElementWrite(unwrapped, source, fileName)
             }
             else -> {}
         }
@@ -85051,18 +85182,19 @@ interface DataView {
                     else {
                         // Anonymous object type — format as { prop: type; ... }
                         val parts = mutableListOf<String>()
-                        // Index signatures first
-                        type.stringIndexInfo?.let { info ->
-                            val readonly = if (info.isReadonly) "readonly " else ""
-                            val paramName = (info.declaration as? IndexSignature)?.parameters?.firstOrNull()
-                                ?.let { (it.name as? Identifier)?.text } ?: "x"
-                            parts.add("${readonly}[$paramName: string]: ${typeToString(info.type)}")
-                        }
-                        type.numberIndexInfo?.let { info ->
-                            val readonly = if (info.isReadonly) "readonly " else ""
-                            val paramName = (info.declaration as? IndexSignature)?.parameters?.firstOrNull()
-                                ?.let { (it.name as? Identifier)?.text } ?: "x"
-                            parts.add("${readonly}[$paramName: number]: ${typeToString(info.type)}")
+                        // Index signatures first, in DECLARATION order (tsc preserves source order:
+                        // `{ readonly [x: number]: string, [x: string]: string }` renders number-first).
+                        run {
+                            fun renderIndex(info: IndexInfo, keyType: String): String {
+                                val readonly = if (info.isReadonly) "readonly " else ""
+                                val paramName = (info.declaration as? IndexSignature)?.parameters?.firstOrNull()
+                                    ?.let { (it.name as? Identifier)?.text } ?: "x"
+                                return "${readonly}[$paramName: $keyType]: ${typeToString(info.type)}"
+                            }
+                            val idxParts = mutableListOf<Pair<Int, String>>()
+                            type.stringIndexInfo?.let { idxParts.add((it.declaration?.pos ?: 0) to renderIndex(it, "string")) }
+                            type.numberIndexInfo?.let { idxParts.add((it.declaration?.pos ?: 1) to renderIndex(it, "number")) }
+                            idxParts.sortedBy { it.first }.forEach { parts.add(it.second) }
                         }
                         // Properties
                         val props = type.properties
