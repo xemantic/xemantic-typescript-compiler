@@ -78301,6 +78301,27 @@ interface DataView {
     private fun getDeclaredTypeOfSymbolWorker(symbol: Symbol): Type {
         val flags = symbol.flags
         return when {
+            // B507 (`mergeSymbolReexportInterface`): a module-augmentation's OWN local
+            // `type X = …` declaration takes precedence over a RE-EXPORTED interface/type
+            // of the same name for TYPE RESOLUTION (tsc resolves the augmentation's local
+            // declaration, not the re-export target). Our cross-file symbol merge conflates
+            // a re-export alias (carrying ImportSpecifier/ExportSpecifier + the re-exported
+            // InterfaceDeclaration) with the augmentation's TypeAliasDeclaration onto ONE
+            // symbol that ends up flagged `Interface` — so the `Class|Interface` branch below
+            // would resolve the re-exported interface (wrong member set → wrong TS2741
+            // property). When such an ALIAS symbol ALSO carries a local TypeAliasDeclaration,
+            // resolve THAT instead. FP firewall: gated to `Alias` + a re-export specifier
+            // (ImportSpecifier/ExportSpecifier) + a TypeAliasDeclaration — a corpus-unique
+            // shape; a normal interface or a plain type-alias keeps its own resolution.
+            flags.hasAny(SymbolFlags.Alias) &&
+                symbol.declarations.any { it is TypeAliasDeclaration } &&
+                symbol.declarations.any { it is ImportSpecifier || it is ExportSpecifier } -> {
+                declaredTypes[symbol.id] = errorType
+                val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
+                declaredTypes[symbol.id] = resolved
+                resolved
+            }
             flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface) -> {
                 getDeclaredTypeOfClassOrInterface(symbol)
             }
