@@ -896,7 +896,7 @@ class TypeScriptCompiler {
             // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
             // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
             if (parser.getDiagnostics().isNotEmpty()) {
-                diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 }
+                diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 || it.code == 1036 }
             }
             // B310: TS1248/TS1031 (tsc checkGrammarModifiers via grammarErrorOnNode) are
             // suppressed when the file has REAL parse diagnostics. Grammar-class codes our
@@ -1372,7 +1372,7 @@ class TypeScriptCompiler {
             diagnostics.addAll(checker.getDiagnostics())
             // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
             if (filesWithParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
+                diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015 || it.code == 1036) && it.fileName in filesWithParseDiagnostics }
             }
             // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
             // (see the single-file path note).

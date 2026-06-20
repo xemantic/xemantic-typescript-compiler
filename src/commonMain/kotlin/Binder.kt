@@ -372,7 +372,19 @@ class Binder(private val options: CompilerOptions) {
             symbol.valueDeclaration = declarationNode
         }
         symbol.parent = currentContainer
-        scope[name] = symbol
+        // B505: first-wins for a Class+Class duplicate. tsc keeps the FIRST class as the
+        // canonical scope binding, so name/member resolution uses its declaration (and a
+        // later same-named class's members are NOT contributed). The later class still gets
+        // its own symbol (returned + node-recorded) for its own diagnostics, but does NOT
+        // overwrite scope[name]. TS2300 duplicate detection is AST-based
+        // (checkDuplicateDeclarations) so it is unaffected. Scoped to Class+Class only to
+        // avoid disturbing other non-mergeable combos (class+interface, var+class), whose
+        // last-wins behavior other tests depend on.
+        val classDuplicate = existing != null &&
+            existing.flags.hasAny(SymbolFlags.Class) && flags.hasAny(SymbolFlags.Class)
+        if (!classDuplicate) {
+            scope[name] = symbol
+        }
         recordNodeSymbol(declarationNode, symbol)
         return symbol
     }

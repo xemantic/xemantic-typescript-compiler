@@ -4073,7 +4073,32 @@ class Parser(
                 else parseExpressionStatement()
             }
 
-            else -> parseExpressionStatement()
+            else -> {
+                // B505: `export <bogus-modifier> <declaration>` (e.g. `export extension class C`)
+                // — tsc treats the dangling `export` (no real declaration following) as
+                // "Declaration or statement expected." at the `export` keyword, then re-parses
+                // the bogus identifier as an expression statement and the trailing declaration
+                // on its own. Tight FP gate: the token is an identifier AND the NEXT token is a
+                // declaration-start keyword — exactly the bogus-modifier-before-declaration shape.
+                // Plain `export foo;` (identifier not followed by a declaration) keeps the prior
+                // recovery (no TS1128). Require a TRUE Identifier token (not a contextual keyword)
+                // so the UMD `export as namespace X` form (`as` is AsKeyword followed by
+                // `namespace`) is NOT misread as a bogus-modifier shape.
+                if (token == SyntaxKind.Identifier && lookAhead {
+                        nextToken()
+                        token == ClassKeyword || token == InterfaceKeyword ||
+                            token == FunctionKeyword || token == EnumKeyword ||
+                            token == NamespaceKeyword || token == ModuleKeyword ||
+                            token == AbstractKeyword || token == VarKeyword ||
+                            token == LetKeyword || token == ConstKeyword || token == TypeKeyword
+                    }) {
+                    reportError(
+                        "Declaration or statement expected.",
+                        code = 1128, overrideStart = pos, overrideLength = 6,
+                    )
+                }
+                parseExpressionStatement()
+            }
         }
     }
 
