@@ -29235,8 +29235,16 @@ class Checker(
                 // separately at their own checks and replace the redeclare diagnostic.
                 val hasImport = "import" in kinds || "import=" in kinds
                 val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && !hasImport
-                if (allBlockScoped && group.size >= 2) {
-                    for (decl in group) {
+                // A `type` alias occupies the TYPE space, NOT the block-scoped VALUE space (in
+                // .ts/.tsx), so it neither counts toward NOR receives a block-scoped redeclaration
+                // diagnostic — only the let/const declarations do. (The JS-only `type X` + `const X`
+                // case, where the type IS a value-space redeclaration, is handled above at the
+                // isJsLikeFileName branch.) Counting `group.size` instead FP'd TS2451 on a `.ts`
+                // `type X` + `declare const X` pair (longObjectInstantiationChain1 `type merge` +
+                // `declare const merge`): only 1 block-scoped decl, no redeclaration.
+                val blockScopedDecls = group.filter { it.kind == "let" || it.kind == "const" }
+                if (allBlockScoped && blockScopedDecls.size >= 2) {
+                    for (decl in blockScopedDecls) {
                         val start = decl.nameNode.pos
                         val nameLen = if (decl.nameNode is Identifier) (decl.nameNode as Identifier).text.length
                             else (decl.nameNode.end - decl.nameNode.pos)
