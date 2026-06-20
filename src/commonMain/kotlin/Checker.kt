@@ -2507,6 +2507,40 @@ class Checker(
     }
 
     /**
+     * B508: For an ambient `declare module "<spec>"` whose body has `export default <Name>`
+     * where <Name> resolves to a body-level TYPE-ONLY namespace, return <Name>; else null.
+     * Reads the ambient body AST directly (B494 pattern — does NOT rely on resolveAlias,
+     * which cannot reach an ambient module's default export). Used to detect a JS-file
+     * default import that binds to a type-only namespace (TS18042 + value-use TS2708).
+     */
+    private fun ambientDefaultExportTypeOnlyNamespace(spec: String): String? {
+        for (result in binderResults) {
+            // Only SCRIPT files define ambient external modules; in module files
+            // `declare module "X"` is an augmentation (mirrors isAmbientModuleTypeOnly).
+            if (isModuleFile(result.sourceFile.statements)) continue
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                if (stmt.name !is StringLiteralNode) continue
+                if ((stmt.name as StringLiteralNode).text != spec) continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                for (s in body.statements) {
+                    if (s is ExportAssignment && !s.isExportEquals) {
+                        val expr = s.expression as? Identifier ?: continue
+                        for (inner in body.statements) {
+                            if (inner is ModuleDeclaration && inner.name is Identifier
+                                && (inner.name as Identifier).text == expr.text) {
+                                val innerBody = inner.body as? ModuleBlock ?: continue
+                                if (isModuleBlockTypeOnly(innerBody)) return expr.text
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    /**
      * Check if an ambient external module (declare module "X") exports only types.
      * Searches all files for matching `declare module` blocks and checks their exports.
      */
@@ -40148,7 +40182,31 @@ interface DataView {
                     // Import declarations create value bindings (aliases), not type-only names
                     is ImportDeclaration -> {
                         val clause = stmt.importClause ?: continue
-                        clause.name?.text?.let { valueNames.add(it) }
+                        // B508: a JS-file (checkJs) DEFAULT import binding to a type-only
+                        // ambient-module namespace (`export default <type-only namespace>`)
+                        // is itself type-only — tsc emits TS18042 at the import binding and
+                        // routes value-position uses of the name to TS2708. Route to
+                        // namespaceOnlyNames instead of valueNames (narrow: JS+checkJs only).
+                        val defaultName = clause.name?.text
+                        val jsTypeOnlyDefaultSpec = if (defaultName != null &&
+                            isJsLikeFileName(fileName) && options.checkJs) {
+                            ((stmt.moduleSpecifier as? StringLiteralNode)?.text)
+                                ?.takeIf { ambientDefaultExportTypeOnlyNamespace(it) != null }
+                        } else null
+                        if (jsTypeOnlyDefaultSpec != null) {
+                            namespaceOnlyNames.add(defaultName!!)
+                            val nameNode = clause.name!!
+                            val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "'$defaultName' is a type and cannot be imported in JavaScript files. " +
+                                    "Use 'import(\"$jsTypeOnlyDefaultSpec\").$defaultName' in a JSDoc type annotation.",
+                                category = DiagnosticCategory.Error, code = 18042,
+                                fileName = fileName, line = l, character = c,
+                                start = nameNode.pos, length = defaultName.length,
+                            ))
+                        } else {
+                            clause.name?.text?.let { valueNames.add(it) }
+                        }
                         when (val nb = clause.namedBindings) {
                             is NamespaceImport -> valueNames.add(nb.name.text)
                             is NamedImports -> nb.elements.forEach { spec -> valueNames.add(spec.name.text) }
@@ -40593,6 +40651,16 @@ interface DataView {
                     val name = operand.text
                     if (name !in valueNames && name in typeOnlyNames) {
                         emitTS2693(name, operand, source, fileName)
+                    } else if (name !in valueNames && name in namespaceOnlyNames) {
+                        // B508: `typeof <type-only namespace>` in value position → TS2708.
+                        val start = operand.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Cannot use namespace '$name' as a value.",
+                            category = DiagnosticCategory.Error, code = 2708,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = name.length,
+                        ))
                     }
                 }
             }
