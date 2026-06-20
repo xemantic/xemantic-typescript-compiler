@@ -3198,7 +3198,9 @@ class Transformer(
         val needsAnyInlineHelper = options.importHelpers && (
             needsDecorateHelper || needsParamHelper || needsMetadataHelper ||
             needsRestHelper || needsAwaiterHelper || needsAsyncGeneratorHelper ||
-            needsMakeTemplateObjectHelper
+            needsMakeTemplateObjectHelper ||
+            needsClassPrivateFieldGetHelper || needsClassPrivateFieldSetHelper ||
+            needsClassPrivateFieldInHelper
         )
         var leadingHelpersHandled = false
         if (needsAnyImportHelper && !options.importHelpers && !options.noEmitHelpers) {
@@ -3246,12 +3248,14 @@ class Transformer(
             }
             if (!hasTslibAlready) {
                 val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
-                // Insert after preamble + void0 hoists + function stubs.
-                // The preamble is at 0 (if present), void0 hoists follow, then function stubs.
+                // Insert after preamble + void0 hoists + function stubs. `prependedCount` covers
+                // any leading hoisted vars (private-field WeakMap `var _X;`, sideEffect/computed
+                // temps) that were already moved to result[0] above the preamble — the require
+                // must land AFTER them (matches tsc: `var _X; <preamble>; const tslib_1 = ...`).
                 val preambleCount = if (!hasExportEquals && hasStaticModuleDeclarations) 1 else 0
                 val hoistCount = if (exportedVarNames.isEmpty()) 0 else ((exportedVarNames.size + 49) / 50)
                 val stubCount = functionExportStubs.size
-                val insertIdx = preambleCount + hoistCount + stubCount
+                val insertIdx = preambleCount + hoistCount + stubCount + prependedCount
                 result.add(insertIdx, tslibStmt)
             }
         }
@@ -13789,6 +13793,11 @@ class Transformer(
                     val weakMapVar = "_${className}_$fieldName"
                     val initExpr = prop.initializer?.let { transformExpression(it) }
                     privateFieldInfos.add(PrivateFieldInfo(fieldName, weakMapVar, initExpr))
+                    // Register the WeakMap var so the CJS transform hoists `var _C_x;` above the
+                    // Object.defineProperty(exports) preamble (matches tsc). The class-EXPRESSION
+                    // branch already does this; native (es2015+) class DECLARATIONS need it too —
+                    // without it a CJS module's WeakMap hoist lands below the preamble.
+                    if (functionScopeDepth == 0) computedPropHoistNames.add(weakMapVar)
                 }
             }
             // B15.7: emit ONE combined `var X, Y, Z;` statement for all private fields,
