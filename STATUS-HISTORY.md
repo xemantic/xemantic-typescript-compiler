@@ -1,3 +1,7 @@
+## Round 207 (trimmed from STATUS.md 2026-06-20 round 212)
+
+_Round 207 (2026-06-20, multi-iteration session, ≥30 iterations per user request, addressing blockers): **+1 net (307→306 failing, 9779→9780 passing), B505 (`extension`), ZERO regressions (exact failing-set diff via `scripts/fail_set.py`).** Re-confirmed the contained pool exhausted FOUR independent ways: find_candidates EXTRA/MISSING/SWAP fresh=0/0/0; NONE fresh=7 (all deep type-engine: TS2344/TS2589 mapped/conditional recursion, indexed-access keyof, promisePermutations, controlFlowArray, reactReduxLikeDeferredInference); OUTPUT fresh=1 (systemModule17, tsgo-irrelevant); AND an 18-agent triage Workflow over the 18 smallest-diff partial-emit failures returned **0 clean-single-piece, 0 two-piece — 100% architectural/multi-piece**. **B505 (+1, `extension`)** — `declare namespace M { export extension class C {} }` flipped via THREE coordinated pieces: (1) Parser TS1128 at the dangling `export` keyword for the `export <true-Identifier> <decl-keyword>` bogus-modifier shape (the `token == SyntaxKind.Identifier` gate, NOT `isIdentifier()`, is load-bearing — `isIdentifier()` matched the UMD `export as namespace X` form); (2) TS1036 suppressed when the file has parse diagnostics; (3) Binder `declareSymbol` first-wins for a Class+Class duplicate (scoped to Class+Class only, no boundary drift)._
+
 ## Round 205 (trimmed from STATUS.md 2026-06-20 round 210)
 
 

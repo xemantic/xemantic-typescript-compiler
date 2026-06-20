@@ -23716,27 +23716,56 @@ class Checker(
                 }
             }
             is PropertyAccessExpression -> {
-                // Dotted namespace A.B.C: collect exports of each ancestor namespace
-                // (A, A.B, A.B.C) so names from parent namespaces are in scope.
-                val segments = mutableListOf<String>()
-                var cur: Expression = name
-                while (cur is PropertyAccessExpression) {
-                    segments.add(0, cur.name.text)
-                    cur = cur.expression
+                // Dotted namespace A.B.C: collect exports of each dotted segment
+                // (A, A.B, A.B.C) so names from those namespaces are in scope.
+                //
+                // The binder records the INNERMOST segment symbol (C) for the decl
+                // node — recordNodeSymbol overwrites once per segment, so last (C)
+                // wins — and merges same-named segments across declaration blocks.
+                // So nodeToSymbol gives the MERGED C directly; walk C -> B -> A via
+                // symbol.parent to add each dotted segment's exports.
+                //
+                // The old code rooted the walk at result.locals[firstSegment], which
+                // was WRONG when the dotted namespace is NESTED inside another
+                // namespace (e.g. `namespace M.N { namespace X.Y.Z {} }`): the first
+                // segment X lives in N's exports, not file locals, so the walk found
+                // nothing and dropped the merged sibling-block members
+                // (dottedModuleName: `v` declared in a sibling `M.N.X.Y.Z` block was
+                // invisible to `f(v)` in the first block → spurious TS2304).
+                val segCount = run {
+                    var n = 1; var c: Expression = name
+                    while (c is PropertyAccessExpression) { n++; c = c.expression }
+                    n
                 }
-                if (cur is Identifier) segments.add(0, cur.text)
-                var sym: Symbol? = null
-                for ((i, seg) in segments.withIndex()) {
-                    sym = if (i == 0) {
-                        result.locals[seg] ?: globals[seg]
-                    } else {
-                        sym?.exports?.get(seg)
+                var sym: Symbol? = result.nodeToSymbol[nodeKey(stmt)]
+                if (sym != null) {
+                    var steps = 0
+                    while (sym != null && steps < segCount) {
+                        sym.exports?.forEach { (exportName, exportSym) ->
+                            nsScope.names.add(exportName)
+                            if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
+                        }
+                        sym = sym.parent
+                        steps++
                     }
-                    if (sym == null) break
-                    // Add exports of each ancestor namespace to scope
-                    sym.exports?.forEach { (exportName, exportSym) ->
-                        nsScope.names.add(exportName)
-                        if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
+                } else {
+                    // Fallback: original file-local-rooted walk (top-level dotted names
+                    // whose decl node didn't reach nodeToSymbol).
+                    val segments = mutableListOf<String>()
+                    var cur: Expression = name
+                    while (cur is PropertyAccessExpression) {
+                        segments.add(0, cur.name.text)
+                        cur = cur.expression
+                    }
+                    if (cur is Identifier) segments.add(0, cur.text)
+                    var s: Symbol? = null
+                    for ((i, seg) in segments.withIndex()) {
+                        s = if (i == 0) result.locals[seg] ?: globals[seg] else s?.exports?.get(seg)
+                        if (s == null) break
+                        s.exports?.forEach { (exportName, exportSym) ->
+                            nsScope.names.add(exportName)
+                            if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
+                        }
                     }
                 }
             }
@@ -24351,7 +24380,16 @@ class Checker(
                 // TypeScript omits TS2728 "declared here" when the suggestion is a pure type alias.
                 is TypeAliasDeclaration -> return null
                 is EnumDeclaration -> decl.name.pos
-                is ModuleDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                is ModuleDeclaration -> {
+                    val mname = decl.name
+                    // Dotted `namespace A.B.C`: tsc gives only the INNERMOST segment a
+                    // valueDeclaration; an intermediate container segment (A, B) has none,
+                    // so tsc omits the TS2728 "declared here" when the suggestion is such a
+                    // segment (dottedModuleName suggests `X` for `x` — X is the first segment
+                    // of `X.Y.Z`, so no related info).
+                    if (mname is PropertyAccessExpression && mname.name.text != name) return null
+                    (mname as? Identifier)?.pos ?: decl.pos
+                }
                 is ImportSpecifier -> decl.name.pos
                 is NamespaceImport -> decl.name.pos
                 else -> decl.pos
@@ -42153,7 +42191,8 @@ interface DataView {
                     // tsc's FINAL missing-impl rule keys on body-node EXISTENCE (!node.body):
                     // a MISSING-block body (parse recovery) suppresses it — only the pair-gap
                     // rule above uses nodeIsPresent semantics.
-                    if (stmt.body == null && ModifierFlag.Declare !in stmt.modifiers) {
+                    if (stmt.body == null && ModifierFlag.Declare !in stmt.modifiers &&
+                        !functionSignatureFollowedByArrow(stmt, source)) {
                         val name = stmt.name?.text ?: continue
                         // Check what follows this overload signature
                         val implResult = findImplementation(statements, i, name)
@@ -42576,6 +42615,47 @@ interface DataView {
             start = pos,
             length = length,
         ))
+    }
+
+    /**
+     * A bodyless [FunctionDeclaration] whose parameter list is IMMEDIATELY followed
+     * by `=>` is the malformed-body parse recovery (`function f(x)=>2*x;`). Our
+     * parser keeps a NULL body for it (B324/B325), but tsc treats it as a present
+     * body — it reports TS1144 ("'{' or ';' expected.") at the `=>` and does NOT
+     * report TS2391 (missing implementation). FP-safe: no legitimate bodyless
+     * function (overload signature / `function f();`) has `)=>` as its body — that
+     * is never valid TS, so detecting `)` directly followed by `=>` is unambiguous.
+     * A return-type annotation (`: T`) is excluded so a function-type return
+     * (`function f(): () => void;`) stays a real overload signature → keeps TS2391.
+     */
+    private fun functionSignatureFollowedByArrow(stmt: FunctionDeclaration, source: String): Boolean {
+        if (stmt.body != null) return false
+        var i = stmt.pos.coerceIn(0, source.length)
+        // Find the parameter list '(' (after name / type params).
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '(') break
+            if (c == '{' || c == ';' || c == '<') return false // type params or body start → bail
+            i++
+        }
+        if (i >= source.length || source[i] != '(') return false
+        // Match the parameter-list parens (handles nested parens in defaults/types).
+        var depth = 0
+        while (i < source.length) {
+            when (source[i]) {
+                '(' -> depth++
+                ')' -> { depth--; if (depth == 0) { i++; break } }
+            }
+            i++
+        }
+        // After ')': the very next significant token must be '=>'. A ':' (return-type
+        // annotation), '{' (body) or ';' (overload sig) means it is NOT this recovery.
+        while (i < source.length) {
+            val c = source[i]
+            if (c.isWhitespace()) { i++; continue }
+            return c == '=' && i + 1 < source.length && source[i + 1] == '>'
+        }
+        return false
     }
 
     private fun emitTS2391(nameNode: Node, source: String, fileName: String) {
