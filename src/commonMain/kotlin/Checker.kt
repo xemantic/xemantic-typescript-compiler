@@ -1696,6 +1696,11 @@ class Checker(
         checkInterfaceMultiBaseConflicts()
         // 64f4. Check index signature property type compatibility (TS2411)
         checkIndexSignatureProperties()
+        // B518. Full index-constraint checking for INHERITED / merged / cross-base
+        // members against own/inherited index signatures (TS2411 + TS2413). Runs AFTER
+        // checkIndexSignatureProperties so it can DEDUP against the per-block emits
+        // (propertiesAndIndexers).
+        checkFullIndexConstraints()
         // B496. Cross-typed-array assignment (TS2322 via [Symbol.toStringTag] mismatch)
         checkTypedArrayCrossAssignment()
         // 64g. Check abstract class instantiation (TS2511)
@@ -89126,6 +89131,357 @@ interface DataView {
                     checkInheritedSymbolIndexMembers(stmt, source, fileName)
                 }
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
+        }
+    }
+
+    // B518: data for one collected member during full index-constraint checking.
+    private class IdxMember(
+        val name: String,           // lookup name ("1", "a", "Infinity", "-Infinity", "6")
+        val isNumericName: Boolean, // numeric-named → applies to BOTH number+string index sigs
+        val typeDisplay: String,    // formatted prop type display ("Z", "boolean", "() => string")
+        val type: Type,             // resolved prop value type (for assignability)
+        val namePos: Int,           // source position of the name (for own-prop errorNode)
+        val isOwn: Boolean,         // declared in one of the type's own merge blocks
+        val displayName: String,    // name as rendered in the message (string-literal names quoted)
+        val nameSpanLen: Int,       // span length of the name (string-literal incl. quotes)
+    )
+
+    private class IdxSig(
+        val isNumber: Boolean,
+        val valueNode: TypeNode,
+        val valueType: Type,
+        val pos: Int,               // index-sig declaration pos (for own-sig errorNode)
+        val isOwn: Boolean,
+    )
+
+    /**
+     * B518: TS2411/TS2413 index-constraint checking for the cases the per-block
+     * [checkIndexSigInStatement] structurally cannot reach — INHERITED properties (from
+     * `extends` bases, transitively), MERGED-block properties (a member in one merge block
+     * vs an index signature in another), and CROSS-BASE index signatures inherited from
+     * different parents. Mirrors tsc's `checkIndexConstraints` errorNode rule: an OWN
+     * property reports at the property; an INHERITED property reports at the OWN index sig
+     * (if any) else at the type NAME. Dedups against the already-emitted per-block
+     * diagnostics so it only fills the gaps. Single-file (bases resolved from this file's
+     * statements). FP firewall: only PRIMITIVE index value types (a method/named-type
+     * member is then reliably (non-)assignable), non-generic types only, and gated to types
+     * that EXTEND a base or are part of a merge group (the only cases the per-block code
+     * misses). Flips `propertiesAndIndexers`.
+     */
+    private fun checkFullIndexConstraints() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // Build a single-file name -> declaration map for base resolution.
+            val byName = mutableMapOf<String, MutableList<Statement>>()
+            fun index(stmts: List<Statement>) {
+                for (s in stmts) {
+                    when (s) {
+                        is InterfaceDeclaration -> byName.getOrPut(s.name.text) { mutableListOf() }.add(s)
+                        is ClassDeclaration -> s.name?.let { byName.getOrPut(it.text) { mutableListOf() }.add(s) }
+                        is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { index(it.statements) }
+                        else -> {}
+                    }
+                }
+            }
+            index(result.sourceFile.statements)
+            val processed = mutableSetOf<String>()
+            try {
+                fun walk(stmts: List<Statement>) {
+                    for (s in stmts) {
+                        when (s) {
+                            is InterfaceDeclaration -> processFullIndexConstraints(s.name.text, byName, processed, source, fileName)
+                            is ClassDeclaration -> s.name?.let { processFullIndexConstraints(it.text, byName, processed, source, fileName) }
+                            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walk(it.statements) }
+                            else -> {}
+                        }
+                    }
+                }
+                walk(result.sourceFile.statements)
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun processFullIndexConstraints(
+        typeName: String,
+        byName: Map<String, List<Statement>>,
+        processed: MutableSet<String>,
+        source: String,
+        fileName: String,
+    ) {
+        if (typeName in processed) return
+        processed.add(typeName)
+        val ownDecls = byName[typeName] ?: return
+        // Type NAME node (for the "both inherited" errorNode) — first declaration's name.
+        val typeNamePos: Int = when (val d = ownDecls.first()) {
+            is InterfaceDeclaration -> d.name.pos
+            is ClassDeclaration -> d.name?.pos ?: return
+            else -> return
+        }
+        val typeNameLen = typeName.length
+        // Gate: only types that extend a base OR are part of a >1-block merge — the cases
+        // the per-block emitter misses. Single-block non-extending types are fully covered.
+        val extendsBaseNames = mutableListOf<String>()
+        var anyGeneric = false
+        for (d in ownDecls) {
+            when (d) {
+                is InterfaceDeclaration -> {
+                    if (!d.typeParameters.isNullOrEmpty()) anyGeneric = true
+                    d.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.forEach { (it.expression as? Identifier)?.text?.let(extendsBaseNames::add) }
+                }
+                is ClassDeclaration -> {
+                    if (!d.typeParameters.isNullOrEmpty()) anyGeneric = true
+                    d.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.forEach { (it.expression as? Identifier)?.text?.let(extendsBaseNames::add) }
+                }
+                else -> {}
+            }
+        }
+        if (anyGeneric) return
+        if (extendsBaseNames.isEmpty() && ownDecls.size <= 1) return
+
+        // Collect OWN members + OWN index sigs (across all merge blocks).
+        val ownMembers = mutableListOf<IdxMember>()
+        val ownSigs = mutableListOf<IdxSig>()
+        for (d in ownDecls) {
+            val members: List<ClassElement> = when (d) {
+                is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                is ClassDeclaration -> d.members
+                else -> emptyList()
+            }
+            collectIdxMembers(members, isOwn = true, ownMembers)
+            collectIdxSigs(members, isOwn = true, ownSigs)
+        }
+        // Collect INHERITED members + index sigs transitively (single-file).
+        val inheritedMembers = mutableListOf<IdxMember>()
+        val inheritedSigs = mutableListOf<IdxSig>()
+        run {
+            val seen = mutableSetOf(typeName)
+            fun collectBase(name: String, depth: Int) {
+                if (depth > 8 || name in seen) return
+                seen.add(name)
+                val decls = byName[name] ?: return
+                for (d in decls) {
+                    val members: List<ClassElement> = when (d) {
+                        is InterfaceDeclaration -> {
+                            if (!d.typeParameters.isNullOrEmpty()) return
+                            d.members.filterIsInstance<ClassElement>()
+                        }
+                        is ClassDeclaration -> {
+                            if (!d.typeParameters.isNullOrEmpty()) return
+                            d.members
+                        }
+                        else -> emptyList()
+                    }
+                    collectIdxMembers(members, isOwn = false, inheritedMembers)
+                    collectIdxSigs(members, isOwn = false, inheritedSigs)
+                    val bases = when (d) {
+                        is InterfaceDeclaration -> d.heritageClauses
+                        is ClassDeclaration -> d.heritageClauses
+                        else -> null
+                    }?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                    for (b in bases) collectBase(b, depth + 1)
+                }
+            }
+            for (b in extendsBaseNames) collectBase(b, 0)
+        }
+
+        // Effective index sigs: own first, then inherited.
+        val effNumberSig = ownSigs.firstOrNull { it.isNumber } ?: inheritedSigs.firstOrNull { it.isNumber }
+        val effStringSig = ownSigs.firstOrNull { !it.isNumber } ?: inheritedSigs.firstOrNull { !it.isNumber }
+        if (effNumberSig == null && effStringSig == null) return
+
+        val allMembers = ownMembers + inheritedMembers
+        // Names that have an OWN declaration shadow inherited same-name members.
+        val ownNames = ownMembers.map { it.name }.toSet()
+
+        // Per-DIRECT-base visibility (transitive prop names + number/string sig presence). A
+        // "both inherited" conflict (prop + sig both come from bases) is reported at THIS type
+        // ONLY when no single direct base sees BOTH — otherwise that base already reports it
+        // (tsc reports a conflict at the most-base type where prop+sig are jointly visible).
+        data class Vis(val props: Set<String>, val hasNumber: Boolean, val hasString: Boolean)
+        fun collectVisibility(name: String): Vis {
+            val props = mutableSetOf<String>()
+            var hasNum = false; var hasStr = false
+            val seen = mutableSetOf<String>()
+            fun rec(n: String, depth: Int) {
+                if (depth > 8 || n in seen) return
+                seen.add(n)
+                val decls = byName[n] ?: return
+                for (d in decls) {
+                    val ms: List<ClassElement> = when (d) {
+                        is InterfaceDeclaration -> d.members.filterIsInstance<ClassElement>()
+                        is ClassDeclaration -> d.members
+                        else -> emptyList()
+                    }
+                    for (mem in ms) {
+                        when (mem) {
+                            is PropertyDeclaration -> idxMemberName(mem.name)?.let { props.add(it.name) }
+                            is MethodDeclaration -> if (mem.parameters.isEmpty()) idxMemberName(mem.name)?.let { props.add(it.name) }
+                            is IndexSignature -> {
+                                val kt = mem.parameters.firstOrNull()?.type as? KeywordTypeNode
+                                if (kt?.kind == SyntaxKind.NumberKeyword) hasNum = true
+                                if (kt?.kind == SyntaxKind.StringKeyword) hasStr = true
+                            }
+                            else -> {}
+                        }
+                    }
+                    val bs = (when (d) {
+                        is InterfaceDeclaration -> d.heritageClauses
+                        is ClassDeclaration -> d.heritageClauses
+                        else -> null
+                    })?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                    for (b in bs) rec(b, depth + 1)
+                }
+            }
+            rec(name, 0)
+            return Vis(props, hasNum, hasStr)
+        }
+        val baseVis = extendsBaseNames.map { collectVisibility(it) }
+
+        fun emit2411(m: IdxMember, sig: IdxSig) {
+            if (sig.valueType === anyType || sig.valueType === errorType) return
+            // Only fire for PRIMITIVE index value types (FP firewall).
+            if (!sig.valueType.flags.hasAny(
+                    TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or TypeFlags.ESSymbol)) return
+            if (m.type === anyType || m.type === errorType) return
+            if (checkTypeRelatedTo(m.type, sig.valueType, assignableRelation)) return
+            // Both-inherited conflict already reported on a base? Suppress (dedup vs the base).
+            if (!m.isOwn && !sig.isOwn &&
+                baseVis.any { m.name in it.props && (if (sig.isNumber) it.hasNumber else it.hasString) }) return
+            val indexKind = if (sig.isNumber) "number" else "string"
+            val indexDisplay = typeToString(sig.valueType)
+            val msg = "Property '${m.displayName}' of type '${m.typeDisplay}' is not assignable to '$indexKind' index type '$indexDisplay'."
+            // errorNode rule: own prop → the prop; inherited prop → own sig if any else type name.
+            val (start, len) = when {
+                m.isOwn -> Pair(m.namePos, m.nameSpanLen)
+                sig.isOwn -> idxSigSpan(sig.pos, source)
+                else -> Pair(typeNamePos, typeNameLen)
+            }
+            if (diagnostics.any { it.code == 2411 && it.start == start && it.message == msg }) return
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = msg, category = DiagnosticCategory.Error, code = 2411,
+                fileName = fileName, line = line, character = character, start = start, length = len,
+            ))
+        }
+
+        for (m in allMembers) {
+            // An inherited member shadowed by an own same-name member is skipped (own wins).
+            if (!m.isOwn && m.name in ownNames) continue
+            // string index applies to ALL named props; number index applies to numeric names.
+            if (effStringSig != null) emit2411(m, effStringSig)
+            if (m.isNumericName && effNumberSig != null) emit2411(m, effNumberSig)
+        }
+
+        // TS2413: number index value must be assignable to string index value.
+        if (effNumberSig != null && effStringSig != null) {
+            val nv = effNumberSig.valueType
+            val sv = effStringSig.valueType
+            val primitive = TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
+            val bothInheritedSigs = !effNumberSig.isOwn && !effStringSig.isOwn
+            val sigPairAlreadyOnBase = bothInheritedSigs && baseVis.any { it.hasNumber && it.hasString }
+            if (!sigPairAlreadyOnBase &&
+                nv !== anyType && nv !== errorType && sv !== anyType && sv !== errorType &&
+                nv.flags.hasAny(primitive) && sv.flags.hasAny(primitive) &&
+                !checkTypeRelatedTo(nv, sv, assignableRelation)) {
+                val numDisplay = typeToString(nv)
+                val strDisplay = typeToString(sv)
+                val msg = "'number' index type '$numDisplay' is not assignable to 'string' index type '$strDisplay'."
+                // errorNode: own number sig if any, else type name.
+                val (start, len) = if (effNumberSig.isOwn) idxSigSpan(effNumberSig.pos, source)
+                    else Pair(typeNamePos, typeNameLen)
+                if (diagnostics.none { it.code == 2413 && it.start == start && it.message == msg }) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = msg, category = DiagnosticCategory.Error, code = 2413,
+                        fileName = fileName, line = line, character = character, start = start, length = len,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B518: span of an index-signature declaration for the errorNode. tsc squiggles the full
+     * member INCLUDING the trailing `;` (e.g. `[n: number]: string;` = 20 chars).
+     */
+    private fun idxSigSpan(pos: Int, source: String): Pair<Int, Int> {
+        var start = pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        var spanEnd = start
+        while (spanEnd < source.length && source[spanEnd] != '\n' && source[spanEnd] != ';' && source[spanEnd] != '}') spanEnd++
+        // Include the trailing ';' terminator if present; otherwise trim trailing whitespace.
+        if (spanEnd < source.length && source[spanEnd] == ';') {
+            spanEnd++
+        } else {
+            while (spanEnd > start && source[spanEnd - 1].isWhitespace()) spanEnd--
+        }
+        return Pair(start, (spanEnd - start).coerceAtLeast(1))
+    }
+
+    /** B518: collect index-checkable members (properties + zero-arg methods) from a block. */
+    private fun collectIdxMembers(members: List<ClassElement>, isOwn: Boolean, out: MutableList<IdxMember>) {
+        for (member in members) {
+            when (member) {
+                is PropertyDeclaration -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    val n = idxMemberName(member.name) ?: continue
+                    val typeNode = member.type ?: continue
+                    val t = getTypeFromTypeNodeSafe(typeNode) ?: continue
+                    val disp = formatTypeForDisplay(typeNode) ?: typeToString(t)
+                    out.add(IdxMember(n.name, n.isNumeric, disp, t, n.pos, isOwn, n.display, n.spanLen))
+                }
+                is MethodDeclaration -> {
+                    if (ModifierFlag.Static in member.modifiers) continue
+                    if (member.parameters.isNotEmpty()) continue   // conservative: only zero-arg methods
+                    if (!member.typeParameters.isNullOrEmpty()) continue
+                    val n = idxMemberName(member.name) ?: continue
+                    if (n.name.isEmpty() || n.name == "new") continue
+                    val retNode = member.type ?: continue
+                    val retDisp = formatTypeForDisplay(retNode) ?: typeToString(getTypeFromTypeNodeSafe(retNode) ?: anyType)
+                    // The method's value is a function type; never assignable to a primitive index.
+                    // A fresh empty object type is a reliable non-primitive marker.
+                    out.add(IdxMember(n.name, n.isNumeric, "() => $retDisp",
+                        Type.Object(), n.pos, isOwn, n.display, n.spanLen))
+                }
+                else -> {}
+            }
+        }
+    }
+
+    // B518: resolved name info for an index-checkable member name.
+    private class IdxName(val name: String, val isNumeric: Boolean, val pos: Int, val display: String, val spanLen: Int)
+
+    /** B518: name info for a member, or null for unsupported name kinds. A string-literal name
+     *  renders QUOTED in the message and its span includes the quotes (matches tsc). */
+    private fun idxMemberName(name: NameNode): IdxName? = when (name) {
+        is Identifier -> {
+            if (name.text.startsWith("#")) null
+            else IdxName(name.text, isCanonicalNumericPropertyName(name.text), name.pos, name.text, name.text.length)
+        }
+        is NumericLiteralNode -> IdxName(name.text, true, name.pos, name.text, name.text.length)
+        is StringLiteralNode -> IdxName(name.text, isCanonicalNumericPropertyName(name.text), name.pos, "\"${name.text}\"", name.text.length + 2)
+        else -> null
+    }
+
+    /** B518: collect number/string index signatures (only string/number key types). */
+    private fun collectIdxSigs(members: List<ClassElement>, isOwn: Boolean, out: MutableList<IdxSig>) {
+        for (member in members) {
+            if (member !is IndexSignature) continue
+            val keyType = member.parameters.firstOrNull()?.type as? KeywordTypeNode ?: continue
+            val isNumber = when (keyType.kind) {
+                SyntaxKind.NumberKeyword -> true
+                SyntaxKind.StringKeyword -> false
+                else -> continue
+            }
+            val valueNode = member.type ?: continue
+            val valueType = getTypeFromTypeNodeSafe(valueNode) ?: continue
+            out.add(IdxSig(isNumber, valueNode, valueType, member.pos, isOwn))
         }
     }
 
