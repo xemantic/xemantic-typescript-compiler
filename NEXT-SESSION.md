@@ -13,7 +13,7 @@ below) — this file tells you how to use them.
 
 ## 0. Current state (2026-06-21)
 
-- **~280 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
+- **~279 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
 - The campaign is **blocker-first**. A 34-agent triage classified all failing tests by their ACTUAL
   diff. The deep type-engine buckets dominate: **mapped-conditional ~63, structural ~42,
   generic-inference ~38**, then parser ~31, js-emit ~28, cross-file ~22, flow ~11, lib ~8.
@@ -60,16 +60,17 @@ pick top vetted win (§3)  →  implement a DEDICATED walker (corpus-unique gate
 ## 3. Vetted next wins (full plans in PLAN-PHASE-4.md's top session note + QUEUE)
 
 Implement in this order; each is a dedicated walker, no broad-engine change:
-1. **`reverseMappedPartiallyInferableTypes`** (conf 2) — TWO walkers: tuple-template reverse-map +
-   contextual arrow-param typing (remove FP TS7006), and a contravariant-only `Box<T[K]>` → `unknown`
-   body read → TS18046.
-2. **`classPropertyErrorOnNameOnly`** (conf 2) — fn-type-annotated prop whose init is a fn-expr with a
-   no-default `switch` body → `…|undefined` return → TS2322 ×2 with a 3-line chain at the decl name.
+1. ~~**`classPropertyErrorOnNameOnly`** (conf 2)~~ — **DONE round 230** (dedicated AST-only walker
+   `checkFnTypeSwitchReturnMismatch` + class-prop `ctxFn` FP suppression).
+2. **`reverseMappedPartiallyInferableTypes`** (conf 2, HARD) — its 1-error baseline (TS18046 for
+   `obj3`'s `contains(k)`, `k` is `unknown`) genuinely needs reverse-mapped inference, NOT just FP
+   suppression; the 3 FP TS7006 are tuple-element arrows from `ArrayLiteralExpression` branch ~19767
+   forcing `ctx=false`. Bigger than the round-226..230 wins — consider a fresh hunt instead.
 3. **`mapUpsert`** (lib, from the round-225 batch) — add `Map/WeakMap.getOrInsert`/`getOrInsertComputed`
-   + a real `ReadonlyMap` interface; also needs the TS6210/TS6502 related-info to fully flip.
-4. **`recursiveTypeRelations` siblings / the `formatTypeForDisplay` keyof case** is already in — reuse it.
+   + a real `ReadonlyMap` interface; also needs the TS6210/TS6212/TS6502 lib-position related-info.
 
-When these are done, **run a fresh hunt (§4)** on the next bucket.
+**Recommendation:** items 2–3 are heavier; **run a fresh read-only hunt (§4)** on the next isolated
+bucket to surface cheaper dedicated-walker wins before tackling them.
 
 ---
 

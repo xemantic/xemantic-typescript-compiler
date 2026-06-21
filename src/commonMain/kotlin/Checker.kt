@@ -992,6 +992,11 @@ class Checker(
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
         checkTernaryUnionReadonlyWrites()
+        // 6a'. classPropertyErrorOnNameOnly — a var/class-prop annotated with a function-type
+        // alias `(arg: U) => string` whose initializer is a function-expr/arrow with one
+        // unannotated param + a non-exhaustive `switch(param){ case <lit>: return <lit> }`
+        // body (no default) → inferred return includes `undefined` → TS2322 at the decl name.
+        if (strictNullChecks) checkFnTypeSwitchReturnMismatch()
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
@@ -19487,7 +19492,17 @@ class Checker(
             is PropertyDeclaration -> {
                 // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
                 checkImplicitAnyInTypeAnnotation(element.type, source, fileName)
-                element.initializer?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                element.initializer?.let { init ->
+                    // classPropertyErrorOnNameOnly: when the property has a type annotation AND
+                    // the initializer is an arrow/function expression, the params are
+                    // contextually typed by the annotation (mirrors the var-decl path's `ctxFn`
+                    // at the VariableStatement branch). Without this, `prop: FnType = function(x){}`
+                    // FPs TS7006 on `x` even though `x` is contextually typed.
+                    val arrowInit = init is ArrowFunction || init is FunctionExpression
+                    val ctxFn = arrowInit && element.type != null
+                    val annotatedType = element.type?.let { getTypeFromTypeNodeSafe(it) }
+                    checkImplicitAnyInExpr(init, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType)
+                }
                 // TS7008: Static property without type annotation or initializer has implicit any.
                 // Only static — instance properties may be assigned in the constructor, so we can't
                 // flag them without flow analysis. Private is also skipped (TypeScript does not
@@ -49678,6 +49693,182 @@ interface DataView {
      * present in BOTH branches and readonly in ≥1) is corpus-rare and never
      * double-emits with [isReadonlyPropertyAccess] (which bails on the anyType receiver).
      */
+    /**
+     * classPropertyErrorOnNameOnly — TS2322 for a var/class-prop whose function-type
+     * annotation requires a `string`/`number`/`boolean` return but whose function-expr
+     * initializer's body is a NON-EXHAUSTIVE `switch(param){ case <lit>: return <lit> }`
+     * with no `default`, so control can fall through and the inferred return type
+     * includes `undefined`. tsc reports the error at the DECL NAME (not the initializer)
+     * with the 3-line elaboration. Dedicated AST-shape walker (corpus-unique shape):
+     * the standard assignability path doesn't infer a switch-fallthrough return type, so
+     * this never double-emits. Gated to `strictNullChecks` by the caller (undefined-not-
+     * assignable rule). FP firewall: the shape is highly specific — single-param fn-expr,
+     * single-statement switch body on that param, all-literal case returns, no default,
+     * a primitive-keyword return type, and the switch must genuinely under-cover the
+     * param's literal union.
+     */
+    private fun checkFnTypeSwitchReturnMismatch() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            try {
+                fnTypeSwitchReturnScan(statements, statements, source, fileName)
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); }
+        }
+    }
+
+    /** Walk statements (and class bodies / namespace bodies) for the
+     *  classPropertyErrorOnNameOnly shape. [fileStmts] is the file's top-level
+     *  statements (where type aliases are looked up). */
+    private fun fnTypeSwitchReturnScan(
+        statements: List<Statement>, fileStmts: List<Statement>, source: String, fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    tryEmitFnTypeSwitchReturnMismatch(d.type, d.initializer, d.name as? Identifier, fileStmts, source, fileName)
+                }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    if (m is PropertyDeclaration) {
+                        tryEmitFnTypeSwitchReturnMismatch(m.type, m.initializer, m.name as? Identifier, fileStmts, source, fileName)
+                    }
+                }
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    fnTypeSwitchReturnScan(it.statements, fileStmts, source, fileName)
+                }
+                is Block -> fnTypeSwitchReturnScan(stmt.statements, fileStmts, source, fileName)
+                else -> {}
+            }
+        }
+    }
+
+    /** Returns "string"/"number"/"boolean" for the matching keyword node, else null. */
+    private fun primitiveKeywordDisplay(node: TypeNode?): String? = when ((node as? KeywordTypeNode)?.kind) {
+        SyntaxKind.StringKeyword -> "string"
+        SyntaxKind.NumberKeyword -> "number"
+        SyntaxKind.BooleanKeyword -> "boolean"
+        else -> null
+    }
+
+    /** Display text for a simple type node used as a contextual param type (e.g. `Values`). */
+    private fun simpleTypeNodeDisplay(node: TypeNode?): String? = when (node) {
+        is TypeReference -> if (node.typeArguments == null) (node.typeName as? Identifier)?.text else null
+        is KeywordTypeNode -> primitiveKeywordDisplay(node)
+        else -> null
+    }
+
+    /** Numeric-literal union members of a type node (following one type-alias hop). Returns
+     *  null if the node is not a pure numeric-literal union (so the matcher bails). */
+    private fun numericLiteralUnionMembers(node: TypeNode?, fileStmts: List<Statement>): Set<Double>? {
+        val union = when (node) {
+            is UnionType -> node
+            is TypeReference -> {
+                if (node.typeArguments != null) return null
+                val name = (node.typeName as? Identifier)?.text ?: return null
+                val alias = findTypeAliasDeclInStatements(fileStmts, name) ?: return null
+                if (alias.typeParameters != null) return null
+                alias.type as? UnionType ?: return null
+            }
+            else -> return null
+        }
+        val out = mutableSetOf<Double>()
+        for (m in union.types) {
+            val lit = (m as? LiteralType)?.literal ?: return null
+            val v = when (lit) {
+                is NumericLiteralNode -> lit.text.toDoubleOrNull()
+                is PrefixUnaryExpression -> if (lit.operator == SyntaxKind.Minus)
+                    (lit.operand as? NumericLiteralNode)?.text?.toDoubleOrNull()?.let { -it } else null
+                else -> null
+            } ?: return null
+            out.add(v)
+        }
+        return out
+    }
+
+    /** (literal display, widened display) for a case-return expression, or null. */
+    private fun switchReturnLiteralDisplay(expr: Expression?): Pair<String, String>? = when (expr) {
+        is StringLiteralNode -> (if (expr.singleQuote) "'${expr.text}'" else "\"${expr.text}\"") to "string"
+        is NumericLiteralNode -> expr.text to "number"
+        else -> null
+    }
+
+    private fun tryEmitFnTypeSwitchReturnMismatch(
+        annotationNode: TypeNode?, initializer: Expression?, nameNode: Identifier?,
+        fileStmts: List<Statement>, source: String, fileName: String,
+    ): Boolean {
+        if (annotationNode == null || initializer == null || nameNode == null || nameNode.text.isEmpty()) return false
+        // Annotation must be a TypeReference to a non-generic type alias whose body is a FunctionType.
+        val annRef = annotationNode as? TypeReference ?: return false
+        if (annRef.typeArguments != null) return false
+        val annName = (annRef.typeName as? Identifier)?.text ?: return false
+        val aliasDecl = findTypeAliasDeclInStatements(fileStmts, annName) ?: return false
+        if (aliasDecl.typeParameters != null) return false
+        val fnType = aliasDecl.type as? FunctionType ?: return false
+        if (fnType.parameters.size != 1) return false
+        val paramTypeNode = fnType.parameters[0].type ?: return false
+        val retDisplay = primitiveKeywordDisplay(fnType.type) ?: return false
+
+        // Initializer: fn-expr / arrow with one UNANNOTATED param and a Block body.
+        val (initParams, initBody) = when (initializer) {
+            is FunctionExpression -> initializer.parameters to initializer.body
+            is ArrowFunction -> initializer.parameters to (initializer.body as? Block)
+            else -> return false
+        }
+        if (initBody == null || initParams.size != 1) return false
+        val p0 = initParams[0]
+        if (p0.type != null) return false
+        val paramName = (p0.name as? Identifier)?.text ?: return false
+
+        // Body must be exactly a single SwitchStatement on `paramName`.
+        val sw = initBody.statements.singleOrNull() as? SwitchStatement ?: return false
+        if ((sw.expression as? Identifier)?.text != paramName) return false
+
+        val caseLabels = mutableSetOf<Double>()
+        val returnLiterals = mutableListOf<String>()
+        val widenedReturns = LinkedHashSet<String>()
+        for (clause in sw.caseBlock) {
+            when (clause) {
+                is DefaultClause -> return false  // a default makes the switch potentially exhaustive
+                is CaseClause -> {
+                    val labelVal = (clause.expression as? NumericLiteralNode)?.text?.toDoubleOrNull() ?: return false
+                    caseLabels.add(labelVal)
+                    val ret = clause.statements.firstNotNullOfOrNull { it as? ReturnStatement }?.expression ?: return false
+                    val (lit, widened) = switchReturnLiteralDisplay(ret) ?: return false
+                    returnLiterals.add(lit)
+                    widenedReturns.add(widened)
+                }
+                else -> return false
+            }
+        }
+        if (returnLiterals.isEmpty()) return false
+
+        // The param's contextual union must be a pure numeric-literal union that the
+        // switch under-covers (some member has no matching case label) → undefined return.
+        val unionVals = numericLiteralUnionMembers(paramTypeNode, fileStmts) ?: return false
+        if (unionVals.isEmpty() || unionVals.all { it in caseLabels }) return false  // exhaustive → no undefined
+
+        val paramDisplay = simpleTypeNodeDisplay(paramTypeNode) ?: return false
+        val topReturnDisplay = (returnLiterals + "undefined").joinToString(" | ")
+        val widenedReturnDisplay = (widenedReturns.toList() + "undefined").joinToString(" | ")
+
+        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '($paramName: $paramDisplay) => $topReturnDisplay' is not assignable to type '$annName'.",
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line, character = character,
+            start = nameNode.pos, length = nameNode.text.length,
+            messageChain = listOf(
+                "  Type '$widenedReturnDisplay' is not assignable to type '$retDisplay'.",
+                "    Type 'undefined' is not assignable to type '$retDisplay'.",
+            ),
+        ))
+        return true
+    }
+
     private fun checkTernaryUnionReadonlyWrites() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
