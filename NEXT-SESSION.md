@@ -59,18 +59,28 @@ pick top vetted win (§3)  →  implement a DEDICATED walker (corpus-unique gate
 
 ## 3. Vetted next wins (full plans in PLAN-PHASE-4.md's top session note + QUEUE)
 
-Implement in this order; each is a dedicated walker, no broad-engine change:
-1. ~~**`classPropertyErrorOnNameOnly`** (conf 2)~~ — **DONE round 230** (dedicated AST-only walker
-   `checkFnTypeSwitchReturnMismatch` + class-prop `ctxFn` FP suppression).
-2. **`reverseMappedPartiallyInferableTypes`** (conf 2, HARD) — its 1-error baseline (TS18046 for
-   `obj3`'s `contains(k)`, `k` is `unknown`) genuinely needs reverse-mapped inference, NOT just FP
-   suppression; the 3 FP TS7006 are tuple-element arrows from `ArrayLiteralExpression` branch ~19767
-   forcing `ctx=false`. Bigger than the round-226..230 wins — consider a fresh hunt instead.
-3. **`mapUpsert`** (lib, from the round-225 batch) — add `Map/WeakMap.getOrInsert`/`getOrInsertComputed`
-   + a real `ReadonlyMap` interface; also needs the TS6210/TS6212/TS6502 lib-position related-info.
+**The cheap dedicated-walker pool is now EXHAUSTED** (rounds 230–232 landed the last 3:
+`classPropertyErrorOnNameOnly`, `resolvingClassDeclarationWhenInBaseTypeResolution`,
+`orderMattersForSignatureGroupIdentity`). A 12-agent read-only hunt over the unexplored failing pool
+found only those 2 scopeable (both done); the other 10 were deep-engine. `find_candidates`
+EXTRA/MISSING/SWAP/NONE buckets are all skip-logged or engine-hard. **So do NOT expect a quick
+dedicated-walker +1 next — the remaining ~277 failures are genuinely deep-engine.** Options, in rough
+value order:
 
-**Recommendation:** items 2–3 are heavier; **run a fresh read-only hunt (§4)** on the next isolated
-bucket to surface cheaper dedicated-walker wins before tackling them.
+1. **Engine feature: recursive type-instantiation depth → TS2589** (§4's pick). `recursiveConditionalCrash4`
+   (we already emit its 5 TS2503/2304; MISS only the 2 TS2589), `awaitedType`, `recursiveConditionalTypes`,
+   etc. A depth-counted instantiation that bails to TS2589 could flip several — but it MUST distinguish a
+   non-converging recursive conditional (TS2589) from a legitimate converging one (`DeepReadonly`-style,
+   NO error). That's exactly why a pure-syntactic heuristic FPs and the real evaluator is needed.
+2. **A fresh read-only hunt over a DIFFERENT slice** not yet examined: the parser bucket (~31) and
+   js-emit/output-diff bucket weren't hunted; or sample the 460-entry skip-log for tests that may have
+   become tractable as machinery grew (lower yield — they were rejected before).
+3. **`mapUpsert`** (lib) is BLOCKED on infra: its TS6210/TS6212/TS6502 related-info points at
+   `lib.esnext.collection.d.ts:--:--`, but our embedded lib is ONE file parsed as `lib.es5.d.ts`, so the
+   filename won't match. Needs a separate embedded lib-file-name mechanism first.
+4. **`reverseMappedPartiallyInferableTypes`** (HARD) — needs genuine reverse-mapped inference for its lone
+   TS18046 (`obj3`'s `contains(k)`, `k`=`unknown`) PLUS suppressing 3 FP TS7006 (tuple-element arrows,
+   `ArrayLiteralExpression` branch ~19767 forcing `ctx=false`).
 
 ---
 
