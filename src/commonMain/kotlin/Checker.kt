@@ -73858,6 +73858,27 @@ interface DataView {
         }
         if (name !is Identifier) return
 
+        // B526: variadic-tuple element access `const x: T = recv[i]` — our tuple model
+        // collapses the rest element to its ARRAY type (so prop `0` of `[...number[], number]`
+        // is `number[]`), making the standard path FP on rest-region indices and miss the
+        // out-of-bounds `| undefined` (noUncheckedIndexedAccess). Delegate to the dedicated
+        // emitter (handles both the genuine element mismatch and the undefined case) and skip
+        // the standard check. FP firewall: receiver's declared annotation is a one-rest
+        // variadic tuple (corpus-rare: indexedAccessWithVariableElement).
+        decl.initializer?.let { init ->
+            if (init is ElementAccessExpression && init.expression is Identifier &&
+                init.argumentExpression is NumericLiteralNode) {
+                val tup = receiverVariadicTupleNode(init.expression as Identifier)
+                if (tup != null) {
+                    decl.type?.let { ann ->
+                        val idx = (init.argumentExpression as NumericLiteralNode).text.toIntOrNull() ?: -1
+                        vtiaCheckVarDecl(tup, idx, ann, name, source, fileName)
+                    }
+                    return
+                }
+            }
+        }
+
         // TS2820/TS2322: a string-literal initializer assigned to a literal-union-typed var
         // (`const t1: T1 = "strong"` where `type T1 = "string" | "number" | "boolean"`).
         // When the literal isn't a member of the union, emit TS2820 with a "Did you mean" spelling
@@ -90399,6 +90420,69 @@ interface DataView {
                 }
                 else -> return // control flow may narrow — stop entirely
             }
+        }
+    }
+
+    /** B526: resolve a bare-identifier receiver to its declared ONE-REST variadic
+     *  tuple annotation (no optional/named members), else null. */
+    private fun receiverVariadicTupleNode(recv: Identifier): TupleType? {
+        val sym = currentFileLocals?.get(recv.text) ?: globals[recv.text] ?: return null
+        val vd = sym.declarations.filterIsInstance<VariableDeclaration>().firstOrNull { it.type != null } ?: return null
+        val tup = trduTupleOf(vd.type, currentFileLocals) ?: return null
+        var rest = 0; var bad = false
+        for (el in tup.elements) when (el) {
+            is RestType -> rest++
+            is OptionalType, is NamedTupleMember -> bad = true
+            else -> {}
+        }
+        return if (!bad && rest == 1) tup else null
+    }
+
+    /** B526: emit the correct TS2322 for `const x: ann = variadicTuple[index]`.
+     *  Element type at the index = the fixed element (index < fixedBefore) or the
+     *  union of the rest element + trailing fixed elements. Adds `| undefined`
+     *  (noUncheckedIndexedAccess) when index >= the tuple's guaranteed min length. */
+    private fun vtiaCheckVarDecl(
+        tuple: TupleType, index: Int, annNode: TypeNode, nameNode: Identifier,
+        source: String, fileName: String,
+    ) {
+        if (index < 0) return
+        var fixedBefore = 0; var fixedAfter = 0; var restSeen = false
+        val beforeNodes = mutableListOf<TypeNode>(); val afterNodes = mutableListOf<TypeNode>()
+        var restInner: TypeNode? = null
+        for (el in tuple.elements) {
+            when (el) {
+                // `...number[]` — the rest's ELEMENT type is the array's element (`number`),
+                // not the array type itself; unwrap a bare ArrayType.
+                is RestType -> { restSeen = true; restInner = (el.type as? ArrayType)?.elementType ?: el.type }
+                else -> if (!restSeen) { fixedBefore++; beforeNodes.add(el) } else { fixedAfter++; afterNodes.add(el) }
+            }
+        }
+        val ri = restInner ?: return
+        val minLength = fixedBefore + fixedAfter
+        val annType = try { getTypeFromTypeNode(annNode) } catch (_: Throwable) { return }
+        if (annType === anyType || annType === errorType) return
+        val elemNodes = if (index < fixedBefore) listOf(beforeNodes[index]) else (listOf(ri) + afterNodes)
+        val elemTypes = elemNodes.map { try { getTypeFromTypeNode(it) } catch (_: Throwable) { return } }
+        if (elemTypes.any { it === anyType || it === errorType }) return
+        val elemType = if (elemTypes.size == 1) elemTypes[0] else getUnionType(elemTypes)
+        val addUndef = options.noUncheckedIndexedAccess && strictNullChecks && index >= minLength &&
+            !annType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Undefined or TypeFlags.Null)
+        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        if (!checkTypeRelatedTo(elemType, annType, assignableRelation)) {
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(elemType)}' is not assignable to type '${typeToString(annType)}'.",
+                category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                line = line, character = ch, start = nameNode.pos, length = nameNode.text.length,
+            ))
+        } else if (addUndef) {
+            val annDisp = typeToString(annType)
+            diagnostics.add(Diagnostic(
+                message = "Type '${typeToString(elemType)} | undefined' is not assignable to type '$annDisp'.",
+                category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                line = line, character = ch, start = nameNode.pos, length = nameNode.text.length,
+                messageChain = listOf("  Type 'undefined' is not assignable to type '$annDisp'."),
+            ))
         }
     }
 
