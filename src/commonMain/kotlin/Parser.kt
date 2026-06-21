@@ -3868,11 +3868,30 @@ class Parser(
         }
         if (isTypeOnly) nextToken()
 
+        // tsc parseImportOrExportSpecifier (kind == ImportSpecifier): the BINDING name —
+        // the sole name when there is no `as`, otherwise the name after `as` — must be a
+        // valid binding identifier. A keyword that is NOT an identifier-in-context (e.g.
+        // `default`) → TS1003 "Identifier expected." at that name. `yield`/`await` and the
+        // strict-future-reserved words (`private`/`public`/…) ARE identifiers here, so they
+        // do NOT trip TS1003 (the strict-mode-reserved words go through TS1214 in the
+        // checker; `yield` is exempt there). See es6ImportNamedImportIdentifiersParsing /
+        // strictModeWordInImportDeclaration.
+        var bindKwStart = scanner.getTokenPos()
+        var bindKwLen = scanner.getTokenText().length
+        var bindIsKwNotIdent = isKeyword() && !isIdentifier()
+
         val first = parseIdentifierName()
         return if (parseOptional(SyntaxKind.AsKeyword)) {
+            bindKwStart = scanner.getTokenPos()
+            bindKwLen = scanner.getTokenText().length
+            bindIsKwNotIdent = isKeyword() && !isIdentifier()
             val name = parseIdentifier()
+            if (bindIsKwNotIdent) reportError("Identifier expected.", code = 1003,
+                overrideStart = bindKwStart, overrideLength = bindKwLen)
             ImportSpecifier(propertyName = first, name = name, isTypeOnly = isTypeOnly, pos = pos, end = getEnd())
         } else {
+            if (bindIsKwNotIdent) reportError("Identifier expected.", code = 1003,
+                overrideStart = bindKwStart, overrideLength = bindKwLen)
             ImportSpecifier(name = first, isTypeOnly = isTypeOnly, pos = pos, end = getEnd())
         }
     }

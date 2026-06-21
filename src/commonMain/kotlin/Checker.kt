@@ -63854,7 +63854,15 @@ interface DataView {
                     clause.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass, isModule) }
                     when (val bindings = clause.namedBindings) {
                         is NamespaceImport -> checkIdentForStrictReserved(bindings.name, source, fileName, inClass, isModule)
-                        is NamedImports -> for (spec in bindings.elements) checkIdentForStrictReserved(spec.name, source, fileName, inClass, isModule)
+                        // tsc: `yield` is a valid import binding identifier at module top
+                        // level (not in a generator context) — only the future-reserved
+                        // words (private/public/package/…) trip TS1214 here; `default`-style
+                        // hard keywords are owned by the parser's TS1003.
+                        // (es6ImportNamedImportIdentifiersParsing vs strictModeWordInImportDeclaration.)
+                        is NamedImports -> for (spec in bindings.elements) {
+                            if (spec.name.text == "yield") continue
+                            checkIdentForStrictReserved(spec.name, source, fileName, inClass, isModule)
+                        }
                         else -> {}
                     }
                 }
