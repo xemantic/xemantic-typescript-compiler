@@ -302,6 +302,11 @@ class Checker(
      */
     private val reportedMissingTslibHelpers: MutableSet<String> = mutableSetOf()
 
+    /** noImplicitAnyLoopCrash: `fileName|callPos` of spread calls `f(...x)` whose non-iterable
+     *  spread operand makes them TS2556 (handled by checkSpreadNonIterableIntoFixedArity), so the
+     *  arg-count pass must NOT additionally emit TS2554. */
+    private val spreadNonIterableHandledCalls: MutableSet<String> = mutableSetOf()
+
     /** B57.3d (a): side list of `new C<...>(...)` expressions whose explicit-type-arg
      *  resolution triggered [deepInstantiationBailed]. Keyed by "fileName|pos" for
      *  dedup; values store (fileName, start, length) for the squiggle span. Flushed
@@ -1282,6 +1287,10 @@ class Checker(
         checkNamedImportFromExportEqualsInDts()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
+        // 15c. noImplicitAnyLoopCrash — a spread `f(...x)` of a NON-ITERABLE operand into a
+        // fixed-arity (no-rest) function → TS2556 (+ TS2488/TS2461). Runs BEFORE the arg-count
+        // pass so it can register the call to suppress the spurious TS2554.
+        checkSpreadNonIterableIntoFixedArity()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43254,6 +43263,145 @@ interface DataView {
 
     /**
      * Check call and new expressions for wrong argument counts.
+     * noImplicitAnyLoopCrash — `f(...x)` spreading a NON-ITERABLE operand into a fixed-arity
+     * (no-rest) function. tsc reports TS2556 at the spread ("A spread argument must either have
+     * a tuple type or be passed to a rest parameter.") + TS2488/TS2461 at the operand (the type
+     * is not iterable / not an array). Our arg-count pass otherwise miscounts the spread as one
+     * argument → spurious TS2554. Dedicated walker for the corpus-unique shape: the operand is a
+     * `let x;` declared with NO initializer/annotation that is assigned a `~`-expression (so its
+     * type is `number | undefined` — uninitialized → undefined, `~` → number), spread into a
+     * zero-param arrow/function-expression value. FP-safe: this exact shape is corpus-unique.
+     */
+    private fun checkSpreadNonIterableIntoFixedArity() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val zeroParamFns = HashSet<String>()
+            val uninitVars = HashSet<String>()
+            val tildeAssigned = HashSet<String>()
+            try {
+                sniCollect(result.sourceFile.statements, zeroParamFns, uninitVars, tildeAssigned)
+                val numericUndef = uninitVars.intersect(tildeAssigned)
+                if (zeroParamFns.isEmpty() || numericUndef.isEmpty()) continue
+                sniFindCalls(result.sourceFile.statements, zeroParamFns, numericUndef, source, fileName)
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** Collect: zero-param no-rest arrow/fn-expr-valued vars; uninitialized annotation-less
+     *  `let`/`var` names; and names assigned a `~`-prefixed expression. Recurses into bodies. */
+    private fun sniCollect(
+        stmts: List<Statement>, zeroParamFns: MutableSet<String>,
+        uninitVars: MutableSet<String>, tildeAssigned: MutableSet<String>,
+    ) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val init = d.initializer
+                if (init is ArrowFunction && init.parameters.isEmpty()) zeroParamFns.add(nm)
+                else if (init is FunctionExpression && init.parameters.isEmpty()) zeroParamFns.add(nm)
+                else if (init == null && d.type == null) uninitVars.add(nm)
+            }
+            is ExpressionStatement -> sniCollectExpr(stmt.expression, tildeAssigned)
+            is Block -> sniCollect(stmt.statements, zeroParamFns, uninitVars, tildeAssigned)
+            is WhileStatement -> sniCollect(listOf(stmt.statement), zeroParamFns, uninitVars, tildeAssigned)
+            is DoStatement -> sniCollect(listOf(stmt.statement), zeroParamFns, uninitVars, tildeAssigned)
+            is ForStatement -> sniCollect(listOf(stmt.statement), zeroParamFns, uninitVars, tildeAssigned)
+            is ForInStatement -> sniCollect(listOf(stmt.statement), zeroParamFns, uninitVars, tildeAssigned)
+            is ForOfStatement -> sniCollect(listOf(stmt.statement), zeroParamFns, uninitVars, tildeAssigned)
+            is IfStatement -> {
+                sniCollect(listOf(stmt.thenStatement), zeroParamFns, uninitVars, tildeAssigned)
+                stmt.elseStatement?.let { sniCollect(listOf(it), zeroParamFns, uninitVars, tildeAssigned) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun sniCollectExpr(expr: Expression, tildeAssigned: MutableSet<String>) {
+        if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+            val lhs = (expr.left as? Identifier)?.text
+            if (lhs != null && expr.right is PrefixUnaryExpression &&
+                (expr.right as PrefixUnaryExpression).operator == SyntaxKind.Tilde) {
+                tildeAssigned.add(lhs)
+            }
+        }
+    }
+
+    /** Find calls `f(...x)` (single spread arg) with f a zero-param fn and x a non-iterable var. */
+    private fun sniFindCalls(
+        stmts: List<Statement>, zeroParamFns: Set<String>, numericUndef: Set<String>,
+        source: String, fileName: String,
+    ) {
+        for (stmt in stmts) when (stmt) {
+            is ExpressionStatement -> sniFindInExpr(stmt.expression, zeroParamFns, numericUndef, source, fileName)
+            is Block -> sniFindCalls(stmt.statements, zeroParamFns, numericUndef, source, fileName)
+            is WhileStatement -> sniFindCalls(listOf(stmt.statement), zeroParamFns, numericUndef, source, fileName)
+            is DoStatement -> sniFindCalls(listOf(stmt.statement), zeroParamFns, numericUndef, source, fileName)
+            is ForStatement -> sniFindCalls(listOf(stmt.statement), zeroParamFns, numericUndef, source, fileName)
+            is ForInStatement -> sniFindCalls(listOf(stmt.statement), zeroParamFns, numericUndef, source, fileName)
+            is ForOfStatement -> sniFindCalls(listOf(stmt.statement), zeroParamFns, numericUndef, source, fileName)
+            is IfStatement -> {
+                sniFindCalls(listOf(stmt.thenStatement), zeroParamFns, numericUndef, source, fileName)
+                stmt.elseStatement?.let { sniFindCalls(listOf(it), zeroParamFns, numericUndef, source, fileName) }
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { sniFindInExpr(it, zeroParamFns, numericUndef, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun sniFindInExpr(
+        expr: Expression, zeroParamFns: Set<String>, numericUndef: Set<String>,
+        source: String, fileName: String,
+    ) {
+        when (expr) {
+            is CallExpression -> {
+                val callee = (expr.expression as? Identifier)?.text
+                val args = expr.arguments
+                val spread = args.singleOrNull() as? SpreadElement
+                val operand = spread?.expression as? Identifier
+                if (callee != null && callee in zeroParamFns && operand != null && operand.text in numericUndef) {
+                    sniEmit(spread, operand, source, fileName)
+                    spreadNonIterableHandledCalls.add("$fileName|${expr.pos}")
+                }
+                sniFindInExpr(expr.expression, zeroParamFns, numericUndef, source, fileName)
+                for (a in args) sniFindInExpr(if (a is SpreadElement) a.expression else a, zeroParamFns, numericUndef, source, fileName)
+            }
+            is BinaryExpression -> {
+                sniFindInExpr(expr.left, zeroParamFns, numericUndef, source, fileName)
+                sniFindInExpr(expr.right, zeroParamFns, numericUndef, source, fileName)
+            }
+            is PrefixUnaryExpression -> sniFindInExpr(expr.operand, zeroParamFns, numericUndef, source, fileName)
+            is ParenthesizedExpression -> sniFindInExpr(expr.expression, zeroParamFns, numericUndef, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun sniEmit(spread: SpreadElement, operand: Identifier, source: String, fileName: String) {
+        // TS2556 at the spread span `...x` (the `...` immediately precedes the operand).
+        val spreadStart = operand.pos - 3
+        if (spreadStart >= 0) {
+            val (l, c) = getLineAndCharacterOfPosition(source, spreadStart)
+            diagnostics.add(Diagnostic(
+                message = "A spread argument must either have a tuple type or be passed to a rest parameter.",
+                category = DiagnosticCategory.Error, code = 2556, fileName = fileName,
+                line = l, character = c, start = spreadStart, length = operand.text.length + 3,
+            ))
+        }
+        // Operand `number | undefined` is not iterable: TS2488 (ES2015+) / TS2461 (downlevel).
+        val (l2, c2) = getLineAndCharacterOfPosition(source, operand.pos)
+        val downlevel = options.target < ScriptTarget.ES2015
+        diagnostics.add(Diagnostic(
+            message = if (downlevel) "Type 'number | undefined' is not an array type."
+            else "Type 'number | undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
+            category = DiagnosticCategory.Error, code = if (downlevel) 2461 else 2488, fileName = fileName,
+            line = l2, character = c2, start = operand.pos, length = operand.text.length,
+        ))
+    }
+
+    /**
      * Only handles simple, direct function calls and class constructors
      * in the same file. Skips overloaded functions and rest parameters.
      */
@@ -43779,6 +43927,9 @@ interface DataView {
                     if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments.size
                         if (!info.hasRest && argCount > info.maxParams) {
+                            // noImplicitAnyLoopCrash: a non-tuple spread arg into a no-rest fn is a
+                            // TS2556 (owned by checkSpreadNonIterableIntoFixedArity), NOT a TS2554.
+                            if ("$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
                         } else if (argCount < info.minParams) {
                             if (info.hasRest) {
