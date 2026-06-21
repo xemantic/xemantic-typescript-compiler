@@ -11673,12 +11673,12 @@ class Checker(
                 if (vs.declarationList.flags != SyntaxKind.VarKeyword) continue
                 for (d in vs.declarationList.declarations) {
                     val init = d.initializer ?: continue
-                    val initType: Type? = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { null }
+                    val initType: Type? = getTypeOfExpression(init)
                     fun concreteNonUndef(t: Type?): Boolean = t != null && t !== errorType &&
                         t !== anyType && !t.flags.hasAny(TypeFlags.Unknown) && !typeIncludesUndefined(t)
                     fun defaultOk(e: Expression): Boolean =
                         concreteNonUndef(literalTypeOfExpression(e)
-                            ?: try { getTypeOfExpression(e) } catch (_: StackOverflowError) { null })
+                            ?: getTypeOfExpression(e))
                     when (val n = d.name) {
                         is Identifier -> if (concreteNonUndef(initType)) candidates.add(n.text)
                         is ArrayBindingPattern -> n.elements.forEachIndexed { i, el ->
@@ -11701,9 +11701,9 @@ class Checker(
                             if (beInit != null) {
                                 if (defaultOk(beInit)) candidates.add(bn)
                             } else if (initType != null) {
-                                val prop = try { getPropertyOfType(initType, bn) } catch (_: StackOverflowError) { null }
+                                val prop = getPropertyOfType(initType, bn)
                                 if (prop != null && !isOptionalProperty(prop)) {
-                                    val pt = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { null }
+                                    val pt = getTypeOfSymbol(prop)
                                     if (concreteNonUndef(pt)) candidates.add(bn)
                                 }
                             }
@@ -11910,10 +11910,10 @@ class Checker(
         val members = if (type is Type.Union) type.types else listOf(type)
         val lits = mutableListOf<Type>()
         for (m in members) {
-            val ap = try { getApparentType(m) } catch (_: StackOverflowError) { return null }
+            val ap = getApparentType(m)
             if (ap !is Type.Object) return null
             val ps = getPropertyOfType(ap, propName) ?: return null
-            val pt = try { getTypeOfSymbol(ps) } catch (_: StackOverflowError) { return null }
+            val pt = getTypeOfSymbol(ps)
             if (!isLiteralKindForDiscriminant(pt)) return null
             lits.add(pt)
         }
@@ -11933,7 +11933,7 @@ class Checker(
         val literalType = literalTypeOfExpression(literalExpr) ?: return
         if (!isLiteralKindForDiscriminant(literalType)) return
         getReferencePath(recv) ?: return
-        val declared = try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return }
+        val declared = getTypeOfExpression(recv)
         if (declared === anyType || declared === errorType) return
         val narrowed = getNarrowedTypeForReference(declared, recv)
         if (narrowed === declared) return
@@ -15616,7 +15616,7 @@ class Checker(
     }
 
     private fun checkForOfExprNonIterable(expr: Expression, source: String, fileName: String) {
-        val exprType = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { return }
+        val exprType = getTypeOfExpression(expr)
         // Determine "definitely non-iterable":
         // - Type.Intrinsic with non-string/any/never/unknown name
         // - Anonymous Type.Object with no symbol, no callSig, no construct
@@ -16071,7 +16071,7 @@ class Checker(
                         val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
                         for (tp in tps) {
                             val constraint = tp.constraint?.let {
-                                try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                                getTypeFromTypeNode(it)
                             }
                             val tpType = Type.TypeParam(constraint = constraint)
                             tpType.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
@@ -17154,7 +17154,7 @@ class Checker(
                 if (nm != null && nm in tpNames) {
                     val cons = tpConstraints[nm]
                     if (cons == null) { failingTpName = nm; break }
-                    val consType = try { getTypeFromTypeNode(cons) } catch (_: StackOverflowError) { null }
+                    val consType = getTypeFromTypeNode(cons)
                     if (consType != null && consType !== errorType &&
                         getPropertyOfType(consType, propName) == null) {
                         failingTpName = nm; break
@@ -19521,7 +19521,7 @@ class Checker(
         // minTarget > options.target. Any resolution failure keeps the default `true`.
         if (callee is PropertyAccessExpression) {
             val memberName = callee.name.text
-            val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { null }
+            val recvType = getTypeOfExpression(callee.expression)
             val ifaceName = when (recvType) {
                 is Type.Reference -> recvType.target.symbol?.name
                 is Type.Interface -> recvType.symbol?.name
@@ -24977,7 +24977,7 @@ class Checker(
                         is StringLiteralNode -> stringType
                         is JsxExpressionContainer -> {
                             val e = v.expression ?: return
-                            val et = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { return }
+                            val et = getTypeOfExpression(e)
                             if (et === anyType || et === errorType) return
                             et
                         }
@@ -25011,7 +25011,7 @@ class Checker(
                                 expr(init)
                                 val n = (d.name as? Identifier)?.text ?: continue
                                 if (d.type != null) continue
-                                val t = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { null }
+                                val t = getTypeOfExpression(init)
                                     ?: continue
                                 if (t === anyType || t === errorType) continue
                                 currentLocalTypes[n] = widenArrayElementLiteralUnion(widenType(t))
@@ -37652,7 +37652,7 @@ interface DataView {
             // `import a = require("./C")` where `C` is `class C<T>` should report TS2314
             // as `'C<T>' requires 1 type argument(s)` (baseline uses the resolved name).
             if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-                val resolved = try { resolveAlias(symbol) } catch (_: StackOverflowError) { null }
+                val resolved = resolveAlias(symbol)
                 if (resolved != null && resolved !== symbol) {
                     val aliasInfo = getTypeParamInfoFromSymbol(resolved, forTypePosition)
                     if (aliasInfo != null) return aliasInfo
@@ -38344,7 +38344,7 @@ interface DataView {
     private fun checkVoidConditionTruthiness(cond: Expression, source: String, fileName: String) {
         val e = unwrapParensExpr(cond)
         if (e !is CallExpression) return
-        val t = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { return }
+        val t = getTypeOfExpression(e)
         if (t !== voidType) return
         val start = e.pos
         val length = expressionTrueEnd(e) - start
@@ -39336,7 +39336,7 @@ interface DataView {
     private fun isAlwaysCallableType(type: Type): Boolean {
         return when (type) {
             is Type.Object -> {
-                try { resolveStructuredTypeMembers(type) } catch (_: StackOverflowError) { return false }
+                resolveStructuredTypeMembers(type)
                 !type.callSignatures.isNullOrEmpty()
             }
             is Type.Union -> type.types.isNotEmpty() && type.types.all { isAlwaysCallableType(it) }
@@ -41940,14 +41940,14 @@ interface DataView {
         val then = thenChainMethod(classDecl) ?: return
         val cbFt = then.parameters[0].type as? FunctionType ?: return
         val ctorArg = newExpr.arguments?.singleOrNull() ?: return
-        var curT: Type = try { widenType(getTypeOfExpression(ctorArg)) } catch (_: StackOverflowError) { return }
+        var curT: Type = widenType(getTypeOfExpression(ctorArg))
         if (curT !is Type.Object) return
         for (seg in segs) {
             val arrow = seg.arguments!![0] as? ArrowFunction ?: return
             if (arrow.parameters.size != 1) return
             val body = arrow.body
             val sType: Type = when (body) {
-                is NewExpression -> try { getTypeOfExpression(body) } catch (_: StackOverflowError) { return }
+                is NewExpression -> getTypeOfExpression(body)
                 else -> return // only `new X` bodies handled
             }
             if (sType !is Type.Object) return
@@ -42080,7 +42080,7 @@ interface DataView {
         if (localTpMap.isEmpty()) return
         // The interface that is the ultimate constraint (for the `.value.<prop>` write check).
         val constraintType: Type? = classTpNode.constraint?.let {
-            try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+            getTypeFromTypeNode(it)
         }
         for (st in body.statements) {
             if (st !is ExpressionStatement) continue
@@ -42188,8 +42188,8 @@ interface DataView {
             val objType = constraintType as? Type.Object
             if (objType != null) resolveStructuredTypeMembers(objType)
             val propSym = getPropertyOfType(constraintType, writePropName) ?: return
-            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return }
-            val rhsType = try { getWidenedLiteralType(getTypeOfExpression(writeRhs)) } catch (_: StackOverflowError) { return }
+            val propType = getTypeOfSymbol(propSym)
+            val rhsType = getWidenedLiteralType(getTypeOfExpression(writeRhs))
             if (rhsType === errorType || propType === errorType) return
             if (!checkTypeRelatedTo(rhsType, propType, assignableRelation)) {
                 val start = writeLhs.pos
@@ -42210,7 +42210,7 @@ interface DataView {
             val nm = (node.typeName as? Identifier)?.text
             if (nm != null && tpMap.containsKey(nm)) return tpMap[nm]
         }
-        val t = try { getTypeFromTypeNode(node) } catch (_: StackOverflowError) { return null }
+        val t = getTypeFromTypeNode(node)
         return if (t === errorType) null else t
     }
 
@@ -42246,7 +42246,7 @@ interface DataView {
             if (i >= args.size) return null
             val arg = args[i]
             if (arg is SpreadElement) return null
-            val at = try { widenType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return null }
+            val at = widenType(getTypeOfExpression(arg))
             if (at === errorType || at === anyType) return null
             if (!tpMap.containsKey(tpName)) tpMap[tpName] = at
         }
@@ -45334,7 +45334,7 @@ interface DataView {
                 val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
                 if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
                 if (recvType === anyType || recvType === errorType) return
-                try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return }
+                resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
                 if (recvType.stringIndexInfo == null) return
                 if (recvType.members?.containsKey(target.name.text) == true) return
@@ -45354,7 +45354,7 @@ interface DataView {
                 val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
                 if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
                 if (recvType === anyType || recvType === errorType) return
-                try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return }
+                resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
                 if (recvType.stringIndexInfo == null && recvType.numberIndexInfo == null) return
                 var arg: Expression = target.argumentExpression
@@ -45974,7 +45974,7 @@ interface DataView {
             while (retExpr is ParenthesizedExpression) retExpr = retExpr.expression
             val concrete = paramType.types.mapNotNull { (it as? Type.Object)?.members?.get(propName) }
             if (concrete.size != 1) continue
-            val memberType = try { getTypeOfSymbol(concrete[0]) } catch (_: StackOverflowError) { continue }
+            val memberType = getTypeOfSymbol(concrete[0])
             if (memberType !is Type.Object) continue
             val callSig = memberType.callSignatures?.singleOrNull() ?: continue
             if (!callSig.typeParameters.isNullOrEmpty()) continue
@@ -45986,7 +45986,7 @@ interface DataView {
             if (r is Type.StringLiteral || r is Type.NumberLiteral) {
                 // Path A: literal-typed declared return vs a literal return expr.
                 val srcRet = literalTypeOfExpression(retExpr) ?: continue
-                val ok = try { checkTypeRelatedTo(srcRet, r, assignableRelation) } catch (_: StackOverflowError) { continue }
+                val ok = checkTypeRelatedTo(srcRet, r, assignableRelation)
                 if (ok) continue
                 val start = retExpr.pos
                 val length = (expressionTrueEnd(retExpr) - start).coerceAtLeast(1)
@@ -46012,16 +46012,16 @@ interface DataView {
             } else if (r is Type.Object && r !is Type.Interface && r !is Type.Reference && r.symbol == null &&
                 retExpr is ObjectLiteralExpression) {
                 // Path B: object-literal return vs an anonymous declared return type.
-                try { resolveStructuredTypeMembers(r) } catch (_: StackOverflowError) { continue }
+                resolveStructuredTypeMembers(r)
                 val retTypeLit = (memberFnNode?.type as? TypeLiteral)
                 for (ip in retExpr.properties) {
                     val ipa = ip as? PropertyAssignment ?: continue
                     val ipName = (ipa.name as? Identifier)?.text ?: continue
                     val declSym = r.members?.get(ipName) ?: continue
-                    val declType = try { getTypeOfSymbol(declSym) } catch (_: StackOverflowError) { continue }
+                    val declType = getTypeOfSymbol(declSym)
                     if (declType !is Type.StringLiteral && declType !is Type.NumberLiteral) continue
                     val srcLit = literalTypeOfExpression(ipa.initializer) ?: continue
-                    val ok = try { checkTypeRelatedTo(srcLit, declType, assignableRelation) } catch (_: StackOverflowError) { continue }
+                    val ok = checkTypeRelatedTo(srcLit, declType, assignableRelation)
                     if (ok) continue
                     val start = (ipa.name as Identifier).pos
                     val length = ipName.length
@@ -46145,7 +46145,7 @@ interface DataView {
         data class Emit(val v: Violation, val srcDisplay: String, val tgtDisplay: String)
         val emits = mutableListOf<Emit>()
         for (v in violations) {
-            val fnType = try { getTypeOfExpression(v.init) } catch (_: StackOverflowError) { return false }
+            val fnType = getTypeOfExpression(v.init)
             if (fnType !is Type.Object) return false
             val callSig = fnType.callSignatures?.singleOrNull() ?: return false
             val ret = callSig.resolvedReturnType ?: return false
@@ -47055,7 +47055,7 @@ interface DataView {
         source: String, fileName: String,
     ) {
         if (arrayLit.elements.any { it is SpreadElement }) return
-        val rhsType = try { getTypeOfExpression(rhs) } catch (_: StackOverflowError) { return }
+        val rhsType = getTypeOfExpression(rhs)
         if (rhsType !is Type.Object) return
         val tupleElems = rhsType.tupleElementTypes ?: return
         val tupleLen = tupleElems.size
@@ -49141,7 +49141,7 @@ interface DataView {
                 if (clsName != null) {
                     val classSym = globals[clsName] ?: (if (fileName != null) fileResults[fileName]?.locals?.get(clsName) else null)
                     if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
-                        val classType = try { getDeclaredTypeOfSymbol(classSym) } catch (_: StackOverflowError) { null }
+                        val classType = getDeclaredTypeOfSymbol(classSym)
                         if (classType != null) {
                             val prop = getPropertyOfType(classType, propName)
                             if (prop != null && isReadonlySymbol(prop)) return true
@@ -49565,7 +49565,7 @@ interface DataView {
             val source = result.sourceFile.text
             val objVars = HashMap<String, ObjectLiteralExpression>()
             collectObjLiteralVars(result.sourceFile.statements, objVars)
-            try { asyncYieldStarScan(result.sourceFile.statements, source, fileName, objVars) } catch (_: StackOverflowError) {}
+            asyncYieldStarScan(result.sourceFile.statements, source, fileName, objVars)
         }
     }
 
@@ -53622,7 +53622,7 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             currentUlSource = source
-            try { ulProcessScope(result.sourceFile.statements, source, fileName) } catch (_: StackOverflowError) {}
+            try { ulProcessScope(result.sourceFile.statements, source, fileName) }
             finally { currentUlSource = null }
         }
     }
@@ -53978,7 +53978,7 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             val fileStmts = result.sourceFile.statements
-            try { oruScope(fileStmts, null, null, fileStmts, source, fileName) } catch (_: StackOverflowError) {}
+            oruScope(fileStmts, null, null, fileStmts, source, fileName)
         }
     }
 
@@ -54318,7 +54318,7 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             evSource = source
-            try { evProcessScope(result.sourceFile.statements, source, fileName) } catch (_: StackOverflowError) {}
+            evProcessScope(result.sourceFile.statements, source, fileName)
         }
     }
 
@@ -58739,11 +58739,11 @@ interface DataView {
                                     val pn = (p.name as? Identifier)?.text
                                     val pi = p.initializer
                                     if (pn == null || pi == null) { analyzable = false; break }
-                                    val t = try { widenType(getTypeOfExpression(pi)) } catch (_: StackOverflowError) { anyType }
+                                    val t = widenType(getTypeOfExpression(pi))
                                     entries.add(pn to t)
                                 }
                                 is ShorthandPropertyAssignment -> {
-                                    val t = try { widenType(getTypeOfExpression(p.name)) } catch (_: StackOverflowError) { anyType }
+                                    val t = widenType(getTypeOfExpression(p.name))
                                     entries.add(p.name.text to t)
                                 }
                                 else -> { analyzable = false; break }
@@ -59149,11 +59149,11 @@ interface DataView {
                         when (p) {
                             is PropertyAssignment -> {
                                 val pn = p.name as? Identifier ?: run { analyzable = false; null } ?: break
-                                val t = try { widenType(getTypeOfExpression(p.initializer)) } catch (_: StackOverflowError) { anyType }
+                                val t = widenType(getTypeOfExpression(p.initializer))
                                 propEntries.add(pn to t)
                             }
                             is ShorthandPropertyAssignment -> {
-                                val t = try { widenType(getTypeOfExpression(p.name)) } catch (_: StackOverflowError) { anyType }
+                                val t = widenType(getTypeOfExpression(p.name))
                                 propEntries.add(p.name to t)
                             }
                             else -> { analyzable = false; break }
@@ -60230,7 +60230,7 @@ interface DataView {
         val ol = op as? ObjectLiteralExpression ?: return
         val tgt = try { getTypeFromTypeNode(tref) } catch (_: Throwable) { return }
         if (tgt !is Type.Interface || tgt is Type.Reference) return
-        try { resolveStructuredTypeMembers(tgt) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(tgt)
         val tgtProps = tgt.properties ?: return
         if (tgtProps.isEmpty()) return
         if (tgt.stringIndexInfo != null || tgt.numberIndexInfo != null) return
@@ -60245,7 +60245,7 @@ interface DataView {
         // legal — the target side overlaps). Without this the walker FPs on every
         // partial/empty object-literal cast (contextualTyping/m7Bugs).
         val srcType = try { getTypeOfObjectLiteral(ol) } catch (_: Throwable) { return }
-        val tgtComparableToSrc = try { checkTypeRelatedTo(tgt, srcType, comparableRelation) } catch (_: StackOverflowError) { true }
+        val tgtComparableToSrc = checkTypeRelatedTo(tgt, srcType, comparableRelation)
         if (tgtComparableToSrc) return
         fun pName(p: PropertyAssignment) = (p.name as? Identifier)?.text ?: (p.name as? StringLiteralNode)?.text
         val olNames = olProps.mapNotNull { pName(it) }.toSet()
@@ -60285,7 +60285,7 @@ interface DataView {
             val srcT = try { getTypeOfExpression(p.initializer) } catch (_: Throwable) { continue }
             val tgtT = try { getTypeOfSymbol(tgtSym) } catch (_: Throwable) { continue }
             if (srcT === anyType || srcT === errorType || tgtT === anyType || tgtT === errorType) continue
-            val comparable = try { checkTypeRelatedTo(srcT, tgtT, comparableRelation) } catch (_: StackOverflowError) { true }
+            val comparable = checkTypeRelatedTo(srcT, tgtT, comparableRelation)
             if (!comparable) {
                 val chain = listOf(
                     "  Types of property '$nm' are incompatible.",
@@ -60434,7 +60434,7 @@ interface DataView {
         var inner: Expression = rawInner
         if (inner is ParenthesizedExpression) inner = inner.expression
         val identType: Type? = if (inner is Identifier && inner.text != "null" && inner.text != "undefined") {
-            try { getTypeOfIdentifier(inner) } catch (_: StackOverflowError) { null }
+            getTypeOfIdentifier(inner)
         } else null
         val sourceLit: String = when {
             inner is Identifier && (inner.text == "null" || inner.text == "undefined") -> inner.text
@@ -61469,8 +61469,8 @@ interface DataView {
     ) {
         val inner = expr.expression
         val typeNode = expr.type
-        val sourceType = try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
-        val targetType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return }
+        val sourceType = getTypeOfExpression(inner)
+        val targetType = getTypeFromTypeNode(typeNode)
         if (sourceType !is Type.Reference) return
         if (targetType !is Type.Reference) return
         if (sourceType.target !== targetType.target) return
@@ -61489,9 +61489,9 @@ interface DataView {
         for (i in sourceArgs.indices) {
             val s = sourceArgs[i]
             val t = targetArgs[i]
-            val sToT = try { checkTypeRelatedTo(s, t, assignableRelation) } catch (_: StackOverflowError) { return }
+            val sToT = checkTypeRelatedTo(s, t, assignableRelation)
             if (sToT) continue
-            val tToS = try { checkTypeRelatedTo(t, s, assignableRelation) } catch (_: StackOverflowError) { return }
+            val tToS = checkTypeRelatedTo(t, s, assignableRelation)
             if (tToS) continue
             // 17.82: For array-to-array casts where the source is an array literal AND
             // an element is an object literal with excess properties relative to the
@@ -61503,7 +61503,7 @@ interface DataView {
             // "type X is not comparable to type Y" chain.
             if (inner is ArrayLiteralExpression && sourceType.target.symbol?.name == "Array" &&
                 targetType.target.symbol?.name == "Array" && t is Type.Object) {
-                try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return }
+                resolveStructuredTypeMembers(t)
                 val targetPropNames = collectTargetPropertyNames(t)
                 if (targetPropNames != null) {
                     for (elem in inner.elements) {
@@ -61567,11 +61567,11 @@ interface DataView {
         var inner: Expression = expr.expression
         if (inner is ParenthesizedExpression) inner = inner.expression
         if (inner !is FunctionExpression && inner !is ArrowFunction) return
-        val sourceType = try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
+        val sourceType = getTypeOfExpression(inner)
         if (sourceType !is Type.Object) return
         val srcSigs = sourceType.callSignatures ?: return
         if (srcSigs.isEmpty()) return
-        val targetType = try { getTypeFromTypeNode(expr.type) } catch (_: StackOverflowError) { return }
+        val targetType = getTypeFromTypeNode(expr.type)
         if (targetType !is Type.Object) return
         val tgtSigs = targetType.callSignatures ?: return
         if (tgtSigs.isEmpty()) return
@@ -61649,9 +61649,9 @@ interface DataView {
         val sourceType: Type = if (inner is ArrayLiteralExpression && inner.elements.isEmpty()) {
             getArrayType(neverType)
         } else {
-            try { getTypeOfExpression(inner) } catch (_: StackOverflowError) { return }
+            getTypeOfExpression(inner)
         }
-        val targetType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return }
+        val targetType = getTypeFromTypeNode(typeNode)
         if (sourceType !is Type.Reference) return
         if (sourceType.target.symbol?.name != "Array") return
         if (targetType !is Type.Reference) return
@@ -61659,8 +61659,8 @@ interface DataView {
         if (targetClass.symbol?.name == "Array") return
         val classSym = targetClass.symbol ?: return
         if (!classSym.flags.hasAny(SymbolFlags.Class)) return
-        try { resolveStructuredTypeMembers(sourceType) } catch (_: StackOverflowError) { return }
-        try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(sourceType)
+        resolveStructuredTypeMembers(targetType)
         val sourceMembers = sourceType.members ?: return
         val targetProps = targetType.properties ?: return
         var firstMissing: Symbol? = null
@@ -65273,8 +65273,8 @@ interface DataView {
         }
         if (relevant.isEmpty()) return
         val classSym = result.nodeToSymbol[nodeKey(classDecl)] ?: return
-        val instType = try { getDeclaredTypeOfClassOrInterface(classSym) } catch (_: StackOverflowError) { return }
-        try { resolveStructuredTypeMembers(instType) } catch (_: StackOverflowError) { return }
+        val instType = getDeclaredTypeOfClassOrInterface(classSym)
+        resolveStructuredTypeMembers(instType)
         for ((returnPos, expr) in relevant) {
             when (expr) {
                 is ObjectLiteralExpression -> emitCtorObjLitReturnMismatch(expr, returnPos, instType, className, source, fileName)
@@ -65330,9 +65330,9 @@ interface DataView {
             if (p !is PropertyAssignment) continue
             val pn = p.name as? Identifier ?: continue
             val member = members[pn.text] ?: continue // unknown prop = excess (handled elsewhere)
-            val memberType = try { getTypeOfSymbol(member) } catch (_: StackOverflowError) { continue }
+            val memberType = getTypeOfSymbol(member)
             if (memberType === anyType || memberType === errorType) continue
-            val valType = try { getTypeOfExpression(p.initializer) } catch (_: StackOverflowError) { continue }
+            val valType = getTypeOfExpression(p.initializer)
             if (valType === anyType || valType === errorType) continue
             if (checkTypeRelatedTo(valType, memberType, assignableRelation)) continue
             mismatches.add(arrayOf(
@@ -65383,7 +65383,7 @@ interface DataView {
         newExpr: NewExpression, returnPos: Int,
         instType: Type.Interface, className: String, source: String, fileName: String,
     ) {
-        val s = try { getReturnTypeOfNewExpression(newExpr) } catch (_: StackOverflowError) { return }
+        val s = getReturnTypeOfNewExpression(newExpr)
         if (s === anyType || s === errorType || s !is Type.Object) return
         if (checkTypeRelatedTo(s, instType, assignableRelation)) return
         // FP firewall: only emit when a CLEAN single-property-mismatch chain can be
@@ -65413,17 +65413,17 @@ interface DataView {
      * keeps the new-expression-return FP surface to the single corpus shape.
      */
     private fun buildCtorNewReturnChain(s: Type.Object, t: Type.Interface): List<String>? {
-        try { resolveStructuredTypeMembers(s); resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(s); resolveStructuredTypeMembers(t)
         val tMembers = t.members ?: return null
         val sMembers = s.members ?: return null
         val tStatics = getStaticMembersOfType(t)
         for ((name, tProp) in tMembers) {
             if (name in OBJECT_PROTOTYPE_PROPERTIES || (tStatics != null && name in tStatics)) continue
             if (isOptionalProperty(tProp)) continue
-            val tType = try { getTypeOfSymbol(tProp) } catch (_: StackOverflowError) { return null }
+            val tType = getTypeOfSymbol(tProp)
             if (tType === anyType || tType === errorType) continue
             val sProp = sMembers[name] ?: continue // missing prop is a different (2741) shape
-            val sType = try { getTypeOfSymbol(sProp) } catch (_: StackOverflowError) { return null }
+            val sType = getTypeOfSymbol(sProp)
             if (sType === anyType || sType === errorType) continue
             if (checkTypeRelatedTo(sType, tType, assignableRelation)) continue
             val sDisplay = renderSymbolTypeWithVoidInference(sProp, sType)
@@ -71847,7 +71847,7 @@ interface DataView {
                         }
                         is OptionalType, is NamedTupleMember -> return false
                         else -> {
-                            val t = try { getTypeFromTypeNode(se) } catch (_: StackOverflowError) { return false }
+                            val t = getTypeFromTypeNode(se)
                             if (t === anyType || t === errorType) return false
                             sourceFixedTypes.add(t)
                             sourceFixedDisplays.add(fmtTupleElem(se) ?: return false)
@@ -71855,7 +71855,7 @@ interface DataView {
                     }
                 }
             } else {
-                val t = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return false }
+                val t = getWidenedLiteralType(getTypeOfExpression(el))
                 if (t === anyType || t === errorType) return false
                 sourceFixedTypes.add(t)
                 sourceFixedDisplays.add(typeToString(t))
@@ -71864,7 +71864,7 @@ interface DataView {
         // Compatibility gates — any failure suppresses (different error shapes own those).
         val requiredCount = targetFixed.size
         val targetFixedTypes = targetFixed.map {
-            val t = try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { return false }
+            val t = getTypeFromTypeNode(it)
             if (t === anyType || t === errorType) return false
             t
         }
@@ -71873,15 +71873,15 @@ interface DataView {
         }
         if (sourceFixedTypes.size > requiredCount) {
             val tr = targetRest ?: return false
-            val trType = try { getTypeFromTypeNode(tr) } catch (_: StackOverflowError) { return false }
+            val trType = getTypeFromTypeNode(tr)
             for (i in requiredCount until sourceFixedTypes.size) {
                 if (!checkTypeRelatedTo(sourceFixedTypes[i], trType, assignableRelation)) return false
             }
         }
         if (sourceRest != null) {
             val tr = targetRest ?: return false
-            val srType = try { getTypeFromTypeNode(sourceRest!!) } catch (_: StackOverflowError) { return false }
-            val trType = try { getTypeFromTypeNode(tr) } catch (_: StackOverflowError) { return false }
+            val srType = getTypeFromTypeNode(sourceRest!!)
+            val trType = getTypeFromTypeNode(tr)
             if (!checkTypeRelatedTo(srType, trType, assignableRelation)) return false
         }
         if (sourceFixedTypes.size >= requiredCount) return false
@@ -72376,7 +72376,7 @@ interface DataView {
                 val jsLike = isJsLikeFileName(fileName)
                 fun objLitThis(): Type {
                     if (objLitThisType == null) objLitThisType =
-                        try { getTypeOfObjectLiteral(expr) } catch (_: StackOverflowError) { anyType }
+                        getTypeOfObjectLiteral(expr)
                     return objLitThisType!!
                 }
                 expr.properties.forEach { prop ->
@@ -73145,7 +73145,7 @@ interface DataView {
                     "(" + parts.joinToString(" & ") + ")"
                 }
                 else -> { // TypeLiteral — structural display via the resolved type
-                    val rt = try { getTypeFromTypeNode(m) } catch (_: StackOverflowError) { return false }
+                    val rt = getTypeFromTypeNode(m)
                     if (rt === errorType || rt === anyType) return false
                     typeToString(rt)
                 }
@@ -73167,7 +73167,7 @@ interface DataView {
                 val v = sp.valueExpr
                 val nullish = (v as? Identifier)?.text?.takeIf { it == "null" || it == "undefined" } ?: continue
                 val annNode = k.anns[sp.name]?.singleOrNull() ?: continue
-                val targetT = try { getTypeFromTypeNode(annNode) } catch (_: StackOverflowError) { continue }
+                val targetT = getTypeFromTypeNode(annNode)
                 if (targetT === anyType || targetT === errorType) continue
                 val srcT = if (nullish == "null") nullType else undefinedType
                 if (checkTypeRelatedTo(srcT, targetT, assignableRelation)) continue
@@ -73426,7 +73426,7 @@ interface DataView {
             if (srcParamRender == resolvedParamRender) return false
             if (srcParamRender !in setOf("string", "number", "boolean") ||
                 resolvedParamRender !in setOf("string", "number", "boolean")) return false
-            val srcDisplay = typeToString(try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return false })
+            val srcDisplay = typeToString(getTypeOfExpression(init))
             if (!srcDisplay.startsWith("(")) return false
             diagnostics.add(Diagnostic(
                 message = "Type '$srcDisplay' is not assignable to type '$unionDisplay'.",
@@ -73456,7 +73456,7 @@ interface DataView {
             }.toSet()
             val missing = required.firstOrNull { (it.name as? Identifier)?.text !in classProps } ?: return false
             val missingName = (missing.name as? Identifier)?.text ?: return false
-            val retDisplay = typeToString(try { getTypeFromTypeNode(retLit) } catch (_: StackOverflowError) { return false })
+            val retDisplay = typeToString(getTypeFromTypeNode(retLit))
             if (!retDisplay.startsWith("{")) return false
             val (rl, rc) = getLineAndCharacterOfPosition(source, missing.name.pos)
             diagnostics.add(Diagnostic(
@@ -73626,7 +73626,7 @@ interface DataView {
                         if (p !is PropertyAssignment) continue
                         val pn = p.name as? Identifier ?: continue
                         val member = objType.members?.get(pn.text) ?: continue
-                        val memberType = try { getTypeOfSymbol(member) } catch (_: StackOverflowError) { continue }
+                        val memberType = getTypeOfSymbol(member)
                         if (memberType === anyType || memberType === errorType) continue
                         val valType = getTypeOfExpression(p.initializer)
                         if (valType === anyType || valType === errorType) continue
@@ -73719,7 +73719,7 @@ interface DataView {
                 is NumericLiteralNode -> "number"
                 is BigIntLiteralNode -> "bigint"
                 is ObjectLiteralExpression ->
-                    typeToString(widenType(try { getTypeOfObjectLiteral(init) } catch (_: StackOverflowError) { return@run }))
+                    typeToString(widenType(getTypeOfObjectLiteral(init)))
                 is Identifier -> when (init.text) {
                     "true", "false" -> "boolean"
                     else -> return@run
@@ -73859,8 +73859,8 @@ interface DataView {
             if (primName != null && iaInit is ElementAccessExpression) {
                 val valueType = elementAccessIndexSigValueType(iaInit)
                 if (valueType != null && valueType !== anyType && valueType !== errorType) {
-                    val baseOk = try { checkTypeRelatedTo(valueType, getTypeFromTypeNode(ann!!), assignableRelation) } catch (_: StackOverflowError) { false }
-                    val undefFails = try { !checkTypeRelatedTo(undefinedType, getTypeFromTypeNode(ann!!), assignableRelation) } catch (_: StackOverflowError) { false }
+                    val baseOk = checkTypeRelatedTo(valueType, getTypeFromTypeNode(ann!!), assignableRelation)
+                    val undefFails = !checkTypeRelatedTo(undefinedType, getTypeFromTypeNode(ann!!), assignableRelation)
                     if (baseOk && undefFails) {
                         val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
                         diagnostics.add(Diagnostic(
@@ -74037,7 +74037,7 @@ interface DataView {
                 if (targetReturn is Type.Object) {
                     val synSym = Symbol(SymbolFlags.Class, name.text)
                     synSym.declarations.add(init)
-                    val instanceType = try { getDeclaredTypeOfSymbol(synSym) } catch (_: StackOverflowError) { null }
+                    val instanceType = getDeclaredTypeOfSymbol(synSym)
                     if (instanceType is Type.Object) {
                         val missing = try { collectMissingProperties(instanceType, targetReturn) }
                             catch (_: StackOverflowError) { emptyList() }
@@ -74283,7 +74283,7 @@ interface DataView {
                         ))
                     } else {
                         val mpName = missing[0]
-                        val mpSym = try { getPropertyOfType(targetType, mpName) } catch (_: StackOverflowError) { null }
+                        val mpSym = getPropertyOfType(targetType, mpName)
                         val declaringDisplay = getDeclaringTypeDisplay(mpSym, targetType, displayTarget)
                         val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                         diagnostics.add(Diagnostic(
@@ -74903,7 +74903,7 @@ interface DataView {
                 is MethodDeclaration -> p.name as? ComputedPropertyName
                 else -> null
             } ?: continue
-            val keyType = try { getTypeOfExpression(cpn.expression) } catch (_: StackOverflowError) { continue }
+            val keyType = getTypeOfExpression(cpn.expression)
             if (!keyType.flags.hasAny(TypeFlags.Any) && keyType !== errorType) continue
             var lb = cpn.pos.coerceAtLeast(0)
             while (lb < source.length && source[lb] != '[') lb++
@@ -74934,7 +74934,7 @@ interface DataView {
                 else -> return  // SpreadAssignment / accessor — bail (unsound)
             }
         }
-        val sourceType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        val sourceType = getTypeOfExpression(init)
         checkExcessProperties(init, sourceType, target, targetDisplay, source, fileName)
     }
 
@@ -74945,7 +74945,7 @@ interface DataView {
         fileName: String,
     ) {
         val init = initializer ?: return
-        val initType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        val initType = getTypeOfExpression(init)
         if (initType !is Type.Union) return
         val hasNullOrUndefined = initType.types.any {
             it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
@@ -75066,7 +75066,7 @@ interface DataView {
         val objLit = initializer as? ObjectLiteralExpression ?: return
         if (objLit.properties.size != 1) return
         val spread = objLit.properties[0] as? SpreadAssignment ?: return
-        val srcType = try { getTypeOfExpression(spread.expression) } catch (_: StackOverflowError) { return }
+        val srcType = getTypeOfExpression(spread.expression)
         if (srcType !is Type.Union) return
         // Spread filters out null/undefined; the rest must all be object-like to render.
         val constituents = srcType.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
@@ -75082,7 +75082,7 @@ interface DataView {
                 else -> continue
             }
             val missing = constituents.any {
-                try { getPropertyOfType(it, propName) == null } catch (_: StackOverflowError) { return }
+                getPropertyOfType(it, propName) == null
             }
             if (!missing) continue
             val squiggleStart = propNode.pos
@@ -75110,7 +75110,7 @@ interface DataView {
      *  [checkDestructuringFromObjectSpread] to render spread constituents. */
     private fun structuralSpreadDisplay(t: Type): String? {
         val obj = t as? Type.Object ?: return null
-        try { resolveStructuredTypeMembers(obj) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(obj)
         val props = obj.properties ?: obj.members?.values?.toList() ?: return null
         if (props.isEmpty()) return "{}"
         val parts = props.map { sym -> "${sym.name}: ${typeToString(getTypeOfSymbol(sym))}" }
@@ -75131,7 +75131,7 @@ interface DataView {
         fileName: String,
     ) {
         val init = initializer ?: return
-        val initType = try { getTypeOfExpression(init) } catch (_: StackOverflowError) { return }
+        val initType = getTypeOfExpression(init)
         if (initType !is Type.Interface) return
         resolveStructuredTypeMembers(initType)
         for (el in pattern.elements) {
@@ -75172,7 +75172,7 @@ interface DataView {
                 checkDestructuringAssignmentPrivate(pattern.expression, sourceType, source, fileName)
             is ObjectLiteralExpression -> {
                 if (sourceType is Type.Object) {
-                    try { resolveStructuredTypeMembers(sourceType) } catch (_: StackOverflowError) { return }
+                    resolveStructuredTypeMembers(sourceType)
                 }
                 for (p in pattern.properties) {
                     when (p) {
@@ -75182,7 +75182,7 @@ interface DataView {
                             emitDestructuringPrivate(sourceType, p.name, source, fileName)
                             val pn = resolveDestructuringPropName(p.name, source, fileName) ?: continue
                             val propSym = getPropertyOfType(sourceType, pn.first) ?: continue
-                            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { continue }
+                            val propType = getTypeOfSymbol(propSym)
                             checkDestructuringAssignmentPrivate(p.initializer, propType, source, fileName)
                         }
                         else -> {} // SpreadAssignment etc.
@@ -75452,7 +75452,7 @@ interface DataView {
             if (retObj is Type.Reference && retObj.target.symbol?.name == "Array") return false
             if (retObj is Type.Interface && retObj.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return false
             val objLit = singleReturnExprOf(expr) as? ObjectLiteralExpression ?: return false
-            try { resolveStructuredTypeMembers(retObj) } catch (_: StackOverflowError) { return false }
+            resolveStructuredTypeMembers(retObj)
             return checkNestedObjLitPropTypes(objLit, retObj, source, fileName)
         }
         return false
@@ -75671,7 +75671,7 @@ interface DataView {
                             ))
                         } else {
                             val mpName = missing[0]
-                            val mpSym = try { getPropertyOfType(targetType, mpName) } catch (_: StackOverflowError) { null }
+                            val mpSym = getPropertyOfType(targetType, mpName)
                             val declaringDisplay = getDeclaringTypeDisplay(mpSym, targetType, displayTarget)
                             val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                             diagnostics.add(Diagnostic(
@@ -76180,8 +76180,8 @@ interface DataView {
                         s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
                     val srcSym = globals[srcName]?.takeIf { s ->
                         s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
-                    val tgtType = try { getDeclaredTypeOfSymbol(tgtSym) } catch (_: StackOverflowError) { return@run } as? Type.Object ?: return@run
-                    val srcType = try { getDeclaredTypeOfSymbol(srcSym) } catch (_: StackOverflowError) { return@run } as? Type.Object ?: return@run
+                    val tgtType = getDeclaredTypeOfSymbol(tgtSym) as? Type.Object ?: return@run
+                    val srcType = getDeclaredTypeOfSymbol(srcSym) as? Type.Object ?: return@run
                     try { resolveStructuredTypeMembers(tgtType); resolveStructuredTypeMembers(srcType) }
                     catch (_: StackOverflowError) { return@run }
                     val mismatch = try { findOptionalVsRequiredMismatch(srcType, tgtType) }
@@ -76561,7 +76561,7 @@ interface DataView {
                                     val rhs = expr.right as Identifier
                                     val (line, character) = getLineAndCharacterOfPosition(source, rhs.pos)
                                     val related = mutableListOf<Diagnostic>()
-                                    val mpSym = try { getPropertyOfType(tt, mpName) } catch (_: StackOverflowError) { null }
+                                    val mpSym = getPropertyOfType(tt, mpName)
                                     mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { related.add(it) }
                                     if (required.all { it.name in instanceNames }) {
                                         related.add(Diagnostic(
@@ -76629,7 +76629,7 @@ interface DataView {
                                     ))
                                 } else {
                                     val mpName = missing[0]
-                                    val mpSym = try { getPropertyOfType(tt, mpName) } catch (_: StackOverflowError) { null }
+                                    val mpSym = getPropertyOfType(tt, mpName)
                                     val declaringDisplay = getDeclaringTypeDisplay(mpSym, tt, displayTarget)
                                     val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                                     // B53.1 cross-file disambiguation (mirror of the canUse path):
@@ -77143,7 +77143,7 @@ interface DataView {
         target: ElementAccessExpression, value: Expression, source: String, fileName: String
     ): Boolean {
         if (target.questionDotToken) return false
-        val recvType = try { getTypeOfExpression(target.expression) } catch (_: StackOverflowError) { return false }
+        val recvType = getTypeOfExpression(target.expression)
         if (recvType !is Type.Reference) return false
         val isReadonlyArr = (globalReadonlyArrayType != null && recvType.target === globalReadonlyArrayType) ||
             recvType.target.symbol?.name == "ReadonlyArray"
@@ -77155,7 +77155,7 @@ interface DataView {
         // concrete element type and a concrete, non-assignable RHS are both resolvable.
         val elem = recvType.resolvedTypeArguments?.singleOrNull()
         if (elem != null && elem !== anyType && elem !== errorType) {
-            val rhs = try { getTypeOfExpression(value) } catch (_: StackOverflowError) { null }
+            val rhs = getTypeOfExpression(value)
             if (rhs != null && rhs !== anyType && rhs !== errorType &&
                 !rhs.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
             ) {
@@ -77621,7 +77621,7 @@ interface DataView {
                         (it.name as? Identifier)?.text == retExpr.text
                     }
                     val annotation = matchedParam?.type ?: return null
-                    val resolved = try { getTypeFromTypeNode(annotation) } catch (_: StackOverflowError) { null }
+                    val resolved = getTypeFromTypeNode(annotation)
                     if (resolved === errorType || resolved === anyType) null else resolved
                 }
             }
@@ -77750,7 +77750,7 @@ interface DataView {
                     propSym.declarations.any { it is GetAccessor }
                 val setterParamTypeNode = setAccessorDecl?.parameters?.firstOrNull()?.type
                 val setterResolvedType = setterParamTypeNode?.let {
-                    try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                    getTypeFromTypeNode(it)
                 }
                 // 16.0: For generic class instance types (Type.Reference with type args),
                 // resolve the property's declared type with the class's type parameters in
@@ -77908,7 +77908,7 @@ interface DataView {
         propName: String, source: String, fileName: String,
     ): Boolean {
         if (!options.exactOptionalPropertyTypes || !strictNullChecks) return false
-        val valueType = try { getTypeOfExpression(value) } catch (_: StackOverflowError) { return false }
+        val valueType = getTypeOfExpression(value)
         if (valueType is Type.Union || !valueType.flags.hasAny(TypeFlags.Undefined) ||
             valueType.flags.hasAny(TypeFlags.Any) || valueType === errorType) return false
         fun includesUndefined(t: Type): Boolean =
@@ -77919,11 +77919,11 @@ interface DataView {
         val contributions = LinkedHashSet<String>()
         for (c in objType.types) {
             if (c !is Type.Object) return false
-            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return false }
+            resolveStructuredTypeMembers(c)
             val propSym = c.members?.get(propName) ?: continue
             if (propSym.declarations.any { it is GetAccessor || it is SetAccessor }) return false
             if (!isOptionalProperty(propSym)) return false
-            val pt = try { getPropertyTypeForRelation(c, propSym) } catch (_: StackOverflowError) { return false }
+            val pt = getPropertyTypeForRelation(c, propSym)
             if (pt === anyType || pt === errorType || pt.flags.hasAny(TypeFlags.Unknown)) return false
             declared++
             if (!includesUndefined(pt)) anyLacksUndefined = true
@@ -77971,7 +77971,7 @@ interface DataView {
         var hasReadOnlyConstituent = false
         for (constituent in intersection.types) {
             if (constituent !is Type.Object) continue
-            try { resolveStructuredTypeMembers(constituent) } catch (_: StackOverflowError) { continue }
+            resolveStructuredTypeMembers(constituent)
             // Symbol with declarations (Class/Interface) — walk class members
             // directly to find SetAccessor / GetAccessor / PropertyDeclaration.
             val constSym = constituent.symbol ?: continue
@@ -78053,7 +78053,7 @@ interface DataView {
             // (`x[1]` on `interface { 1: string }` — members store the name "1").
             arg is NumericLiteralNode -> listOf(arg.text)
             arg is Identifier -> {
-                val keyType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return false }
+                val keyType = getTypeOfExpression(arg)
                 when {
                     keyType is Type.StringLiteral -> listOf(keyType.value)
                     keyType is Type.Union && keyType.types.all { it is Type.StringLiteral } ->
@@ -78064,7 +78064,7 @@ interface DataView {
             else -> return false
         }
         if (keys.isEmpty()) return false
-        val recvType = try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return false }
+        val recvType = getTypeOfExpression(recv)
         if (recvType === anyType || recvType === errorType) return false
 
         var anySetter = false
@@ -78080,14 +78080,14 @@ interface DataView {
                 }
                 is Type.Reference -> return false
                 is Type.Object -> {
-                    try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return false }
+                    resolveStructuredTypeMembers(recvType)
                     val propSym = recvType.members?.get(key) ?: return false
                     val setterDecl = propSym.declarations.firstOrNull { it is SetAccessor } as? SetAccessor
                     val wt: Type
                     if (setterDecl != null) {
                         anySetter = true
                         wt = setterDecl.parameters.firstOrNull()?.type?.let {
-                            try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                            getTypeFromTypeNode(it)
                         } ?: return false
                     } else {
                         // B244: DATA-property literal-keyed writes — a narrow,
@@ -78128,7 +78128,7 @@ interface DataView {
         val valueType = if (propTypeContainsLiteral(writeType)) {
             literalTypeOfExpression(value) ?: getTypeOfExpression(value)
         } else {
-            try { getTypeOfExpression(value) } catch (_: StackOverflowError) { return false }
+            getTypeOfExpression(value)
         }
         if (valueType === anyType || valueType === errorType) return false
         if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
@@ -78330,7 +78330,7 @@ interface DataView {
      */
     private fun getCallableMismatchElaboration(source: Type, target: Type): List<String>? {
         if (target !is Type.Object) return null
-        try { resolveStructuredTypeMembers(target) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(target)
         val targetSigs = target.callSignatures
         if (targetSigs.isNullOrEmpty()) return null
         // 17.74: Skip primitive sources — TypeScript emits the "provides no match
@@ -78343,7 +78343,7 @@ interface DataView {
         // Source must be non-callable (no own call sigs)
         val sourceObj = source as? Type.Object
         if (sourceObj != null) {
-            try { resolveStructuredTypeMembers(sourceObj) } catch (_: StackOverflowError) { return null }
+            resolveStructuredTypeMembers(sourceObj)
             if (!sourceObj.callSignatures.isNullOrEmpty()) return null
         }
         val targetSig = targetSigs.first()
@@ -78361,12 +78361,12 @@ interface DataView {
      */
     private fun getNonConstructibleElaboration(source: Type, target: Type): List<String>? {
         if (target !is Type.Object) return null
-        try { resolveStructuredTypeMembers(target) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(target)
         val targetSigs = target.constructSignatures
         if (targetSigs.isNullOrEmpty()) return null
         val sourceObj = source as? Type.Object
         if (sourceObj != null) {
-            try { resolveStructuredTypeMembers(sourceObj) } catch (_: StackOverflowError) { return null }
+            resolveStructuredTypeMembers(sourceObj)
             if (!sourceObj.constructSignatures.isNullOrEmpty()) return null
         }
         val targetSig = targetSigs.first()
@@ -78771,15 +78771,15 @@ interface DataView {
     private fun materializeMemberSetUtility(name: String, typeArgs: List<TypeNode>?): Type? {
         val args = typeArgs ?: return null
         if (args.size != 2) return null
-        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        val src = getTypeFromTypeNode(args[0])
         if (src === anyType || src === errorType) return null
         val srcObj = src as? Type.Object ?: return null
         if (srcObj is Type.Reference) return null // generic instantiations: defer (members may be lazy/substituted)
-        try { resolveStructuredTypeMembers(srcObj) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(srcObj)
         // index signatures complicate key-set semantics → don't materialize
         if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
         val srcProps = srcObj.properties ?: return null
-        val k = try { getTypeFromTypeNode(args[1]) } catch (_: StackOverflowError) { return null }
+        val k = getTypeFromTypeNode(args[1])
         // K must be a string-literal key set (single or union of string literals).
         val keyLits: List<String> = when (k) {
             is Type.StringLiteral -> listOf(k.value)
@@ -78821,11 +78821,11 @@ interface DataView {
         if (name != "Readonly") return null
         val args = typeArgs ?: return null
         if (args.size != 1) return null
-        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        val src = getTypeFromTypeNode(args[0])
         if (src === anyType || src === errorType) return null
         val srcObj = src as? Type.Object ?: return null
         if (srcObj is Type.Reference) return null // generic instantiations: defer
-        try { resolveStructuredTypeMembers(srcObj) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(srcObj)
         if (srcObj.stringIndexInfo != null || srcObj.numberIndexInfo != null) return null
         val srcProps = srcObj.properties ?: return null
         val result = Type.Object()
@@ -78858,7 +78858,7 @@ interface DataView {
     private fun materializeSignatureUtility(name: String, typeArgs: List<TypeNode>?): Type? {
         val args = typeArgs ?: return null
         if (args.size != 1) return null
-        val src = try { getTypeFromTypeNode(args[0]) } catch (_: StackOverflowError) { return null }
+        val src = getTypeFromTypeNode(args[0])
         if (src === anyType || src === errorType) return null
         fun tupleFromSig(sig: Signature): Type? {
             // Bail on rest/optional params: modeling them needs rest/optional tuple
@@ -78868,7 +78868,7 @@ interface DataView {
                 if (pd?.dotDotDotToken == true || pd?.questionToken == true) return null
             }
             val elemTypes = sig.parameters.map { ps ->
-                try { getTypeOfSymbol(ps) } catch (_: StackOverflowError) { return null }
+                getTypeOfSymbol(ps)
             }
             if (elemTypes.any { it === errorType }) return null
             return buildTupleFromTypes(elemTypes)
@@ -78895,11 +78895,11 @@ interface DataView {
         val name = getTypeReferenceLastName(node.typeName) ?: return
         if (name != "Parameters" && name != "ReturnType") return
         val arg = node.typeArguments?.singleOrNull() ?: return
-        val whole = try { getTypeFromTypeNode(node) } catch (_: StackOverflowError) { return }
+        val whole = getTypeFromTypeNode(node)
         if (whole !== errorType) return
-        val resolved = try { getTypeFromTypeNode(arg) } catch (_: StackOverflowError) { return }
+        val resolved = getTypeFromTypeNode(arg)
         if (resolved !is Type.Object) return
-        try { resolveStructuredTypeMembers(resolved) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(resolved)
         // Constructor type (typeof Class): construct sig present, no call sig.
         if (!resolved.callSignatures.isNullOrEmpty() || resolved.constructSignatures.isNullOrEmpty()) return
         val display = formatTypeForDisplay(arg) ?: return
@@ -79421,7 +79421,7 @@ interface DataView {
                 // and B was silently anyType. Infer (widened — freshness stripped,
                 // matching tsc's export-default rule).
                 else defaultImportObjectLiteralExpr(symbol)?.let { lit ->
-                    try { inferTypeFromInitializer(lit) } catch (_: StackOverflowError) { null }
+                    inferTypeFromInitializer(lit)
                 } ?: anyType
             }
             flags.hasAny(SymbolFlags.TypeParameter) -> getDeclaredTypeOfSymbol(symbol)
@@ -80813,7 +80813,7 @@ interface DataView {
             is RegularExpressionLiteralNode -> {
                 val sym = globals["RegExp"]
                 if (sym != null) {
-                    try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { anyType }
+                    getDeclaredTypeOfSymbol(sym)
                 } else anyType
             }
             is BigIntLiteralNode -> bigintType
@@ -81452,7 +81452,7 @@ interface DataView {
      * directly declared on the receiver's interface/class.
      */
     private fun resolvePropertyMethodDecl(access: PropertyAccessExpression): Node? {
-        val recvType = try { getTypeOfExpression(access.expression) } catch (_: StackOverflowError) { return null }
+        val recvType = getTypeOfExpression(access.expression)
         if (recvType === anyType || recvType === errorType) return null
         val propName = access.name.text
         val sym = getPropertyOfType(recvType, propName) ?: return null
@@ -81523,7 +81523,7 @@ interface DataView {
             val discriminant = discriminantName ?: return null
             t.types.filter { member ->
                 val propSym = getPropertyOfType(member, discriminant) ?: return@filter true
-                val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return@filter true }
+                val propType = getTypeOfSymbol(propSym)
                 if (propType === anyType || propType === errorType) true
                 else literalTypes.any { lit -> checkTypeRelatedTo(lit, propType, assignableRelation) }
             }
@@ -81627,7 +81627,7 @@ interface DataView {
                 else getUnionType(filtered)
             } else t
         }
-        val targetType = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return null }
+        val targetType = getTypeFromTypeNode(targetTypeNode)
         if (targetType === errorType || targetType === anyType) return null
         // After assertion succeeds, narrow to target type.
         if (t is Type.Union) {
@@ -81703,16 +81703,16 @@ interface DataView {
             val bindings = mutableMapOf<String, Type>()
             collectPredicateTpBindings(paramAnnotation, t, tpNames, bindings)
             if (bindings.isEmpty()) {
-                try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+                getTypeFromTypeNode(targetTypeNode)
             } else {
                 val saved = currentTypeAliasArgs
                 currentTypeAliasArgs = (saved ?: emptyMap()) + bindings
-                val resolved = try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { null }
+                val resolved = getTypeFromTypeNode(targetTypeNode)
                 currentTypeAliasArgs = saved
                 resolved ?: return t
             }
         } else {
-            try { getTypeFromTypeNode(targetTypeNode) } catch (_: StackOverflowError) { return t }
+            getTypeFromTypeNode(targetTypeNode)
         }
         if (targetType === errorType || targetType === anyType) return t
         if (t is Type.Union) {
@@ -81764,7 +81764,7 @@ interface DataView {
                     val pn = (m.name as? Identifier)?.text ?: m.name?.let { getPropertyKeyName(it) } ?: continue
                     val pt = m.type ?: continue
                     val propSym = getPropertyOfType(actual, pn) ?: continue
-                    val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { continue }
+                    val propType = getTypeOfSymbol(propSym)
                     collectPredicateTpBindings(pt, propType, tps, out)
                 }
             }
@@ -82033,11 +82033,11 @@ interface DataView {
         // narrowing on objects that don't model the discriminant.
         var singleHadDiscriminant = false
         val filtered = members.filter { member ->
-            val apparent = try { getApparentType(member) } catch (_: StackOverflowError) { return@filter true }
+            val apparent = getApparentType(member)
             if (apparent !is Type.Object) return@filter true
-            val propSym = try { getPropertyOfType(apparent, propName) } catch (_: StackOverflowError) { return@filter true }
+            val propSym = getPropertyOfType(apparent, propName)
                 ?: return@filter true
-            val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return@filter true }
+            val propType = getTypeOfSymbol(propSym)
             if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
             if (!isLiteralKindForDiscriminant(propType)) return@filter true
             singleHadDiscriminant = true
@@ -82311,7 +82311,7 @@ interface DataView {
         // Without this, `b3 = { f: (n) => 0 }` displays the source as `{ f: (n: any) => any }`
         // instead of `{ f: (n: number) => number }`.
         val ctxObj = (contextualType as? Type.Object)?.also {
-            try { resolveStructuredTypeMembers(it) } catch (_: StackOverflowError) {}
+            resolveStructuredTypeMembers(it)
         }
         for (prop in expr.properties) {
             when (prop) {
@@ -82324,7 +82324,7 @@ interface DataView {
                         else -> continue
                     }
                     val propCtx = ctxObj?.members?.get(name)?.let { sym ->
-                        try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                        getTypeOfSymbol(sym)
                     }
                     val savedCtx = contextualType
                     val useCtx = propCtx != null && propCtx !== anyType && propCtx !== errorType &&
@@ -82468,7 +82468,7 @@ interface DataView {
             }
         }
         is Type.Object -> {
-            try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) {}
+            resolveStructuredTypeMembers(t)
             (t.properties ?: emptyList()).filter { !isOptionalProperty(it) }.associateBy { it.name }
         }
         else -> emptyMap()
@@ -83117,13 +83117,13 @@ interface DataView {
             if (tn !in setOf("Array", "ReadonlyArray", "ArrayLike", "Set", "Iterable", "IterableIterator")) return null
             return elem
         }
-        val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+        val argType = getTypeOfExpression(arg)
         elementOf(argType)?.let { return getArrayType(it) }
         // `recv.values()` where recv: T[] — the embedded Array.values() returns any.
         if (arg is CallExpression && arg.arguments.isEmpty() && !arg.questionDotToken) {
             val vpa = arg.expression as? PropertyAccessExpression ?: return null
             if (vpa.questionDotToken || vpa.name.text != "values") return null
-            val recvType = try { getTypeOfExpression(vpa.expression) } catch (_: StackOverflowError) { return null }
+            val recvType = getTypeOfExpression(vpa.expression)
             val ref = recvType as? Type.Reference ?: return null
             if (ref.target.symbol?.name != "Array") return null
             val elem = ref.resolvedTypeArguments?.singleOrNull() ?: return null
@@ -83168,10 +83168,10 @@ interface DataView {
      *  preserved as FRESH non-widening literals (so `let x = frozen.prop` keeps `"lit"` rather
      *  than widening to the primitive — the `objectFreezeLiteralsDontWiden` rule). */
     private fun freezeObjectLiteral(arg: ObjectLiteralExpression): Type? {
-        val t = try { getTypeOfObjectLiteral(arg) } catch (_: StackOverflowError) { return null }
+        val t = getTypeOfObjectLiteral(arg)
         if (t !is Type.Object) return null
         if (t.members.isNullOrEmpty()) return null
-        try { resolveStructuredTypeMembers(t) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(t)
         frozenObjectTypeIds.add(t.id)
         // Every member is readonly (TS2540 on write).
         for (m in t.members!!.values) mappedReadonlyMemberIds.add(m.id)
@@ -83203,7 +83203,7 @@ interface DataView {
         val roTarget = globalReadonlyArrayType ?: globalArrayType ?: return null
         val elemTypes = arg.elements.map { el ->
             if (el is SpreadElement || el is OmittedExpression) return null
-            val et = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return null }
+            val et = getWidenedLiteralType(getTypeOfExpression(el))
             if (et !is Type.Intrinsic || et.intrinsicName !in setOf("number", "string", "boolean", "bigint")) return null
             et
         }
@@ -83236,10 +83236,10 @@ interface DataView {
         // IIFEs stay anyType, no body inference) to bound the blast radius to the rare
         // `function(): T {…}()` / `((…) => T)()` shape.
         if (callee is FunctionExpression && callee.type != null) {
-            return try { getTypeFromTypeNode(callee.type!!) } catch (_: StackOverflowError) { anyType }
+            return getTypeFromTypeNode(callee.type!!)
         }
         if (callee is ArrowFunction && callee.type != null) {
-            return try { getTypeFromTypeNode(callee.type!!) } catch (_: StackOverflowError) { anyType }
+            return getTypeFromTypeNode(callee.type!!)
         }
         val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
@@ -83504,7 +83504,7 @@ interface DataView {
         // containing TPs) — those need richer inference.
         val tpsSet = tps.toSet()
         for ((idx, p) in params.withIndex()) {
-            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { return null }
+            val pt = getTypeOfSymbol(p)
             if (pt === errorType) return null
             val isRest = (p.valueDeclaration as? Parameter)?.dotDotDotToken == true
             // (a) bare-some-tp_i
@@ -83562,7 +83562,7 @@ interface DataView {
             // Pass 1: anchor positions (non-callback).
             for (i in params.indices) {
                 if (i >= args.size) break
-                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val pt = getTypeOfSymbol(params[i])
                 val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
                 val isBareT = pt === tp
                 val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
@@ -83599,7 +83599,7 @@ interface DataView {
                         val ptMembers = ptObj.members ?: continue
                         val collectedTypes = mutableListOf<Type>()
                         for ((memberName, memberSym) in ptMembers) {
-                            val mt = try { getTypeOfSymbol(memberSym) } catch (_: StackOverflowError) { return null }
+                            val mt = getTypeOfSymbol(memberSym)
                             if (mt !== tp) continue
                             val propAssign = arg.properties.firstOrNull { p ->
                                 p is PropertyAssignment && getPropertyKeyName(p.name) == memberName
@@ -83639,7 +83639,7 @@ interface DataView {
                         if (lp.dotDotDotToken) continue
                         if (lp.name !is Identifier) continue
                         val lpTypeNode = lp.type ?: continue
-                        val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
+                        val lpType = getTypeFromTypeNode(lpTypeNode)
                         if (lpType === anyType || lpType === errorType) return null
                         if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
                         val widened = widenType(lpType)
@@ -83657,7 +83657,7 @@ interface DataView {
                         candidates.add(Candidate(ai, neverType, null))
                         continue
                     }
-                    val rawArgType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    val rawArgType = getTypeOfExpression(arg)
                     if (rawArgType === anyType || rawArgType === errorType) return null
                     if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
                     // 17.31e: for `Array<tp>` param, the inference candidate is the
@@ -83724,7 +83724,7 @@ interface DataView {
                     )
             for (i in params.indices) {
                 if (i >= args.size) break
-                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val pt = getTypeOfSymbol(params[i])
                 val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
                 if (isRest) continue
                 if (pt === tp) continue
@@ -83754,7 +83754,7 @@ interface DataView {
                     val callbackSig = fnObj?.callSignatures?.singleOrNull()
                     val callbackParam = callbackSig?.parameters?.singleOrNull()
                     val callbackParamType = callbackParam?.let {
-                        try { getTypeOfSymbol(it) } catch (_: StackOverflowError) { null }
+                        getTypeOfSymbol(it)
                     }
                     val callbackReturn = callbackSig?.resolvedReturnType
                     val otherTp = (callbackParamType as? Type.TypeParam)
@@ -83789,7 +83789,7 @@ interface DataView {
                         var concreteOk = true
                         for (sp in callbackSig.parameters) {
                             if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { concreteOk = false; break }
-                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { concreteOk = false; break }
+                            val spt = getTypeOfSymbol(sp)
                             if (spt === anyType || spt === errorType) { concreteOk = false; break }
                             if (tps.any { typeMentionsTypeParam(spt, it) }) { concreteOk = false; break }
                             sigParamTypes.add(spt)
@@ -83883,7 +83883,7 @@ interface DataView {
                         var slotsOk = true
                         for (sp in callbackSig.parameters) {
                             if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { slotsOk = false; break }
-                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { slotsOk = false; break }
+                            val spt = getTypeOfSymbol(sp)
                             val slotTp = spt as? Type.TypeParam
                             if (slotTp == null || slotTp !in tpsSet || slotTp === tp) { slotsOk = false; break }
                             val mapped = mapperPairs.firstOrNull { it.first === slotTp }?.second
@@ -84072,7 +84072,7 @@ interface DataView {
                     if (lp.dotDotDotToken) continue
                     if (lp.name !is Identifier) continue
                     val lpTypeNode = lp.type ?: continue
-                    val lpType = try { getTypeFromTypeNode(lpTypeNode) } catch (_: StackOverflowError) { return null }
+                    val lpType = getTypeFromTypeNode(lpTypeNode)
                     if (lpType === anyType || lpType === errorType) return null
                     if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
                     val widened = widenType(lpType)
@@ -84363,7 +84363,7 @@ interface DataView {
             var anchored: Type? = null
             for (i in params.indices) {
                 if (i >= args.size) break
-                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val pt = getTypeOfSymbol(params[i])
                 val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
                 val isBareT = pt === tp
                 val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
@@ -84375,7 +84375,7 @@ interface DataView {
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
                     if (isArrayT && arg is ArrayLiteralExpression && arg.elements.isEmpty()) continue
-                    val rawArgType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                    val rawArgType = getTypeOfExpression(arg)
                     if (rawArgType === anyType || rawArgType === errorType) continue
                     if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
                     val argType = if (isArrayT) {
@@ -84420,13 +84420,13 @@ interface DataView {
      */
     private fun tparamMentionedInFunctionType(sig: Signature, tp: Type.TypeParam): Boolean {
         for (p in sig.parameters) {
-            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            val pt = getTypeOfSymbol(p)
             if (pt !is Type.Object) continue
             val sigs = (pt.callSignatures ?: emptyList()) + (pt.constructSignatures ?: emptyList())
             if (sigs.isEmpty()) continue
             for (s in sigs) {
                 for (sp in s.parameters) {
-                    val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { continue }
+                    val spt = getTypeOfSymbol(sp)
                     if (typeMentionsTypeParam(spt, tp)) return true
                 }
                 val rt = s.resolvedReturnType ?: continue
@@ -84462,7 +84462,7 @@ interface DataView {
                     val sigs = (t.callSignatures ?: emptyList()) + (t.constructSignatures ?: emptyList())
                     for (s in sigs) {
                         for (sp in s.parameters) {
-                            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { continue }
+                            val spt = getTypeOfSymbol(sp)
                             if (mentionsDeep(spt)) return true
                         }
                         val rt = s.resolvedReturnType
@@ -84474,7 +84474,7 @@ interface DataView {
             }
         }
         for (p in sig.parameters) {
-            val pt = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            val pt = getTypeOfSymbol(p)
             if (pt !is Type.Object) continue
             val sigs = (pt.callSignatures ?: emptyList()) + (pt.constructSignatures ?: emptyList())
             if (sigs.isEmpty()) continue
@@ -84511,16 +84511,16 @@ interface DataView {
             var conflict = false
             for (i in params.indices) {
                 if (i >= args.size) break
-                val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { return null }
+                val pt = getTypeOfSymbol(params[i])
                 if (pt !== tp) continue  // bare-T anchor positions only
                 val arg = args[i]
                 if (arg is SpreadElement) continue
-                val raw = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return null }
+                val raw = getTypeOfExpression(arg)
                 if (raw === anyType || raw === errorType) continue
                 if (raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
                 // Prefer the unwidened LITERAL form (`""`/`1`) for the fixed-type
                 // display; getTypeOfExpression already widens under @strict:false.
-                val literal = try { literalTypeOfExpression(arg) } catch (_: StackOverflowError) { null } ?: raw
+                val literal = literalTypeOfExpression(arg) ?: raw
                 val widened = widenType(raw)
                 if (firstWidened == null) {
                     firstLiteral = literal
@@ -84576,7 +84576,7 @@ interface DataView {
         if (members.isEmpty()) return false
         var hasTpMember = false
         for (sym in members.values) {
-            val mt = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { return false }
+            val mt = getTypeOfSymbol(sym)
             if (mt is Type.TypeParam && mt in tps) {
                 hasTpMember = true
             } else if (tps.any { typeMentionsTypeParam(mt, it) }) {
@@ -84621,7 +84621,7 @@ interface DataView {
         if (sigs.size != 1) return null
         val sig = sigs[0]
         if (sig.parameters.size != 1) return null
-        val pt = try { getTypeOfSymbol(sig.parameters[0]) } catch (_: StackOverflowError) { return null }
+        val pt = getTypeOfSymbol(sig.parameters[0])
         if (pt !is Type.TypeParam || pt !in tps) return null
         val rt = sig.resolvedReturnType ?: return null
         // B83.2: when currentTp is provided, only that TP's mention in return type
@@ -84672,7 +84672,7 @@ interface DataView {
         if (sig.parameters.isEmpty()) return null
         // All callback params must be concrete (mention no TP).
         for (sp in sig.parameters) {
-            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { return null }
+            val spt = getTypeOfSymbol(sp)
             if (tps.any { typeMentionsTypeParam(spt, it) }) return null
         }
         val rt = sig.resolvedReturnType ?: return null
@@ -84719,7 +84719,7 @@ interface DataView {
             // Rest params disallowed in this gate — bare-TP would conflict with
             // rest-of-tp[] anchor positions handled separately.
             if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) return null
-            val spt = try { getTypeOfSymbol(sp) } catch (_: StackOverflowError) { return null }
+            val spt = getTypeOfSymbol(sp)
             if (spt is Type.TypeParam && spt in tps) {
                 slots.add(spt)
                 anyBareTp = true
@@ -84819,7 +84819,7 @@ interface DataView {
                     val targetProp = try { getPropertyOfType(targetType, name) }
                         catch (_: StackOverflowError) { null }
                     val targetPropType = targetProp?.let {
-                        try { getTypeOfSymbol(it) } catch (_: StackOverflowError) { null }
+                        getTypeOfSymbol(it)
                     }
                     val srcType = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) }
                         catch (_: StackOverflowError) { null }
@@ -84938,9 +84938,9 @@ interface DataView {
             // genuine qualified class resolves — qualified functions/namespaces/vars fall
             // through to anyType (prior behavior), keeping the FP surface minimal.
             is PropertyAccessExpression -> {
-                val sym = try { resolveQualifiedValueSymbol(callee) } catch (_: StackOverflowError) { null }
+                val sym = resolveQualifiedValueSymbol(callee)
                 if (sym != null && sym.flags.hasAny(SymbolFlags.Class)) {
-                    try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { return anyType }
+                    getDeclaredTypeOfSymbol(sym)
                 } else {
                     // B511: a clodule `declare namespace M { class C; function C }` — class+function
                     // don't merge in our binder (canMerge lacks the combo → last-wins, the FUNCTION
@@ -84952,7 +84952,7 @@ interface DataView {
                     if (classDecl?.name != null) {
                         val classSym = Symbol(SymbolFlags.Class, classDecl.name!!.text)
                         classSym.declarations.add(classDecl)
-                        try { getDeclaredTypeOfSymbol(classSym) } catch (_: StackOverflowError) { return anyType }
+                        getDeclaredTypeOfSymbol(classSym)
                     } else return anyType
                 }
             }
@@ -88976,15 +88976,15 @@ interface DataView {
                         val pending = mutableListOf<Diagnostic>()
                         for (p in orderedProps) {
                             val pNode = p.typeNode ?: continue
-                            val pType = try { getTypeFromTypeNode(pNode) } catch (_: StackOverflowError) { continue }
+                            val pType = getTypeFromTypeNode(pNode)
                             if (!isAnon(pType)) continue
                             val kinds = if (p.numKey != null) listOf("number", "string") else listOf("string")
                             for (kind in kinds) {
                                 val idx = idxs.firstOrNull { it.kind == kind && it.baseName != p.baseName } ?: continue
                                 val iNode = idx.valueNode ?: continue
-                                val iType = try { getTypeFromTypeNode(iNode) } catch (_: StackOverflowError) { continue }
+                                val iType = getTypeFromTypeNode(iNode)
                                 if (!isAnon(iType)) continue
-                                val ok = try { checkTypeRelatedTo(pType, iType, assignableRelation) } catch (_: StackOverflowError) { true }
+                                val ok = checkTypeRelatedTo(pType, iType, assignableRelation)
                                 if (ok) continue
                                 val pDisp = if (pNode is TypeLiteral && pNode.members.isEmpty()) "{}" else typeToString(pType)
                                 val iDisp = typeToString(iType)
@@ -89332,17 +89332,17 @@ interface DataView {
         for (param in parameters) {
             val pattern = param.name as? ObjectBindingPattern ?: continue
             val annNode = param.type ?: continue
-            val annType = try { getApparentType(getTypeFromTypeNode(annNode)) } catch (_: StackOverflowError) { continue }
+            val annType = getApparentType(getTypeFromTypeNode(annNode))
             if (annType !is Type.Object) continue
-            try { resolveStructuredTypeMembers(annType) } catch (_: StackOverflowError) { continue }
+            resolveStructuredTypeMembers(annType)
             for (el in pattern.elements) {
                 val be = el as? BindingElement ?: continue
                 if (be.dotDotDotToken) continue
                 val nm = be.name as? Identifier ?: continue
                 val propName = (be.propertyName as? Identifier)?.text ?: nm.text
-                val prop = try { getPropertyOfType(annType, propName) } catch (_: StackOverflowError) { continue } ?: continue
+                val prop = getPropertyOfType(annType, propName) ?: continue
                 if (be.initializer == null && isOptionalProperty(prop)) continue  // binding may be undefined
-                val mt = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { continue }
+                val mt = getTypeOfSymbol(prop)
                 if (mt !is Type.Object) continue
                 bindings[nm.text] = mt
             }
@@ -89392,9 +89392,9 @@ interface DataView {
         call: CallExpression, bindings: Map<String, Type>, source: String, fileName: String,
     ) {
         // Resolve the callee to exactly one non-generic call signature.
-        val calleeType = try { getTypeOfExpression(call.expression) } catch (_: StackOverflowError) { return }
+        val calleeType = getTypeOfExpression(call.expression)
         if (calleeType !is Type.Object) return
-        try { resolveStructuredTypeMembers(calleeType) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.callSignatures ?: return
         if (sigs.size != 1) return
         val sig = sigs[0]
@@ -89403,17 +89403,17 @@ interface DataView {
             if (arg !is PropertyAccessExpression) continue
             val recv = arg.expression as? Identifier ?: continue
             val recvType = bindings[recv.text] ?: continue
-            val prop = try { getPropertyOfType(recvType, arg.name.text) } catch (_: StackOverflowError) { continue } ?: continue
+            val prop = getPropertyOfType(recvType, arg.name.text) ?: continue
             if (!isOptionalProperty(prop)) continue
-            val propType = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { continue }
+            val propType = getTypeOfSymbol(prop)
             if (propType === anyType || propType === errorType) continue
             val paramSym = sig.parameters.getOrNull(i) ?: continue
-            val paramType = try { getTypeOfSymbol(paramSym) } catch (_: StackOverflowError) { continue }
+            val paramType = getTypeOfSymbol(paramSym)
             if (paramType === anyType || paramType === errorType) continue
             // Only-undefined-fails gate: member type passes, bare undefined fails.
-            val memberOk = try { checkTypeRelatedTo(propType, paramType, assignableRelation) } catch (_: StackOverflowError) { continue }
+            val memberOk = checkTypeRelatedTo(propType, paramType, assignableRelation)
             if (!memberOk) continue
-            val undefFails = try { !checkTypeRelatedTo(undefinedType, paramType, assignableRelation) } catch (_: StackOverflowError) { continue }
+            val undefFails = !checkTypeRelatedTo(undefinedType, paramType, assignableRelation)
             if (!undefFails) continue
             val display = "${typeToString(propType)} | undefined"
             val start = arg.pos
@@ -89505,7 +89505,7 @@ interface DataView {
                 if (bad || restCount != 1) continue
                 val resolvable = tuple.elements.all { el ->
                     val inner = if (el is RestType) el.type else el
-                    val t = try { getTypeFromTypeNode(inner) } catch (_: StackOverflowError) { return@all false }
+                    val t = getTypeFromTypeNode(inner)
                     t !== anyType && t !== errorType && !t.flags.hasAny(TypeFlags.Unknown)
                 }
                 if (!resolvable) continue
@@ -89854,7 +89854,7 @@ interface DataView {
                 // B148d: primitive `@typedef {number} Foo` target → assignability check (TS2322).
                 if (targetType is Type.Intrinsic && targetType !== anyType && targetType !== errorType) {
                     val expr0 = stmt.expression
-                    val sourceType = try { getTypeOfExpression(expr0) } catch (_: StackOverflowError) { continue }
+                    val sourceType = getTypeOfExpression(expr0)
                     if (sourceType === anyType || sourceType === errorType) continue
                     val assignable = try { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }
                         catch (_: StackOverflowError) { continue }
@@ -89875,18 +89875,18 @@ interface DataView {
                 // Resolve the interface's members (getDeclaredTypeOfSymbol returns the shell;
                 // collectTargetPropertyNames needs the populated member table). No-op for the
                 // already-materialized @typedef-synthesized Type.Object.
-                try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { continue }
+                resolveStructuredTypeMembers(targetType)
                 if (targetType.members.isNullOrEmpty()) continue
                 val expr = stmt.expression
                 if (expr is ObjectLiteralExpression) {
                     // Fresh object literal → excess-property check (TS2353).
-                    val sourceType = try { getTypeOfObjectLiteral(expr) } catch (_: StackOverflowError) { continue }
+                    val sourceType = getTypeOfObjectLiteral(expr)
                     checkExcessProperties(expr, sourceType, targetType, displayTarget, source, fileName)
                 } else {
                     // Variable/other expr source → missing-required-property check (TS2739/40/41).
-                    val sourceType = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { continue }
+                    val sourceType = getTypeOfExpression(expr)
                     if (sourceType !is Type.Object || sourceType === errorType) continue
-                    val missing = try { collectMissingProperties(sourceType, targetType) } catch (_: StackOverflowError) { continue }
+                    val missing = collectMissingProperties(sourceType, targetType)
                     if (missing.isEmpty()) continue
                     val start = expr.pos
                     val length = expressionTrueEnd(expr) - start
@@ -89915,7 +89915,7 @@ interface DataView {
         if (typeNode is ImportType) {
             val qual = typeNode.qualifier as? Identifier ?: return null
             val sym = globals[qual.text] ?: return null
-            val t = try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { return null }
+            val t = getDeclaredTypeOfSymbol(sym)
             return t to typeToString(t)
         }
         if (typeNode is TypeReference) {
@@ -90404,8 +90404,8 @@ interface DataView {
             val numNode = effNumSig?.type
             val strNode = effStrSig?.type
             if (numNode != null && strNode != null) {
-                val numVal = try { getTypeFromTypeNode(numNode) } catch (_: StackOverflowError) { errorType }
-                val strVal = try { getTypeFromTypeNode(strNode) } catch (_: StackOverflowError) { errorType }
+                val numVal = getTypeFromTypeNode(numNode)
+                val strVal = getTypeFromTypeNode(strNode)
                 // B272: PRIMITIVE index value types — `[n: number]: string` + `[s: string]: number`
                 // is always TS2413 (obj[0] is also obj["0"]). Same own-sig report position as
                 // the named-interface path below; disjoint by value kind.
@@ -90436,7 +90436,7 @@ interface DataView {
                     numVal !== strVal && numVal !== errorType && strVal !== errorType) {
                     resolveStructuredTypeMembers(numVal)
                     resolveStructuredTypeMembers(strVal)
-                    var missing = try { collectMissingProperties(numVal, strVal) } catch (_: StackOverflowError) { emptyList() }
+                    var missing = collectMissingProperties(numVal, strVal)
                     // B292: INDEX-VALUE incompatibility between PROP-LESS named
                     // interfaces (`[n]: Orange` vs `[s]: Yellow` where Orange's index
                     // values are primitives and Yellow's are non-empty user
@@ -93266,7 +93266,7 @@ interface DataView {
         if (classTypeParams != null && classTypeParams.isNotEmpty()) {
             val classSymbol = globals[rawClassName]
             val classType = classSymbol?.let {
-                try { getDeclaredTypeOfSymbol(it) as? Type.Interface } catch (_: StackOverflowError) { null }
+                getDeclaredTypeOfSymbol(it) as? Type.Interface
             }
             val canonicalTypeParams = classType?.typeParameters
             if (canonicalTypeParams != null && canonicalTypeParams.size == classTypeParams.size) {
@@ -94869,7 +94869,7 @@ interface DataView {
                 it is SetAccessor && getMemberName(it.name) == gName
             } as? SetAccessor ?: continue
             val setAnn = setter.parameters.firstOrNull()?.type ?: continue
-            val target = try { getTypeFromTypeNode(setAnn) } catch (_: StackOverflowError) { continue }
+            val target = getTypeFromTypeNode(setAnn)
             if (target === anyType || target === errorType) continue
             if (!isPrimitiveOnlyWriteType(target)) continue
             val body = getter.body ?: continue
@@ -94881,7 +94881,7 @@ interface DataView {
         for (s in stmts) when (s) {
             is ReturnStatement -> {
                 val e = s.expression ?: continue
-                val raw = try { getTypeOfExpression(e) } catch (_: StackOverflowError) { continue }
+                val raw = getTypeOfExpression(e)
                 if (raw === anyType || raw === errorType) continue
                 val widened = getWidenedLiteralType(raw)
                 if (!isPrimitiveOnlyWriteType(widened)) continue
@@ -95016,10 +95016,10 @@ interface DataView {
             if (ptpName !in map) continue
             val resolvedNode = resolveTpNode(ptpName) ?: continue
             // Avoid re-resolving to another TP (would not be a concrete primitive anyway).
-            val pType = try { getTypeFromTypeNode(resolvedNode) } catch (_: StackOverflowError) { continue }
+            val pType = getTypeFromTypeNode(resolvedNode)
             if (!isSimpleCheckableType(pType)) continue
             val argExpr = call.arguments?.getOrNull(i) ?: continue
-            val argType = try { getTypeOfExpression(argExpr) } catch (_: StackOverflowError) { continue }
+            val argType = getTypeOfExpression(argExpr)
             if (argType === anyType || argType === errorType) continue
             if (checkTypeRelatedTo(argType, pType, assignableRelation)) continue
             val argDisp = typeToString(getWidenedLiteralType(argType))
@@ -95061,7 +95061,7 @@ interface DataView {
                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                 p
             }
-            tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { errorType } }
+            tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it) }
             scope[tp.name.text] = typeParam
         }
         currentTypeParamScope = if (scope.isEmpty()) null else scope
@@ -95092,8 +95092,8 @@ interface DataView {
                 }
                 // TS2344: default does not satisfy constraint.
                 val cNode = tp.constraint ?: continue
-                val dType = try { getTypeFromTypeNode(defNode) } catch (_: StackOverflowError) { continue }
-                val cType = try { getTypeFromTypeNode(cNode) } catch (_: StackOverflowError) { continue }
+                val dType = getTypeFromTypeNode(defNode)
+                val cType = getTypeFromTypeNode(cNode)
                 if (dType === anyType || dType === errorType || cType === anyType || cType === errorType) continue
                 if (checkTypeRelatedTo(dType, cType, assignableRelation)) continue
                 // A default that is a TYPE PARAMETER satisfies the constraint when its OWN
@@ -95783,7 +95783,7 @@ interface DataView {
      */
     private fun getTypeParameterDeclarationsOfSymbol(symbol: Symbol): List<TypeParameter>? {
         val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+            resolveAlias(symbol)
         } else symbol
         for (decl in resolved.declarations) {
             val typeParamNodes = when (decl) {
@@ -95803,7 +95803,7 @@ interface DataView {
     private fun getTypeParametersOfSymbol(symbol: Symbol): List<Type.TypeParam>? {
         // Follow alias if this is an import alias
         val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+            resolveAlias(symbol)
         } else symbol
         for (decl in resolved.declarations) {
             val typeParamNodes = when (decl) {
@@ -95979,7 +95979,7 @@ interface DataView {
                             val callee = call?.expression as? PropertyAccessExpression
                             if (rightArr != null && rightArr.elements.isEmpty() &&
                                 callee != null && callee.name.text == "match") {
-                                val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { null }
+                                val recvType = getTypeOfExpression(callee.expression)
                                 if (recvType === stringType || recvType is Type.StringLiteral) {
                                     for (el in pattern.elements) {
                                         val be = el as? BindingElement ?: continue
@@ -96182,7 +96182,7 @@ interface DataView {
         // not `this`'s type when a `this:` param is present).
         val effectiveClassType: Type? = if (member is MethodDeclaration && hasExplicitThisParam) {
             val ann = member.parameters.firstOrNull()?.type
-            if (ann != null) try { getTypeFromTypeNode(ann) } catch (_: StackOverflowError) { classType } else classType
+            if (ann != null) getTypeFromTypeNode(ann) else classType
         } else classType
         when (member) {
             is MethodDeclaration -> {
@@ -96346,7 +96346,7 @@ interface DataView {
                                 if (i < sig.parameters.size) {
                                     val ptRaw = getTypeOfSymbol(sig.parameters[i])
                                     val pt = if (ctxMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                                        try { instantiateContextualParamType(ptRaw, ctxMapper) } catch (_: StackOverflowError) { ptRaw }
+                                        instantiateContextualParamType(ptRaw, ctxMapper)
                                     } else ptRaw
                                     if (pt === anyType || pt === errorType) null else pt
                                 } else null
@@ -96391,7 +96391,7 @@ interface DataView {
                     if (cur.operator == SyntaxKind.Equals &&
                         (cur.left is ArrayLiteralExpression || cur.left is ObjectLiteralExpression)
                     ) {
-                        val rhsT = try { getTypeOfExpression(cur.right) } catch (_: StackOverflowError) { null }
+                        val rhsT = getTypeOfExpression(cur.right)
                         if (rhsT != null) checkDestructuringAssignmentPrivate(cur.left, rhsT, source, fileName)
                     }
                     rightStack.addLast(cur.right)
@@ -96430,7 +96430,7 @@ interface DataView {
                                 if (param.type != null) continue
                                 if (i >= sig.parameters.size) break
                                 val pName = param.name as? Identifier ?: continue
-                                val pType = try { getTypeOfSymbol(sig.parameters[i]) } catch (_: StackOverflowError) { continue }
+                                val pType = getTypeOfSymbol(sig.parameters[i])
                                 if (pType === anyType || pType === errorType) continue
                                 currentLocalTypes[pName.text] = pType
                             }
@@ -96482,7 +96482,7 @@ interface DataView {
                 // arrow function params can be typed from the contextual member types.
                 val ctxObj = contextualType as? Type.Object
                 if (ctxObj != null) {
-                    try { resolveStructuredTypeMembers(ctxObj) } catch (_: StackOverflowError) {}
+                    resolveStructuredTypeMembers(ctxObj)
                 }
                 for (prop in expr.properties) {
                     when (prop) {
@@ -96494,7 +96494,7 @@ interface DataView {
                             }
                             val propCtx = if (propName != null && ctxObj != null) {
                                 ctxObj.members?.get(propName)?.let { sym ->
-                                    try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                                    getTypeOfSymbol(sym)
                                 }
                             } else null
                             val savedCtx = contextualType
@@ -96575,7 +96575,7 @@ interface DataView {
                                 if (param.type != null) continue
                                 if (i >= sig.parameters.size) break
                                 val pName = param.name as? Identifier ?: continue
-                                val pType = try { getTypeOfSymbol(sig.parameters[i]) } catch (_: StackOverflowError) { continue }
+                                val pType = getTypeOfSymbol(sig.parameters[i])
                                 if (pType === anyType || pType === errorType) continue
                                 currentLocalTypes[pName.text] = pType
                             }
@@ -96612,7 +96612,7 @@ interface DataView {
                 }
                 val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
                 anonSym.declarations.add(expr)
-                val anonClassType = try { getDeclaredTypeOfSymbol(anonSym) } catch (_: StackOverflowError) { null }
+                val anonClassType = getDeclaredTypeOfSymbol(anonSym)
                 val savedStatic = inStaticClassMethod
                 inStaticClassMethod = false
                 for (member in expr.members) {
@@ -96857,7 +96857,7 @@ interface DataView {
             else -> null
         }
         if (classSymbol == null || !classSymbol.flags.hasAny(SymbolFlags.Class)) return null
-        return try { getDeclaredTypeOfSymbol(classSymbol) } catch (_: StackOverflowError) { null }
+        return getDeclaredTypeOfSymbol(classSymbol)
     }
 
     /**
@@ -97078,10 +97078,10 @@ interface DataView {
         for (tpDecl in typeParameters) {
             val tp = scope[tpDecl.name.text] ?: continue
             tpDecl.constraint?.let {
-                try { tp.constraint = getTypeFromTypeNode(it) } catch (_: StackOverflowError) {}
+                tp.constraint = getTypeFromTypeNode(it)
             }
             tpDecl.default?.let {
-                try { tp.default = getTypeFromTypeNode(it) } catch (_: StackOverflowError) {}
+                tp.default = getTypeFromTypeNode(it)
             }
         }
         return saved
@@ -97404,7 +97404,7 @@ interface DataView {
         for (base in baseTypes) {
             if (base !is Type.Interface) return false // unknown base shape — be conservative
             if (baseDisplay == null) baseDisplay = base.symbol?.name
-            try { resolveStructuredTypeMembers(base) } catch (_: StackOverflowError) { return false }
+            resolveStructuredTypeMembers(base)
             if (isStaticContext) {
                 // Static lookup — check the static-side member table only.
                 if (base.staticMembers?.get(propName) != null) return false
@@ -97440,7 +97440,7 @@ interface DataView {
         val chain = base.baseTypes ?: return false
         for (b in chain) {
             if (b !is Type.Interface) return false
-            try { resolveStructuredTypeMembers(b) } catch (_: StackOverflowError) { return false }
+            resolveStructuredTypeMembers(b)
             if (getPropertyOfType(b, propName) != null) return true
             if (basePropertyInheritedChain(b, propName, visited)) return true
         }
@@ -97561,13 +97561,13 @@ interface DataView {
             getTypeOfExpression(info.recvOfRecv)
         } catch (_: StackOverflowError) { return }
         if (recvOfRecvType === anyType || recvOfRecvType === errorType) return
-        val apparent = try { getApparentType(recvOfRecvType) } catch (_: StackOverflowError) { return }
+        val apparent = getApparentType(recvOfRecvType)
         val propSym = getPropertyOfType(apparent, info.propName) ?: return
         if (!isOptionalProperty(propSym)) return
         // Compute the receiver's declared type as `propType | undefined`, then
         // consult loop-aware flow narrowing. If undefined survives narrowing,
         // emit the diagnostic.
-        val propType = try { getTypeOfSymbol(propSym) } catch (_: StackOverflowError) { return }
+        val propType = getTypeOfSymbol(propSym)
         if (propType === anyType || propType === errorType) return
         val declaredWithUndef = if (typeIncludesExplicitUndefined(propType)) propType
             else getUnionType(listOf(propType, undefinedType))
@@ -97631,7 +97631,7 @@ interface DataView {
         if (!strictNullChecks) return
         if (expr.questionDotToken) return
         val recv = expr.expression as? Identifier ?: return
-        val declared = try { getTypeOfIdentifier(recv) } catch (_: StackOverflowError) { return }
+        val declared = getTypeOfIdentifier(recv)
         if (declared === anyType || declared === errorType) return
         if (declared !is Type.Union) return
         if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
@@ -97840,9 +97840,9 @@ interface DataView {
             }
 
             // Compute the type of `receiverType.propName` and continue.
-            val apparent = try { getApparentType(receiverType) } catch (_: StackOverflowError) { return }
+            val apparent = getApparentType(receiverType)
             val prop = getPropertyOfType(apparent, propName) ?: return
-            var propType = try { getTypeOfSymbol(prop) } catch (_: StackOverflowError) { return }
+            var propType = getTypeOfSymbol(prop)
             if (propType === errorType) return
             if (isOptionalProperty(prop) && !typeIncludesExplicitUndefined(propType)) {
                 propType = getUnionType(listOf(propType, undefinedType))
@@ -98045,9 +98045,9 @@ interface DataView {
         val memberName = enumAccess.name.text
         val memberSym = enumSym.exports?.get(memberName) ?: return false
         if (!memberSym.flags.hasAny(SymbolFlags.EnumMember)) return false
-        val numHasIt = try { getPropertyOfType(getApparentType(numberType), propName) } catch (_: StackOverflowError) { null }
+        val numHasIt = getPropertyOfType(getApparentType(numberType), propName)
         if (numHasIt != null) return false
-        val strHasIt = try { getPropertyOfType(getApparentType(stringType), propName) } catch (_: StackOverflowError) { null }
+        val strHasIt = getPropertyOfType(getApparentType(stringType), propName)
         if (strHasIt != null) return false
         val display = "$enumName.$memberName"
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
@@ -98084,9 +98084,9 @@ interface DataView {
         if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
         if (recv.text == "this" || recv.text == "super") return false
         val display = enumTypedReceiverDisplay(recv) ?: return false
-        val numHasIt = try { getPropertyOfType(getApparentType(numberType), propName) } catch (_: StackOverflowError) { return false }
+        val numHasIt = getPropertyOfType(getApparentType(numberType), propName)
         if (numHasIt != null) return false
-        val strHasIt = try { getPropertyOfType(getApparentType(stringType), propName) } catch (_: StackOverflowError) { return false }
+        val strHasIt = getPropertyOfType(getApparentType(stringType), propName)
         if (strHasIt != null) return false
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
         diagnostics.add(Diagnostic(
@@ -98145,10 +98145,10 @@ interface DataView {
         if (utilName != "Partial" && utilName != "Required" && utilName != "Readonly") return
         val typeArgs = typeNode.typeArguments ?: return
         if (typeArgs.size != 1) return
-        val argType = try { getTypeFromTypeNode(typeArgs[0]) } catch (_: StackOverflowError) { return }
+        val argType = getTypeFromTypeNode(typeArgs[0])
         if (argType !is Type.Object || argType === anyType || argType === errorType) return
         if (argType is Type.Interface && !argType.baseTypes.isNullOrEmpty()) return
-        try { resolveStructuredTypeMembers(argType) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(argType)
         if (getPropertyOfType(argType, propName) != null) return
         val inner = typeToString(argType)
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
@@ -98291,7 +98291,7 @@ interface DataView {
         // narrowed-to-never path below handles those for Union receivers).
         run {
             val reductionReason = findIntersectionReductionForExpr(objectExpr) ?: return@run
-            val recvType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { return@run }
+            val recvType = getTypeOfExpression(objectExpr)
             if (recvType !== neverType) return@run
             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
             diagnostics.add(Diagnostic(
@@ -98324,10 +98324,10 @@ interface DataView {
         // Used by patterns like `class C extends "".bogus {}` where the heritage
         // expression is a PropertyAccessExpression on a StringLiteralNode receiver.
         if (objectExpr is StringLiteralNode && propName !in RUNTIME_PROPERTIES) {
-            val apparent = try { getApparentType(stringType) } catch (_: StackOverflowError) { return }
+            val apparent = getApparentType(stringType)
             if (apparent is Type.Object) {
-                try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
-                val hasProp = try { getPropertyOfType(apparent, propName) } catch (_: StackOverflowError) { return } != null
+                resolveStructuredTypeMembers(apparent)
+                val hasProp = getPropertyOfType(apparent, propName) != null
                 if (!hasProp) {
                     val display = "\"" + (objectExpr.text) + "\""
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
@@ -98473,7 +98473,7 @@ interface DataView {
                         val ctorSym2 = globals[ctorExpr2.text] ?: return@run
                         if (!ctorSym2.flags.hasAny(SymbolFlags.Variable) || ctorSym2.flags.hasAny(SymbolFlags.Class)) return@run
                         if (!ctorSym2.declarations.all { it in builtinLibDecls }) return@run
-                        val t = try { getReturnTypeOfNewExpression(objectExpr) } catch (_: StackOverflowError) { return@run }
+                        val t = getReturnTypeOfNewExpression(objectExpr)
                         val n = when (t) {
                             is Type.Reference -> t.target.symbol?.name
                             is Type.Interface -> t.symbol?.name
@@ -98517,7 +98517,7 @@ interface DataView {
         // return type's apparent-type member table at this site without broader
         // refactoring).
         if (objectExpr is CallExpression) {
-            val callType = try { getReturnTypeOfCallExpression(objectExpr) } catch (_: StackOverflowError) { return }
+            val callType = getReturnTypeOfCallExpression(objectExpr)
             if (callType === neverType) {
                 val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                 diagnostics.add(Diagnostic(
@@ -98539,9 +98539,9 @@ interface DataView {
             if (callType is Type.Intrinsic &&
                 callType.intrinsicName in PRIMITIVE_WRAPPER_INTRINSIC_NAMES
             ) {
-                val apparent = try { getApparentType(callType) } catch (_: StackOverflowError) { return }
+                val apparent = getApparentType(callType)
                 if (apparent is Type.Object) {
-                    try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
+                    resolveStructuredTypeMembers(apparent)
                     if (getPropertyOfType(apparent, propName) != null) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     // B65.1: route through typeToString so TemplateLiteralType-sourced
@@ -98608,13 +98608,13 @@ interface DataView {
         // member typed `any` (e.g. `c.unknown.length` under `class C extends Base:any`)
         // is correctly left alone.
         if (objectExpr is PropertyAccessExpression || objectExpr is ElementAccessExpression) {
-            val recvType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { null }
+            val recvType = getTypeOfExpression(objectExpr)
             if (recvType is Type.Intrinsic &&
                 recvType.intrinsicName in PRIMITIVE_WRAPPER_INTRINSIC_NAMES && propName.isNotEmpty()
             ) {
-                val apparent = try { getApparentType(recvType) } catch (_: StackOverflowError) { null }
+                val apparent = getApparentType(recvType)
                 if (apparent is Type.Object) {
-                    try { resolveStructuredTypeMembers(apparent) } catch (_: StackOverflowError) { return }
+                    resolveStructuredTypeMembers(apparent)
                     if (getPropertyOfType(apparent, propName) != null) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
@@ -98655,7 +98655,7 @@ interface DataView {
             enclosingClassType
         } else if (objectExpr is ArrayLiteralExpression) {
             // 16.4: `[1,2,3].NonexistantMethod()` → TS2339 against `number[]`.
-            val rawArr = try { getTypeOfArrayLiteral(objectExpr) } catch (_: StackOverflowError) { return }
+            val rawArr = getTypeOfArrayLiteral(objectExpr)
             if (rawArr === anyType || rawArr === errorType) return
             if (rawArr !is Type.Reference || rawArr.target !== globalArrayType) return
             // Widen literal element types for display: [1,2,3] → number[] (not (1|2|3)[]).
@@ -98703,7 +98703,7 @@ interface DataView {
                 while (castInner is ParenthesizedExpression) castInner = castInner.expression
                 if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
                     propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
-                    val castType = try { getTypeOfExpression(objectExpr) } catch (_: StackOverflowError) { null }
+                    val castType = getTypeOfExpression(objectExpr)
                     if (castType is Type.Interface && castType !is Type.Reference && castType.symbol != null &&
                         castType.baseTypes.isNullOrEmpty() &&
                         castType.callSignatures.isNullOrEmpty() &&
@@ -98801,7 +98801,7 @@ interface DataView {
                         val members = narrowed.types.filterNot { isNullishConstituent(it) }
                         fun memberHasIt(m: Type): Boolean {
                             if (m === anyType || m === errorType || m === unknownType) return true
-                            return try { typeHasOwnProperty(getApparentType(m), propName) } catch (_: StackOverflowError) { true }
+                            return typeHasOwnProperty(getApparentType(m), propName)
                         }
                         val missingMembers = members.filter { !memberHasIt(it) }
                         val anyHasIt = members.any { memberHasIt(it) }
@@ -98829,7 +98829,7 @@ interface DataView {
                             var suggestion: String? = null
                             if (allWellResolved && members.all { it is Type.Interface }) {
                                 val commonProps = members.map { m ->
-                                    try { resolveStructuredTypeMembers(m as Type.Interface) } catch (_: StackOverflowError) {}
+                                    resolveStructuredTypeMembers(m as Type.Interface)
                                     (m as Type.Interface).properties?.mapTo(mutableSetOf()) { it.name } ?: mutableSetOf()
                                 }.reduceOrNull { a, b -> a.apply { retainAll(b) } } ?: mutableSetOf()
                                 suggestion = getSpellingSuggestionFromNames(propName, commonProps)
@@ -98936,7 +98936,7 @@ interface DataView {
                     (keySuggestion == null || keySuggestion.startsWith(".")) &&
                     propName.isNotEmpty() && propName[0] !in '0'..'9' &&
                     propName !in RUNTIME_PROPERTIES) {
-                    val recvSym = try { resolveQualifiedValueSymbol(objectExpr) } catch (_: StackOverflowError) { null }
+                    val recvSym = resolveQualifiedValueSymbol(objectExpr)
                     val memberSym = recvSym?.takeIf {
                         it.flags.hasAny(SymbolFlags.Module) &&
                             !it.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Alias or SymbolFlags.NamespaceModule)
@@ -98966,7 +98966,7 @@ interface DataView {
                     (keySuggestion == null || keySuggestion.startsWith(".")) &&
                     propName.isNotEmpty() && propName[0] !in '0'..'9' &&
                     propName !in RUNTIME_PROPERTIES) {
-                    val recvSym = try { resolveQualifiedValueSymbol(objectExpr) } catch (_: StackOverflowError) { null }
+                    val recvSym = resolveQualifiedValueSymbol(objectExpr)
                     val nsBlocks = recvSym?.takeIf {
                         it.flags.hasAny(SymbolFlags.Module) && !it.flags.hasAny(SymbolFlags.NamespaceModule)
                     }?.declarations?.filterIsInstance<ModuleDeclaration>() ?: emptyList()
@@ -99145,7 +99145,7 @@ interface DataView {
                         it is ExportDeclaration && it.exportClause == null && it.moduleSpecifier != null
                     }
                     if (hasStarReexport) return@run
-                    val resolved = try { resolveAlias(identSymbol) } catch (_: StackOverflowError) { return@run }
+                    val resolved = resolveAlias(identSymbol)
                     if (!resolved.flags.hasAny(SymbolFlags.Module)) return@run
                     val exports = resolved.exports ?: return@run
                     if (exports.containsKey(propName)) return@run
@@ -99919,7 +99919,7 @@ interface DataView {
                     enumName = annRefName
                     enumMembers = members
                 } else {
-                    val t = try { getTypeOfIdentifier(arg) } catch (_: StackOverflowError) { null }
+                    val t = getTypeOfIdentifier(arg)
                     when {
                         t is Type.StringLiteral -> singleKey = t.value
                         t is Type.Union && t.types.isNotEmpty() && t.types.all { it is Type.StringLiteral } ->
@@ -99935,13 +99935,13 @@ interface DataView {
         val freshLit = freshObjectLiteralOf(recvExpr)
         var rt: Type? = null
         if (freshLit != null) {
-            rt = try { getTypeOfExpression(freshLit) } catch (_: StackOverflowError) { null }
+            rt = getTypeOfExpression(freshLit)
         } else if (recvExpr is Identifier) {
             val declInit = nearestPrecedingObjectLiteralDecl(fileName, recvExpr.text, expr.pos)
-            rt = if (declInit != null) try { getTypeOfExpression(declInit) } catch (_: StackOverflowError) { null }
-            else try { getTypeOfExpression(recvExpr) } catch (_: StackOverflowError) { null }
+            rt = if (declInit != null) getTypeOfExpression(declInit)
+            else getTypeOfExpression(recvExpr)
         } else if (recvExpr is PropertyAccessExpression) {
-            rt = try { getTypeOfExpression(recvExpr) } catch (_: StackOverflowError) { null }
+            rt = getTypeOfExpression(recvExpr)
         }
         if (rt == null) return false
         // Enum receivers (the enum OBJECT `E["key"]` or enum-typed values) are owned
@@ -99998,7 +99998,7 @@ interface DataView {
                 }
             }
             rt is Type.Object -> {
-                try { resolveStructuredTypeMembers(rt) } catch (_: StackOverflowError) { return false }
+                resolveStructuredTypeMembers(rt)
                 if (rt.stringIndexInfo != null || rt.numberIndexInfo != null) return false
                 if (!rt.callSignatures.isNullOrEmpty() || !rt.constructSignatures.isNullOrEmpty()) return false
                 val props = rt.properties ?: emptyList()
@@ -100006,13 +100006,13 @@ interface DataView {
                 isNamedReceiver = false
                 methodChecker = checker@{ method ->
                     val m = props.firstOrNull { it.name == method } ?: return@checker false
-                    val mt = (try { getTypeOfSymbol(m) } catch (_: StackOverflowError) { null }) as? Type.Object ?: return@checker false
+                    val mt = (getTypeOfSymbol(m)) as? Type.Object ?: return@checker false
                     val sigs = mt.callSignatures ?: return@checker false
                     if (sigs.size != 1) return@checker false
                     val sig = sigs[0]
                     if (sig.minArgumentCount < 1 && sig.parameters.isEmpty()) return@checker false
                     val p0 = sig.parameters.getOrNull(0) ?: return@checker false
-                    val p0t = try { getTypeOfSymbol(p0) } catch (_: StackOverflowError) { null } ?: return@checker false
+                    val p0t = getTypeOfSymbol(p0) ?: return@checker false
                     when {
                         p0t === stringType || p0t === anyType || p0t === errorType ->
                             singleKey != null || unionKeys != null
@@ -100154,7 +100154,7 @@ interface DataView {
         // (interface/class instance/anonymous object/reference) — `any`/error
         // receivers bail like tsc's isErrorType objectType bail.
         if (arg is BigIntLiteralNode) {
-            val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+            val rt = getTypeOfExpression(expr.expression)
             if (rt is Type.Object && rt !== errorType) {
                 val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
                 diagnostics.add(Diagnostic(
@@ -100171,9 +100171,9 @@ interface DataView {
         // resolving to a concrete object/reference shape (interface/class instance/
         // anonymous object/reference) — `any`/error receivers bail like tsc.
         if (arg is Identifier && arg.text != "null" && arg.text != "undefined") {
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            val argType = getTypeOfExpression(arg)
             if (argType === bigintType) {
-                val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+                val rt = getTypeOfExpression(expr.expression)
                 if ((rt is Type.Object || rt is Type.Interface || rt is Type.Reference) && rt !== errorType) {
                     val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
                     diagnostics.add(Diagnostic(
@@ -100193,7 +100193,7 @@ interface DataView {
         // type is a Union with at least one Array `Type.Reference` constituent.
         // Squiggle covers the full arg expression via expressionTrueEnd.
         if (arg is ElementAccessExpression) {
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            val argType = getTypeOfExpression(arg)
             if (argType is Type.Union) {
                 val arrayConstituent = argType.types.firstOrNull { t ->
                     t is Type.Reference && t.target.symbol?.name == "Array"
@@ -100244,7 +100244,7 @@ interface DataView {
         // coerce, and NOT an enum, whose members ARE valid indices). Squiggle covers the
         // index identifier only (matches TypeScript's span).
         if (arg is Identifier && arg.text != "null" && arg.text != "undefined") {
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { null }
+            val argType = getTypeOfExpression(arg)
             if (argType is Type.Interface) {
                 val sym = argType.symbol
                 val nm = sym?.name
@@ -100311,7 +100311,7 @@ interface DataView {
         // Squiggle covers full `receiver[key]` expression. Must run BEFORE the `when (arg)`
         // block which returns for non-literal keys.
         if (arg is Identifier && (options.noImplicitAny || options.strict)) {
-            val argType = try { getTypeOfIdentifier(arg) } catch (_: StackOverflowError) { null }
+            val argType = getTypeOfIdentifier(arg)
             // B70.2: accept both `any` and `string` as the index expression's type.
             // For-in loop variables (typed as `string` via the ForInStatement walker)
             // also trigger TS7053 with `'string'` in the message — TypeScript's rule
@@ -100323,9 +100323,9 @@ interface DataView {
                 else -> null
             }
             if (argDisplay != null) {
-                val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+                val recvType = getTypeOfExpression(expr.expression)
                 if (recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
-                    try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { /* fall-through */ }
+                    resolveStructuredTypeMembers(recvType)
                     val noProps = recvType.properties.isNullOrEmpty()
                     val noIndex = recvType.stringIndexInfo == null && recvType.numberIndexInfo == null
                     val noCalls = recvType.callSignatures.isNullOrEmpty() && recvType.constructSignatures.isNullOrEmpty()
@@ -100370,14 +100370,14 @@ interface DataView {
         // excludes `({...} as Record<...>)[id]` shapes.
         run {
             if (arg is StringLiteralNode || arg is NumericLiteralNode) return@run
-            val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { return@run }
+            val recvType = getTypeOfExpression(expr.expression)
             if (recvType !is Type.Object || recvType is Type.Reference || recvType is Type.Interface) return@run
-            try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return@run }
+            resolveStructuredTypeMembers(recvType)
             if (recvType.stringIndexInfo != null || recvType.numberIndexInfo != null) return@run
             if (!recvType.callSignatures.isNullOrEmpty() || !recvType.constructSignatures.isNullOrEmpty()) return@run
             val props = recvType.properties ?: return@run
             if (props.isEmpty()) return@run
-            val idxType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return@run }
+            val idxType = getTypeOfExpression(arg)
             if (idxType !is Type.Union) return@run
             val keys = props.map { it.name }.toSet()
             var missing: String? = null
@@ -100397,7 +100397,7 @@ interface DataView {
                 val length = (end - recvStart).coerceAtLeast(1)
                 val (line, character) = getLineAndCharacterOfPosition(source, recvStart)
                 val recvDisplay = props.joinToString(prefix = "{ ", separator = "; ", postfix = "; }") { sym ->
-                    val pt = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { anyType }
+                    val pt = symbolTypes[sym.id] ?: getTypeOfSymbol(sym)
                     "${sym.name}: ${typeToString(widenType(pt))}"
                 }
                 diagnostics.add(Diagnostic(
@@ -100483,7 +100483,7 @@ interface DataView {
         // primitive is TS7053 under noImplicitAny and SILENT otherwise (the
         // property-existence TS2339 path is property-access only).
         if (arg is StringLiteralNode && arg.text.toDoubleOrNull() == null) {
-            val rt = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { null }
+            val rt = getTypeOfExpression(expr.expression)
             if (rt === stringType || rt is Type.StringLiteral) return
         }
         // Build the raw suggestion syntax for TS2576 from the source text:
@@ -101072,7 +101072,7 @@ interface DataView {
                 // sees the narrowed type and doesn't FP (typePredicateInLoop).
                 val narrow = resolveUserTypeGuardNarrowing(stmt.expression)
                 val uType = narrow?.let { (_, uNode) ->
-                    try { getTypeFromTypeNode(uNode) } catch (_: StackOverflowError) { null }
+                    getTypeFromTypeNode(uNode)
                 }
                 if (narrow != null && uType != null && uType !== anyType && uType !== errorType) {
                     val vn = narrow.first
@@ -101376,7 +101376,7 @@ interface DataView {
                 } else {
                     val annParam = ann.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
                     annParam?.type?.let {
-                        try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                        getTypeFromTypeNode(it)
                     }
                 }
                 if (base == null || base === anyType || base === errorType) continue
@@ -101576,7 +101576,7 @@ interface DataView {
     private fun checkSingleTaggedTemplateTypes(
         expr: TaggedTemplateExpression, source: String, fileName: String,
     ) {
-        val calleeType = try { getCalleeType(expr.tag) } catch (_: StackOverflowError) { return }
+        val calleeType = getCalleeType(expr.tag)
         if (calleeType === anyType || calleeType === errorType) return
         val signatures = getCallSignaturesOfType(calleeType)
         if (signatures.size != 1) return
@@ -101598,7 +101598,7 @@ interface DataView {
             val paramType = getTypeOfSymbol(params[paramIdx])
             if (paramType === anyType || paramType === errorType) continue
             if (!isSimpleCheckableType(paramType)) continue
-            val argType = try { getTypeOfExpression(sub) } catch (_: StackOverflowError) { continue }
+            val argType = getTypeOfExpression(sub)
             if (argType === anyType || argType === errorType) continue
             if (!isSimpleCheckableType(argType)) continue
             // Use the subtype relation to check assignability.
@@ -101652,10 +101652,10 @@ interface DataView {
         val last = params.last()
         val isRest = (last.valueDeclaration as? Parameter)?.dotDotDotToken == true
         if (!isRest) return false
-        val ptype = try { getTypeOfSymbol(last) } catch (_: StackOverflowError) { return false }
+        val ptype = getTypeOfSymbol(last)
         if (ptype !== neverType) return false
         val argDisplays = expr.arguments.map { a ->
-            val at = try { getTypeOfExpression(a) } catch (_: StackOverflowError) { return false }
+            val at = getTypeOfExpression(a)
             typeToString(at)
         }
         val tupleDisplay = "[" + argDisplays.joinToString(", ") + "]"
@@ -101688,7 +101688,7 @@ interface DataView {
         // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
         // evaluation with the key TPs fixed to this call's string-literal args.
         if (calleeExpr is PropertyAccessExpression &&
-            try { tryEmitDependentIndexedConstraintTs2345(expr, source, fileName) } catch (_: StackOverflowError) { false }) return
+            tryEmitDependentIndexedConstraintTs2345(expr, source, fileName)) return
         // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
         // param `object | null`; our embedded lib has `any`, so the standard arg check
         // never fires. tsc display quirk: a non-nullish failing primitive reports
@@ -101705,7 +101705,7 @@ interface DataView {
             if (!expr.typeArguments.isNullOrEmpty()) return@run
             if (expr.arguments.isEmpty() || expr.arguments.size > 2) return@run
             val arg = expr.arguments[0]
-            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { return@run }
+            val argType = getWidenedLiteralType(getTypeOfExpression(arg))
             val display: String? = when {
                 argType is Type.Intrinsic && argType.intrinsicName in
                     setOf("number", "string", "boolean", "bigint", "symbol") -> "object"
@@ -101897,8 +101897,8 @@ interface DataView {
                             if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
                             if (s1.parameters.size != s2.parameters.size) return@run true
                             for (k in s1.parameters.indices) {
-                                val t1 = try { getTypeOfSymbol(s1.parameters[k]) } catch (_: StackOverflowError) { return@run false }
-                                val t2 = try { getTypeOfSymbol(s2.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                val t1 = getTypeOfSymbol(s1.parameters[k])
+                                val t2 = getTypeOfSymbol(s2.parameters[k])
                                 if (t1 !== t2) return@run true
                             }
                         }
@@ -102437,7 +102437,7 @@ interface DataView {
         fileName: String,
     ): Boolean {
         val callee = expr.expression as? PropertyAccessExpression ?: return false
-        val recvType = try { getTypeOfExpression(callee.expression) } catch (_: StackOverflowError) { return false }
+        val recvType = getTypeOfExpression(callee.expression)
         if (recvType === anyType || recvType === errorType) return false
         val apparent = getApparentType(recvType)
         val prop = getPropertyOfType(apparent, callee.name.text) ?: return false
@@ -102998,7 +102998,7 @@ interface DataView {
                 is NumericLiteralNode -> "Number"
                 is StringLiteralNode -> "String"
                 is NewExpression -> {
-                    val inst = try { getReturnTypeOfNewExpression(ce) } catch (_: StackOverflowError) { return@run }
+                    val inst = getReturnTypeOfNewExpression(ce)
                     if (inst is Type.Interface && getConstructSignaturesOfType(inst).isEmpty())
                         inst.symbol?.name ?: return@run
                     else return@run
@@ -103068,8 +103068,8 @@ interface DataView {
                                 if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
                                 if (s1.parameters.size != s2.parameters.size) return@run true
                                 for (k in s1.parameters.indices) {
-                                    val t1 = try { getTypeOfSymbol(s1.parameters[k]) } catch (_: StackOverflowError) { return@run false }
-                                    val t2 = try { getTypeOfSymbol(s2.parameters[k]) } catch (_: StackOverflowError) { return@run false }
+                                    val t1 = getTypeOfSymbol(s1.parameters[k])
+                                    val t2 = getTypeOfSymbol(s2.parameters[k])
                                     if (t1 !== t2) return@run true
                                 }
                             }
@@ -103150,7 +103150,7 @@ interface DataView {
         val hasExplicitTypeArgs = !expr.typeArguments.isNullOrEmpty()
         val resolvedTypeArgs: List<Type>? = if (hasExplicitTypeArgs) {
             expr.typeArguments!!.map { tn ->
-                try { getTypeFromTypeNode(tn) } catch (_: StackOverflowError) { errorType }
+                getTypeFromTypeNode(tn)
             }
         } else null
         val explicitArgsAllResolve = resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }
@@ -103195,7 +103195,7 @@ interface DataView {
                 val decl = p.valueDeclaration as? Parameter
                 val typeNode = decl?.type
                 if (typeNode == null) return@map p
-                val freshType = try { getTypeFromTypeNode(typeNode) } catch (_: StackOverflowError) { return@map p }
+                val freshType = getTypeFromTypeNode(typeNode)
                 if (freshType === errorType) return@map p
                 val cached = symbolTypes[p.id]
                 if (cached === freshType) return@map p
@@ -103914,8 +103914,8 @@ interface DataView {
             is ParenthesizedExpression -> getCalleeType(expr.expression)
             is NonNullExpression -> getCalleeType(expr.expression)
             is SatisfiesExpression -> getCalleeType(expr.expression)
-            is CallExpression -> try { getReturnTypeOfCallExpression(expr) } catch (_: StackOverflowError) { anyType }
-            is NewExpression -> try { getReturnTypeOfNewExpression(expr) } catch (_: StackOverflowError) { anyType }
+            is CallExpression -> getReturnTypeOfCallExpression(expr)
+            is NewExpression -> getReturnTypeOfNewExpression(expr)
             else -> anyType
         }
     }
@@ -104124,7 +104124,7 @@ interface DataView {
                         argType is Type.NumberLiteral || argType is Type.BigIntLiteral ||
                         argType === trueType || argType === falseType
                     if (!isPrim || argType === anyType || argType === errorType) continue
-                    val ok = try { checkTypeRelatedTo(argType, narrowed, assignableRelation) } catch (_: StackOverflowError) { continue }
+                    val ok = checkTypeRelatedTo(argType, narrowed, assignableRelation)
                     if (ok) continue
                     val start = arg.pos
                     val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
@@ -104212,14 +104212,14 @@ interface DataView {
         var anchorIdx = -1
         for (j in params.indices) {
             if (j >= args.size) break
-            val pt = try { getTypeOfSymbol(params[j]) } catch (_: StackOverflowError) { return false }
+            val pt = getTypeOfSymbol(params[j])
             if (!isArrayOfTypeParam(pt, tp)) continue
             val arr = args[j] as? ArrayLiteralExpression ?: continue
             if (arr.elements.isEmpty() || arr.elements.any { it is SpreadElement }) continue
             val elemTypes = mutableListOf<Type>()
             var ok = true
             for (el in arr.elements) {
-                val t = try { getWidenedLiteralType(getTypeOfExpression(el)) } catch (_: StackOverflowError) { return false }
+                val t = getWidenedLiteralType(getTypeOfExpression(el))
                 val isAllowed = t is Type.Intrinsic && t.intrinsicName in setOf("string", "number", "boolean", "null", "undefined")
                 if (!isAllowed) { ok = false; break }
                 if (elemTypes.none { it.id == t.id }) elemTypes.add(t)
@@ -104232,7 +104232,7 @@ interface DataView {
         val tInferred = inferredT ?: return false
         for (i in params.indices) {
             if (i == anchorIdx || i >= args.size) continue
-            val pt = try { getTypeOfSymbol(params[i]) } catch (_: StackOverflowError) { continue }
+            val pt = getTypeOfSymbol(params[i])
             val ref = pt as? Type.Reference ?: continue
             val refArgs = ref.resolvedTypeArguments ?: continue
             if (refArgs.size != 2) continue
@@ -104270,18 +104270,18 @@ interface DataView {
             val retRef = callSig.type as? TypeReference ?: continue
             if ((retRef.typeName as? Identifier)?.text != ifaceTps[1].name.text || !retRef.typeArguments.isNullOrEmpty()) continue
             val arg = args[i]
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+            val argType = getTypeOfExpression(arg)
             if (argType !is Type.Object || argType is Type.Interface || argType is Type.Reference) continue
             if (!argType.constructSignatures.isNullOrEmpty() || !argType.members.isNullOrEmpty()) continue
             val s0 = argType.callSignatures?.singleOrNull() ?: continue
             val sTp = s0.typeParameters?.singleOrNull() ?: continue
             if (s0.parameters.size != 1) continue
-            val sParamType = try { getTypeOfSymbol(s0.parameters[0]) } catch (_: StackOverflowError) { continue }
+            val sParamType = getTypeOfSymbol(s0.parameters[0])
             if (sParamType !== sTp || s0.resolvedReturnType !== sTp) continue
-            val assignable = try { checkTypeRelatedTo(tInferred, c, assignableRelation) } catch (_: StackOverflowError) { continue }
+            val assignable = checkTypeRelatedTo(tInferred, c, assignableRelation)
             if (assignable) return false
             val failing = (tInferred as? Type.Union)?.types?.filter {
-                !(try { checkTypeRelatedTo(it, c, assignableRelation) } catch (_: StackOverflowError) { true })
+                !(checkTypeRelatedTo(it, c, assignableRelation))
             } ?: listOf(tInferred)
             val nullish = failing.firstOrNull { it is Type.Intrinsic && it.intrinsicName == "undefined" }
                 ?: failing.firstOrNull { it is Type.Intrinsic && it.intrinsicName == "null" }
@@ -104346,7 +104346,7 @@ interface DataView {
         if (constituents.size < 2) return false
         for (c in constituents) {
             if (c !is Type.Object || c is Type.Interface || c is Type.Reference) return false
-            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return false }
+            resolveStructuredTypeMembers(c)
         }
         for (prop in arg.properties) {
             val pa = prop as? PropertyAssignment ?: continue
@@ -104358,7 +104358,7 @@ interface DataView {
             for (c in constituents) {
                 val sym = (c as Type.Object).members?.get(pName)
                 if (sym == null || isOptionalProperty(sym)) { allHave = false; break }
-                val t = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                val t = getTypeOfSymbol(sym)
                 if (t !is Type.StringLiteral && t !is Type.NumberLiteral) { allHave = false; break }
                 discTypes.add(t)
                 if (firstDeclPos < 0) {
@@ -104375,7 +104375,7 @@ interface DataView {
                 val vd = (sym.valueDeclaration ?: sym.declarations.firstOrNull())
                     as? VariableDeclaration ?: return@run null
                 vd.type?.let {
-                    return@run try { getTypeFromTypeNode(it) } catch (_: StackOverflowError) { null }
+                    return@run getTypeFromTypeNode(it)
                 }
                 // Un-annotated: require the declaring keyword to be exactly let/var
                 // (const preserves the literal type — our widening would FP there).
@@ -104393,7 +104393,7 @@ interface DataView {
                 valueType is Type.StringLiteral || valueType is Type.NumberLiteral
             if (!vOk) continue
             val anyPass = discTypes.any { dt ->
-                try { checkTypeRelatedTo(valueType, dt, assignableRelation) } catch (_: StackOverflowError) { true }
+                checkTypeRelatedTo(valueType, dt, assignableRelation)
             }
             if (anyPass) continue
             val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
@@ -104437,7 +104437,7 @@ interface DataView {
         if (constituents.size < 2) return
         for (c in constituents) {
             if (c !is Type.Object || c is Type.Interface || c is Type.Reference) return
-            try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return }
+            resolveStructuredTypeMembers(c)
         }
         for (elem in arrLit.elements) {
             val obj = elem as? ObjectLiteralExpression ?: continue
@@ -104460,7 +104460,7 @@ interface DataView {
             for (c in constituents) {
                 val sym = (c as Type.Object).members?.get(pName)
                 if (sym == null || isOptionalProperty(sym)) { allHave = false; break }
-                val t = try { getTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                val t = getTypeOfSymbol(sym)
                 if (t !is Type.StringLiteral && t !is Type.NumberLiteral) { allHave = false; break }
                 discTypes.add(t)
                 if (firstDeclPos < 0) {
@@ -104474,7 +104474,7 @@ interface DataView {
             val valueType = literalTypeOfExpression(pa.initializer) ?: continue
             if (valueType !is Type.StringLiteral && valueType !is Type.NumberLiteral) continue
             val anyPass = discTypes.any { dt ->
-                try { checkTypeRelatedTo(valueType, dt, assignableRelation) } catch (_: StackOverflowError) { true }
+                checkTypeRelatedTo(valueType, dt, assignableRelation)
             }
             if (anyPass) continue
             val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
@@ -104532,7 +104532,7 @@ interface DataView {
         if (ref.typeArguments != null) return null
         val aliasName = (ref.typeName as? Identifier)?.text ?: return null
         // Top-level alias: direct resolution works.
-        val direct = try { getTypeFromTypeNode(ref) } catch (_: StackOverflowError) { null }
+        val direct = getTypeFromTypeNode(ref)
         if (direct is Type.Union) return direct to aliasName
         // Function/block-local alias: NOT bound (Binder block-scope gotcha), so the named
         // reference resolves to errorType. Find the `type X = A | B` declaration and resolve
@@ -104540,7 +104540,7 @@ interface DataView {
         // lookup, so the union materializes even for an unbound alias.
         val aliasDecl = findLocalTypeAlias(aliasName, fileName) ?: return null
         val body = aliasDecl.type as? UnionType ?: return null
-        val u = (try { getTypeFromTypeNode(body) } catch (_: StackOverflowError) { return null })
+        val u = (getTypeFromTypeNode(body))
             as? Type.Union ?: return null
         return u to aliasName
     }
@@ -104991,13 +104991,13 @@ interface DataView {
                 (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == propName }
             } ?: return
             val pt = prop.type ?: return
-            val pType = try { getTypeFromTypeNode(pt) } catch (_: StackOverflowError) { return }
+            val pType = getTypeFromTypeNode(pt)
             if (pType !is Type.StringLiteral && pType !is Type.NumberLiteral) return
             discDisplays.add(typeToString(pType))
         }
         if (discDisplays.isEmpty()) return
         val discDisplay = discDisplays.distinct().joinToString(" | ")
-        val caseDisplay = try { typeToString(getTypeFromTypeNode(unionNode)) } catch (_: StackOverflowError) { return }
+        val caseDisplay = typeToString(getTypeFromTypeNode(unionNode))
         // tsc's union-source comparability elaboration reports the FIRST non-comparable
         // constituent as a sub-line; for this object-union-vs-literal-union shape the
         // discriminant-matched member relates and the trailing member is reported.
@@ -105220,9 +105220,9 @@ interface DataView {
                 if (!isBareTpRef(ps.firstOrNull()?.type, aliasTp)) { allFunnel = false; break }
             }
             if (!allFunnel) continue
-            val p = try { getTypeFromTypeNode(concreteArg) } catch (_: StackOverflowError) { continue }
+            val p = getTypeFromTypeNode(concreteArg)
             if (p !is Type.Interface) continue
-            try { resolveStructuredTypeMembers(p) } catch (_: StackOverflowError) { continue }
+            resolveStructuredTypeMembers(p)
             inferred = p
             anchorIdx = i
             break
@@ -105246,10 +105246,10 @@ interface DataView {
                 val pa = prop as? PropertyAssignment ?: continue
                 val nameNode = pa.name as? Identifier ?: continue
                 val targetProp = pInferred.members?.get(nameNode.text) ?: continue
-                val targetType = try { getTypeOfSymbol(targetProp) } catch (_: StackOverflowError) { continue }
+                val targetType = getTypeOfSymbol(targetProp)
                 if (!isSimpleCheckableType(targetType)) continue
                 val srcLit = literalTypeOfExpression(pa.initializer) ?: continue
-                val ok = try { checkTypeRelatedTo(srcLit, targetType, assignableRelation) } catch (_: StackOverflowError) { true }
+                val ok = checkTypeRelatedTo(srcLit, targetType, assignableRelation)
                 if (ok) continue
                 val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
                 diagnostics.add(Diagnostic(
@@ -105295,7 +105295,7 @@ interface DataView {
                 if ((pRef.typeName as? Identifier)?.text != tpAst.name.text || !pRef.typeArguments.isNullOrEmpty()) continue
                 val arg = args.getOrNull(i) ?: continue
                 if (arg is SpreadElement) continue
-                val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+                val argType = getTypeOfExpression(arg)
                 if (argType !is Type.Object || argType is Type.Interface || argType is Type.Reference) continue
                 if (!argType.callSignatures.isNullOrEmpty() || !argType.constructSignatures.isNullOrEmpty()) continue
                 if (argType.stringIndexInfo != null || argType.numberIndexInfo != null) continue
@@ -106535,7 +106535,7 @@ interface DataView {
         val lastParam = params[lastIdx]
         val isRest = (lastParam.valueDeclaration as? Parameter)?.dotDotDotToken == true
         if (!isRest) return
-        val paramType = try { getTypeOfSymbol(lastParam) } catch (_: StackOverflowError) { return }
+        val paramType = getTypeOfSymbol(lastParam)
         if (paramType !is Type.Reference) return
         if (paramType.target?.symbol?.name != "Array") return
         val tArgs = paramType.resolvedTypeArguments ?: return
@@ -106549,7 +106549,7 @@ interface DataView {
         for (i in lastIdx until args.size) {
             val arg = args[i]
             if (arg is SpreadElement) continue
-            val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue }
+            val argType = getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) continue
             // Conservative gate: only emit when argType is a simple/primitive
@@ -107438,7 +107438,7 @@ interface DataView {
                     (pn is Identifier && pn.text.toDoubleOrNull() != null)
                 if (!isNumericKey) continue
             }
-            val valType = try { getTypeOfExpression(p.initializer) } catch (_: StackOverflowError) { continue }
+            val valType = getTypeOfExpression(p.initializer)
             if (valType === anyType || valType === errorType || valType === unknownType) continue
             if (!isSimpleCheckableType(valType)) continue
             if (!checkTypeRelatedTo(valType, declaredVar, assignableRelation)) continue
@@ -107487,7 +107487,7 @@ interface DataView {
         fileName: String,
     ) {
         if (targetType !is Type.Object) return
-        try { resolveStructuredTypeMembers(targetType) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(targetType)
         val strIdx = targetType.stringIndexInfo
         val numIdx = targetType.numberIndexInfo
         if (strIdx == null && numIdx == null) return
@@ -107499,7 +107499,7 @@ interface DataView {
         fun emitForValue(valuePosNode: Node, valueExpr: Expression, applicable: IndexInfo) {
             val indexValueType = applicable.type
             if (indexValueTrivial(indexValueType)) return
-            val valueType = try { getTypeOfExpression(valueExpr) } catch (_: StackOverflowError) { return }
+            val valueType = getTypeOfExpression(valueExpr)
             if (valueType === anyType || valueType === unknownType || valueType === errorType) return
             val idxDecl = applicable.declaration ?: return
             val idxPos = idxDecl.pos
@@ -107531,7 +107531,7 @@ interface DataView {
                     catch (_: StackOverflowError) { emptyList() }
                 if (missing.isNotEmpty() && !checkTypeRelatedTo(valueType, indexValueType, assignableRelation)) {
                     val mpName = missing[0]
-                    val mpSym = try { getPropertyOfType(indexValueType, mpName) } catch (_: StackOverflowError) { null }
+                    val mpSym = getPropertyOfType(indexValueType, mpName)
                     val related = listOfNotNull(mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }, ts6501())
                     diagnostics.add(Diagnostic(
                         message = "Property '$mpName' is missing in type '${typeToString(valueType)}' but required in type '${typeToString(indexValueType)}'.",
@@ -107634,10 +107634,10 @@ interface DataView {
             val md = memberDecl ?: continue
             val memberTypeNode = md.type ?: continue
             val value = prop.initializer ?: continue
-            val memberType = try { getTypeFromTypeNode(memberTypeNode) } catch (_: StackOverflowError) { continue }
+            val memberType = getTypeFromTypeNode(memberTypeNode)
             if (memberType === anyType || memberType === errorType || memberType === unknownType) continue
             val valueType = (literalTypeOfExpression(value)
-                ?: try { getTypeOfExpression(value) } catch (_: StackOverflowError) { continue })
+                ?: getTypeOfExpression(value))
             if (valueType === anyType || valueType === errorType || valueType === unknownType) continue
             val ok = try { checkTypeRelatedTo(valueType, memberType, assignableRelation) }
                 catch (_: StackOverflowError) { true }
@@ -107712,7 +107712,7 @@ interface DataView {
             val applicable = (if (isNumericKey) (numIdx ?: strIdx) else strIdx) ?: continue
             val idxValType = applicable.type
             if (trivial(idxValType)) continue
-            val propType = try { getTypeOfSymbol(p) } catch (_: StackOverflowError) { continue }
+            val propType = getTypeOfSymbol(p)
             if (trivial(propType)) continue
             // Reliability gate: at least one side primitive (named-vs-named is unreliable).
             if (!isSimpleCheckableType(propType) && !isSimpleCheckableType(idxValType)) continue
@@ -108714,7 +108714,7 @@ interface DataView {
             val slot = slots.getOrNull(i) ?: continue
             if (slot === anyType || slot === errorType || slot is Type.TypeParam) continue
             if (!isSimpleCheckableType(slot)) continue
-            val elemType = try { getTypeOfExpression(elem) } catch (_: StackOverflowError) { continue }
+            val elemType = getTypeOfExpression(elem)
             if (elemType === anyType || elemType === errorType) continue
             if (!isSimpleCheckableType(elemType)) continue
             if (!checkTypeRelatedTo(elemType, slot, assignableRelation)) {
@@ -108778,7 +108778,7 @@ interface DataView {
     ): Boolean {
         var emitted = false
         val targetObj = targetType as? Type.Object ?: return false
-        try { resolveStructuredTypeMembers(targetObj) } catch (_: StackOverflowError) { return false }
+        resolveStructuredTypeMembers(targetObj)
         for (prop in objLit.properties) {
             if (prop !is PropertyAssignment) continue
             val value = unwrapToObjLitValue(prop.initializer ?: continue)
@@ -108929,9 +108929,9 @@ interface DataView {
         enclosingPropName: String? = null, enclosingTarget: Type.Object? = null,
     ): Boolean {
         if (objLit.properties.any { it is SpreadAssignment }) return false
-        val srcType = try { getTypeOfObjectLiteral(objLit) } catch (_: StackOverflowError) { return false }
+        val srcType = getTypeOfObjectLiteral(objLit)
         if (srcType !is Type.Object) return false
-        val missing = try { collectMissingProperties(srcType, target) } catch (_: StackOverflowError) { return false }
+        val missing = collectMissingProperties(srcType, target)
         if (missing.isEmpty()) return false
         val displaySource = typeToString(srcType)
         val displayTarget = typeToString(target)
@@ -109038,9 +109038,9 @@ interface DataView {
                     val argName = (arg as? TypeReference)?.typeName as? Identifier
                     if (argName != null) {
                         val sym = currentFileLocals?.get(argName.text) ?: globals[argName.text]
-                        if (sym != null) return try { getDeclaredTypeOfSymbol(sym) } catch (_: StackOverflowError) { null }
+                        if (sym != null) return getDeclaredTypeOfSymbol(sym)
                     }
-                    return try { getTypeFromTypeNode(arg) } catch (_: StackOverflowError) { null }
+                    return getTypeFromTypeNode(arg)
                 }
             }
         }
@@ -109089,7 +109089,7 @@ interface DataView {
             val nestedArrayLike = arrayElementTypeForExcess(elementType) != null
             if (bag == null && !nestedArrayLike) return
             val disp = displayName ?: typeToString(elementType)
-            if (bag != null) try { resolveStructuredTypeMembers(bag) } catch (_: StackOverflowError) { return }
+            if (bag != null) resolveStructuredTypeMembers(bag)
             for (elem in init.elements) {
                 when (elem) {
                     is ObjectLiteralExpression -> if (bag != null) {
@@ -109163,7 +109163,7 @@ interface DataView {
                         // the cast type `foo` lacks `id`, so element-level TS2741 fires.
                         val elemType = getTypeOfExpression(elem)
                         if (elemType !is Type.Object) continue
-                        try { resolveStructuredTypeMembers(elemType) } catch (_: StackOverflowError) { continue }
+                        resolveStructuredTypeMembers(elemType)
                         val missingSym = getMissingRequiredPropertySymbol(elemType, elementType)
                         if (missingSym != null) {
                             val displaySource = typeToString(elemType)
@@ -109646,16 +109646,16 @@ interface DataView {
         for (i in 0 until n) {
             if (srcDecls?.getOrNull(i)?.dotDotDotToken == true ||
                 tgtDecls?.getOrNull(i)?.dotDotDotToken == true) continue
-            val sp = try { getTypeOfSymbol(srcSig.parameters[i]) } catch (_: StackOverflowError) { continue }
-            val tp = try { getTypeOfSymbol(tgtSig.parameters[i]) } catch (_: StackOverflowError) { continue }
+            val sp = getTypeOfSymbol(srcSig.parameters[i])
+            val tp = getTypeOfSymbol(tgtSig.parameters[i])
             if (sp === anyType || sp === errorType || sp is Type.TypeParam) continue
             if (tp === anyType || tp === errorType || tp is Type.TypeParam) continue
             val onePrimitive = sp is Type.Intrinsic || tp is Type.Intrinsic ||
                 sp is Type.StringLiteral || sp is Type.NumberLiteral ||
                 tp is Type.StringLiteral || tp is Type.NumberLiteral
             if (!onePrimitive) continue
-            val d1 = try { checkTypeRelatedTo(tp, sp, assignableRelation) } catch (_: StackOverflowError) { true }
-            val d2 = try { checkTypeRelatedTo(sp, tp, assignableRelation) } catch (_: StackOverflowError) { true }
+            val d1 = checkTypeRelatedTo(tp, sp, assignableRelation)
+            val d2 = checkTypeRelatedTo(sp, tp, assignableRelation)
             if (!d1 && !d2) return true
         }
         return false
@@ -110171,7 +110171,7 @@ interface DataView {
                 if (!isSimpleCheckableType(targetRet)) return@run
                 val arrowRet = singleReturnExprOf(propNode.initializer) ?: return@run
                 val srcRet = (literalTypeOfExpression(arrowRet)
-                    ?: try { getTypeOfExpression(arrowRet) } catch (_: StackOverflowError) { return@run })
+                    ?: getTypeOfExpression(arrowRet))
                 if (srcRet === anyType || srcRet === errorType) return@run
                 if (checkTypeRelatedTo(srcRet, targetRet, assignableRelation)) return@run
                 val start = arrowRet.pos
@@ -110820,8 +110820,8 @@ interface DataView {
             for (targetProp in targetProps) {
                 val sourceProp = mergedMembers[targetProp.name] ?: continue
                 if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
-                val srcType = try { getTypeOfSymbol(sourceProp) } catch (_: StackOverflowError) { continue }
-                val tgtType = try { getTypeOfSymbol(targetProp) } catch (_: StackOverflowError) { continue }
+                val srcType = getTypeOfSymbol(sourceProp)
+                val tgtType = getTypeOfSymbol(targetProp)
                 if (srcType === errorType || tgtType === errorType) continue
                 if (!checkTypeRelatedTo(srcType, tgtType, assignableRelation)) {
                     val propPath = if (path.isEmpty()) targetProp.name else "$path.${targetProp.name}"
@@ -110881,7 +110881,7 @@ interface DataView {
             if (c is Type.Object) {
                 resolveStructuredTypeMembers(c)
                 c.members?.forEach { (n, s) ->
-                    val ty = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { return@forEach }
+                    val ty = getTypeOfSymbol(s)
                     if (ty.flags.hasAny(TypeFlags.StringLiteral or TypeFlags.NumberLiteral or TypeFlags.BooleanLiteral)) m[n] = ty
                 }
             }
@@ -112130,10 +112130,10 @@ interface DataView {
      * Reference-to-Array's element type when the interface declares no own index info.
      */
     private fun elementAccessIndexSigValueType(expr: ElementAccessExpression): Type? {
-        val recvType = try { getTypeOfExpression(expr.expression) } catch (_: StackOverflowError) { return null }
+        val recvType = getTypeOfExpression(expr.expression)
         if (recvType !is Type.Object || recvType is Type.Union) return null
         if (recvType === anyType || recvType === errorType) return null
-        try { resolveStructuredTypeMembers(recvType) } catch (_: StackOverflowError) { return null }
+        resolveStructuredTypeMembers(recvType)
         if (recvType.tupleElementTypes != null) return null
         var arg: Expression = expr.argumentExpression
         while (arg is ParenthesizedExpression) arg = arg.expression
@@ -112246,7 +112246,7 @@ interface DataView {
      * - If T is an unresolved type parameter: return anyType (can't evaluate)
      */
     private fun getTypeFromConditionalType(node: ConditionalType): Type {
-        val checkType = try { getTypeFromTypeNode(node.checkType) } catch (_: StackOverflowError) { return anyType }
+        val checkType = getTypeFromTypeNode(node.checkType)
         if (checkType === anyType || checkType === errorType) return anyType
         // Unresolved type parameter — can't evaluate
         if (checkType is Type.TypeParam) return anyType
@@ -112258,7 +112258,7 @@ interface DataView {
         // anyType, masking the inferred result (e.g. `SyntheticDestination<number,
         // Synthetic<number,number>>` should resolve to `number`, not `any`).
         tryEvaluateConditionalWithInfer(checkType, node)?.let { return it }
-        val extendsType = try { getTypeFromTypeNode(node.extendsType) } catch (_: StackOverflowError) { return anyType }
+        val extendsType = getTypeFromTypeNode(node.extendsType)
         if (extendsType === anyType || extendsType === errorType) return anyType
         // Distribution over unions
         if (checkType is Type.Union) {
@@ -112297,7 +112297,7 @@ interface DataView {
             if (a is InferType) {
                 bindings[a.typeParameter.name.text] = checkArgs[i]
             } else {
-                val patternArg = try { getTypeFromTypeNode(a) } catch (_: StackOverflowError) { return null }
+                val patternArg = getTypeFromTypeNode(a)
                 if (patternArg === errorType) return null
                 // Non-infer position must accept checkType's arg for the true branch.
                 if (!checkTypeRelatedTo(checkArgs[i], patternArg, assignableRelation)) return null
@@ -115648,7 +115648,7 @@ interface DataView {
                 p is PropertyAssignment && (p.name is Identifier || p.name is StringLiteralNode)
             }
         }
-        val target = try { resolveAliasTarget(sym) } catch (_: StackOverflowError) { null } ?: sym
+        val target = resolveAliasTarget(sym) ?: sym
         ((target.valueDeclaration ?: target.declarations.firstOrNull()) as? VariableDeclaration)?.let { vd ->
             if (vd.type == null && completeObjLit(vd.initializer)) return true
         }
@@ -115759,12 +115759,12 @@ interface DataView {
                 else -> null
             }
         }.toSet()
-        val widened = try { widenType(getTypeOfExpression(anchorArg)) } catch (_: StackOverflowError) { return false }
+        val widened = widenType(getTypeOfExpression(anchorArg))
         if (widened !is Type.Object || widened is Type.Interface || widened is Type.Reference) return false
         // Constraint guard: a constraint-failing anchor is tsc's TS2345, not EPC.
         tp.constraint?.let { c ->
             if (c !== anyType && c !== errorType) {
-                val ok = try { checkTypeRelatedTo(widened, c, assignableRelation) } catch (_: StackOverflowError) { false }
+                val ok = checkTypeRelatedTo(widened, c, assignableRelation)
                 if (!ok) return false
             }
         }
@@ -115823,7 +115823,7 @@ interface DataView {
         val callee = expr.expression as? PropertyAccessExpression ?: return false
         val recv = callee.expression
         if ((recv as? Identifier)?.text == "super") return false
-        val ref = (try { getTypeOfExpression(recv) } catch (_: StackOverflowError) { return false })
+        val ref = (getTypeOfExpression(recv))
             as? Type.Reference ?: return false
         val classArgs = ref.resolvedTypeArguments ?: return false
         if (classArgs.isEmpty() || classArgs.any { it is Type.TypeParam || it === anyType || it === errorType }) return false
@@ -115868,7 +115868,7 @@ interface DataView {
                 if (keyArg == null) { ok = false; break }
                 val curObj = cur as? Type.Object
                 if (curObj != null) {
-                    try { resolveStructuredTypeMembers(curObj) } catch (_: StackOverflowError) { ok = false; break }
+                    resolveStructuredTypeMembers(curObj)
                 }
                 cur = try { getIndexedAccessType(cur, Type.StringLiteral(keyArg.text)) }
                     catch (_: StackOverflowError) { ok = false; break }
@@ -115880,7 +115880,7 @@ interface DataView {
             val arg = expr.arguments[vIdx]
             if (arg is SpreadElement) continue
             val argType = literalTypeOfExpression(arg)
-                ?: (try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { continue })
+                ?: (getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType || !isSimpleCheckableType(argType)) continue
             val pass = try { checkTypeRelatedTo(argType, cur, assignableRelation) }
                 catch (_: StackOverflowError) { true }
@@ -115922,7 +115922,7 @@ interface DataView {
         }
         val arg = call.arguments[1]
         if (arg is SpreadElement) return
-        val argType = try { getTypeOfExpression(arg) } catch (_: StackOverflowError) { return }
+        val argType = getTypeOfExpression(arg)
         val argDisplay: String = when {
             argType is Type.Reference && argType.target.symbol?.name == "Array" &&
                 argType.resolvedTypeArguments?.size == 1 -> typeToString(argType)
@@ -116004,7 +116004,7 @@ interface DataView {
             }
 
             // Case B: the argument is a concrete simple type (number/string/null/…).
-            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { continue }
+            val argType = getWidenedLiteralType(getTypeOfExpression(arg))
             if (argType is Type.TypeParam || argType === anyType || argType === errorType) continue
             if (!isSimpleCheckableType(argType)) continue
             val display = typeToString(argType)
@@ -116069,7 +116069,7 @@ interface DataView {
             // unconstrained type param (the enclosing arrow's `T`)?
             val mappedTp = inst.argTpNames.getOrNull(classTpPos) ?: continue
             val arg = call.arguments.getOrNull(i) ?: continue
-            val argType = try { getWidenedLiteralType(getTypeOfExpression(arg)) } catch (_: StackOverflowError) { continue }
+            val argType = getWidenedLiteralType(getTypeOfExpression(arg))
             if (argType is Type.TypeParam || argType === anyType || argType === errorType) continue
             if (!isSimpleCheckableType(argType)) continue
             val display = typeToString(argType)
@@ -117735,7 +117735,7 @@ interface DataView {
                 if (b.operator != SyntaxKind.Equals) continue
                 val pattern = b.left as? ObjectLiteralExpression ?: continue
                 val rhs = b.right as? Identifier ?: continue
-                val rhsType = (try { getTypeOfExpression(rhs) } catch (_: StackOverflowError) { null })
+                val rhsType = (getTypeOfExpression(rhs))
                     as? Type.Object ?: continue
                 if (rhsType is Type.Reference) continue
                 resolveStructuredTypeMembers(rhsType)
@@ -119391,7 +119391,7 @@ interface DataView {
             // A user-declared `Record` shadows the built-in utility type — bail for the file.
             if (result.locals.containsKey("Record")) continue
             val source = result.sourceFile.text
-            try { idxRecScanStatements(result.sourceFile.statements, source, fileName, emptyMap()) } catch (_: StackOverflowError) {}
+            idxRecScanStatements(result.sourceFile.statements, source, fileName, emptyMap())
         }
     }
 
@@ -119636,7 +119636,7 @@ interface DataView {
     /** Resolve an expression's type, falling back to a local annotation map for
      *  function-body locals/params that the standalone walker can't bind. */
     private fun pdduResolveType(expr: Expression, localAnns: Map<String, TypeNode>): Type? {
-        val t = try { getTypeOfExpression(expr) } catch (_: StackOverflowError) { return null }
+        val t = getTypeOfExpression(expr)
         if (t !== anyType && t !== errorType) return t
         val ann = (expr as? Identifier)?.let { localAnns[it.text] } ?: return t
         return try { getTypeFromTypeNode(ann) } catch (_: Throwable) { t }
@@ -119663,7 +119663,7 @@ interface DataView {
             val valName = ((idxSig.type as? TypeReference)?.typeName as? Identifier)?.text ?: return@lit
             val tp = tps.firstOrNull { it.name.text == valName } ?: return@lit
             if ((tp.default as? KeywordTypeNode)?.kind != SyntaxKind.UnknownKeyword) return@lit
-            val argType = try { getTypeOfExpression(singleArg) } catch (_: StackOverflowError) { return@lit }
+            val argType = getTypeOfExpression(singleArg)
             if (argType !is Type.Reference || argType.target?.symbol?.name != "Array") return@lit
             val argDisp = typeToString(argType)
             val (ln, ch) = getLineAndCharacterOfPosition(source, singleArg.pos)
@@ -119726,7 +119726,7 @@ interface DataView {
             concatCall?.let { cc ->
                 val firstElem = (cc.arguments.firstOrNull() as? ArrayLiteralExpression)?.elements?.firstOrNull()
                 if (firstElem != null && firstElem !is SpreadElement) {
-                    val elemType = try { widenType(getTypeOfExpression(firstElem)) } catch (_: StackOverflowError) { null }
+                    val elemType = widenType(getTypeOfExpression(firstElem))
                     if (elemType != null && elemType !== anyType && elemType !== errorType) {
                         val disp = typeToString(elemType)
                         val (ln, ch) = getLineAndCharacterOfPosition(source, firstElem.pos)
@@ -119779,7 +119779,7 @@ interface DataView {
         }
         val arg = theArg
         val elem = elemRaw as? Type.Object ?: return
-        try { resolveStructuredTypeMembers(elem) } catch (_: StackOverflowError) { return }
+        resolveStructuredTypeMembers(elem)
         for (prop in arg.properties) {
             val pa = prop as? PropertyAssignment ?: continue
             val pname = (pa.name as? Identifier)?.text ?: continue
@@ -119815,12 +119815,12 @@ interface DataView {
     private fun pdduCheckElement(elObj: ObjectLiteralExpression, union: Type.Union, aliasName: String, source: String, fileName: String) {
         val constituents = union.types.filterIsInstance<Type.Object>()
         if (constituents.size < 2) return
-        for (c in constituents) try { resolveStructuredTypeMembers(c) } catch (_: StackOverflowError) { return }
+        for (c in constituents) resolveStructuredTypeMembers(c)
         // Discriminant candidates: a property name that is a literal type in EVERY constituent.
         val discNames = constituents[0].members?.keys?.filter { name ->
             constituents.all { c ->
                 val s = c.members?.get(name) ?: return@all false
-                val t = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { null }
+                val t = getTypeOfSymbol(s)
                 t is Type.StringLiteral || t is Type.NumberLiteral
             }
         } ?: return
@@ -119831,13 +119831,13 @@ interface DataView {
             if (dval !is Type.StringLiteral && dval !is Type.NumberLiteral) continue
             val matches = constituents.filter { c ->
                 val s = c.members?.get(dname) ?: return@filter false
-                val t = try { getTypeOfSymbol(s) } catch (_: StackOverflowError) { return@filter false }
-                try { checkTypeRelatedTo(dval, t, assignableRelation) } catch (_: StackOverflowError) { false }
+                val t = getTypeOfSymbol(s)
+                checkTypeRelatedTo(dval, t, assignableRelation)
             }
             if (matches.size != 1) continue
             val selected = matches[0]
-            val elObjType = try { getTypeOfObjectLiteral(elObj) } catch (_: StackOverflowError) { return }
-            val missing = try { collectMissingProperties(elObjType, selected) } catch (_: StackOverflowError) { return }
+            val elObjType = getTypeOfObjectLiteral(elObj)
+            val missing = collectMissingProperties(elObjType, selected)
             if (missing.isEmpty()) return
             // tsc reports the element as "not assignable to <unionAlias>" with a chain explaining
             // the discriminant-SELECTED member's missing props; the source display preserves the
@@ -120255,7 +120255,7 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
-            try { gIdxScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptyMap(), emptyMap()) } catch (_: StackOverflowError) {}
+            gIdxScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptyMap(), emptyMap())
         }
     }
 
@@ -126394,7 +126394,7 @@ interface DataView {
         if (callee is PropertyAccessExpression) {
             val recv = callee.expression
             if (recv is Identifier && recv.text in BUILTIN_LIB_GLOBAL_VALUE_NAMES) {
-                val calleeType = try { getTypeOfPropertyAccess(callee) } catch (_: StackOverflowError) { return }
+                val calleeType = getTypeOfPropertyAccess(callee)
                 if (calleeType === anyType || calleeType === errorType) return
                 val sigs = getCallSignaturesOfType(calleeType)
                 if (sigs.isEmpty()) return
@@ -126435,7 +126435,7 @@ interface DataView {
 
         // Follow import alias
         val resolved = if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-            try { resolveAlias(symbol) } catch (_: StackOverflowError) { symbol }
+            resolveAlias(symbol)
         } else symbol
 
         // Get type parameters from the function/class declarations. For overloaded
