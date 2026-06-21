@@ -31589,7 +31589,15 @@ class Checker(
                         && !moduleName.startsWith("/")
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
-                        && (options.module == null || options.module in ES_MODULE_KINDS)
+                        && (options.module == null || options.module in ES_MODULE_KINDS
+                            // B524: also EXPLICIT commonjs (default node10). The extra
+                            // suppressions below cover the B98.r2 FP cases that previously
+                            // made this case intractable: untyped node_modules `.js`
+                            // (bareModulePackageInAnyInput) + symlinked packages whose target
+                            // is a real `<pkg>/index.{ts,tsx,d.ts}` dir (bareModuleSymlinkTargetDir).
+                            || (options.module == ModuleKind.CommonJS
+                                && !bareModulePackageInAnyInput(moduleName)
+                                && !bareModuleSymlinkTargetDir(moduleName)))
                         && options.moduleResolution == null
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
@@ -32372,6 +32380,39 @@ class Checker(
         val needle = "/node_modules/$pkgName/"
         for (fn in fileResults.keys) {
             if (needle in fn || fn.startsWith("node_modules/$pkgName/")) return true
+        }
+        return false
+    }
+
+    /**
+     * B524: like [hasNodeModulesPackage] but ALSO consults the RAW input file set
+     * ([allInputFileNames]) — which includes untyped `.js` files that are NOT bound into
+     * [fileResults]. Used by the commonjs bare-specifier TS2307 gate so an
+     * `import Foo from "foo"` where `/node_modules/foo/index.js` exists as an untyped
+     * module (extendsUntypedModule) does NOT FP TS2307.
+     */
+    private fun bareModulePackageInAnyInput(pkgName: String): Boolean {
+        if (hasNodeModulesPackage(pkgName)) return true
+        val needle = "/node_modules/$pkgName/"
+        for (fn in allInputFileNames) {
+            if (needle in fn || fn.startsWith("node_modules/$pkgName/")) return true
+        }
+        return false
+    }
+
+    /**
+     * B524: a bare specifier `<pkg>` may resolve via a node_modules SYMLINK whose target is
+     * a real source package directory `<dir>/<pkg>/index.{ts,tsx,d.ts}` — the symlink path
+     * is NOT materialized in [fileResults]/[allInputFileNames] (only its target is), so the
+     * node_modules-package checks miss it (moduleResolutionWithSymlinks). Suppress TS2307
+     * when such a target directory exists anywhere. UNDER-firing (a coincidental
+     * `<pkg>/index.ts` dir with no symlink) is the SAFE direction — we never fire TS2307 for
+     * bare commonjs specifiers today, so an FN here is harmless.
+     */
+    private fun bareModuleSymlinkTargetDir(pkgName: String): Boolean {
+        val exts = listOf("/$pkgName/index.ts", "/$pkgName/index.tsx", "/$pkgName/index.d.ts")
+        for (fn in fileResults.keys) {
+            if (exts.any { fn.endsWith(it) }) return true
         }
         return false
     }
