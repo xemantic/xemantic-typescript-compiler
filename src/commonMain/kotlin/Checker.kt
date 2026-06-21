@@ -85205,10 +85205,15 @@ interface DataView {
         // to `anyType` because `getApparentType(union)` returns the union
         // unchanged and `getPropertyOfType` on the union recurses into each
         // primitive (Type.Intrinsic, not Type.Object) → returns null.
-        if (objectType is Type.Union && objectType !== anyType && objectType !== errorType) {
+        // B516: distribute over the APPARENT union — covers both a direct Union receiver
+        // and a TypeParam whose constraint is a union (`p: T`, `T extends A | B` → apparent
+        // `A | B`), so `p.a` resolves to the union `A["a"] | B["a"]` rather than the first
+        // member's property type alone.
+        val unionForProp = getApparentType(objectType)
+        if (unionForProp is Type.Union && unionForProp !== anyType && unionForProp !== errorType) {
             val propTypes = mutableListOf<Type>()
             var allHaveProp = true
-            for (constituent in objectType.types) {
+            for (constituent in unionForProp.types) {
                 val apparent = getApparentType(constituent)
                 val prop = getPropertyOfType(apparent, propName)
                 if (prop == null) {
@@ -97323,7 +97328,27 @@ interface DataView {
                 try {
                     val resolvedType = getTypeFromTypeNode(paramType)
                     if (resolvedType !== anyType && resolvedType !== errorType) {
-                        currentLocalTypes[paramName.text] = resolvedType
+                        // B516: do NOT register a function-typed param whose signature
+                        // references a type parameter — calls to it are owned by
+                        // `checkFnTypedParamCalls`. Registering it here (now that the
+                        // body's pushed TP scope resolves the sig's `T` to a real
+                        // Type.TypeParam rather than the prior errorType) would make the
+                        // MAIN call-arg path double-emit TS2345 alongside that walker
+                        // (and FP an extra arg-check for `f<any>(null)`-shaped type-arg
+                        // errors). Before the TP-scope push the sig params were errorType
+                        // (never Type.TypeParam), so this gate is naturally inert outside
+                        // generic function bodies.
+                        val isTpReferencingFnParam = resolvedType is Type.Object &&
+                            resolvedType !is Type.Interface &&
+                            resolvedType.properties.isNullOrEmpty() &&
+                            !resolvedType.callSignatures.isNullOrEmpty() &&
+                            resolvedType.callSignatures!!.any { sig ->
+                                sig.parameters.any { getTypeOfSymbol(it) is Type.TypeParam } ||
+                                    sig.resolvedReturnType is Type.TypeParam
+                            }
+                        if (!isTpReferencingFnParam) {
+                            currentLocalTypes[paramName.text] = resolvedType
+                        }
                     }
                 } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                 finally { if (bridgeNs) inferenceNamespaceStack.removeLast() }
@@ -101218,6 +101243,12 @@ interface DataView {
                                 if (!t.callSignatures.isNullOrEmpty()) {
                                     currentLocalTypes[nm.text] = t
                                 }
+                            } else if (t is Type.Union &&
+                                t.types.all { getCallSignaturesOfType(it).isNotEmpty() }) {
+                                // B516: a UNION-of-callables local (e.g. `var a: T["a"]` resolving
+                                // to `((x:number)=>string) | ((x:boolean)=>string)`) — record it so
+                                // calling `a(...)` reaches the union-callee combined-signature check.
+                                currentLocalTypes[nm.text] = t
                             }
                         } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                     }
@@ -101292,11 +101323,47 @@ interface DataView {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    // B516: push the function's OWN type parameters onto currentTypeParamScope
+                    // (mirroring the ClassDeclaration branch below) so a generic function body's
+                    // param/var annotations referencing `T` resolve to a TypeParam-with-constraint
+                    // rather than errorType. Needed for e.g. `function f<T extends A|B>(p: T) { ... }`
+                    // where `p.a(...)` / a `var a: T["a"]` callee must resolve through T's
+                    // constraint. Save/restore keeps the scope local to this body.
+                    val savedFnScope = currentTypeParamScope
+                    val savedFnAst = currentTypeParamAstForOps
+                    val fnTps = stmt.typeParameters
+                    if (!fnTps.isNullOrEmpty()) {
+                        val newScope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+                        val newAst = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
+                        val fresh = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                        for (tp in fnTps) {
+                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                val p = Type.TypeParam()
+                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                                p
+                            }
+                            newScope[tp.name.text] = typeParam
+                            newAst[tp.name.text] = tp
+                            fresh.add(tp to typeParam)
+                        }
+                        currentTypeParamScope = newScope
+                        currentTypeParamAstForOps = newAst
+                        for ((tp, typeParam) in fresh) {
+                            if (typeParam.constraint == null) {
+                                tp.constraint?.let {
+                                    try { typeParam.constraint = getTypeFromTypeNode(it) }
+                                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+                                }
+                            }
+                        }
+                    }
                     try {
                         populateParameterLocalTypes(stmt.parameters)
                         checkCallTypesInStatements(body.statements, source, fileName)
                     } finally {
                         currentLocalTypes = savedLocalTypes
+                        currentTypeParamScope = savedFnScope
+                        currentTypeParamAstForOps = savedFnAst
                     }
                 }
             }
@@ -102050,6 +102117,68 @@ interface DataView {
                 val hasNullSig = sigsList.any { it == null }
                 if (!hasNullSig) {
                     val sigs = sigsList.map { it!! }
+                    // B516: union-of-callables combined signature (tsc getUnionSignatures).
+                    // When every member call signature is type-parameter-free, has the SAME
+                    // (non-zero) required-only arity, no `this`/optional/rest params, AND at
+                    // least one parameter position has DIFFERING types across members, tsc
+                    // synthesizes ONE signature whose parameter at position i is the
+                    // INTERSECTION of the members' types there (e.g.
+                    // `((x:number)=>string) | ((x:boolean)=>string)` → `(x: number & boolean)`
+                    // = `(x: never)`). Calling it then checks the args against the combined
+                    // (often `never`) parameters — yielding TS2345 / TS2554 instead of the
+                    // (incorrect) "none of those signatures are compatible" TS2349. The
+                    // type-param gate keeps `fnUnion2`/`F3|F4`-style genuinely-incompatible
+                    // unions on the TS2349 path; the `this`-param gate (params drop `this`
+                    // at build, so a this-only sig has arity 0) excludes `unionTypeCallSignatures6`.
+                    val combinable = run {
+                        val pc = sigs[0].parameters.size
+                        if (pc == 0) return@run false
+                        for (s in sigs) {
+                            if (!s.typeParameters.isNullOrEmpty()) return@run false
+                            if (s.parameters.size != pc) return@run false
+                            if (s.minArgumentCount != pc) return@run false // all required, no optional/rest
+                        }
+                        // require at least one position where the param types differ
+                        (0 until pc).any { i ->
+                            val t0 = getTypeOfSymbol(sigs[0].parameters[i])
+                            sigs.any { getTypeOfSymbol(it.parameters[i]) !== t0 }
+                        }
+                    }
+                    if (combinable) {
+                        val pc = sigs[0].parameters.size
+                        val args = expr.arguments
+                        if (args.size > pc) {
+                            emitTS2554TooMany(pc, pc, args.size, args, pc, source, fileName)
+                            return
+                        }
+                        for (i in 0 until minOf(args.size, pc)) {
+                            val combinedParamType =
+                                getIntersectionType(sigs.map { getTypeOfSymbol(it.parameters[i]) })
+                            val arg = args[i]
+                            if (arg is SpreadElement) continue
+                            val argType = getTypeOfExpression(arg)
+                            if (argType === anyType || argType === errorType) continue
+                            if (!checkTypeRelatedTo(argType, combinedParamType, assignableRelation)) {
+                                val paramIsLiteral = getWidenedLiteralType(combinedParamType) !== combinedParamType
+                                val showLiteral = paramIsLiteral || combinedParamType === neverType
+                                val argDisplay = if (showLiteral)
+                                    typeToString(literalTypeOfExpression(arg) ?: argType)
+                                else typeToString(getWidenedLiteralType(argType))
+                                val start = arg.pos
+                                val length = expressionTrueEnd(arg) - start
+                                if (length > 0) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Argument of type '$argDisplay' is not assignable to parameter of type '${typeToString(combinedParamType)}'.",
+                                        category = DiagnosticCategory.Error, code = 2345,
+                                        fileName = fileName, line = line, character = character,
+                                        start = start, length = length,
+                                    ))
+                                }
+                            }
+                        }
+                        return
+                    }
                     val differ = run {
                         for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                             val s1 = sigs[i]; val s2 = sigs[j]
@@ -112517,6 +112646,15 @@ interface DataView {
      * - keyof T → union of all property types
      */
     private fun getIndexedAccessType(objectType: Type, indexType: Type): Type {
+        // B516: distribute over a UNION object type — `(A | B)["a"]` → `A["a"] | B["a"]`.
+        // Without this, `getPropertyOfType(A | B, "a")` collapses to a single member's
+        // property type (or null), so `T["a"]` (T extends A|B) never resolves to the
+        // union of member property types tsc produces.
+        if (objectType is Type.Union) {
+            val parts = objectType.types.map { getIndexedAccessType(it, indexType) }
+            if (parts.any { it === anyType || it === errorType }) return anyType
+            return getUnionType(parts)
+        }
         // String literal key: T["prop"] → type of property "prop"
         if (indexType is Type.StringLiteral) {
             val prop = getPropertyOfType(objectType, indexType.value)
