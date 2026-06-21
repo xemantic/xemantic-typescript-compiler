@@ -36194,6 +36194,13 @@ class Checker(
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
 
+        // circularResolvedSignature: utility-type alias bodies whose DEFINITION (not name)
+        // tsc shows in a TS6500 enclosing-type display for an instantiation-derived target.
+        // In the companion object so it is initialized at class load (init-order gotcha).
+        private val ENCLOSING_UNFOLD_UTILITIES = setOf(
+            "Readonly", "Partial", "Required", "Pick", "Omit", "Record",
+        )
+
         // B519: arithmetic / relational / bitwise operators that require DEFINED operands — a
         // possibly-undefined operand of one of these is TS18048. In the companion object so it is
         // initialized at class load (the `init` block runs the check pipeline before instance
@@ -75691,8 +75698,32 @@ interface DataView {
      * the var-decl array/object drill, instead of the coarse whole-value error at
      * the `return` keyword. Returns true when a leaf diagnostic was emitted.
      */
+    // circularResolvedSignature: when the contextual target came from instantiating a
+    // generic param (`() => S` with S := a user alias `Data = Readonly<{…}>`), tsc's
+    // TS6500 "expected type comes from property" related info shows the alias's
+    // DEFINITION (`Readonly<{…}>`), not its NAME (`Data`) — the type went through
+    // type-parameter instantiation, which drops the outer user alias but keeps the
+    // utility instantiation. Render the definition for a non-generic alias whose body
+    // is a utility-type reference (Readonly/Partial/…); otherwise keep the alias name.
+    private fun aliasUtilityDefinitionDisplay(t: Type): String? {
+        val (name, args) = aliasDisplayMap[t.id] ?: return null
+        if (args.isNotEmpty()) return null
+        for (result in binderResults) {
+            val decl = findTypeAliasDeclInStatements(result.sourceFile.statements, name) ?: continue
+            if (!decl.typeParameters.isNullOrEmpty()) return null
+            val body = decl.type
+            val utilName = (body as? TypeReference)?.typeName?.let { it as? Identifier }?.text
+            if (utilName != null && utilName in ENCLOSING_UNFOLD_UTILITIES) {
+                return formatTypeForDisplay(body)
+            }
+            return null
+        }
+        return null
+    }
+
     private fun tryDrillReturnArrowOrArray(
         expr: Expression?, targetType: Type, source: String, fileName: String,
+        unfoldAliasForTs6500: Boolean = false,
     ): Boolean {
         if (expr == null) return false
         // Case 3: return [ {...}, ... ] vs Foo[] — reuse the var-decl array-element drill.
@@ -75715,7 +75746,8 @@ interface DataView {
             if (retObj is Type.Interface && retObj.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return false
             val objLit = singleReturnExprOf(expr) as? ObjectLiteralExpression ?: return false
             resolveStructuredTypeMembers(retObj)
-            return checkNestedObjLitPropTypes(objLit, retObj, source, fileName)
+            val override = if (unfoldAliasForTs6500) aliasUtilityDefinitionDisplay(retObj) else null
+            return checkNestedObjLitPropTypes(objLit, retObj, source, fileName, enclosingDisplayOverride = override)
         }
         return false
     }
@@ -106440,6 +106472,17 @@ interface DataView {
                     displayType = literalTypeOfExpression(arg) ?: argType)) {
                 continue
             }
+            // circularResolvedSignature: an arrow/fn-expr ARGUMENT whose body is an
+            // object literal (`useState<Data>(() => ({ value: "string", … }))`) drills
+            // to the inner property mismatch (TS2322 at `value`) against the param's
+            // function-type return, mirroring B491's RETURN-context drill at the
+            // call-arg position. FP-firewalled inside tryDrillReturnArrowOrArray
+            // (single non-generic call sig, concrete object return, simple-leaf only).
+            if (!isRestParam && (arg is ArrowFunction || arg is FunctionExpression) &&
+                paramType is Type.Object &&
+                tryDrillReturnArrowOrArray(arg, paramType, source, fileName, unfoldAliasForTs6500 = true)) {
+                continue
+            }
             if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
                 paramType.target?.symbol?.name == "Array") {
                 checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
@@ -109760,6 +109803,11 @@ interface DataView {
         objLit: ObjectLiteralExpression, targetType: Type, source: String, fileName: String,
         viaUnion: Boolean = false,
         arrayPropsOnly: Boolean = false,
+        // circularResolvedSignature: override for the TS6500 enclosing-type display at
+        // THIS (top) level only — recursive calls leave it null. Renders the alias's
+        // definition (`Readonly<{…}>`) instead of its name (`Data`) for an
+        // instantiation-derived contextual target.
+        enclosingDisplayOverride: String? = null,
     ): Boolean {
         var emitted = false
         val targetObj = targetType as? Type.Object ?: return false
@@ -109846,7 +109894,7 @@ interface DataView {
                             val (l2, c2) = getLineAndCharacterOfPosition(source, keyPos2)
                             val related = createPropertyDeclaredHereRelatedInfo(tgtSym)?.let { d ->
                                 listOf(d.copy(
-                                    message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetObj)}'",
+                                    message = "The expected type comes from property '$propName' which is declared here on type '${enclosingDisplayOverride ?: typeToString(targetObj)}'",
                                     code = 6500,
                                 ))
                             } ?: emptyList()
@@ -109882,7 +109930,7 @@ interface DataView {
                 val leafRelated = if (!viaUnion) {
                     targetObj.members?.get(propName)?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { d ->
                         listOf(d.copy(
-                            message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetObj)}'",
+                            message = "The expected type comes from property '$propName' which is declared here on type '${enclosingDisplayOverride ?: typeToString(targetObj)}'",
                             code = 6500,
                         ))
                     } ?: emptyList()
