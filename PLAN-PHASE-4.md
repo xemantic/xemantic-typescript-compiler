@@ -118,6 +118,24 @@ instantiation, expression type inference, parallel checking pool are in place.
 
 ## Phase 16 — Fundamental Type System Features
 
+**Session 2026-06-21 (post-round-232 EXHAUSTIVE TRIAGE, max-compute) — no code change; established the surgical pool is 100% empty and built the engine roadmap below.**
+
+After landing rounds 230–232, I ran a SECOND read-only hunt (24 more small-baseline failing tests) + manually examined ~15 tests across ALL categories (diagnostics, JS-emit, decl-emit). Combined with the round-231 hunt (12 tests), that's **36 agents + manual triage → EVERY remaining failure is ENGINE (zero scopeable, zero PARTIAL-that-flips)**. The cheap dedicated-walker vein that carried rounds ~180–232 (~+1/round) is mined out. The 277 failures break down (233 diagnostic / 44 JS-emit / 7 decl-emit by harness assertion kind) and map cleanly onto the existing Blockers:
+
+**Diagnostic failures (233) — by required engine feature, roughly highest-leverage first:**
+- **Generic/contextual inference** (the dominant blocker): infer type-params from args + `as const`/tuple inference + best-common-type + rest-param→positional contextual typing, then check. E.g. `contextualTupleTypeParameterReadonly` (we emit the RIGHT TS2345 at the RIGHT position but display `T`/`any` — inference never bound `T`), `inferenceExactOptionalProperties2`, `genericFunctionInference1`, `reactReduxLikeDeferredInferenceAllowsAssignment`, `mutuallyRecursiveCallbacks`.
+- **Mapped-type evaluation** (biggest sub-cluster, ~22): `mappedTypeRecursiveInference`, `specialIntersectionsInMappedTypes`, `mappedTypeWithCombinedTypeMappers`, `mappedTypeWithAsClauseAndLateBoundProperty`, `spyComparisonChecking` (`{[k in keyof T]: Spy}` + intersection indexed access).
+- **Recursive type-instantiation depth → TS2589** (~8): `recursiveConditionalCrash4`, `awaitedType`, `recursiveConditionalTypes`, `circularlyConstrained…`. **Precise unblocker (round-232 investigation, see NEXT-SESSION §3.1):** the depth-bail mechanism EXISTS but never fires because `getTypeFromTypeNode(ConditionalType-with-infer)` returns errorType immediately (never recurses); the real fix is conditional-eval that recurses branches AND reduces args (to tell non-converging from converging).
+- **Relation/structural** (~42): deep assignability chains, intersection comparison, index-signature/Record materialization (`emptyObjectNotSubtypeOfIndexSignatureContainingObject2`, `aliasInstantiationExpressionGenericIntersectionNoCrash1/2`, `genericConditionalConstrainedToUnknownNotAssignableToConcreteObject`).
+- **Union-receiver method-call combinability**: `unionOfArraysFilterCall` (we FP 3× TS2349 because the B516 `combinable` gate rejects type-param overloads — load-bearing, risky to touch — and it ALSO needs a separate TS18048).
+- **Blocker-#3 cross-file/namespace scope conflation**: `cloduleTest2`, several cross-file.
+- **Flow + circularity**: `exhaustiveSwitchCheckCircularity` (we FP 3× TS2322 + miss the TS2345-never).
+- **Deep parser error-recovery**: `parametersSyntaxErrorNoCrash1` (11 exact-position diagnostics incl. TS2842/2843).
+
+**JS-emit failures (44):** **internal-comment preservation** (≥3: `elementAccessExpressionInternalComments`, `importExportInternalComments`, … — the emitter drops inter-token trivia comments; needs trivia tracking across every emit path), multi-file **emit ordering** (`emitMemberAccessExpression` — source-DFS vs @Filename rule), **arbitrary-string import/export names** (`bigintArbirtraryIdentifier`, parser+emitter), **BOM round-trip** (`emitBOM`). Many target removed/deprecated features → check TSGO-RELEVANCE.md first.
+
+**BOTTOM LINE for the next session:** do NOT hunt for surgical walkers — the pool is empty (verified 3 ways). Pick ONE blocker and build it incrementally with strict revert-on-regression discipline. Highest leverage = generic/contextual inference (dominant) or mapped-type evaluation (biggest sub-cluster); most self-contained entry = TS2589 conditional-recursion (precise unblocker documented) or the JS-emit internal-comment-preservation cluster. Each is a multi-session feature; land clean verified increments only.
+
 **Session 2026-06-21 (round 232, max-compute AUTONOMOUS CAMPAIGN, continued) — +1 (278→277 failing, 9808→9809 passing), `orderMattersForSignatureGroupIdentity`, ZERO regressions (exact failing-set diff). Session total +8 (285→277).**
 
 EIGHTH win (the 2nd scopeable from the round-231 read-only hunt). TWO dedicated parts:
