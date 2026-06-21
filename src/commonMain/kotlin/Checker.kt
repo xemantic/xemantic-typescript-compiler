@@ -88988,7 +88988,8 @@ interface DataView {
                     else -> null
                 }
                 // Extract one declaration's DIRECT members into propSources (attributed to baseDisplay).
-                fun addBaseMembers(memberList: List<Any>, baseDisplay: String, effectiveTypeArgs: List<TypeNode>?) {
+                // B521: forceOptional=true makes every member optional (for a `Partial<X>` base).
+                fun addBaseMembers(memberList: List<Any>, baseDisplay: String, effectiveTypeArgs: List<TypeNode>?, forceOptional: Boolean = false) {
                     for (member in memberList) {
                         val propName: String
                         val isPrivate: Boolean
@@ -89015,7 +89016,7 @@ interface DataView {
                             else -> continue
                         }
                         propSources.getOrPut(propName) { mutableListOf() }
-                            .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt, isMethod, effectiveTypeArgs, memberHasTypeParams))
+                            .add(BaseProperty(baseDisplay, isPrivate, propType, isOpt || forceOptional, isMethod, effectiveTypeArgs, memberHasTypeParams))
                     }
                 }
                 // B98.r48: collect a base's OWN + INHERITED members (recurse into its own
@@ -89031,7 +89032,27 @@ interface DataView {
                                 addBaseMembers(decl.members.toList(), baseDisplay, effectiveTypeArgs)
                                 decl.heritageClauses?.filter { it.token == SyntaxKind.ExtendsKeyword }?.forEach { hc ->
                                     for (bt in hc.types) {
-                                        val bs = resolveBaseSym(bt.expression) ?: continue
+                                        // B521: under exactOptionalPropertyTypes, expand a `Partial<X>` base
+                                        // into X's members ALL forced optional, attributed to baseDisplay. The
+                                        // relation engine doesn't materialize `Partial<>` here, so a member like
+                                        // `port?: number` (from Partial) vs another base's `port?: number | undefined`
+                                        // is invisible without this — needed for the TS2320 EOPT identity conflict.
+                                        // EOPT-gated → non-EOPT behavior is byte-identical (no expansion).
+                                        val be = bt.expression
+                                        if (options.exactOptionalPropertyTypes && be is Identifier && be.text == "Partial" &&
+                                            bt.typeArguments?.size == 1) {
+                                            val argRef = bt.typeArguments!![0] as? TypeReference
+                                            val argName = (argRef?.typeName as? Identifier)?.text
+                                            val argSym = argName?.let {
+                                                globals[it] ?: currentFileLocals?.get(it) ?: baseSymbol.parent?.exports?.get(it)
+                                            }
+                                            val argDecl = argSym?.declarations?.filterIsInstance<InterfaceDeclaration>()?.firstOrNull()
+                                            if (argDecl != null) {
+                                                addBaseMembers(argDecl.members.toList(), baseDisplay, null, forceOptional = true)
+                                                continue
+                                            }
+                                        }
+                                        val bs = resolveBaseSym(be) ?: continue
                                         collectBase(bs, baseDisplay, bt.typeArguments, visited)
                                     }
                                 }
@@ -89111,6 +89132,15 @@ interface DataView {
                                 val t0 = getTypeFromTypeNode(t0Node)
                                 val t1 = getTypeFromTypeNode(t1Node)
                                 if (t0 === errorType || t1 === errorType) false
+                                // B521: under exactOptionalPropertyTypes, two OPTIONAL same-named
+                                // properties from different bases must be IDENTICAL (tsc uses
+                                // isTypeIdenticalTo here, not assignability). `port?: number` (type
+                                // `number`) vs `port?: number | undefined` are assignable one way but
+                                // NOT identical → TS2320. Identity proxy = mutual assignability; the
+                                // gate is EOPT-only so non-EOPT behavior (NEITHER-direction) is unchanged.
+                                else if (options.exactOptionalPropertyTypes && src1.isOptional && src2.isOptional)
+                                    !(checkTypeRelatedTo(t0, t1, assignableRelation) &&
+                                      checkTypeRelatedTo(t1, t0, assignableRelation))
                                 else !checkTypeRelatedTo(t0, t1, assignableRelation) &&
                                     !checkTypeRelatedTo(t1, t0, assignableRelation)
                             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }
