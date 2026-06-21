@@ -1497,6 +1497,8 @@ class Checker(
         checkNeverArrayDestructureFromNullElse()
         // 45b7. B370: exhaustive-switch default destructure of a never sibling binding → TS2488
         checkExhaustiveSwitchDefaultDestructure()
+        // 45b7'. B522: array-destructure of an intersection-reduces-to-never type → TS2488
+        checkIntersectionNeverArrayDestructure()
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
@@ -105641,6 +105643,116 @@ interface DataView {
             i++
         }
         return (i - start).coerceAtLeast(1)
+    }
+
+    /**
+     * B522: TS2488 for array-destructuring (`const [x] = v`) of a value whose declared type
+     * reduces to `never` — an INTERSECTION of object types with a shared property declared with
+     * incompatible LITERAL types (`{ a: "foo" } & { a: "bar" }` → never), a UNION whose members
+     * all so reduce, or a type parameter constrained by such an intersection (display uses the
+     * TP NAME, e.g. "Type 'T' must have ..."). The relation engine doesn't model the
+     * intersection-→-never reduction, so we emit nothing today. AST-based; FP-safe because the
+     * never-classification fires ONLY for a shared prop with ≥2 DISTINCT literal types (a
+     * provably-empty intersection) and array-destructuring `never` is always TS2488 in tsc.
+     */
+    private fun checkIntersectionNeverArrayDestructure() {
+        // TS2488 uses the Symbol.iterator protocol; under ES3/ES5 without downlevelIteration
+        // array-destructuring uses array-likeness (no iterator) → tsc emits NOTHING there.
+        if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val topAnn = HashMap<String, TypeNode>()
+            collectNeverVarAnns(result.sourceFile.statements, topAnn)
+            walkNeverDestructure(result.sourceFile.statements, topAnn, emptyMap(), source, fileName)
+        }
+    }
+
+    private fun collectNeverVarAnns(stmts: List<Statement>, out: MutableMap<String, TypeNode>) {
+        for (st in stmts) if (st is VariableStatement) for (d in st.declarationList.declarations) {
+            val n = (d.name as? Identifier)?.text ?: continue
+            val t = d.type ?: continue
+            if (n !in out) out[n] = t
+        }
+    }
+
+    private fun unwrapParenType(t: TypeNode?): TypeNode? =
+        if (t is ParenthesizedType) unwrapParenType(t.type) else t
+
+    private fun neverIntersectionLiteralKey(t: TypeNode?): String? = when (val lit = (unwrapParenType(t) as? LiteralType)?.literal) {
+        is StringLiteralNode -> "s:${lit.text}"
+        is NumericLiteralNode -> "n:${lit.text}"
+        is BigIntLiteralNode -> "b:${lit.text}"
+        is Identifier -> if (lit.text == "true" || lit.text == "false") "k:${lit.text}" else null
+        else -> null
+    }
+
+    private fun isNeverIntersectionType(node: IntersectionType): Boolean {
+        val propLits = HashMap<String, MutableSet<String>>()
+        for (m in node.types) {
+            val tl = unwrapParenType(m) as? TypeLiteral ?: continue
+            for (member in tl.members) {
+                if (member is PropertyDeclaration) {
+                    val pn = (member.name as? Identifier)?.text ?: continue
+                    val k = neverIntersectionLiteralKey(member.type) ?: continue
+                    propLits.getOrPut(pn) { HashSet() }.add(k)
+                }
+            }
+        }
+        return propLits.values.any { it.size >= 2 }
+    }
+
+    /** Returns the display name ("never" or a TP name) if the annotation reduces to never, else null. */
+    private fun classifyNeverDestructure(ann: TypeNode?, tpConstraints: Map<String, TypeNode>): String? {
+        return when (val t = unwrapParenType(ann)) {
+            is IntersectionType -> if (isNeverIntersectionType(t)) "never" else null
+            is UnionType -> if (t.types.isNotEmpty() && t.types.all { classifyNeverDestructure(it, tpConstraints) == "never" }) "never" else null
+            is TypeReference -> {
+                val nm = (t.typeName as? Identifier)?.text
+                val c = nm?.let { tpConstraints[it] }
+                if (nm != null && c != null && classifyNeverDestructure(c, tpConstraints) != null) nm else null
+            }
+            else -> null
+        }
+    }
+
+    private fun walkNeverDestructure(
+        stmts: List<Statement>, varAnn: Map<String, TypeNode>,
+        tpConstraints: Map<String, TypeNode>, source: String, fileName: String,
+    ) {
+        for (s in stmts) {
+            when (s) {
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    val pat = d.name as? ArrayBindingPattern ?: continue
+                    val initName = (d.initializer as? Identifier)?.text ?: continue
+                    val ann = varAnn[initName] ?: continue
+                    val disp = classifyNeverDestructure(ann, tpConstraints) ?: continue
+                    val len = arrayPatternSpanLen(pat.pos, source)
+                    val (line, ch) = getLineAndCharacterOfPosition(source, pat.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$disp' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                        category = DiagnosticCategory.Error, code = 2488,
+                        fileName = fileName, line = line, character = ch,
+                        start = pat.pos, length = len,
+                    ))
+                }
+                is FunctionDeclaration -> {
+                    val body = s.body ?: continue
+                    val childAnn = HashMap(varAnn)
+                    for (p in s.parameters) {
+                        val pn = (p.name as? Identifier)?.text ?: continue
+                        val pt = p.type ?: continue
+                        childAnn[pn] = pt
+                    }
+                    val childTps = HashMap(tpConstraints)
+                    s.typeParameters?.forEach { tp -> tp.constraint?.let { childTps[tp.name.text] = it } }
+                    collectNeverVarAnns(body.statements, childAnn)
+                    walkNeverDestructure(body.statements, childAnn, childTps, source, fileName)
+                }
+                else -> {}
+            }
+        }
     }
 
     /**
