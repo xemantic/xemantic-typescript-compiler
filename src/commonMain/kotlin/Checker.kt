@@ -20673,7 +20673,18 @@ class Checker(
                             continue
                         }
                         checkUnresolvedInExpr(type.expression, classScope, source, fileName)
-                        checkHeritageTypeArgCount(type, classScope, source, fileName)
+                        // indexSignatureInOtherFile (piece A): `class C extends B` where B is
+                        // BOTH a generic interface AND a value var (`declare var B: BCtor` whose
+                        // `new(): B<any>`) extends the VALUE (the non-generic ctor) — tsc does NOT
+                        // arity-check the generic interface, so no TS2314. Skip the arity check
+                        // for an extends clause (no explicit type args) whose base has a value var
+                        // declaration anywhere in the program. Proven net-zero (round 209).
+                        val skipArityForValueExtends = clause.token == SyntaxKind.ExtendsKeyword &&
+                            type.typeArguments.isNullOrEmpty() &&
+                            (type.expression as? Identifier)?.text?.let { heritageBaseHasValueVarDecl(it) } == true
+                        if (!skipArityForValueExtends) {
+                            checkHeritageTypeArgCount(type, classScope, source, fileName)
+                        }
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                         // 17.163: TS2304 for `class C<T> extends T {}` — heritage clause
                         // requires a value, but T resolves only to an enclosing type
@@ -38136,6 +38147,25 @@ interface DataView {
      * Emits TS2314 when extends/implements clause uses wrong number of type args.
      * Only fires when all type params are required (no defaults).
      */
+    /**
+     * indexSignatureInOtherFile (piece A): true when [name] is declared as a value VARIABLE
+     * anywhere in the program (`declare var name: ...` / `var name = ...`). Used to suppress
+     * the generic-arity TS2314 for `class C extends name` — an `extends` of a value uses its
+     * construct signature (not the same-named generic interface), so no arity check applies.
+     */
+    private fun heritageBaseHasValueVarDecl(name: String): Boolean {
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is VariableStatement) {
+                    for (d in stmt.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text == name) return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     private fun checkHeritageTypeArgCount(
         exprWithArgs: ExpressionWithTypeArguments,
         scope: NameScope,
@@ -89088,8 +89118,111 @@ interface DataView {
             try {
                 for (stmt in result.sourceFile.statements) {
                     checkIndexSigInStatement(stmt, source, fileName)
+                    checkInheritedSymbolIndexMembers(stmt, source, fileName)
                 }
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
+        }
+    }
+
+    /**
+     * indexSignatureInOtherFile (piece B): TS2411 for an INHERITED computed-symbol-keyed member
+     * (`[Symbol.iterator]`, `[Symbol.unscopables]`) of an extended generic interface that is not
+     * assignable to the derived class's OWN symbol index signature (`[key: symbol]: V`). The base
+     * is extended via its value var (`declare var B: BCtor` whose ctor returns `B<any>`), so the
+     * own-member-only [checkIndexSigInStatement] never sees these inherited members.
+     *
+     * FP firewall: derived class has an OWN symbol index sig whose value type is a PRIMITIVE (a
+     * method type is never assignable to a primitive); base extended via a value var; zero-param
+     * computed-`Symbol.X` methods only. Corpus-rare shape (only the indexSignatureInOtherFile pair).
+     */
+    private fun checkInheritedSymbolIndexMembers(stmt: Statement, source: String, fileName: String) {
+        if (stmt !is ClassDeclaration) return
+        val symIdxSig = stmt.members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
+            sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.SymbolKeyword } == true
+        } ?: return
+        val idxValueNode = symIdxSig.type ?: return
+        val idxValueType = getTypeFromTypeNode(idxValueNode)
+        // Only fire when the symbol index value type is a PRIMITIVE — a method/function member is
+        // then never assignable (FP-safe). any/unknown/object value types are skipped.
+        if (!idxValueType.flags.hasAny(
+                TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or TypeFlags.ESSymbol)) return
+        val idxValueDisplay = formatTypeForDisplay(idxValueNode) ?: typeToString(idxValueType)
+        // Resolve the extends base (single Identifier) — require an extends-via-value base.
+        val baseName = stmt.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()
+            ?.let { (it.expression as? Identifier)?.text } ?: return
+        if (!heritageBaseHasValueVarDecl(baseName)) return
+        val baseSym = globals[baseName] ?: return
+        val baseInterfaces = baseSym.declarations.filterIsInstance<InterfaceDeclaration>()
+        if (baseInterfaces.isEmpty()) return
+        val tpNames = baseInterfaces.flatMap { iface ->
+            iface.typeParameters?.mapNotNull { it.name.text } ?: emptyList() }.toSet()
+
+        // Squiggle for the OWN symbol index signature (full text `[key: symbol]: V`).
+        var start = symIdxSig.pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        var spanEnd = start
+        while (spanEnd < source.length && source[spanEnd] != '\n' && source[spanEnd] != ';' && source[spanEnd] != '}') spanEnd++
+        while (spanEnd > start && source[spanEnd - 1].isWhitespace()) spanEnd--
+        val spanLen = (spanEnd - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+
+        // Render a return TypeNode substituting base type-param names → "any" (the instance is B<any>).
+        fun renderAny(n: TypeNode): String? = when (n) {
+            is TypeReference -> {
+                val nm = getTypeReferenceLastName(n.typeName) ?: return@renderAny null
+                val args = n.typeArguments
+                if (args.isNullOrEmpty()) { if (nm in tpNames) "any" else nm }
+                else {
+                    val a = args.map { renderAny(it) }
+                    if (a.any { it == null }) return@renderAny null
+                    "$nm<${a.joinToString(", ")}>"
+                }
+            }
+            else -> formatTypeForDisplay(n)
+        }
+
+        data class SymMember(val display: String, val memberType: String, val namePos: Int)
+        val collected = mutableListOf<SymMember>()
+        for (iface in baseInterfaces) {
+            for (member in iface.members) {
+                if (member !is MethodDeclaration) continue
+                if (member.parameters.isNotEmpty()) continue
+                val nameNode = member.name as? ComputedPropertyName ?: continue
+                val pae = nameNode.expression as? PropertyAccessExpression ?: continue
+                if ((pae.expression as? Identifier)?.text != "Symbol") continue
+                val displayName = "[Symbol.${pae.name.text}]"
+                val retNode = member.type ?: continue
+                val retDisplay = renderAny(retNode) ?: continue
+                collected.add(SymMember(displayName, "() => $retDisplay", nameNode.pos))
+            }
+        }
+        collected.sortBy { it.namePos }
+        for (sm in collected) {
+            val related: List<Diagnostic> = run {
+                val (declFile, declSource) = resolveDeclarationSourceFile(sm.namePos)
+                if (declFile == null || declSource == null) return@run emptyList()
+                // The ComputedPropertyName pos includes leading trivia — skip to the `[`.
+                var np = sm.namePos
+                while (np < declSource.length && declSource[np].isWhitespace()) np++
+                val isLib = isLibFileName(declFile)
+                val (dl, dc) = if (isLib) Pair<Int?, Int?>(null, null)
+                    else getLineAndCharacterOfPosition(declSource, np).let { Pair<Int?, Int?>(it.first, it.second) }
+                listOf(Diagnostic(
+                    message = "'${sm.display}' is declared here.",
+                    category = DiagnosticCategory.Message, code = 2728,
+                    fileName = declFile, line = dl, character = dc,
+                    start = np, length = sm.display.length,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Property '${sm.display}' of type '${sm.memberType}' is not assignable to 'symbol' index type '$idxValueDisplay'.",
+                category = DiagnosticCategory.Error, code = 2411,
+                fileName = fileName, line = line, character = character,
+                start = start, length = spanLen,
+                relatedInformation = related,
+            ))
         }
     }
 
