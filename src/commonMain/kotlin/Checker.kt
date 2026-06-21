@@ -36121,6 +36121,17 @@ class Checker(
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
 
+        // B519: arithmetic / relational / bitwise operators that require DEFINED operands — a
+        // possibly-undefined operand of one of these is TS18048. In the companion object so it is
+        // initialized at class load (the `init` block runs the check pipeline before instance
+        // `val`s declared later in the body would initialize — the documented init-order gotcha).
+        private val ARITH_REL_OPERATORS = setOf(
+            SyntaxKind.LessThan, SyntaxKind.GreaterThan, SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+            SyntaxKind.Plus, SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.AsteriskAsterisk,
+            SyntaxKind.Slash, SyntaxKind.Percent, SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+            SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan, SyntaxKind.GreaterThanGreaterThanGreaterThan,
+        )
+
         /** B423: JSDoc-valid primitive / keyword type names (lowercase-ish) that are NOT in
          *  KNOWN_GLOBALS but are legal single-identifier `@typedef`/`@property` types. */
         private val JSDOC_TYPE_PRIMITIVE_NAMES: Set<String> = setOf(
@@ -44557,10 +44568,33 @@ interface DataView {
                 // reference the parameter itself (`function f(x = x)` / `(b = b.toString())`).
                 // FP-safe: a reference to the own name inside the own initializer (not crossing
                 // a nested function/class boundary) is always a self-reference grammar error.
-                (param.name as? Identifier)?.text?.let { pname ->
-                    findParamSelfRef(init, pname)?.let { refPos ->
-                        emitParamInitForbidden(refPos, pname.length, 2372,
-                            "Parameter '$pname' cannot reference itself.", source, fileName, emitted)
+                // B519: emit TS2372 at EVERY self-reference (per-position, not per-line — tsc
+                // reports per identifier resolution), PLUS the optionality-removal companions
+                // when the param TYPE includes `undefined` under strictNullChecks: TS2502 at the
+                // param name (the param's type resolution is circular through the default) and
+                // TS18048 for a self-ref used as an arithmetic/relational operand (possibly
+                // undefined). Flips `circularOptionalityRemoval`.
+                (param.name as? Identifier)?.let { nameId ->
+                    val pname = nameId.text
+                    val refs = mutableListOf<Pair<Int, Boolean>>()
+                    collectParamSelfRefs(init, pname, false, refs)
+                    if (refs.isNotEmpty()) {
+                        val typeHasUndef = paramTypeIncludesUndefined(param)
+                        if (typeHasUndef && strictNullChecks) {
+                            // TS2502 squiggles the WHOLE parameter (name through default end).
+                            val spanEnd = paramDefaultRightmostEnd(init)
+                            emitDiagAtPos(nameId.pos, (spanEnd - nameId.pos).coerceAtLeast(1), 2502,
+                                "'$pname' is referenced directly or indirectly in its own type annotation.",
+                                source, fileName, emitted)
+                        }
+                        for ((refPos, isArithOperand) in refs) {
+                            emitDiagAtPos(refPos, pname.length, 2372,
+                                "Parameter '$pname' cannot reference itself.", source, fileName, emitted)
+                            if (isArithOperand && typeHasUndef && strictNullChecks) {
+                                emitDiagAtPos(refPos, pname.length, 18048,
+                                    "'$pname' is possibly 'undefined'.", source, fileName, emitted)
+                            }
+                        }
                     }
                 }
             }
@@ -44640,6 +44674,92 @@ interface DataView {
             // FunctionExpression / ArrowFunction / ClassExpression / literals → boundary; do not recurse.
             else -> return null
         }
+    }
+
+    /**
+     * B519: collect ALL references to [name] inside a parameter default initializer [expr], each
+     * tagged with whether it is a direct operand of an arithmetic/relational/bitwise binary
+     * expression (→ possibly-undefined TS18048). Same scope rules as [findParamSelfRef] (does not
+     * cross nested function/arrow/class boundaries). [arithCtx] propagates through parens only.
+     */
+    private fun collectParamSelfRefs(expr: Expression, name: String, arithCtx: Boolean, out: MutableList<Pair<Int, Boolean>>) {
+        when (expr) {
+            is Identifier -> if (expr.text == name) out.add(expr.pos to arithCtx)
+            is ParenthesizedExpression -> collectParamSelfRefs(expr.expression, name, arithCtx, out)
+            is PropertyAccessExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is ElementAccessExpression -> { collectParamSelfRefs(expr.expression, name, false, out); collectParamSelfRefs(expr.argumentExpression, name, false, out) }
+            is CallExpression -> { collectParamSelfRefs(expr.expression, name, false, out); for (a in expr.arguments) collectParamSelfRefs(a, name, false, out) }
+            is NewExpression -> { collectParamSelfRefs(expr.expression, name, false, out); expr.arguments?.forEach { collectParamSelfRefs(it, name, false, out) } }
+            is BinaryExpression -> {
+                val isArith = expr.operator in ARITH_REL_OPERATORS
+                // Flatten the same-operator left-spine preserving source order; each operand's
+                // immediate parent is a binary with this operator (so the arith flag is uniform).
+                val rights = ArrayDeque<Expression>()
+                var node: Expression = expr
+                while (node is BinaryExpression && node.operator == expr.operator) {
+                    rights.addFirst(node.right); node = node.left
+                }
+                collectParamSelfRefs(node, name, isArith, out)
+                for (r in rights) collectParamSelfRefs(r, name, isArith, out)
+            }
+            is ConditionalExpression -> {
+                collectParamSelfRefs(expr.condition, name, false, out)
+                collectParamSelfRefs(expr.whenTrue, name, false, out)
+                collectParamSelfRefs(expr.whenFalse, name, false, out)
+            }
+            is PrefixUnaryExpression -> collectParamSelfRefs(expr.operand, name, false, out)
+            is PostfixUnaryExpression -> collectParamSelfRefs(expr.operand, name, false, out)
+            is ArrayLiteralExpression -> for (e in expr.elements) collectParamSelfRefs(e, name, false, out)
+            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
+                is PropertyAssignment -> collectParamSelfRefs(p.initializer, name, false, out)
+                is SpreadAssignment -> collectParamSelfRefs(p.expression, name, false, out)
+                is ShorthandPropertyAssignment -> { if (p.name.text == name) out.add(p.name.pos to false); p.objectAssignmentInitializer?.let { collectParamSelfRefs(it, name, false, out) } }
+                else -> {}
+            }
+            is SpreadElement -> collectParamSelfRefs(expr.expression, name, false, out)
+            is AsExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is NonNullExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is TypeAssertionExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is SatisfiesExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is AwaitExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is YieldExpression -> expr.expression?.let { collectParamSelfRefs(it, name, false, out) }
+            is DeleteExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is VoidExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is TypeOfExpression -> collectParamSelfRefs(expr.expression, name, false, out)
+            is TemplateExpression -> for (s in expr.templateSpans) collectParamSelfRefs(s.expression, name, false, out)
+            is CommaListExpression -> for (e in expr.elements) collectParamSelfRefs(e, name, false, out)
+            is TaggedTemplateExpression -> {
+                collectParamSelfRefs(expr.tag, name, false, out)
+                (expr.template as? TemplateExpression)?.templateSpans?.forEach { collectParamSelfRefs(it.expression, name, false, out) }
+            }
+            // FunctionExpression / ArrowFunction / ClassExpression / literals → boundary; do not recurse.
+            else -> {}
+        }
+    }
+
+    /** B519: rightmost source end of a parameter default initializer (for the TS2502 span). */
+    private fun paramDefaultRightmostEnd(expr: Expression): Int = when (expr) {
+        is ConditionalExpression -> paramDefaultRightmostEnd(expr.whenFalse)
+        is BinaryExpression -> paramDefaultRightmostEnd(expr.right)
+        else -> expressionTrueEnd(expr)
+    }
+
+    /** B519: a parameter's declared type includes `undefined` (a union member or an optional `?`). */
+    private fun paramTypeIncludesUndefined(param: Parameter): Boolean {
+        if (param.questionToken) return true
+        val t = param.type ?: return false
+        return t is UnionType && t.types.any { it is KeywordTypeNode && it.kind == SyntaxKind.UndefinedKeyword }
+    }
+
+    /** B519: emit a diagnostic at an exact position, deduping by (code, position). */
+    private fun emitDiagAtPos(start: Int, length: Int, code: Int, message: String, source: String, fileName: String, emitted: MutableSet<String>) {
+        if (!emitted.add("$code@$start")) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message, category = DiagnosticCategory.Error, code = code,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length.coerceAtLeast(1),
+        ))
     }
 
     private fun walkParamForbiddenBindingName(name: Expression, source: String, fileName: String, emitted: MutableSet<String>) {
