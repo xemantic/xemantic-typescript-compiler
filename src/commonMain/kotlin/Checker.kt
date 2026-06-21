@@ -997,6 +997,9 @@ class Checker(
         // unannotated param + a non-exhaustive `switch(param){ case <lit>: return <lit> }`
         // body (no default) → inferred return includes `undefined` → TS2322 at the decl name.
         if (strictNullChecks) checkFnTypeSwitchReturnMismatch()
+        // 6a''. orderMattersForSignatureGroupIdentity — a call to a ≥2-call-sig-only-interface
+        // var with a fresh object literal that excess-fails EVERY overload → TS2769 + TS2339-never.
+        checkSignatureGroupOverloadExcessCalls()
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
@@ -26572,6 +26575,7 @@ class Checker(
         // alias body often resolves to errorType/any, which the type-based path skips.
         if (ts2403CheckAliasAnnotations(decls, varName, source, fileName)) return
         if (ts2403CheckEnumValueRedeclarations(decls, varName, source, fileName)) return
+        if (ts2403CheckCallSigInterfaceGroups(decls, varName, source, fileName)) return
         val firstType = getVarDeclType(firstDecl) ?: return
         // Two comparison modes: SIMPLE (intrinsic/literal/function — reliable string
         // compare) and STRUCTURED (generic interface instantiations — recursive
@@ -26638,6 +26642,182 @@ class Checker(
                 relatedInformation = relatedInfo,
             ))
         }
+    }
+
+    /**
+     * TS2403 "signature group identity is order-sensitive" (orderMattersForSignatureGroupIdentity).
+     * Two `declare var X: I` declarations whose interface annotations are CALL-SIGNATURE-ONLY
+     * are the SAME type iff their call-signature lists are POSITIONALLY identical (tsc compares
+     * signature groups in declaration order). The general SIMPLE path name-compares the interface
+     * symbols, so it FPs TS2403 for two differently-named but structurally-identical call-sig
+     * interfaces (A≡B → no error) yet must still fire for the reversed case (A≢C → TS2403).
+     * Returns true when it handled the group (every decl annotates a ≥2-call-sig-only interface),
+     * so the caller skips the name-based path. FP-safe: corpus-unique shape; renders each
+     * signature via the existing signatureToStringColon and compares the ordered lists.
+     */
+    private fun ts2403CheckCallSigInterfaceGroups(
+        decls: List<VariableDeclaration>, varName: String, source: String, fileName: String,
+    ): Boolean {
+        val renders = ArrayList<List<String>>(decls.size)
+        val names = ArrayList<String>(decls.size)
+        for (d in decls) {
+            val ann = d.type ?: return false
+            val t = getTypeFromTypeNodeSafe(ann) as? Type.Object ?: return false
+            val r = callSigOnlyInterfaceRenders(t) ?: return false
+            renders.add(r)
+            names.add(typeToString(t))
+        }
+        if (renders[0].size < 2) return false  // require a genuine signature GROUP (≥2 sigs)
+        val firstRender = renders[0]
+        val firstExported = isVarDeclExported(decls[0])
+        val firstNameNode = decls[0].name as? Identifier
+        for (i in 1 until decls.size) {
+            val decl = decls[i]
+            if (isVarDeclExported(decl) != firstExported) continue
+            if (renders[i] == firstRender) continue  // identical group ORDER → same type → no TS2403
+            val nameNode = decl.name as? Identifier ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            val relatedInfo = if (firstNameNode != null) {
+                val (fl, fc) = getLineAndCharacterOfPosition(source, firstNameNode.pos)
+                listOf(Diagnostic(
+                    message = "'$varName' was also declared here.",
+                    category = DiagnosticCategory.Message, code = 6203, fileName = fileName,
+                    line = fl, character = fc, start = firstNameNode.pos, length = firstNameNode.text.length,
+                ))
+            } else emptyList()
+            diagnostics.add(Diagnostic(
+                message = "Subsequent variable declarations must have the same type.  Variable '$varName' must be of type '${names[0]}', but here has type '${names[i]}'.",
+                category = DiagnosticCategory.Error, code = 2403, fileName = fileName,
+                line = line, character = character, start = nameNode.pos, length = nameNode.text.length,
+                relatedInformation = relatedInfo,
+            ))
+        }
+        return true
+    }
+
+    /** Ordered call-signature renderings of a CALL-SIGNATURE-ONLY object/interface type
+     *  (≥1 call sig, NO named properties, NO construct signatures), or null if not that shape. */
+    private fun callSigOnlyInterfaceRenders(type: Type.Object): List<String>? {
+        resolveStructuredTypeMembers(type)
+        val sigs = type.callSignatures
+        if (sigs.isNullOrEmpty()) return null
+        if (!type.properties.isNullOrEmpty()) return null
+        if (!type.constructSignatures.isNullOrEmpty()) return null
+        return sigs.map { signatureToStringColon(it, false) }
+    }
+
+    /**
+     * TS2769 + TS2339-never for a call to a CALL-SIGNATURE-group var where a FRESH object literal
+     * arg has an EXCESS property against EVERY overload's object param, so no overload matches and
+     * the call result is `never` (orderMattersForSignatureGroupIdentity). The general call path
+     * bails to anyType for a named multi-call-sig interface callee (documented FP-avoidance), so
+     * this is purely ADDITIVE. FP-safe: corpus-unique shape — a `declare var X` typed by a
+     * ≥2-call-sig-only interface, called with ONE object literal whose keys excess-fail EVERY
+     * signature (if any signature matched, tsc would pick it and we bail).
+     */
+    private fun checkSignatureGroupOverloadExcessCalls() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            val candidates = HashMap<String, Type.Object>()
+            for (stmt in statements) {
+                if (stmt is VariableStatement && ModifierFlag.Declare in stmt.modifiers) {
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        if (nm in candidates) continue  // first declaration wins (the overload set)
+                        val ann = d.type ?: continue
+                        val t = getTypeFromTypeNodeSafe(ann) as? Type.Object ?: continue
+                        resolveStructuredTypeMembers(t)
+                        val sigs = t.callSignatures
+                        if (sigs == null || sigs.size < 2) continue
+                        if (!t.properties.isNullOrEmpty() || !t.constructSignatures.isNullOrEmpty()) continue
+                        candidates[nm] = t
+                    }
+                }
+            }
+            if (candidates.isEmpty()) continue
+            try {
+                for (stmt in statements) {
+                    if (stmt is ExpressionStatement) osceVisitExpr(stmt.expression, candidates, source, fileName)
+                }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun osceVisitExpr(expr: Expression, candidates: Map<String, Type.Object>, source: String, fileName: String) {
+        when (expr) {
+            is CallExpression -> {
+                val info = signatureGroupOverloadExcessInfo(expr, candidates)
+                if (info != null) {
+                    val callee = expr.expression as Identifier
+                    val chain = ArrayList<String>(info.size * 2)
+                    for ((idx, triple) in info.withIndex()) {
+                        chain.add("  Overload ${idx + 1} of ${info.size}, '${triple.first}', gave the following error.")
+                        chain.add("    Object literal may only specify known properties, and '${triple.third}' does not exist in type '${triple.second}'.")
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                        line = line, character = character, start = callee.pos, length = callee.text.length,
+                        messageChain = chain,
+                    ))
+                }
+                osceVisitExpr(expr.expression, candidates, source, fileName)
+                expr.arguments.forEach { osceVisitExpr(it, candidates, source, fileName) }
+            }
+            is PropertyAccessExpression -> {
+                val inner = expr.expression
+                if (inner is CallExpression && signatureGroupOverloadExcessInfo(inner, candidates) != null) {
+                    val nameNode = expr.name
+                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${nameNode.text}' does not exist on type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                        line = line, character = character, start = nameNode.pos, length = nameNode.text.length,
+                    ))
+                }
+                osceVisitExpr(expr.expression, candidates, source, fileName)
+            }
+            is ParenthesizedExpression -> osceVisitExpr(expr.expression, candidates, source, fileName)
+            is BinaryExpression -> {
+                osceVisitExpr(expr.left, candidates, source, fileName)
+                osceVisitExpr(expr.right, candidates, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** (sigDisplay, paramDisplay, firstExcessKey) per overload if [call] is `X({objLit})` where X
+     *  is a candidate call-sig-group var and the object literal excess-fails EVERY overload; else null. */
+    private fun signatureGroupOverloadExcessInfo(
+        call: CallExpression, candidates: Map<String, Type.Object>,
+    ): List<Triple<String, String, String>>? {
+        val callee = call.expression as? Identifier ?: return null
+        val iface = candidates[callee.text] ?: return null
+        if (call.arguments.size != 1) return null
+        val objLit = call.arguments[0] as? ObjectLiteralExpression ?: return null
+        val keys = ArrayList<String>(objLit.properties.size)
+        for (p in objLit.properties) {
+            val key = (p as? PropertyAssignment)?.name as? Identifier ?: return null
+            keys.add(key.text)
+        }
+        if (keys.isEmpty()) return null
+        val sigs = iface.callSignatures ?: return null
+        val out = ArrayList<Triple<String, String, String>>(sigs.size)
+        for (sig in sigs) {
+            if (sig.parameters.size != 1) return null
+            val paramType = getTypeOfSymbol(sig.parameters[0]) as? Type.Object ?: return null
+            resolveStructuredTypeMembers(paramType)
+            val paramProps = (paramType.properties ?: return null).map { it.name }.toSet()
+            if (paramProps.isEmpty()) return null
+            if (!paramProps.all { it in keys }) return null  // every param prop provided → pure-excess gate
+            val excess = keys.firstOrNull { it !in paramProps } ?: return null  // ≥1 excess key
+            out.add(Triple(signatureToStringColon(sig, false), typeToString(paramType), excess))
+        }
+        return out
     }
 
     /**
