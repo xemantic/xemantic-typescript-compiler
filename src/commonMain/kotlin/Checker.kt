@@ -142,6 +142,11 @@ class Checker(
         var relationUsedCycleBreak = false
         /** Track pairs already being elaborated to prevent infinite recursion in recursive types. */
         val elaborationStack = HashSet<Long>()
+        /** Source/target type-id pairs currently inside [getFunctionMismatchElaboration].
+         *  A recursive function type (`interface I { (x: I): void }`) recurses with
+         *  swapped operands (contravariance) into an alternating (A,B)/(B,A) cycle that
+         *  would otherwise overflow the stack (silently swallowed by callers). */
+        val functionElaborationStack = HashSet<Long>()
         var argCountDepth = 0
         var callTypeCheckDepth = 0
         var arithmeticCheckDepth = 0
@@ -85305,12 +85310,33 @@ interface DataView {
 
     /** Get the type of a binary expression. */
     private fun getTypeOfBinaryExpression(expr: BinaryExpression): Type {
-        return when (expr.operator) {
+        // Iterate down the left spine instead of recursing through
+        // getTypeOfExpression(expr.left): a deeply-nested left-associative chain
+        // (binderBinaryExpressionStress's `a+b+c+...` → ((a+b)+c)+...) would
+        // otherwise StackOverflow. getTypeOfExpression delegates straight here for a
+        // BinaryExpression, so folding operand types bottom-up over the spine is
+        // exactly equivalent to the recursive form.
+        val spine = ArrayList<BinaryExpression>()
+        var node: Expression = expr
+        while (node is BinaryExpression) { spine.add(node); node = node.left }
+        var acc = getTypeOfExpression(node) // leftmost non-binary leaf
+        for (i in spine.indices.reversed()) {
+            val n = spine[i]
+            acc = combineBinaryTypes(n.operator, acc, n.right)
+        }
+        return acc
+    }
+
+    /** Result type of `<leftType> <operator> <right>` — the per-operator rules
+     *  from [getTypeOfBinaryExpression], extracted so a chain can be folded
+     *  iteratively. [leftType] is the already-resolved type of the left operand;
+     *  the right operand is resolved here only when the operator's rule needs it. */
+    private fun combineBinaryTypes(operator: SyntaxKind, leftType: Type, right: Expression): Type {
+        return when (operator) {
             // Arithmetic → number
             SyntaxKind.Plus -> {
                 // Plus is special: string + any = string, any + string = string
-                val leftType = getTypeOfExpression(expr.left)
-                val rightType = getTypeOfExpression(expr.right)
+                val rightType = getTypeOfExpression(right)
                 if (leftType.flags.hasAny(TypeFlags.StringLike) || rightType.flags.hasAny(TypeFlags.StringLike)) {
                     stringType
                 } else if (leftType.flags.hasAny(TypeFlags.NumberLike) && rightType.flags.hasAny(TypeFlags.NumberLike)) {
@@ -85328,8 +85354,8 @@ interface DataView {
             SyntaxKind.GreaterThanGreaterThanGreaterThan ->
                 // B283: both-bigint arithmetic yields bigint (tsc bothAreBigIntLike branch);
                 // anything else (incl. mixed/unions) keeps the historical number result.
-                if (isBigIntLikeType(getTypeOfExpression(expr.left)) &&
-                    isBigIntLikeType(getTypeOfExpression(expr.right))) bigintType else numberType
+                if (isBigIntLikeType(leftType) &&
+                    isBigIntLikeType(getTypeOfExpression(right))) bigintType else numberType
 
             // Comparison → boolean
             SyntaxKind.LessThan, SyntaxKind.GreaterThan,
@@ -85339,36 +85365,33 @@ interface DataView {
             SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
 
             // Assignment → type of left
-            SyntaxKind.Equals -> getTypeOfExpression(expr.right)
+            SyntaxKind.Equals -> getTypeOfExpression(right)
             SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
             SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
             SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
             SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
             SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
-            SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> getTypeOfExpression(expr.left)
+            SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> leftType
             // Logical assignment ops — type is the union of LHS (kept) and RHS (assigned).
             SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
             SyntaxKind.QuestionQuestionEquals -> {
-                val leftT = getTypeOfExpression(expr.left)
-                val rightT = getTypeOfExpression(expr.right)
-                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+                val rightT = getTypeOfExpression(right)
+                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
             }
 
             // Logical → union of operands
-            SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(expr.right)
+            SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(right)
             SyntaxKind.BarBar -> {
-                val leftT = getTypeOfExpression(expr.left)
-                val rightT = getTypeOfExpression(expr.right)
-                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+                val rightT = getTypeOfExpression(right)
+                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
             }
             SyntaxKind.QuestionQuestion -> {
-                val leftT = getTypeOfExpression(expr.left)
-                val rightT = getTypeOfExpression(expr.right)
-                if (leftT === rightT) leftT else getUnionType(listOf(leftT, rightT))
+                val rightT = getTypeOfExpression(right)
+                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
             }
 
             // Comma → type of right
-            SyntaxKind.Comma -> getTypeOfExpression(expr.right)
+            SyntaxKind.Comma -> getTypeOfExpression(right)
 
             else -> anyType
         }
@@ -91014,8 +91037,18 @@ interface DataView {
                 }
             }
             is BinaryExpression -> {
-                checkAbstractInExpr(expr.left, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInExpr(expr.right, source, fileName, abstractClasses, typeofAbstractVars)
+                // Worklist (not recursion on .left): a deeply-nested binary chain
+                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
+                // recursive left/right walk. Flatten iteratively, pushing right-then-left
+                // for left-to-right pre-order, recursing only into non-binary operands.
+                val work = ArrayDeque<Expression>()
+                work.addLast(expr)
+                while (work.isNotEmpty()) {
+                    when (val n = work.removeLast()) {
+                        is BinaryExpression -> { work.addLast(n.right); work.addLast(n.left) }
+                        else -> checkAbstractInExpr(n, source, fileName, abstractClasses, typeofAbstractVars)
+                    }
+                }
             }
             is CallExpression -> {
                 // Detect `[A, B, ...].map((cls) => new cls())` pattern: when the receiver is an
@@ -109631,6 +109664,22 @@ interface DataView {
     private fun getFunctionMismatchElaboration(
         source: Type.Object, target: Type.Object
     ): List<String> {
+        // Cycle guard: a recursive function type (`interface I { (x: I): void }`)
+        // recurses below with swapped operands (contravariance) into an alternating
+        // (A,B)/(B,A) cycle. Re-entry on a pair already in progress returns no
+        // elaboration instead of overflowing the stack (silently swallowed by callers).
+        val pairKey = packRelationKey(source.id, target.id)
+        if (!state.functionElaborationStack.add(pairKey)) return emptyList()
+        try {
+            return getFunctionMismatchElaborationWorker(source, target)
+        } finally {
+            state.functionElaborationStack.remove(pairKey)
+        }
+    }
+
+    private fun getFunctionMismatchElaborationWorker(
+        source: Type.Object, target: Type.Object
+    ): List<String> {
         val sourceSigs = source.callSignatures
         val targetSigs = target.callSignatures
         if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
@@ -114038,8 +114087,19 @@ interface DataView {
                 expr.arguments?.forEach { spread2698Expr(it, source, fileName, anns) }
             }
             is BinaryExpression -> {
-                spread2698Expr(expr.left, source, fileName, anns)
-                spread2698Expr(expr.right, source, fileName, anns)
+                // Worklist (not recursion on .left): a deeply-nested binary chain
+                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
+                // recursive left/right walk. Flatten the binary tree iteratively —
+                // push right-then-left so leaves are visited left-to-right (pre-order,
+                // matching the recursive form) — recursing only into non-binary operands.
+                val work = ArrayDeque<Expression>()
+                work.addLast(expr)
+                while (work.isNotEmpty()) {
+                    when (val n = work.removeLast()) {
+                        is BinaryExpression -> { work.addLast(n.right); work.addLast(n.left) }
+                        else -> spread2698Expr(n, source, fileName, anns)
+                    }
+                }
             }
             is ConditionalExpression -> {
                 spread2698Expr(expr.condition, source, fileName, anns)
@@ -120524,18 +120584,32 @@ interface DataView {
                 sym2strCheckExpr(span.expression, source, fileName, symbolNames, tpNames, aliasNames)
             }
             is BinaryExpression -> {
-                when (expr.operator) {
-                    SyntaxKind.Plus -> {
-                        if (sym2strIsSymbolOperand(expr.left, symbolNames)) emitSym2469(expr.left, "+", source, fileName)
-                        else if (sym2strIsSymbolOperand(expr.right, symbolNames)) emitSym2469(expr.right, "+", source, fileName)
+                // Worklist (not recursion on .left): a deeply-nested binary chain
+                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
+                // recursive left/right walk. Pop each binary node — running the same
+                // per-node TS2469 operator check — and push right-then-left so the
+                // traversal order (per-node check then left, then right) matches the
+                // recursive form exactly; recurse only into non-binary operands.
+                val work = ArrayDeque<Expression>()
+                work.addLast(expr)
+                while (work.isNotEmpty()) {
+                    when (val n = work.removeLast()) {
+                        is BinaryExpression -> {
+                            when (n.operator) {
+                                SyntaxKind.Plus -> {
+                                    if (sym2strIsSymbolOperand(n.left, symbolNames)) emitSym2469(n.left, "+", source, fileName)
+                                    else if (sym2strIsSymbolOperand(n.right, symbolNames)) emitSym2469(n.right, "+", source, fileName)
+                                }
+                                SyntaxKind.PlusEquals -> {
+                                    if (sym2strIsSymbolOperand(n.right, symbolNames)) emitSym2469(n.right, "+=", source, fileName)
+                                }
+                                else -> {}
+                            }
+                            work.addLast(n.right); work.addLast(n.left)
+                        }
+                        else -> sym2strCheckExpr(n, source, fileName, symbolNames, tpNames, aliasNames)
                     }
-                    SyntaxKind.PlusEquals -> {
-                        if (sym2strIsSymbolOperand(expr.right, symbolNames)) emitSym2469(expr.right, "+=", source, fileName)
-                    }
-                    else -> {}
                 }
-                sym2strCheckExpr(expr.left, source, fileName, symbolNames, tpNames, aliasNames)
-                sym2strCheckExpr(expr.right, source, fileName, symbolNames, tpNames, aliasNames)
             }
             is PrefixUnaryExpression -> {
                 if (expr.operator == SyntaxKind.Plus && sym2strIsSymbolOperand(expr.operand, symbolNames)) emitSym2469(expr.operand, "+", source, fileName)
