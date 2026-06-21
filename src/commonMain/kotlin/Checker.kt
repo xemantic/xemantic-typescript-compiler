@@ -447,6 +447,21 @@ class Checker(
      *  [getFlowAt] during narrowing in [checkVarDeclAssignability]. Null in passes
      *  that don't initialize it (narrowing is opt-in per emission site). */
     private var currentFlowGraph: FlowGraph? = null
+    /**
+     * inKeywordAndUnknown: when true, [narrowByTruthiness] maps a bare truthy
+     * `unknown` to the [truthyUnknownType] sentinel so [checkInOperatorRhs] can
+     * emit TS2638. Set ONLY around that one narrowing walk; false everywhere
+     * else → general narrowing keeps `unknown` unchanged (zero blast radius).
+     */
+    private var narrowUnknownToEmptyObject = false
+    /**
+     * inKeywordAndUnknown: the current file's flow graph during the arithmetic
+     * pass. Held in a DEDICATED field (NOT [currentFlowGraph]) so the pass's many
+     * `getTypeOfExpression` calls stay flow-UNAWARE (setting [currentFlowGraph]
+     * broadly regressed 78 arithmetic/comparison tests). [checkInOperatorRhs]
+     * sets [currentFlowGraph] from this only around its own narrowing walk.
+     */
+    private var currentArithmeticFlowGraph: FlowGraph? = null
 
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
@@ -81698,6 +81713,11 @@ interface DataView {
     }
 
     private fun narrowByTruthiness(t: Type, truthy: Boolean): Type {
+        // inKeywordAndUnknown: under the scoped in-operator narrowing pass a bare
+        // `unknown` narrowed truthy becomes the distinguished `{}` sentinel (tsc:
+        // truthy `unknown` is `{}`, which "may represent a primitive"). Off by
+        // default so all other narrowing keeps `unknown` unchanged.
+        if (t === unknownType && truthy && narrowUnknownToEmptyObject) return truthyUnknownType
         return if (truthy) {
             when {
                 isDefinitelyFalsyMember(t) -> neverType
@@ -82113,6 +82133,10 @@ interface DataView {
     ): Type {
         // 17.34b: path-based comparison so `A._a instanceof Class` matches when name="A._a".
         if (getReferencePath(expr.left) != name) return t
+        // inKeywordAndUnknown: an `instanceof` of [name] proves object-ness, so it
+        // supersedes the truthy-`unknown` `{}` sentinel — demote back to `unknown`
+        // so `'a' in x` after `x instanceof Object` does NOT fire TS2638 (f1).
+        if (t === truthyUnknownType) return unknownType
         val classType = resolveInstanceOfRhsType(expr.right) ?: return t
         if (t is Type.Union) {
             val filtered = if (isMatch) {
@@ -109055,7 +109079,47 @@ interface DataView {
         try {
             val rhsType = getTypeOfExpression(rhs)
             if (rhsType === anyType || rhsType === errorType) return
-            if (rhsType === unknownType) return
+            if (rhsType === unknownType) {
+                // inKeywordAndUnknown: `<expr> in y` where `y: unknown` is narrowed
+                // by a truthiness guard (NOT instanceof) to `{}` → TS2638 "may
+                // represent a primitive". Scoped narrowing walk maps a truthy bare
+                // `unknown` to the `truthyUnknownType` sentinel; declared `{}` and
+                // instanceof-narrowed operands don't reach it. currentFlowGraph is
+                // set only HERE (the arithmetic pass otherwise stays flow-unaware).
+                val flowGraph = currentArithmeticFlowGraph
+                val path = if (flowGraph != null) getReferencePath(rhs) else null
+                if (flowGraph != null && path != null) {
+                    val savedGraph = currentFlowGraph
+                    val savedFlag = narrowUnknownToEmptyObject
+                    currentFlowGraph = flowGraph
+                    narrowUnknownToEmptyObject = true
+                    val narrowed = try {
+                        val flow = getFlowAt(rhs)
+                        if (flow != null) narrowTypeFromFlow(unknownType, flow, path, mutableSetOf(), 0) else unknownType
+                    } finally {
+                        currentFlowGraph = savedGraph
+                        narrowUnknownToEmptyObject = savedFlag
+                    }
+                    if (narrowed === truthyUnknownType) {
+                        val start = rhs.pos
+                        val length = expressionTrueEnd(rhs) - start
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '{}' may represent a primitive value, which is not permitted as the right operand of the 'in' operator.",
+                                category = DiagnosticCategory.Error,
+                                code = 2638,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                            ))
+                        }
+                    }
+                }
+                return
+            }
             // null/undefined are valid (handled separately by strictNullChecks)
             if (rhsType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
             // Object/Interface/Reference types are valid
@@ -121781,6 +121845,10 @@ interface DataView {
             val source = result.sourceFile.text
             currentFileLocals = result.locals
             currentCheckFileName = fileName
+            // inKeywordAndUnknown: expose the flow graph via a DEDICATED field so
+            // checkInOperatorRhs can consult narrowing (TS2638) without making the
+            // rest of the arithmetic pass flow-aware (which regressed 78 tests).
+            currentArithmeticFlowGraph = result.flowGraph
             // Per-file snapshot: the VariableStatement branch records literal-typed
             // locals into currentLocalTypes (so `const t = true; x >= t` can resolve
             // `t`); restore afterwards so entries never leak across files.
@@ -121793,6 +121861,7 @@ interface DataView {
         }
         currentFileLocals = null
         currentCheckFileName = null
+        currentArithmeticFlowGraph = null
     }
 
     private fun checkArithmeticInStatements(stmts: List<Statement>, source: String, fileName: String) {

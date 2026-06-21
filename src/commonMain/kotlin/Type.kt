@@ -242,6 +242,15 @@ sealed class Type {
 
 val anyType = Type.Intrinsic(TypeFlags.Any, "any")
 val unknownType = Type.Intrinsic(TypeFlags.Unknown, "unknown")
+/**
+ * Distinguished empty-object sentinel produced ONLY when a bare `unknown` is
+ * narrowed truthy under the checker's scoped `narrowUnknownToEmptyObject` pass
+ * (see `inKeywordAndUnknown`). tsc narrows `unknown` truthy to `{}` ("may
+ * represent a primitive"); identity-distinct from any user `{}` so the `in`-RHS
+ * check can emit TS2638 for it while declared `{}` / instanceof-narrowed
+ * operands do not. Never escapes the scoped pass.
+ */
+val truthyUnknownType = Type.Object()
 val stringType = Type.Intrinsic(TypeFlags.String, "string")
 val numberType = Type.Intrinsic(TypeFlags.Number, "number")
 val booleanType = Type.Intrinsic(TypeFlags.Boolean, "boolean")
