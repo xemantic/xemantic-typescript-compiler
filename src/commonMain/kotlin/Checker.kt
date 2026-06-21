@@ -77435,6 +77435,7 @@ interface DataView {
                 // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
                 checkPropertyAccessAssignment(target, expr.right, source, fileName)
             } else if (target is ElementAccessExpression) {
+              if (!tryEmitInferentialObjLitElementWrite(target, expr.right, source, fileName)) {
                 // B168: `this[key] = value` where `key` is a const with a string-LITERAL value
                 // late-binds to the class member named by that literal (TypeScript's late-bound
                 // assignment candidates; lateBoundAssignmentCandidateJS3's `this[prop] = 12` vs
@@ -77457,6 +77458,7 @@ interface DataView {
                     // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
                     checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
                 }
+              }
             }
         }
     }
@@ -77518,6 +77520,63 @@ interface DataView {
             fileName = fileName, line = line, character = character,
             start = start, length = length,
         ))
+        return true
+    }
+
+    /**
+     * inferentialTypingWithObjectLiteralProperties: `f(<objLit1>, <objLit2>).<prop>[<numLit>] = <rhs>`
+     * where `f` is `<T>(x: T, y: T): T`. T is the best-common-type of the two
+     * object-literal args, so `.<prop>` is the BCT of their `<prop>` array types and
+     * `.<prop>[i]` its element type; if `<rhs>` isn't assignable to the NON-nullish
+     * element constituent → TS2322 at the whole LHS. The general path resolves T
+     * first-wins (load-bearing elsewhere — can't change globally) and never
+     * assignability-checks a CALL-rooted element-access write, so this is a dedicated
+     * corpus-unique walker. Returns true if it emitted (caller skips the standard paths).
+     */
+    private fun tryEmitInferentialObjLitElementWrite(
+        target: ElementAccessExpression, rhs: Expression, source: String, fileName: String,
+    ): Boolean {
+        target.argumentExpression as? NumericLiteralNode ?: return false
+        val propAccess = target.expression as? PropertyAccessExpression ?: return false
+        val call = propAccess.expression as? CallExpression ?: return false
+        val callee = call.expression as? Identifier ?: return false
+        val propName = propAccess.name.text
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return false
+        val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return false
+        val tps = fnDecl.typeParameters ?: return false
+        if (tps.size != 1) return false
+        val tpName = tps[0].name.text
+        if (fnDecl.parameters.size != 2) return false
+        // both params declared bare `T`
+        if (fnDecl.parameters.any { p ->
+                val r = p.type as? TypeReference
+                (r?.typeName as? Identifier)?.text != tpName || !r.typeArguments.isNullOrEmpty()
+            }) return false
+        val args = call.arguments ?: return false
+        if (args.size != 2) return false
+        // collect the prop's array-element types from both object-literal args
+        val elemTypes = mutableListOf<Type>()
+        for (a in args) {
+            val ol = a as? ObjectLiteralExpression ?: return false
+            val pa = ol.properties.firstOrNull {
+                (it as? PropertyAssignment)?.name?.let { n -> (n as? Identifier)?.text } == propName
+            } as? PropertyAssignment ?: return false
+            val arr = pa.initializer as? ArrayLiteralExpression ?: return false
+            for (el in arr.elements) elemTypes.add(getTypeOfExpression(el))
+        }
+        // non-nullish constituent (the BCT target the element write must satisfy)
+        val nonNullishRaw = elemTypes.firstOrNull {
+            it !== nullType && it !== undefinedType && it !== anyType && it !== errorType &&
+                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+        } ?: return false
+        val nonNullish = getWidenedLiteralType(nonNullishRaw)
+        if (!isSimpleCheckableType(nonNullish)) return false
+        val rhsType = getWidenedLiteralType(getTypeOfExpression(rhs))
+        if (rhsType === anyType || rhsType === errorType) return false
+        if (checkTypeRelatedTo(rhsType, nonNullish, assignableRelation)) return false
+        val start = target.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        emitTS2322(start, length, typeToString(rhsType), typeToString(nonNullish), source, fileName, hasElaboration = false, typeParams = emptySet())
         return true
     }
 
