@@ -106469,6 +106469,67 @@ interface DataView {
         return false
     }
 
+    /**
+     * literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` called as
+     * `f(<moduleAlias>, "<lit>")` where the bare-`T` arg is an `import = require(...)`
+     * module namespace. `keyof T` is the module's EXPORT-name union, so a string
+     * literal not among the exports → TS2345 ("Argument of type '\"<lit>\"' is not
+     * assignable to parameter of type '<keys union>'."). The general inference path
+     * types `typeof <module>` as anyType (so `keyof T` yields nothing); this reads the
+     * export names off the resolved Module symbol directly. FP gate (corpus-unique):
+     * single TP, a bare-`T` param + a `keyof T` param, the bare-`T` arg resolves to a
+     * Module symbol with ≥1 export, and the `keyof T` arg is a string literal NOT in
+     * the export names.
+     */
+    private fun tryEmitModuleNamespaceKeyofTs2345(
+        args: List<Expression>, sigIn: Signature, source: String, fileName: String,
+    ): Boolean {
+        val fnDecl = sigIn.declaration as? FunctionDeclaration ?: return false
+        val tps = fnDecl.typeParameters ?: return false
+        if (tps.size != 1) return false
+        val tpName = tps[0].name.text
+        var bareTIdx = -1
+        var keyofTIdx = -1
+        for ((i, p) in fnDecl.parameters.withIndex()) {
+            val pt = p.type
+            when {
+                pt is TypeReference && (pt.typeName as? Identifier)?.text == tpName &&
+                    pt.typeArguments.isNullOrEmpty() -> bareTIdx = i
+                pt is TypeOperator && pt.operator == SyntaxKind.KeyOfKeyword -> {
+                    val inner = pt.type
+                    if (inner is TypeReference && (inner.typeName as? Identifier)?.text == tpName &&
+                        inner.typeArguments.isNullOrEmpty()) keyofTIdx = i
+                }
+            }
+        }
+        if (bareTIdx < 0 || keyofTIdx < 0) return false
+        val bareArg = args.getOrNull(bareTIdx) as? Identifier ?: return false
+        val keyArg = args.getOrNull(keyofTIdx) as? StringLiteralNode ?: return false
+        val sym = currentFileLocals?.get(bareArg.text) ?: globals[bareArg.text] ?: return false
+        val resolved = try { resolveAlias(sym) } catch (e: StackOverflowError) {
+            reportCheckerStackOverflow(e); null
+        } ?: return false
+        if (!resolved.flags.hasAny(SymbolFlags.Module or SymbolFlags.ValueModule or SymbolFlags.NamespaceModule)) return false
+        val keys = resolved.exports?.keys?.toList() ?: return false
+        if (keys.isEmpty() || keyArg.text in keys) return false
+        val keyUnionDisplay = keys.joinToString(" | ") { "\"$it\"" }
+        val srcDisplay = "\"${keyArg.text}\""
+        val start = keyArg.pos
+        val length = (expressionTrueEnd(keyArg) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcDisplay' is not assignable to parameter of type '$keyUnionDisplay'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        return true
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -106495,6 +106556,10 @@ interface DataView {
         // (the constraint bakes to anyType at signature build).
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return
+        // literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` where the
+        // bare-T arg is a module namespace and the keyof-T literal isn't an export name.
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitModuleNamespaceKeyofTs2345(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
