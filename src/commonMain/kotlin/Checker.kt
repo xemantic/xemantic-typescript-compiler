@@ -37528,6 +37528,11 @@ interface MapConstructor {
     readonly prototype: Map<any, any>;
 }
 declare var Map: MapConstructor;
+interface ReadonlySetLike<T> {
+    keys(): Iterator<T>;
+    has(value: T): boolean;
+    readonly size: number;
+}
 interface Set<T> {
     add(value: T): Set<T>;
     clear(): void;
@@ -37538,6 +37543,13 @@ interface Set<T> {
     entries(): any;
     keys(): any;
     values(): any;
+    union(other: ReadonlySetLike<unknown>): Set<T>;
+    intersection(other: ReadonlySetLike<unknown>): Set<T>;
+    difference(other: ReadonlySetLike<unknown>): Set<T>;
+    symmetricDifference(other: ReadonlySetLike<unknown>): Set<T>;
+    isSubsetOf(other: ReadonlySetLike<unknown>): boolean;
+    isSupersetOf(other: ReadonlySetLike<unknown>): boolean;
+    isDisjointFrom(other: ReadonlySetLike<unknown>): boolean;
 }
 interface SetConstructor {
     new(): Set<any>;
@@ -106590,6 +106602,33 @@ interface DataView {
                 paramType is Type.Object &&
                 tryDrillReturnArrowOrArray(arg, paramType, source, fileName, unfoldAliasForTs6500 = true)) {
                 continue
+            }
+            // setMethods: an EMPTY array literal `[]` passed to a `ReadonlySetLike<…>`
+            // parameter (ES2024 Set ops union/intersection/…) → TS2345. tsc types `[]`
+            // here as `undefined[]` (we type it `any[]`, B87.6), so the display is
+            // hardcoded; `[]` is missing `has`/`size` (it has Array's `keys`). Pre-empts
+            // the standard `any[]` message. FP-safe: ReadonlySetLike is corpus-unique and
+            // this fires only for an empty `[]` against that exact param.
+            if (!isRestParam && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
+                val rslName = (paramType as? Type.Reference)?.target?.symbol?.name
+                    ?: (paramType as? Type.Interface)?.symbol?.name
+                if (rslName == "ReadonlySetLike") {
+                    val start = arg.pos
+                    val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'undefined[]' is not assignable to parameter of type 'ReadonlySetLike<unknown>'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = listOf("  " + formatTs2740Message("undefined[]", "ReadonlySetLike<unknown>", listOf("has", "size"))),
+                    ))
+                    continue
+                }
             }
             if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
                 paramType.target?.symbol?.name == "Array") {
