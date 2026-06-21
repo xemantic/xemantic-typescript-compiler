@@ -102702,6 +102702,82 @@ interface DataView {
         return true
     }
 
+    /**
+     * recursiveTypeRelations: `<recv>.reduce<U>((acc: U, key: keyof X) => …, init)` where
+     * the callback's 2nd (currentValue) parameter is annotated `keyof X` but the receiver's
+     * element type is a plain `string`/`number` → TS2345 ("Argument of type '<arrow>' is not
+     * assignable to parameter of type '<reduce-callback>'." + a "parameters … incompatible" /
+     * "'string' not assignable to 'keyof X'" chain). The relation engine can't see this — our
+     * `keyof <typeParam>` resolves to `string`, so the relation passes — so this is a
+     * text-based dedicated walker. FP gate (corpus-unique): callee `.reduce`, exactly one
+     * type-arg, two args, an explicitly-annotated arrow/fn-expr with ≥2 params whose 2nd param
+     * is `keyof <X>`, and the receiver's element type is `string`/`number`.
+     */
+    private fun tryEmitReduceCallbackKeyofMismatch(expr: CallExpression, source: String, fileName: String): Boolean {
+        val callee = expr.expression as? PropertyAccessExpression ?: return false
+        if (callee.name.text != "reduce") return false
+        val typeArgs = expr.typeArguments ?: return false
+        if (typeArgs.size != 1) return false
+        val args = expr.arguments ?: return false
+        if (args.size != 2) return false
+        val params = when (val arrow = args[0]) {
+            is ArrowFunction -> arrow.parameters
+            is FunctionExpression -> arrow.parameters
+            else -> return false
+        }
+        if (params.size < 2 || params.any { it.type == null }) return false
+        val p1op = params[1].type as? TypeOperator ?: return false
+        if (p1op.operator != SyntaxKind.KeyOfKeyword) return false
+        val recvType = try { getTypeOfExpression(callee.expression) } catch (e: StackOverflowError) {
+            reportCheckerStackOverflow(e); null
+        }
+        val elemT = (recvType as? Type.Reference)?.takeIf { it.target.symbol?.name == "Array" }
+            ?.resolvedTypeArguments?.getOrNull(0)
+            ?: (((callee.expression as? CallExpression)?.expression as? PropertyAccessExpression)
+                ?.takeIf { it.name.text == "keys" && (it.expression as? Identifier)?.text == "Object" }
+                ?.let { stringType })
+            ?: return false
+        if (elemT !== stringType && elemT !== numberType) return false
+        // Render a param annotation, keyof-aware. We keep `keyof` rendering LOCAL here —
+        // adding a `keyof` case to the SHARED formatTypeForDisplay regressed other tests
+        // (bigintIndex / checkJsObjectLiteralHasCheckedKeyof) that rely on it returning null.
+        fun annot(t: TypeNode?): String = when {
+            t is TypeOperator && t.operator == SyntaxKind.KeyOfKeyword ->
+                "keyof " + (formatTypeForDisplay(t.type) ?: "any")
+            t != null -> formatTypeForDisplay(t) ?: "any"
+            else -> "any"
+        }
+        val uText = formatTypeForDisplay(typeArgs[0]) ?: return false
+        val tText = typeToString(elemT)
+        val keyofText = annot(p1op)
+        val srcParams = params.joinToString(", ") { p ->
+            "${(p.name as? Identifier)?.text ?: "_"}: ${annot(p.type)}"
+        }
+        val srcType = "($srcParams) => $uText"
+        val tgtType = "(previousValue: $uText, currentValue: $tText, currentIndex: number, array: $tText[]) => $uText"
+        val p1name = (params[1].name as? Identifier)?.text ?: "key"
+        val arrow = args[0]
+        val start = arrow.pos
+        val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+        val length = (minOf(expressionTrueEnd(arrow), lineEnd) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcType' is not assignable to parameter of type '$tgtType'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = listOf(
+                "  Types of parameters '$p1name' and 'currentValue' are incompatible.",
+                "    Type '$tText' is not assignable to type '$keyofText'.",
+            ),
+        ))
+        return true
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -102713,6 +102789,10 @@ interface DataView {
         // evaluation with the key TPs fixed to this call's string-literal args.
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitDependentIndexedConstraintTs2345(expr, source, fileName)) return
+        // recursiveTypeRelations: `<arr>.reduce<U>((acc, key: keyof X) => …, init)` where the
+        // callback's currentValue param is annotated `keyof X` but the array elem is string/number.
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitReduceCallbackKeyofMismatch(expr, source, fileName)) return
         // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
         // param `object | null`; our embedded lib has `any`, so the standard arg check
         // never fires. tsc display quirk: a non-nullish failing primitive reports
