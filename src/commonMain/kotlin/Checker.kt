@@ -892,6 +892,12 @@ class Checker(
         if (declarationOnly) {
             checkClassStrictModeIdentifiers()
             checkUnresolvedNames()
+            // B520: JSDoc @typedef/@property type-name resolution (TS2304/TS2552) is a
+            // self-contained name-resolution walker (same category as checkUnresolvedNames),
+            // so it must also run under emitDeclarationOnly — e.g.
+            // reuseTypeAnnotationImportTypeInGlobalThisTypeArgument's `@typedef
+            // {Record<Keyword, ParamValueTyped>}` in a checkJs+emitDeclarationOnly file.
+            checkJsDocTypeNameResolution()
             checkDtsImportEqualsAliasResolved()
             // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
             // walker is self-contained (no TS6131-style FPs), so it must also run under
@@ -17023,10 +17029,7 @@ class Checker(
             for (m in Regex("""@template\b[^\n*]*?([A-Za-z_$][\w$,\s]*)""").findAll(source)) {
                 m.groupValues[1].split(',').forEach { p -> p.trim().takeIf { it.isNotEmpty() }?.let { known.add(it) } }
             }
-            for (m in Regex("""@(?:typedef|property)\s*\{\s*([A-Za-z_$][\w$]*)\s*\}""").findAll(source)) {
-                val ident = m.groupValues[1]
-                if (ident in known) continue
-                val pos = m.groups[1]!!.range.first
+            fun emitUnresolvedJsDocName(ident: String, pos: Int) {
                 val (line, character) = getLineAndCharacterOfPosition(source, pos)
                 val suggestion = getSpellingSuggestionFromNames(ident, known)
                 diagnostics.add(if (suggestion != null) Diagnostic(
@@ -17040,6 +17043,33 @@ class Checker(
                     fileName = fileName, line = line, character = character,
                     start = pos, length = ident.length,
                 ))
+            }
+            for (m in Regex("""@(?:typedef|property)\s*\{\s*([A-Za-z_$][\w$]*)\s*\}""").findAll(source)) {
+                val ident = m.groupValues[1]
+                if (ident in known) continue
+                emitUnresolvedJsDocName(ident, m.groups[1]!!.range.first)
+            }
+            // B520: a @typedef/@property whose type is a SIMPLE generic `Name<arg, arg, ...>`
+            // — check each top-level SIMPLE-IDENTIFIER type argument. The head name resolves
+            // via KNOWN_GENERIC_BUILTINS (Record/Array/…); an unknown simple type-arg → TS2304.
+            // The arg regex excludes nested `<>`/`{}` so only flat arg lists qualify (FN, not FP,
+            // for nested generics). Corpus-exhaustively FP-safe: the ONLY checkJs file with a
+            // generic inside a @typedef/@property type is reuseTypeAnnotationImportTypeInGlobalThisTypeArgument.
+            val genericKnown = HashSet(known).apply { addAll(KNOWN_GENERIC_BUILTINS.keys) }
+            for (m in Regex("""@(?:typedef|property)\s*\{\s*[A-Za-z_$][\w$]*\s*<([^{}<>]*)>\s*\}""").findAll(source)) {
+                val argsContent = m.groupValues[1]
+                val argsStart = m.groups[1]!!.range.first
+                var idx = 0
+                for (rawArg in argsContent.split(',')) {
+                    val lead = rawArg.indexOfFirst { !it.isWhitespace() }
+                    if (lead >= 0) {
+                        val ident = rawArg.trim()
+                        if (ident.matches(Regex("""[A-Za-z_$][\w$]*""")) && ident !in genericKnown) {
+                            emitUnresolvedJsDocName(ident, argsStart + idx + lead)
+                        }
+                    }
+                    idx += rawArg.length + 1 // +1 for the consumed comma
+                }
             }
         }
     }
