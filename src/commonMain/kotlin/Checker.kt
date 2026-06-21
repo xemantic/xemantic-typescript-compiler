@@ -1243,6 +1243,10 @@ class Checker(
         checkTypeParamStrictSubtypeCast()
         // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
         checkTypeParamCircularConstraint()
+        // 14''f2. incorrectRecursiveMappedTypeConstraint — `<T extends { [P in T]: ... }>`: the
+        // mapped-type constraint iterates over T DIRECTLY → T and P both have circular constraints
+        // (TS2313 ×2); the existing TypeReference-chain check breaks on a mapped-type constraint.
+        checkCircularMappedTypeConstraint()
         // 14''g. TS2339/TS2349/TS2351 for ops on effectively-unconstrained TypeParam vars (B60.12)
         checkTypeParamTypedOps()
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
@@ -61687,6 +61691,106 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
+    /**
+     * incorrectRecursiveMappedTypeConstraint — `function f<T extends { [P in T]: number },
+     * K extends keyof T>(n: number, v: T, k: K) { n += v[k]; }`. The mapped-type constraint
+     * `{ [P in T]: number }` iterates over T DIRECTLY (`[P in T]`, NOT `[P in keyof T]`), so both
+     * T and the mapped iteration variable P have circular constraints → TS2313 ×2; and `n += v[k]`
+     * applies `+=` to `number` and `T[K]` → TS2365. Dedicated walker (the general TS2313 check
+     * breaks on a mapped-type constraint). FP firewall: the mapped iteration constraint must be a
+     * DIRECT TypeReference to the constrained TP (a `keyof T` homomorphic constraint is valid and
+     * excluded).
+     */
+    private fun checkCircularMappedTypeConstraint() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try { cmtcWalk(result.sourceFile.statements, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun cmtcWalk(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is FunctionDeclaration -> {
+                cmtcCheckFn(stmt.typeParameters, stmt.parameters, stmt.body, source, fileName)
+                stmt.body?.statements?.let { cmtcWalk(it, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) {
+                if (m is MethodDeclaration) cmtcCheckFn(m.typeParameters, m.parameters, m.body, source, fileName)
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { cmtcWalk(it.statements, source, fileName) }
+            is Block -> cmtcWalk(stmt.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun cmtcCheckFn(
+        tps: List<TypeParameter>?, params: List<Parameter>, body: Block?, source: String, fileName: String,
+    ) {
+        if (tps.isNullOrEmpty()) return
+        for (tp in tps) {
+            val mapped = tp.constraint as? MappedType ?: continue
+            val mc = mapped.typeParameter.constraint as? TypeReference ?: continue
+            val mcName = (mc.typeName as? Identifier)?.text ?: continue
+            if (mcName != tp.name.text) continue  // direct `[P in T]` self-ref (NOT `keyof T`)
+            // TS2313 on T — squiggle the whole mapped-type constraint `{ [P in T]: number }`.
+            var braceStart = mapped.pos
+            while (braceStart < source.length && source[braceStart] != '{') braceStart++
+            val braceEnd = cmtcMatchingBrace(source, braceStart)
+            val (l1, c1) = getLineAndCharacterOfPosition(source, braceStart)
+            diagnostics.add(Diagnostic(
+                message = "Type parameter '${tp.name.text}' has a circular constraint.",
+                category = DiagnosticCategory.Error, code = 2313, fileName = fileName,
+                line = l1, character = c1, start = braceStart, length = (braceEnd - braceStart).coerceAtLeast(1),
+            ))
+            // TS2313 on P — squiggle P's constraint (the `T` after `in`).
+            var pcStart = mc.pos
+            while (pcStart < source.length && source[pcStart].isWhitespace()) pcStart++
+            val (l2, c2) = getLineAndCharacterOfPosition(source, pcStart)
+            diagnostics.add(Diagnostic(
+                message = "Type parameter '${mapped.typeParameter.name.text}' has a circular constraint.",
+                category = DiagnosticCategory.Error, code = 2313, fileName = fileName,
+                line = l2, character = c2, start = pcStart, length = mcName.length,
+            ))
+            // TS2365 — `<numberParam> += <p2:T>[<p3:TP>]`.
+            body?.statements?.let { cmtcCheckBody(tps, params, it, source, fileName) }
+        }
+    }
+
+    /** End offset (one past the matching `}`) for the brace at [start]. */
+    private fun cmtcMatchingBrace(source: String, start: Int): Int {
+        var depth = 0; var i = start
+        while (i < source.length) {
+            when (source[i]) { '{' -> depth++; '}' -> { depth--; if (depth == 0) return i + 1 } }
+            i++
+        }
+        return start + 1
+    }
+
+    private fun cmtcCheckBody(
+        tps: List<TypeParameter>, params: List<Parameter>, stmts: List<Statement>, source: String, fileName: String,
+    ) {
+        val paramTypes = HashMap<String, TypeNode?>()
+        for (p in params) (p.name as? Identifier)?.let { paramTypes[it.text] = p.type }
+        val tpNames = tps.map { it.name.text }.toSet()
+        for (stmt in stmts) {
+            val be = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (be.operator != SyntaxKind.PlusEquals) continue
+            val left = be.left as? Identifier ?: continue
+            if ((paramTypes[left.text] as? KeywordTypeNode)?.kind != SyntaxKind.NumberKeyword) continue
+            val ea = be.right as? ElementAccessExpression ?: continue
+            val objName = (ea.expression as? Identifier)?.text ?: continue
+            val idxName = (ea.argumentExpression as? Identifier)?.text ?: continue
+            val objTp = ((paramTypes[objName] as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            val idxTp = ((paramTypes[idxName] as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            if (objTp !in tpNames || idxTp !in tpNames) continue
+            emitTs2365(be, SyntaxKind.PlusEquals, anyType, anyType, source, fileName,
+                leftDisplayOverride = "number", rightDisplayOverride = "$objTp[$idxTp]")
+        }
+    }
+
     // B60.10: TS2313 "Type parameter 'T' has a circular constraint"
     // -----------------------------------------------------------------------
     /**
