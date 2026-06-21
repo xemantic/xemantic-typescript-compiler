@@ -843,6 +843,7 @@ class Checker(
     private val ambientCyclicBaseClassNamesByFile: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     init {
+        try {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
@@ -1915,6 +1916,31 @@ class Checker(
         checkEmptyDomIntersectionAccess()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
+        } catch (e: StackOverflowError) {
+            // Boundary safety net: every per-call try/catch(StackOverflowError) used to
+            // live inline (and silently swallow into the NONE bucket). The cycle/iteration
+            // guards now make overflow unreachable on the corpus; this single boundary
+            // catches any future/adversarial case that escapes them and SURFACES it as a
+            // diagnostic instead of crashing the compile or dropping it silently.
+            reportCheckerStackOverflow(e)
+        }
+    }
+
+    /** Emit a single TS2589 when type checking recursed past the stack limit on a
+     *  construct the depth/cycle guards do not cover. Best-effort position: the start
+     *  of the first checked file. Never fires on the test corpus (0 overflows). */
+    private fun reportCheckerStackOverflow(@Suppress("UNUSED_PARAMETER") e: StackOverflowError) {
+        val firstFile = binderResults.firstOrNull()?.sourceFile
+        diagnostics.add(Diagnostic(
+            message = "Type instantiation is excessively deep and possibly infinite.",
+            category = DiagnosticCategory.Error,
+            code = 2589,
+            fileName = firstFile?.fileName,
+            line = if (firstFile != null) 0 else null,
+            character = if (firstFile != null) 0 else null,
+            start = 0,
+            length = 0,
+        ))
     }
 
     /**
@@ -4486,7 +4512,7 @@ class Checker(
                         if (type !== anyType && type !== errorType) {
                             typeMap[name] = type
                         }
-                    } catch (_: StackOverflowError) {
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                         // Circular type resolution — skip
                     }
                 } else if (symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
@@ -4522,7 +4548,7 @@ class Checker(
                             if (type !== anyType && type !== errorType) {
                                 typeMap[name] = type
                             }
-                        } catch (_: StackOverflowError) {}
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                     }
                 }
             }
@@ -15311,7 +15337,7 @@ class Checker(
                         relatedInformation = listOf(related),
                     ))
                 }
-            } catch (_: StackOverflowError) { /* deeply nested — bail this file */ }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* deeply nested — bail this file */ }
         }
     }
 
@@ -19734,7 +19760,7 @@ class Checker(
                                else type.stringIndexInfo
                     info?.type
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 null
             }
             is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name) }
@@ -25109,7 +25135,7 @@ class Checker(
                                 val pname = (firstParam?.name as? Identifier)?.text
                                 if (pname != null && firstParam.type == null) {
                                     val recvType = try { getTypeOfExpression(callee.expression) }
-                                        catch (_: StackOverflowError) { null }
+                                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                                     if (recvType is Type.Reference &&
                                         recvType.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }
                                     ) {
@@ -26781,7 +26807,7 @@ class Checker(
             // Skip null/undefined/void inferred types
             else if (raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) anyType
             else widenType(raw)
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             anyType
         }
     }
@@ -27005,7 +27031,7 @@ class Checker(
                 return Ts2403Cmp.IDENTICAL
             }
             return memberCmp
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             return Ts2403Cmp.UNKNOWN
         } finally {
             ts2403IdentityStack.remove(pair)
@@ -27193,7 +27219,7 @@ class Checker(
         state.ts2403NextSentinel = 0
         return try {
             ts2403Identical(a, b, 0) == Ts2403Cmp.DIFFERENT
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             false
         } finally {
             ts2403IdentityStack.clear()
@@ -32742,7 +32768,7 @@ class Checker(
             val typeNode = varDecl.type ?: return null
             val type = try {
                 getTypeFromTypeNode(typeNode)
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 return null
             }
             return collectCommonObjectMemberNames(type)
@@ -45919,7 +45945,7 @@ interface DataView {
                 argIndex < sig.parameters.size &&
                     typeIsFunctionWithThisParam(getTypeOfSymbol(sig.parameters[argIndex]))
             }
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             false
         }
     }
@@ -47825,7 +47851,7 @@ interface DataView {
                                 }
                             }
                         }
-                    } catch (_: StackOverflowError) { /* circular type */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                 }
                 // B98.r84: TS2704 (read-only property) / TS2542 (read-only index
                 // signature) for `delete obj.readonlyProp` / `delete obj[key]`.
@@ -49196,7 +49222,7 @@ interface DataView {
             // covers accessors that `isReadonlySymbol` (modifier-only) misses (e.g. an object
             // literal `{ get a() {} }`). Keep the Readonly<T> side-channel via the id check.
             return isReadonlyAccessOrModifier(prop) || prop.id in mappedReadonlyMemberIds
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             return false
         }
     }
@@ -49317,7 +49343,7 @@ interface DataView {
                     val idx = stringIndexInfoOfType(objType) ?: return
                     if (idx.isReadonly) emitDeleteReadonlyDiag(inner, 2542,
                         "Index signature in type '${typeToString(objType)}' only permits reading.", source, fileName)
-                } catch (_: StackOverflowError) {}
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
             }
             is ElementAccessExpression -> {
                 val arg = inner.argumentExpression
@@ -49334,7 +49360,7 @@ interface DataView {
                     val idx = stringIndexInfoOfType(objType) ?: return
                     if (idx.isReadonly) emitDeleteReadonlyDiag(inner, 2542,
                         "Index signature in type '${typeToString(objType)}' only permits reading.", source, fileName)
-                } catch (_: StackOverflowError) {}
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
             }
             else -> {}
         }
@@ -49397,7 +49423,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 ternaryReadonlyScan(result.sourceFile.statements, source, fileName, emptyMap())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -49689,7 +49715,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) {}
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
     }
 
     /**
@@ -49747,7 +49773,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) {}
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
     }
 
     /** Check if an assignment target is a readonly property and emit TS2540. */
@@ -53480,7 +53506,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 olnpProcessStatements(result.sourceFile.statements, result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -60641,7 +60667,7 @@ interface DataView {
                             if (typeParam.constraint == null) {
                                 tp.constraint?.let {
                                     try { typeParam.constraint = getTypeFromTypeNode(it) }
-                                    catch (_: StackOverflowError) { /* circular */ }
+                                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                                 }
                             }
                         }
@@ -60687,7 +60713,7 @@ interface DataView {
                                         if (resolved !== errorType && resolved !== anyType) {
                                             currentLocalTypes[paramName.text] = resolved
                                         }
-                                    } catch (_: StackOverflowError) { /* circular */ }
+                                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                                 }
                                 try {
                                     walkStmtsForTypeParamCasts(body.statements, source, fileName)
@@ -61045,7 +61071,7 @@ interface DataView {
                         if (typeParam.constraint == null) {
                             tp.constraint?.let {
                                 try { typeParam.constraint = getTypeFromTypeNode(it) }
-                                catch (_: StackOverflowError) { /* circular */ }
+                                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                             }
                         }
                     }
@@ -61196,7 +61222,7 @@ interface DataView {
                 if (typeParam.constraint == null) {
                     tp.constraint?.let {
                         try { typeParam.constraint = getTypeFromTypeNode(it) }
-                        catch (_: StackOverflowError) { /* circular */ }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                     }
                 }
             }
@@ -61413,7 +61439,7 @@ interface DataView {
             val constraintDisplay = if (astDisplay != null && astDisplay != "{ ; }") astDisplay
             else {
                 val constraintType = try { getTypeFromTypeNode(constraintNode) }
-                catch (_: StackOverflowError) { continue }
+                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
                 if (constraintType === errorType) continue
                 typeToString(constraintType)
             }
@@ -69334,7 +69360,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -69376,7 +69402,7 @@ interface DataView {
                 if (propTypeContainsLiteral(targetType)) {
                     literalTypeOfExpression(inner) ?: getTypeOfExpression(inner)
                 } else getTypeOfExpression(inner)
-            } catch (_: StackOverflowError) { continue }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
             if (branchType === anyType || branchType === errorType) continue
             if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
             if (!canUseTypeEngine(branchType, targetType)) continue
@@ -71267,7 +71293,7 @@ interface DataView {
                                                 if (resolvedType !== anyType && resolvedType !== errorType) {
                                                     currentLocalTypes["this.$propName"] = resolvedType
                                                 }
-                                            } catch (_: StackOverflowError) {}
+                                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                                         }
                                     }
                                 }
@@ -71283,7 +71309,7 @@ interface DataView {
                                             if (resolvedType !== anyType && resolvedType !== errorType) {
                                                 currentLocalTypes[pName] = resolvedType
                                             }
-                                        } catch (_: StackOverflowError) {}
+                                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                                     }
                                 }
                                 try {
@@ -71332,7 +71358,7 @@ interface DataView {
                                                     if (resolvedType !== anyType && resolvedType !== errorType) {
                                                         currentLocalTypes["this.$propName"] = resolvedType
                                                     }
-                                                } catch (_: StackOverflowError) {}
+                                                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                                             }
                                         }
                                     }
@@ -71358,7 +71384,7 @@ interface DataView {
                                                 if (resolvedType !== anyType && resolvedType !== errorType) {
                                                     currentLocalTypes[pName] = resolvedType
                                                 }
-                                            } catch (_: StackOverflowError) {}
+                                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                                         }
                                     }
                                     try {
@@ -72253,7 +72279,7 @@ interface DataView {
                                 } else resolvedType
                                 currentLocalTypes[paramName.text] = effectiveType
                             }
-                        } catch (_: StackOverflowError) { /* circular type */ }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                     }
                 }
             } finally {
@@ -73810,7 +73836,7 @@ interface DataView {
                     }
                     currentLocalTypes[name.text] = widened
                 }
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
             return
         }
 
@@ -73837,7 +73863,7 @@ interface DataView {
                     currentLocalTypes[name.text] = resolvedVarType
                 }
             }
-        } catch (_: StackOverflowError) { /* circular type */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
 
         val init = decl.initializer ?: return
 
@@ -74040,7 +74066,7 @@ interface DataView {
                     val instanceType = getDeclaredTypeOfSymbol(synSym)
                     if (instanceType is Type.Object) {
                         val missing = try { collectMissingProperties(instanceType, targetReturn) }
-                            catch (_: StackOverflowError) { emptyList() }
+                            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                         if (missing.isNotEmpty()) {
                             val displaySource = "typeof ${name.text}"
                             val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -74200,7 +74226,7 @@ interface DataView {
             if (isAssignable && sourceType is Type.Object && targetType is Type.Object &&
                 init !is ObjectLiteralExpression) {
                 val mismatch = try { findOptionalVsRequiredMismatch(sourceType, targetType) }
-                    catch (_: StackOverflowError) { null }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                 if (mismatch != null) {
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -74268,7 +74294,7 @@ interface DataView {
                 sourceType.callSignatures.isNullOrEmpty() && targetType.callSignatures.isNullOrEmpty()
             ) {
                 val missing = try { collectMissingProperties(sourceType, targetType) }
-                    catch (_: StackOverflowError) { emptyList() }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                 if (missing.isNotEmpty()) {
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -74743,7 +74769,7 @@ interface DataView {
                 } // end else (not missing property)
                 return // Type engine handled it — skip old system
             }
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             // Circular type resolution — fall through to old system
         }
 
@@ -75394,7 +75420,7 @@ interface DataView {
                 ))
                 }
             }
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             // Circular type resolution — skip
         }
     }
@@ -75437,7 +75463,7 @@ interface DataView {
         if (expr is ArrayLiteralExpression) {
             val before = diagnostics.size
             try { checkArrayLiteralElementExcessProps(expr, targetType, source, fileName) }
-            catch (_: StackOverflowError) {}
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
             return diagnostics.size > before
         }
         // Case 2: return () => ({...}) vs () => Foo — drill the arrow's returned
@@ -75652,7 +75678,7 @@ interface DataView {
                     !canUseTypeEngine(sourceType, targetType)
                 ) {
                     val missing = try { collectMissingProperties(sourceType, targetType) }
-                        catch (_: StackOverflowError) { emptyList() }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                     if (missing.isNotEmpty()) {
                         val displaySource = typeToString(sourceType)
                         val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
@@ -75867,7 +75893,7 @@ interface DataView {
                     ))
                     return
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Fall through to old system
             }
         }
@@ -75924,7 +75950,7 @@ interface DataView {
                         ))
                         return // one error per assignment
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             val target = expr.left
             // 16.4dr: `X.prototype.method = function(){...}` — an extension
@@ -76040,7 +76066,7 @@ interface DataView {
                                 }
                             }
                         }
-                    } catch (_: StackOverflowError) { /* circular */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                 }
             }
             if (target is Identifier) {
@@ -76067,7 +76093,7 @@ interface DataView {
                 if (expr.right is Identifier) {
                     try {
                         if (tryEmitModuleNamespaceTs2741(target, expr.right as Identifier, source, fileName)) return
-                    } catch (_: StackOverflowError) { /* circular */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                     // B191: same-alias Pick-body variance — `b = a` where both vars are
                     // annotated `T<Arg>` with the SAME single-TP alias whose body is
                     // `Pick<TP, keys>`. tsc compares the type ARGS directly (alias
@@ -76080,8 +76106,8 @@ interface DataView {
                         // on a TP-vs-TP / TP-vs-primitive param or return slot.
                         if (try {
                                 tryEmitFnTypedLocalTpMismatchTs2322(target, expr.right as Identifier, source, fileName, typeParams)
-                            } catch (_: StackOverflowError) { false }) return
-                    } catch (_: StackOverflowError) { /* circular */ }
+                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }) return
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                 }
                 // B73.1: cross-file `typeof import("X")` display for module-alias
                 // assignments. Two narrow shapes:
@@ -76153,7 +76179,7 @@ interface DataView {
                             return
                         }
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                 // B236: optional-vs-required presence rule for an EMBEDDED-LIB interface
                 // pair under SNC-OFF — `execResult = matchResult` (RegExpMatchArray →
                 // RegExpExecArray). With SNC off, an optional `index?: number` is plain
@@ -76183,9 +76209,9 @@ interface DataView {
                     val tgtType = getDeclaredTypeOfSymbol(tgtSym) as? Type.Object ?: return@run
                     val srcType = getDeclaredTypeOfSymbol(srcSym) as? Type.Object ?: return@run
                     try { resolveStructuredTypeMembers(tgtType); resolveStructuredTypeMembers(srcType) }
-                    catch (_: StackOverflowError) { return@run }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return@run }
                     val mismatch = try { findOptionalVsRequiredMismatch(srcType, tgtType) }
-                        catch (_: StackOverflowError) { null } ?: return@run
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null } ?: return@run
                     val pname = formatPropertyDisplayName(mismatch)
                     val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
                     diagnostics.add(Diagnostic(
@@ -76613,7 +76639,7 @@ interface DataView {
                             sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
                         ) {
                             val missing = try { collectMissingProperties(sourceType, tt) }
-                                catch (_: StackOverflowError) { emptyList() }
+                                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                             if (missing.isNotEmpty()) {
                                 val displaySource = typeToString(sourceType)
                                 val displayTarget = if (typeAnnotation != null)
@@ -76691,7 +76717,7 @@ interface DataView {
                                         val displayTarget = excessPropDisplayTarget(tt, typeAnnotation)
                                         checkExcessProperties(chainedLit, litType, tt, displayTarget, source, fileName)
                                     }
-                                } catch (_: StackOverflowError) { /* circular */ }
+                                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                             }
                         }
                         // 16.0: Array literal assignment — contextual TS2353 for each object element
@@ -76968,7 +76994,7 @@ interface DataView {
                             return // Type engine handled it — skip old system
                         }
                     }
-                } catch (_: StackOverflowError) {
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                     // Circular type resolution — fall through to old system
                 }
 
@@ -77263,7 +77289,7 @@ interface DataView {
                 character = character,
                 length = length,
             ))
-        } catch (_: StackOverflowError) {}
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
     }
 
     /**
@@ -77405,7 +77431,7 @@ interface DataView {
                 if (base !is Type.Reference) continue
                 val concreteBase = try {
                     instantiateType(base, outerMapper) as? Type.Reference ?: continue
-                } catch (_: StackOverflowError) { continue }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
                 if (concreteBase.id == ref.id) continue
                 val result = resolveGenericPropertyType(concreteBase, propSym)
                 if (result != null) return result
@@ -77549,7 +77575,7 @@ interface DataView {
                 }
                 else -> null
             }
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             null
         } finally {
             currentTypeParamScope = saved
@@ -77640,7 +77666,7 @@ interface DataView {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                     if (resolvedArgs.any { it === errorType }) return null
                     getOrInternReference(calleeType, resolvedArgs)
-                } catch (_: StackOverflowError) {
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                     null
                 }
             }
@@ -77670,7 +77696,7 @@ interface DataView {
                     return try {
                         val raw = getTypeFromTypeNode(annotation)
                         if (raw === errorType || raw === anyType) null else raw
-                    } catch (_: StackOverflowError) { null }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                 }
                 null
             }
@@ -77873,7 +77899,7 @@ interface DataView {
                 length = length,
                 messageChain = chain.toList(),
             ))
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -78109,7 +78135,7 @@ interface DataView {
                             }) return false
                         val resolved = try {
                             resolveGenericPropertyType(recvType, propSym) ?: getTypeOfSymbol(propSym)
-                        } catch (_: StackOverflowError) { return false }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
                         if (!isPrimitiveOnlyWriteType(resolved)) return false
                         anyDataPrim = true
                         wt = resolved
@@ -79735,7 +79761,7 @@ interface DataView {
             return try {
                 val resolved = resolveAlias(symbol)
                 if (resolved !== symbol) resolved else null
-            } catch (_: StackOverflowError) { null }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
         }
         return null
     }
@@ -81894,7 +81920,7 @@ interface DataView {
         if (type !is Type.Object) return false
         return try {
             getPropertyOfType(type, propName) != null
-        } catch (_: StackOverflowError) { false }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }
     }
 
     /**
@@ -81923,7 +81949,7 @@ interface DataView {
         if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
         return try {
             getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType }
-        } catch (_: StackOverflowError) { null }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
     }
 
     /**
@@ -83271,7 +83297,7 @@ interface DataView {
             mappedTypeCircularInfo = null
             val resolvedTypeArgs = try {
                 typeArgs.map { getTypeFromTypeNode(it) }
-            } catch (_: StackOverflowError) { null }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
             if (deepInstantiationBailed) {
                 recordDeepBailExpression(expr)
             }
@@ -83606,7 +83632,7 @@ interface DataView {
                             } as? PropertyAssignment
                             if (propAssign == null) continue
                             val rawValue = try { getTypeOfExpression(propAssign.initializer) }
-                                catch (_: StackOverflowError) { return null }
+                                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return null }
                             if (rawValue === anyType || rawValue === errorType) return null
                             collectedTypes.add(widenType(rawValue))
                         }
@@ -83840,7 +83866,7 @@ interface DataView {
                                         }
                                         val bodyType = try {
                                             getTypeOfExpression(effectiveBodyExpr)
-                                        } catch (_: StackOverflowError) {
+                                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                                             null
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
@@ -83948,7 +83974,7 @@ interface DataView {
                                         currentInferenceMapper = newMapper
                                         val bodyType = try {
                                             getTypeOfExpression(effectiveBodyExpr)
-                                        } catch (_: StackOverflowError) {
+                                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                                             null
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
@@ -84032,7 +84058,7 @@ interface DataView {
                                     currentInferenceMapper = newMapper
                                     val bodyType = try {
                                         getTypeOfExpression(effectiveBodyExpr)
-                                    } catch (_: StackOverflowError) {
+                                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                                         null
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
@@ -84097,7 +84123,7 @@ interface DataView {
                         val lpTypeNode = lp.type
                         if (lpTypeNode == null) { bailed = true; break }
                         val lpType = try { getTypeFromTypeNode(lpTypeNode) }
-                            catch (_: StackOverflowError) { return null }
+                            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return null }
                         if (lpType === anyType || lpType === errorType) return null
                         if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
                         val widened = widenType(lpType)
@@ -84140,7 +84166,7 @@ interface DataView {
             if (constraint != null) {
                 val ok = try {
                     checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
-                } catch (_: StackOverflowError) { return null }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return null }
                 if (!ok) {
                     // B98.r118: a PRIMITIVE arg whose inferred type fails the type
                     // param's STRUCTURED constraint (a named interface or an anonymous
@@ -84238,7 +84264,7 @@ interface DataView {
                                 unionForDisplay else null
                         }
                         val substituted = try { instantiateType(constraint, tpMapper) }
-                            catch (_: StackOverflowError) { constraint }
+                            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); constraint }
                         val arg = args[first.argIdx]
                         if (arg !is SpreadElement) {
                             val start = arg.pos
@@ -84274,7 +84300,7 @@ interface DataView {
                 val ok = try {
                     checkTypeRelatedTo(ci.widenedType, firstWidened, assignableRelation) ||
                         checkTypeRelatedTo(firstWidened, ci.widenedType, assignableRelation)
-                } catch (_: StackOverflowError) { false }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }
                 if (!ok) {
                     conflictAt = i
                     break
@@ -84401,7 +84427,7 @@ interface DataView {
                 val constraint = tp.constraint
                 if (constraint != null) {
                     val ok = try { checkTypeRelatedTo(anchored, constraint, assignableRelation) }
-                        catch (_: StackOverflowError) { false }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }
                     if (!ok) continue
                 }
                 mapperPairs.add(tp to anchored)
@@ -84529,7 +84555,7 @@ interface DataView {
                     val ok = try {
                         checkTypeRelatedTo(widened, firstWidened, assignableRelation) ||
                             checkTypeRelatedTo(firstWidened, widened, assignableRelation)
-                    } catch (_: StackOverflowError) { true }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); true }
                     if (!ok) conflict = true
                 }
             }
@@ -84817,12 +84843,12 @@ interface DataView {
                 val literal = literalsByName[name]
                 if (literal != null) {
                     val targetProp = try { getPropertyOfType(targetType, name) }
-                        catch (_: StackOverflowError) { null }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                     val targetPropType = targetProp?.let {
                         getTypeOfSymbol(it)
                     }
                     val srcType = symbolTypes[sym.id] ?: try { getTypeOfSymbol(sym) }
-                        catch (_: StackOverflowError) { null }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                     if (targetPropType != null && srcType != null &&
                         propTypeContainsLiteral(targetPropType) &&
                         literalWidensTo(literal, srcType)
@@ -84998,7 +85024,7 @@ interface DataView {
                     if (resolvedArgs.none { it === errorType }) {
                         return getOrInternReference(calleeType, resolvedArgs)
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             // 17.14b: Generic argument inference from constructor call.
             // `new Foo<T,U>(arg1, arg2)` infers T,U from arg types matching the
@@ -85014,7 +85040,7 @@ interface DataView {
                     if (inferred != null && inferred.size == typeParams.size && inferred.none { it === errorType }) {
                         return getOrInternReference(calleeType, inferred)
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             // B56.1: `new C()` with no type args and no inferrable args — default
             // TypeParams to `unknown` (or declared `default`) under strict mode.
@@ -85036,7 +85062,7 @@ interface DataView {
                     if (args.none { it === errorType }) {
                         return getOrInternReference(calleeType, args)
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             // 16.4gi: "Constructor interface" pattern — `declare var Object: ObjectConstructor`
             // where `interface ObjectConstructor { new(): Object }`. The new-expression's
@@ -85052,7 +85078,7 @@ interface DataView {
                         val ret = sigs[0].resolvedReturnType
                         if (ret != null && ret !== errorType) return ret
                     }
-                } catch (_: StackOverflowError) { /* circular */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             return calleeType
         }
@@ -85951,7 +85977,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 checkOverloadsInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -87089,7 +87115,7 @@ interface DataView {
             try {
                 checkCircularBaseInStatements(result.sourceFile.statements, source, fileName,
                     inAmbientNamespace = false, namespacePath = emptyList())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -87104,7 +87130,7 @@ interface DataView {
             try {
                 collectAmbientCyclicNamesIn(result.sourceFile.statements, fileName,
                     inAmbientNamespace = false, namespacePath = emptyList())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -87300,7 +87326,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 checkCircularInterfaceBasesInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -88010,7 +88036,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 checkNonConstructorExtendsInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -88277,7 +88303,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkTS2302InStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -88620,7 +88646,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkMultiBaseInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             } finally {
                 currentFileLocals = savedLocals
             }
@@ -88897,7 +88923,7 @@ interface DataView {
                                 if (t0 === errorType || t1 === errorType) false
                                 else !checkTypeRelatedTo(t0, t1, assignableRelation) &&
                                     !checkTypeRelatedTo(t1, t0, assignableRelation)
-                            } catch (_: StackOverflowError) { false }
+                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); false }
                         } else false
                     }
                     if (!conflict) continue
@@ -89063,7 +89089,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkIndexSigInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -89086,7 +89112,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 scanTypedArrayCrossAssign(result.sourceFile.statements, emptyMap(), source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -89285,7 +89311,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     walkDestrParamOptStmt(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             } finally {
                 currentFileLocals = savedLocals
                 currentCheckFileName = savedCheckFile
@@ -89857,7 +89883,7 @@ interface DataView {
                     val sourceType = getTypeOfExpression(expr0)
                     if (sourceType === anyType || sourceType === errorType) continue
                     val assignable = try { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }
-                        catch (_: StackOverflowError) { continue }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
                     if (assignable) continue
                     val start = expr0.pos
                     val length = expressionTrueEnd(expr0) - start
@@ -90794,7 +90820,7 @@ interface DataView {
                 val typeofAbstractVars = mutableSetOf<String>()
                 collectTypeofAbstractVars(result.sourceFile.statements, abstractClasses, typeAliases, typeofAbstractVars)
                 checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses, typeofAbstractVars)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -91179,7 +91205,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkImplementsClausesInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Circular type resolution — skip
             }
         }
@@ -91749,7 +91775,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkInterfaceExtendsInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -92014,7 +92040,7 @@ interface DataView {
     private fun getTypeFromTypeNodeSafe(typeNode: TypeNode): Type? {
         return try {
             getTypeFromTypeNode(typeNode)
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             null
         }
     }
@@ -92611,7 +92637,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkPropertyUseBeforeInitInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) { }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); }
         }
     }
 
@@ -92938,7 +92964,7 @@ interface DataView {
                 for (stmt in result.sourceFile.statements) {
                     checkPropertyOverrideInStatement(stmt, source, fileName)
                 }
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Circular type resolution — skip
             }
         }
@@ -93353,7 +93379,7 @@ interface DataView {
                                 if (resolved.none { it === errorType }) {
                                     return@run getOrInternReference(baseTypeRaw, resolved)
                                 }
-                            } catch (_: StackOverflowError) {}
+                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                         }
                     }
                     baseTypeRaw
@@ -94735,7 +94761,7 @@ interface DataView {
             currentCheckFileName = fileName
             try {
                 bpUnknownStmts(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -94839,7 +94865,7 @@ interface DataView {
             currentCheckFileName = fileName
             try {
                 olAccImpliedStmts(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -94917,7 +94943,7 @@ interface DataView {
             currentCheckFileName = fileName
             try {
                 checkConstraintsInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Circular type resolution — skip
             }
         }
@@ -94942,7 +94968,7 @@ interface DataView {
             currentCheckFileName = fileName
             try {
                 walkGenericDefaults(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -95858,7 +95884,7 @@ interface DataView {
                     result.sourceFile.statements, source, fileName,
                     enclosingClassType = null
                 )
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Circular type resolution in complex files — skip gracefully
             }
             currentFlowGraph = null
@@ -95962,7 +95988,7 @@ interface DataView {
                             if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
                                 currentLocalTypes[nm.text] = t
                             }
-                        } catch (_: StackOverflowError) {}
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                     }
                     // B186: `const [, a = ''] = <string>.match(...) || [];` — RegExpMatchArray
                     // extends Array<string> and the `|| []` arm contributes never[], so every
@@ -96048,7 +96074,7 @@ interface DataView {
                                 iterableT.resolvedTypeArguments?.firstOrNull()
                             else -> null
                         }
-                    } catch (_: StackOverflowError) { null }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                 } else null
                 val prevType = forOfVarName?.let { currentLocalTypes[it] }
                 val hadPrev = forOfVarName != null && currentLocalTypes.containsKey(forOfVarName)
@@ -96314,14 +96340,14 @@ interface DataView {
                             val inferMapper: TypeMapper? =
                                 if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
                                     val full = try { tryInferSingleTypeParamFromArgs(sig, expr.arguments!!, forReturnType = true) }
-                                        catch (_: StackOverflowError) { null }
+                                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                                     // B86.1b-4 fallback: when the full mapper is null (e.g. a
                                     // callback-return-position TP `U` is uninferable because the
                                     // lambda body errors), use the partial anchor-only mapper so
                                     // the lambda's PARAM `(x:T)` still resolves to its concrete
                                     // anchor type during the diagnostic walk (TS2339 in the body).
                                     full ?: try { tryInferAnchorTypeParamsForContext(sig, expr.arguments!!) }
-                                        catch (_: StackOverflowError) { null }
+                                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                                 } else null
                             // B83.4d: literal-preserving OVERRIDE for fixed-type-parameter
                             // conflict TPs (e.g. `f<T>(x:T, b:()=>(a:T)=>void, y:T)` called
@@ -96335,7 +96361,7 @@ interface DataView {
                             val litMapper: TypeMapper? =
                                 if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty())
                                     try { computeFixedConflictLiteralMapper(sig, expr.arguments!!) }
-                                        catch (_: StackOverflowError) { null }
+                                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                                 else null
                             val ctxMapper: TypeMapper? = when {
                                 litMapper == null -> inferMapper
@@ -96364,7 +96390,7 @@ interface DataView {
                                 else null
                             }
                         }
-                    } catch (_: StackOverflowError) { null }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                 }
                 expr.arguments?.forEachIndexed { i, arg ->
                     val savedCtx = contextualType
@@ -96439,7 +96465,7 @@ interface DataView {
                                 if (ret != null && ret !== anyType && ret !== errorType) bodyCtx = ret
                             }
                         }
-                    } catch (_: StackOverflowError) { /* circular */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                 }
                 val savedCtx = contextualType
                 contextualType = bodyCtx
@@ -96553,7 +96579,7 @@ interface DataView {
                                 currentLocalTypes[pName] = pt
                                 continue
                             }
-                        } catch (_: StackOverflowError) {}
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
                     }
                     // Unannotated param: remove any outer binding so property access falls back to `any`
                     currentLocalTypes.remove(pName)
@@ -96580,7 +96606,7 @@ interface DataView {
                                 currentLocalTypes[pName.text] = pType
                             }
                         }
-                    } catch (_: StackOverflowError) { /* circular */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                 }
                 val savedCtx = contextualType
                 contextualType = null
@@ -97166,7 +97192,7 @@ interface DataView {
                     if (resolvedType !== anyType && resolvedType !== errorType) {
                         currentLocalTypes[paramName.text] = resolvedType
                     }
-                } catch (_: StackOverflowError) { /* circular type */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                 finally { if (bridgeNs) inferenceNamespaceStack.removeLast() }
             } else if (paramName is ArrayBindingPattern || paramName is ObjectBindingPattern) {
                 // B83.4i: register destructured-param binding NAMES (e.g. `[x]` / `{x}`)
@@ -97559,7 +97585,7 @@ interface DataView {
         // Resolve receiver-of-receiver's apparent type to find the property symbol.
         val recvOfRecvType = try {
             getTypeOfExpression(info.recvOfRecv)
-        } catch (_: StackOverflowError) { return }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return }
         if (recvOfRecvType === anyType || recvOfRecvType === errorType) return
         val apparent = getApparentType(recvOfRecvType)
         val propSym = getPropertyOfType(apparent, info.propName) ?: return
@@ -97573,7 +97599,7 @@ interface DataView {
             else getUnionType(listOf(propType, undefinedType))
         val narrowed = try {
             getNarrowedTypeForReferenceFollowLoopEntry(declaredWithUndef, info.narrowExpr)
-        } catch (_: StackOverflowError) { return }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return }
         if (!typeIncludesExplicitUndefined(narrowed)) return
         // Construct the display path for the receiver. For PropertyAccess
         // (`foo.a`), use `getReferencePath` (dotted form). For ElementAccess
@@ -97637,7 +97663,7 @@ interface DataView {
         if (!typeIncludesNull(declared) && !typeIncludesExplicitUndefined(declared)) return
         val narrowed = try {
             getNarrowedTypeForReferenceFollowLoopEntry(declared, recv)
-        } catch (_: StackOverflowError) { return }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return }
         val hasNull = typeIncludesNull(narrowed)
         val hasUndef = typeIncludesExplicitUndefined(narrowed)
         if (!hasNull && !hasUndef) return
@@ -98721,7 +98747,7 @@ interface DataView {
                                 ))
                                 return
                             }
-                        } catch (_: StackOverflowError) { /* fall through */ }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* fall through */ }
                     }
                 }
             }
@@ -98884,11 +98910,11 @@ interface DataView {
                                     ))
                                     return
                                 }
-                            } catch (_: StackOverflowError) { /* fall through to normal check */ }
+                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* fall through to normal check */ }
                         }
                     }
                 }
-            } catch (_: StackOverflowError) { /* fall through to normal check */ }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* fall through to normal check */ }
 
             // 17.34c: paths beyond this point assume an Identifier receiver (look up
             // the bare name in globals to drive namespace/typeof/wrapper-type emissions).
@@ -98918,7 +98944,7 @@ interface DataView {
                             if (classType is Type.Interface) {
                                 tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
                             }
-                        } catch (_: StackOverflowError) { /* fall through */ }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* fall through */ }
                     }
                 }
                 // B98.r138 (TS2339): a QUALIFIED namespace member that is a NON-EXPORTED
@@ -99097,7 +99123,7 @@ interface DataView {
                                 return
                             }
                         }
-                    } catch (_: StackOverflowError) { /* fall through to bail */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* fall through to bail */ }
                 }
                 // B140: property access on `import X = require("./Y.json")` where Y.json is
                 // EMPTY (or literally `{}`) — its type is `{}`, so ANY property access is
@@ -100924,7 +100950,7 @@ interface DataView {
             currentFlowGraph = result.flowGraph
             try {
                 checkCallTypesInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 // Safety net for deeply nested ASTs
             }
             currentFlowGraph = null
@@ -101060,7 +101086,7 @@ interface DataView {
                                     currentLocalTypes[nm.text] = t
                                 }
                             }
-                        } catch (_: StackOverflowError) { /* circular type */ }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                     }
                 }
             }
@@ -101159,7 +101185,7 @@ interface DataView {
                 val classTypeParams: List<Type.TypeParam> = if (classSym != null) {
                     try {
                         (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
-                    } catch (_: StackOverflowError) { emptyList() }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                 } else emptyList()
                 val savedClassScope = currentTypeParamScope
                 if (classTypeParams.isNotEmpty()) {
@@ -101186,14 +101212,14 @@ interface DataView {
                         }
                         val baseSym = globals[baseName] ?: return@run null to null
                         val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
-                            try { getTypeFromTypeNode(tn).takeIf { it !== errorType } } catch (_: StackOverflowError) { null }
+                            try { getTypeFromTypeNode(tn).takeIf { it !== errorType } } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                         }.orEmpty()
                         val sig = try {
                             buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
-                        } catch (_: StackOverflowError) { null }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                         val instType = try {
                             buildBaseInstanceTypeForSuper(baseSym, typeArgs)
-                        } catch (_: StackOverflowError) { null }
+                        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                         sig to instType
                     }
                     val baseSig = baseResolution.first
@@ -101258,7 +101284,7 @@ interface DataView {
                                                 if (instType !== anyType && instType !== errorType) {
                                                     currentLocalTypes["this"] = instType
                                                 }
-                                            } catch (_: StackOverflowError) { /* circular */ }
+                                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                                         }
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
@@ -101440,7 +101466,7 @@ interface DataView {
                 val objThisType = try {
                     val t = getTypeOfObjectLiteral(expr)
                     if (t !== anyType && t !== errorType) t else null
-                } catch (_: StackOverflowError) { null }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
                 fun withObjThis(body: Block) {
                     if (objThisType == null) { checkCallTypesInStatements(body.statements, source, fileName); return }
                     val saved = currentLocalTypes
@@ -102205,7 +102231,7 @@ interface DataView {
             }
             val resolvedTypeArgs = try {
                 typeArgs.map { getTypeFromTypeNode(it) }
-            } catch (_: StackOverflowError) { null }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
             if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
                 // Find a generic signature whose type-param count accommodates the supplied
                 // type args. Exact-arity matches; ADDITIONALLY accept FEWER args than params
@@ -102826,7 +102852,7 @@ interface DataView {
                 if (!checkTypeRelatedTo(resolvedTypeArgs[i], constraint, assignableRelation)) {
                     return false
                 }
-            } catch (_: StackOverflowError) { /* skip */ }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* skip */ }
         }
         return true
     }
@@ -104119,7 +104145,7 @@ interface DataView {
                     val narrowed = paramTypes.getOrNull(i) ?: continue
                     val argType = try {
                         literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
-                    } catch (_: StackOverflowError) { continue }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
                     val isPrim = argType is Type.Intrinsic || argType is Type.StringLiteral ||
                         argType is Type.NumberLiteral || argType is Type.BigIntLiteral ||
                         argType === trueType || argType === falseType
@@ -105002,7 +105028,7 @@ interface DataView {
         // constituent as a sub-line; for this object-union-vs-literal-union shape the
         // discriminant-matched member relates and the trailing member is reported.
         val lastMemberDisplay = try { typeToString(getTypeFromTypeNode(unionNode.types.last())) }
-            catch (_: StackOverflowError) { return }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return }
         for (c in sw.caseBlock) {
             if (c !is CaseClause) continue
             val ce = c.expression as? Identifier ?: continue
@@ -105304,7 +105330,7 @@ interface DataView {
                 val inst = try {
                     currentTypeAliasArgs = (saved ?: emptyMap()) + (tpAst.name.text to argType)
                     getTypeFromTypeNode(m)
-                } catch (_: StackOverflowError) { null } finally {
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null } finally {
                     currentTypeAliasArgs = saved
                 }
                 if (inst !is Type.Object || inst === anyType) continue
@@ -105735,7 +105761,7 @@ interface DataView {
                             if (perPropEmitted) return
                         }
                     }
-                } catch (_: StackOverflowError) { /* circular type */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
             }
             // 16.4dt: For an OPTIONAL TypeParam-typed parameter (`x?: T` where T extends
             // some non-null constraint), TypeScript rejects `null` arguments with
@@ -105976,7 +106002,7 @@ interface DataView {
                                 ))
                             }
                         }
-                    } catch (_: StackOverflowError) { /* circular type */ }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                 }
             }
             // 16.4i: Generic parameter with a simple constraint — when the argument
@@ -106150,7 +106176,7 @@ interface DataView {
                             }
                         }
                     }
-                } catch (_: StackOverflowError) { /* circular type */ }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
             }
             // Conservative: only check when parameter type is a well-known type
             // (primitive, void, undefined, null, never). Skip object/interface/union/
@@ -106575,7 +106601,7 @@ interface DataView {
                 !(argIsNamedInstance && isSimpleCheckableType(elementType))) continue
             val ok = try {
                 checkTypeRelatedTo(argType, elementType, assignableRelation)
-            } catch (_: StackOverflowError) { true }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); true }
             if (!ok) {
                 val argDisplay = typeToString(getWidenedLiteralType(argType))
                 val paramDisplay = typeToString(elementType)
@@ -107528,7 +107554,7 @@ interface DataView {
             // TS2741: named source missing a required prop of the named index value type.
             if (valueType is Type.Interface && indexValueType is Type.Interface) {
                 val missing = try { collectMissingProperties(valueType, indexValueType) }
-                    catch (_: StackOverflowError) { emptyList() }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                 if (missing.isNotEmpty() && !checkTypeRelatedTo(valueType, indexValueType, assignableRelation)) {
                     val mpName = missing[0]
                     val mpSym = getPropertyOfType(indexValueType, mpName)
@@ -107640,7 +107666,7 @@ interface DataView {
                 ?: getTypeOfExpression(value))
             if (valueType === anyType || valueType === errorType || valueType === unknownType) continue
             val ok = try { checkTypeRelatedTo(valueType, memberType, assignableRelation) }
-                catch (_: StackOverflowError) { true }
+                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); true }
             if (ok) continue
             val pos = nameNode.pos
             val len = keyName.length + 2
@@ -107697,7 +107723,7 @@ interface DataView {
         if (sourceType.symbol != null || targetType.symbol != null) return
         try {
             resolveStructuredTypeMembers(sourceType); resolveStructuredTypeMembers(targetType)
-        } catch (_: StackOverflowError) { return }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return }
         val strIdx = targetType.stringIndexInfo
         val numIdx = targetType.numberIndexInfo
         if (strIdx == null && numIdx == null) return
@@ -107975,7 +108001,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -108404,7 +108430,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -108538,7 +108564,7 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -108655,7 +108681,7 @@ interface DataView {
                             }
                         }
                     }
-                } catch (_: StackOverflowError) {}
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
             }
             return
         }
@@ -108693,7 +108719,7 @@ interface DataView {
                     ))
                 }
             }
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     /**
@@ -109006,7 +109032,7 @@ interface DataView {
                 if (t.baseTypes?.any { (it as? Type.Object)?.symbol?.name == "Array" } == true)
                     arrayBaseElementTypeFromHeritage(t) else null
             }
-        } catch (_: StackOverflowError) { null }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
         t is Type.Union -> {
             val elems = t.types.mapNotNull { arrayElementTypeForExcess(it) }
             if (elems.size == 1) elems[0] else null
@@ -109229,7 +109255,7 @@ interface DataView {
                     }
                 }
             }
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
     }
 
     private fun checkExcessProperties(
@@ -109393,7 +109419,7 @@ interface DataView {
                     emitted = true
                 }
             }
-        } catch (_: StackOverflowError) { /* circular */ }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
         return emitted
     }
 
@@ -111147,7 +111173,7 @@ interface DataView {
                 val newMembers: SymbolTable = mutableMapOf()
                 val newProps = mutableListOf<Symbol>()
                 for ((name, memberSym) in origMembers) {
-                    val memberType = try { getTypeOfSymbol(memberSym) } catch (_: StackOverflowError) {
+                    val memberType = try { getTypeOfSymbol(memberSym) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                         return type
                     }
                     val instMemberType = instantiateType(memberType, mapper)
@@ -111616,7 +111642,7 @@ interface DataView {
                         if (paramTypeNode != null) {
                             try {
                                 symbolTypes[paramSym.id] = getTypeFromTypeNode(paramTypeNode)
-                            } catch (_: StackOverflowError) { /* leave unresolved */ }
+                            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* leave unresolved */ }
                         }
                     }
                 }
@@ -111677,7 +111703,7 @@ interface DataView {
         if (baseType !is Type.Object) return false
         val methodSym = try {
             getPropertyOfType(baseType, methodName)
-        } catch (_: StackOverflowError) { null } ?: return false
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null } ?: return false
         // Resolve method's type with substitution if base is a Reference
         val methodType = try {
             if (baseType is Type.Reference) {
@@ -111685,7 +111711,7 @@ interface DataView {
             } else {
                 getTypeOfSymbol(methodSym)
             }
-        } catch (_: StackOverflowError) { return false }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
         if (methodType !is Type.Object) return false
         val sigs = methodType.callSignatures
         if (sigs.isNullOrEmpty()) return false
@@ -111694,7 +111720,7 @@ interface DataView {
         if (!typeArgs.isNullOrEmpty()) {
             val resolvedTypeArgs = try {
                 typeArgs.map { getTypeFromTypeNode(it) }
-            } catch (_: StackOverflowError) { return false }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
             if (resolvedTypeArgs.any { it === errorType }) return false
             val genericSig = sigs.firstOrNull { sig ->
                 val tp = sig.typeParameters
@@ -111704,7 +111730,7 @@ interface DataView {
                 val mapper = createTypeMapper(genericSig.typeParameters!!, resolvedTypeArgs)
                 val instantiated = try {
                     instantiateSignature(genericSig, mapper)
-                } catch (_: StackOverflowError) { return false }
+                } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
                 checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName)
                 return true
             }
@@ -112169,7 +112195,7 @@ interface DataView {
         if (constraint == null) return anyType
         val constraintType = try {
             getTypeFromTypeNode(constraint)
-        } catch (_: StackOverflowError) { return anyType }
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return anyType }
         if (constraintType === anyType || constraintType === errorType) return anyType
         // Collect all keys from the constraint
         var keys = when (constraintType) {
@@ -112208,7 +112234,7 @@ interface DataView {
                     // This enables { [K in keyof T]: T[K] } to resolve T[K] per key
                     try {
                         getTypeFromTypeNode(node.type!!)
-                    } catch (_: StackOverflowError) { anyType }
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); anyType }
                 } else anyType
                 val sym = Symbol(SymbolFlags.Property, key)
                 members[key] = sym
@@ -112313,7 +112339,7 @@ interface DataView {
         currentTypeAliasArgs = merged
         return try {
             getTypeFromTypeNode(node.trueType)
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             null
         } finally {
             currentTypeAliasArgs = saved
@@ -112325,7 +112351,7 @@ interface DataView {
         val related = try {
             isSimpleTypeRelatedTo(checkType, extendsType) ||
                 checkTypeRelatedTo(checkType, extendsType, assignableRelation)
-        } catch (_: StackOverflowError) {
+        } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             return anyType
         }
         return if (related) {
@@ -112441,7 +112467,7 @@ interface DataView {
                 if (resolvedProps.isNullOrEmpty()) return stringType
                 val literals = resolvedProps.map { Type.StringLiteral(it.name) }
                 return getUnionType(literals)
-            } catch (_: StackOverflowError) {
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
                 return stringType
             }
         }
@@ -113964,7 +113990,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 spread2698Stmts(result.sourceFile.statements, source, fileName, mutableMapOf())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -114226,7 +114252,7 @@ interface DataView {
             currentCheckFileName = fileName
             try {
                 gfbStmts(result.sourceFile.statements, source, fileName, mutableMapOf())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
         currentFileLocals = null
         currentCheckFileName = null
@@ -114454,7 +114480,7 @@ interface DataView {
             val source = sf.text
             try {
                 nsWriteStmts(sf.statements, source, fileName, aliases, emptySet())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -114765,7 +114791,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 for (stmt in result.sourceFile.statements) shiftWalkStmt(stmt, source, fileName, false)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -114891,7 +114917,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 incDecScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), emptySet())
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -114914,7 +114940,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 mixinTpScanStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -115328,7 +115354,7 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             try { rmepScanStmts(result.sourceFile.statements, source, fileName, result.locals) }
-            catch (_: StackOverflowError) {}
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -115513,7 +115539,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 fnParamScanStmts(result.sourceFile.statements, source, fileName, FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap()))
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -115871,7 +115897,7 @@ interface DataView {
                     resolveStructuredTypeMembers(curObj)
                 }
                 cur = try { getIndexedAccessType(cur, Type.StringLiteral(keyArg.text)) }
-                    catch (_: StackOverflowError) { ok = false; break }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); ok = false; break }
                 if (cur === anyType || cur === errorType) { ok = false; break }
             }
             if (!ok || !isSimpleCheckableType(cur)) continue
@@ -115883,7 +115909,7 @@ interface DataView {
                 ?: (getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType || !isSimpleCheckableType(argType)) continue
             val pass = try { checkTypeRelatedTo(argType, cur, assignableRelation) }
-                catch (_: StackOverflowError) { true }
+                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); true }
             if (pass) continue
             // B98.r126 display rule: preserve the arg literal iff the target is a literal.
             val srcDisp = if (getWidenedLiteralType(cur) !== cur) typeToString(argType)
@@ -119806,7 +119832,7 @@ interface DataView {
                 ?: (pa.name as? StringLiteralNode)?.text
                 ?: (pa.name as? NumericLiteralNode)?.text ?: return@mapNotNull null
             val vt = try { literalTypeOfExpression(pa.initializer) ?: getTypeOfExpression(pa.initializer) }
-                catch (_: StackOverflowError) { return@mapNotNull null }
+                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return@mapNotNull null }
             "$nm: ${typeToString(vt)}"
         }
         return if (parts.isEmpty()) "{}" else "{ ${parts.joinToString("; ")}; }"
@@ -120388,7 +120414,7 @@ interface DataView {
             collectSymbolAliases(result.sourceFile.statements, aliasNames)
             try {
                 sym2strHandleBody(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), aliasNames)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
@@ -120662,7 +120688,7 @@ interface DataView {
             currentLocalTypes = currentLocalTypes.toMutableMap()
             try {
                 checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
-            } catch (_: StackOverflowError) { }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); }
             finally { currentLocalTypes = savedLocalTypes }
         }
         currentFileLocals = null
@@ -121902,7 +121928,7 @@ interface DataView {
             val source = result.sourceFile.text
             try {
                 checkForInLhsInStatements(result.sourceFile.statements, result.locals, source, fileName, inAmbient = false)
-            } catch (_: StackOverflowError) {}
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
         }
     }
 
