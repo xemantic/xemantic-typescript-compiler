@@ -53647,7 +53647,6 @@ interface DataView {
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ModuleDeclaration) continue
                 val aName = (stmt.name as? Identifier)?.text ?: continue
-                val aPos = nsMap[aName]?.first ?: stmt.pos
                 val body = stmt.body as? ModuleBlock ?: continue
                 for (member in body.statements) {
                     if (member !is ClassDeclaration) continue
@@ -53659,8 +53658,14 @@ interface DataView {
                             val rootName = nsChainRoot(pae) ?: continue
                             if (rootName == aName) continue
                             val bEntry = nsMap[rootName] ?: continue
-                            if (bEntry.first <= aPos) continue  // B declared before/at A → already initialized
                             val classDecl = resolveNsMemberClass(bEntry.second, nsChainSegments(pae)) ?: continue
+                            // resolvingClassDeclarationWhenInBaseTypeResolution: compare the ACTUAL
+                            // base-class declaration position to the using class — merged/split
+                            // namespaces make "namespace-earliest-block order" (the old `bEntry.first
+                            // <= aPos` gate) diverge from real declaration order. Faithful
+                            // source-position TDZ: fire only when the base class is declared strictly
+                            // AFTER the using class.
+                            if (classDecl.pos <= member.pos) continue
                             val declPos = classDecl.name?.pos ?: continue
                             emitTS2449(pae.name, declPos, pae.name.text, source, fileName)
                         }
