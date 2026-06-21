@@ -68,10 +68,22 @@ dedicated-walker +1 next — the remaining ~277 failures are genuinely deep-engi
 value order:
 
 1. **Engine feature: recursive type-instantiation depth → TS2589** (§4's pick). `recursiveConditionalCrash4`
-   (we already emit its 5 TS2503/2304; MISS only the 2 TS2589), `awaitedType`, `recursiveConditionalTypes`,
-   etc. A depth-counted instantiation that bails to TS2589 could flip several — but it MUST distinguish a
-   non-converging recursive conditional (TS2589) from a legitimate converging one (`DeepReadonly`-style,
-   NO error). That's exactly why a pure-syntactic heuristic FPs and the real evaluator is needed.
+   (we already emit its 5 TS2503/2304; MISS only the 2 TS2589), `awaitedType` (also needs TS7010+TS2493),
+   `recursiveConditionalTypes`, etc. **Round-232 investigation (precise starting point):** the depth-bail
+   mechanism ALREADY EXISTS — `getTypeFromTypeReference`'s generic-alias substitution path sets
+   `deepInstantiationBailed=true` at `typeAliasResolutionDepth >= 10` (Checker.kt ~79774), and
+   `buildFileLocalTypeMaps` (~4541) emits TS2589 from it (currently gated to NON-generic aliases). The
+   blocker: the bail NEVER FIRES for `Foo<T>`/`LengthDown` because `getTypeFromTypeNode(ConditionalType)`
+   returns errorType IMMEDIATELY for an infer-bearing conditional (both have `${infer $Rest}`) — it never
+   recurses into the branches, so there's no depth to count. **The real unblocker is making conditional-type
+   evaluation attempt branch recursion AND reduce the type args toward a base case** (so it can tell
+   `Foo<unknown>` — arg never changes → non-converging → TS2589 — from `Tail<[a,...r]> = …Tail<r>` — arg
+   shrinks → converges → no error). A side-effect-only "probe" recursion can't distinguish these without
+   evaluating the conditions/args; a pure-syntactic heuristic FPs. The capture-the-bail-node piece is easy
+   once the bail fires: the recursion re-resolves the SAME source self-ref node, so the node at the depth-10
+   bail IS the baseline squiggle position (`Foo<unknown>` at 16,7 / `LengthDown<…Prev<It>>` at 10,7); FP-gate
+   to a generic alias whose body is a top-level `ConditionalType` and whose bail node is a same-named
+   self-ref (excludes the B57.2-revert FP `type T1<T> = [number, T1<{x:T}>]`, a TUPLE body).
 2. **A fresh read-only hunt over a DIFFERENT slice** not yet examined: the parser bucket (~31) and
    js-emit/output-diff bucket weren't hunted; or sample the 460-entry skip-log for tests that may have
    become tractable as machinery grew (lower yield — they were rejected before).
