@@ -1295,6 +1295,10 @@ class Checker(
         // fixed-arity (no-rest) function → TS2556 (+ TS2488/TS2461). Runs BEFORE the arg-count
         // pass so it can register the call to suppress the spurious TS2554.
         checkSpreadNonIterableIntoFixedArity()
+        // 15d. downlevelLetConst16 — `for ([binding] = []; …)` and `for ([binding]/{binding} of [])`
+        // over an EMPTY array literal: the for-init `[]` is the empty tuple (TS2493 OOB), the for-of
+        // `[]` is `undefined[]` (element undefined → TS2488/TS2461 array-destructure, TS2339 object).
+        checkForLoopEmptyArrayDestructure()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43290,6 +43294,124 @@ interface DataView {
                 if (zeroParamFns.isEmpty() || numericUndef.isEmpty()) continue
                 sniFindCalls(result.sourceFile.statements, zeroParamFns, numericUndef, source, fileName)
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /**
+     * downlevelLetConst16 — destructuring binding patterns over an EMPTY array literal `[]` in a
+     * for-loop head. In a for-INITIALIZER `for (let [y] = []; …)` the `[]` is the empty TUPLE `[]`,
+     * so the array binding's element 0 is out of bounds → TS2493. In a for-OF `for (let [x] of [])`
+     * / `for (let {a: x} of [])` the `[]` is `undefined[]` (the binding pattern contextually types
+     * the element `undefined`), so the per-iteration element is `undefined` → an array binding gives
+     * TS2488 (ES2015+) / TS2461 (downlevel) "undefined is not iterable / not an array", and an object
+     * binding gives TS2339 "Property '<k>' does not exist on type 'undefined'" per key. Dedicated
+     * walker — FP-safe by construction: tsc ALWAYS errors on a binding-pattern destructure of an
+     * empty array literal in a for-head, so firing is never a false positive.
+     */
+    private fun checkForLoopEmptyArrayDestructure() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try { feadWalk(result.sourceFile.statements, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun feadWalk(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is ForStatement -> { feadCheckForInit(stmt, source, fileName); feadWalk(listOf(stmt.statement), source, fileName) }
+            is ForOfStatement -> { feadCheckForOf(stmt, source, fileName); feadWalk(listOf(stmt.statement), source, fileName) }
+            is ForInStatement -> feadWalk(listOf(stmt.statement), source, fileName)
+            is Block -> feadWalk(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.statements?.let { feadWalk(it, source, fileName) }
+            is WhileStatement -> feadWalk(listOf(stmt.statement), source, fileName)
+            is DoStatement -> feadWalk(listOf(stmt.statement), source, fileName)
+            is LabeledStatement -> feadWalk(listOf(stmt.statement), source, fileName)
+            is IfStatement -> {
+                feadWalk(listOf(stmt.thenStatement), source, fileName)
+                stmt.elseStatement?.let { feadWalk(listOf(it), source, fileName) }
+            }
+            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
+                is CaseClause -> feadWalk(c.statements, source, fileName)
+                is DefaultClause -> feadWalk(c.statements, source, fileName)
+                else -> {}
+            }
+            is TryStatement -> {
+                feadWalk(stmt.tryBlock.statements, source, fileName)
+                stmt.catchClause?.let { feadWalk(it.block.statements, source, fileName) }
+                stmt.finallyBlock?.let { feadWalk(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in stmt.members) when (m) {
+                is MethodDeclaration -> m.body?.statements?.let { feadWalk(it, source, fileName) }
+                is Constructor -> m.body?.statements?.let { feadWalk(it, source, fileName) }
+                is GetAccessor -> m.body?.statements?.let { feadWalk(it, source, fileName) }
+                is SetAccessor -> m.body?.statements?.let { feadWalk(it, source, fileName) }
+                else -> {}
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { feadWalk(it.statements, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** `for (let [y] = []; …)` → TS2493 per array-binding element (empty tuple, OOB). */
+    private fun feadCheckForInit(stmt: ForStatement, source: String, fileName: String) {
+        val vdl = stmt.initializer as? VariableDeclarationList ?: return
+        for (d in vdl.declarations) {
+            val pattern = d.name as? ArrayBindingPattern ?: continue
+            val init = d.initializer as? ArrayLiteralExpression ?: continue
+            if (init.elements.isNotEmpty()) continue
+            for ((i, el) in pattern.elements.withIndex()) {
+                val nameNode = (el as? BindingElement)?.name as? Identifier ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Tuple type '[]' of length '0' has no element at index '$i'.",
+                    category = DiagnosticCategory.Error, code = 2493, fileName = fileName,
+                    line = line, character = ch, start = nameNode.pos, length = nameNode.text.length,
+                ))
+            }
+        }
+    }
+
+    /** `for (let [x] of [])` → TS2488/2461; `for (let {a: x} of [])` → TS2339 (element `undefined`). */
+    private fun feadCheckForOf(stmt: ForOfStatement, source: String, fileName: String) {
+        val expr = stmt.expression as? ArrayLiteralExpression ?: return
+        if (expr.elements.isNotEmpty()) return
+        val vdl = stmt.initializer as? VariableDeclarationList ?: return
+        val decl = vdl.declarations.firstOrNull() ?: return
+        when (val pattern = decl.name) {
+            is ArrayBindingPattern -> {
+                // A NAMED binding (`[x]`) contextually types the element `undefined` (TS2488 here).
+                // An EMPTY/OMITTED binding (`[]` / `[,]`) leaves `[]` as `never[]` → element `never`,
+                // already handled by the standard iterability path (omittedExpressionForOfLoop) — do
+                // NOT double-emit for those.
+                if (pattern.elements.none { (it as? BindingElement)?.name is Identifier }) return
+                var bstart = pattern.pos
+                while (bstart < source.length && source[bstart] != '[') bstart++
+                var depth = 0; var bend = bstart
+                while (bend < source.length) {
+                    when (source[bend]) { '[' -> depth++; ']' -> { depth--; if (depth == 0) { bend++; break } } }
+                    bend++
+                }
+                val (line, ch) = getLineAndCharacterOfPosition(source, bstart)
+                val downlevel = options.target < ScriptTarget.ES2015
+                diagnostics.add(Diagnostic(
+                    message = if (downlevel) "Type 'undefined' is not an array type."
+                    else "Type 'undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                    category = DiagnosticCategory.Error, code = if (downlevel) 2461 else 2488, fileName = fileName,
+                    line = line, character = ch, start = bstart, length = (bend - bstart).coerceAtLeast(1),
+                ))
+            }
+            is ObjectBindingPattern -> for (el in pattern.elements) {
+                val key = (el.propertyName ?: el.name) as? Identifier ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, key.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '${key.text}' does not exist on type 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = ch, start = key.pos, length = key.text.length,
+                ))
+            }
+            else -> {}
         }
     }
 
