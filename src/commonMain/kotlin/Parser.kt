@@ -1035,6 +1035,14 @@ class Parser(
                             decls.add(parseVariableDeclaration())
                             continue
                         }
+                        // expressionTypeNodeShouldError: a RESERVED keyword after the `.`
+                        // (`const x: "".typeof(...)` recovers as declarator-name `typeof`) →
+                        // TS1389; the list ABORTS unconsumed so `typeof (...)` re-parses as its
+                        // own expression statement (parseSemicolon is silent on `typeof`).
+                        if (isKeyword()) {
+                            reportError("'${scanner.getTokenValue()}' is not allowed as a variable declaration name.",
+                                code = 1389, overrideLength = scanner.getTokenText().length)
+                        }
                     }
                     // Same recovery for same-line Unknown junk (`const a =!@#!@$` — the
                     // `#!`-produced Unknown): ',' expected + TS1134 at the junk (both
@@ -3481,6 +3489,13 @@ class Parser(
             )
         }
         val type = parseType()
+        // expressionTypeNodeShouldError: `type X = "".typeof(...)` leaves a trailing `.` after the
+        // literal type (parsePrimaryType doesn't consume `.member`) → TS1005 ';' expected at the
+        // `.`, then CONSUME it so the trailing `typeof(...)` re-parses cleanly as the next statement.
+        if (token == SyntaxKind.Dot && !scanner.hasPrecedingLineBreak()) {
+            reportError("';' expected.", code = 1005, overrideLength = 1)
+            nextToken()
+        }
         parseSemicolon()
         return TypeAliasDeclaration(
             name = name,
