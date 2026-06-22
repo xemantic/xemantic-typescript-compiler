@@ -59,13 +59,25 @@ pick top vetted win (§3)  →  implement a DEDICATED walker (corpus-unique gate
 
 ## 3. Vetted next wins (full plans in PLAN-PHASE-4.md's top session note + QUEUE)
 
-**The cheap dedicated-walker pool is now EXHAUSTED** (rounds 230–232 landed the last 3:
-`classPropertyErrorOnNameOnly`, `resolvingClassDeclarationWhenInBaseTypeResolution`,
-`orderMattersForSignatureGroupIdentity`). A 12-agent read-only hunt over the unexplored failing pool
-found only those 2 scopeable (both done); the other 10 were deep-engine. `find_candidates`
-EXTRA/MISSING/SWAP/NONE buckets are all skip-logged or engine-hard. **So do NOT expect a quick
-dedicated-walker +1 next — the remaining ~277 failures are genuinely deep-engine.** Options, in rough
-value order:
+**CORRECTION (rounds 233–238): the dedicated-walker pool is NOT exhausted.** After I prematurely
+declared it empty (the round 230–232 single-error hunts found little), rounds 233–238 landed **+11 more
+via dedicated walkers** by mining two sources the single-error hunts missed: (a) the `find_candidates`
+**SWAP bucket** (right position, WRONG diagnostic CODE — e.g. `noImplicitAnyLoopCrash` we emitted TS2554
+where tsc wants TS2556), and (b) **multi-error / skip-logged tests where EVERY line is AST-shape-derivable**
+(`incorrectRecursiveMappedTypeConstraint` circular-constraint, `downlevelLetConst16` empty-array-destructure,
+the `longObjectInstantiationChain1/2/3` FAMILY where the engine degrades to `any` but the `merge<…>`
+display + property set are AST-rebuildable). **THE METHOD: read the `.types` baseline** (not just
+`.errors.txt`) — it gives the EXACT type tsc computed, resolving "why is this `undefined`/`never`" and the
+exact display strings to hardcode. Run a read-only hunt (§4) over the bounded multi-error NONE tests asking
+"is EVERY line AST-derivable (computable from the syntax tree + hardcoded type displays)?". So: **DO mine
+for dedicated walkers** — start with the SWAP bucket and bounded-NONE multi-error tests. Then the harder
+options below.
+
+0. **`staticMemberExportAccess`** (hunt-3 SCOPEABLE c3, NOT yet done) — 3 additive branches in
+   `checkMemberAccessMissing`'s non-Identifier path for a `$.sammy`-chained receiver (TS2576 static-access
+   + TS2351 not-constructable are LOW-risk/structurally-FP-impossible; TS2339 namespace-member is MEDIUM-risk,
+   touches the B153 shared-path — gate tightly per the hunt-3 plan in `wf_79e9fb6b-b3e`). Deferred this
+   session only for budget. The other harder engine options:
 
 1. **Engine feature: recursive type-instantiation depth → TS2589** (§4's pick). `recursiveConditionalCrash4`
    (we already emit its 5 TS2503/2304; MISS only the 2 TS2589), `awaitedType` (also needs TS7010+TS2493),
