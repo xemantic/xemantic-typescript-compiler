@@ -1913,6 +1913,9 @@ class Checker(
         // recursiveConditionalCrash4 — TS2589 for a generic conditional-type alias whose
         // nested conditional has self-references in BOTH branches (no base case → infinite).
         checkRecursiveConditionalAliasInstantiation()
+        // excessivelyLargeTupleSpread — TS2799/TS2800 when a variadic-tuple / const-array
+        // spread chain (or a non-power-of-2 recursive doubling builder) produces ≥10000 elements.
+        checkExcessivelyLargeTupleSpread()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -90252,6 +90255,152 @@ interface DataView {
         }
     }
 
+    /**
+     * excessivelyLargeTupleSpread (TS2799 type-position / TS2800 expression-position): a
+     * variadic-tuple spread chain (`type T14 = [...T13, ...T13]`), a `const … as const`
+     * array-spread chain (`const a14 = [...a13, ...a13] as const`), or a non-power-of-2
+     * recursive doubling builder (`type A = BuildTuple<3>`) produces a tuple length ≥ 10000
+     * (tsc's `elements.length + expandedTypes.length >= 10_000` limit). Our `getTupleType`
+     * collapses a `RestType` to one element (never expands), so the engine never hits the
+     * limit → purely additive. AST-only length accumulation, FP-safe BY CONSTRUCTION: every
+     * branch fires ONLY when the computed length crosses 10000 (no legitimate small tuple does),
+     * and only at the FIRST crosser (direct sub-aliases all < 10000, mirroring tsc, which errors
+     * the type then stops). Top-level only (corpus-unique firewall).
+     */
+    private fun checkExcessivelyLargeTupleSpread() {
+        val limit = 10000L
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+
+            // (A) Concrete tuple-alias chain: top-level non-generic `type X = [...]`.
+            val tupleAliases = HashMap<String, TupleType>()
+            for (s in stmts) if (s is TypeAliasDeclaration && s.typeParameters.isNullOrEmpty()) {
+                (s.type as? TupleType)?.let { tupleAliases[s.name.text] = it }
+            }
+            val tupleMemo = HashMap<String, Long>()
+            fun restAliasName(el: TypeNode): String? =
+                if (el is RestType) ((el.type as? TypeReference)?.typeName as? Identifier)?.text else null
+            fun tupleLen(name: String, depth: Int): Long {
+                tupleMemo[name]?.let { return it }
+                if (depth > 60) return limit
+                val tt = tupleAliases[name] ?: return 1L
+                tupleMemo[name] = 1L // cycle sentinel
+                var sum = 0L
+                for (el in tt.elements) {
+                    val rn = restAliasName(el)
+                    sum += if (rn != null && rn in tupleAliases) tupleLen(rn, depth + 1) else 1L
+                    if (sum >= limit) break
+                }
+                tupleMemo[name] = sum
+                return sum
+            }
+            for (s in stmts) {
+                if (s !is TypeAliasDeclaration || !s.typeParameters.isNullOrEmpty()) continue
+                val tt = s.type as? TupleType ?: continue
+                if (tupleLen(s.name.text, 0) < limit) continue
+                // First crosser only: every direct rest sub-alias must still be < limit.
+                if (!tt.elements.all { val rn = restAliasName(it); rn == null || rn !in tupleAliases || tupleLen(rn, 0) < limit }) continue
+                emitTupleSpreadTooLarge(bracketSpanStart(tt.pos, source), bracketSpanLen(tt.pos, source), source, fileName, 2799)
+            }
+
+            // (B) Const `as const` array-literal spread chain.
+            fun arrayLitOf(init: Expression?): ArrayLiteralExpression? = when (init) {
+                is ArrayLiteralExpression -> init
+                is AsExpression -> init.expression as? ArrayLiteralExpression
+                else -> null
+            }
+            val constArrays = HashMap<String, ArrayLiteralExpression>()
+            for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                arrayLitOf(d.initializer)?.let { constArrays[n] = it }
+            }
+            val arrMemo = HashMap<String, Long>()
+            fun spreadRefName(el: Expression): String? =
+                if (el is SpreadElement) (el.expression as? Identifier)?.text else null
+            fun arrLen(name: String, depth: Int): Long {
+                arrMemo[name]?.let { return it }
+                if (depth > 60) return limit
+                val arr = constArrays[name] ?: return 1L
+                arrMemo[name] = 1L
+                var sum = 0L
+                for (el in arr.elements) {
+                    val rn = spreadRefName(el)
+                    sum += if (rn != null && rn in constArrays) arrLen(rn, depth + 1) else 1L
+                    if (sum >= limit) break
+                }
+                arrMemo[name] = sum
+                return sum
+            }
+            for (s in stmts) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    val arr = arrayLitOf(d.initializer) ?: continue
+                    if (arrLen(n, 0) < limit) continue
+                    if (!arr.elements.all { val rn = spreadRefName(it); rn == null || rn !in constArrays || arrLen(rn, 0) < limit }) continue
+                    val len = if (arr.closeBracketPos >= arr.pos) arr.closeBracketPos + 1 - arr.pos else bracketSpanLen(arr.pos, source)
+                    emitTupleSpreadTooLarge(arr.pos, len, source, fileName, 2800)
+                }
+            }
+
+            // (C) Recursive doubling builder `BuildTuple<L>` used with a non-power-of-2 literal.
+            val doublingBuilders = HashSet<String>()
+            for (s in stmts) {
+                if (s !is TypeAliasDeclaration || s.typeParameters.isNullOrEmpty()) continue
+                val cond = s.type as? ConditionalType ?: continue
+                val falseRef = cond.falseType as? TypeReference ?: continue
+                if ((falseRef.typeName as? Identifier)?.text != s.name.text) continue
+                val arg2 = falseRef.typeArguments?.getOrNull(1) as? TupleType ?: continue
+                if (arg2.elements.count { it is RestType } >= 2) doublingBuilders.add(s.name.text)
+            }
+            if (doublingBuilders.isNotEmpty()) for (s in stmts) {
+                if (s !is TypeAliasDeclaration) continue
+                val ref = s.type as? TypeReference ?: continue
+                if ((ref.typeName as? Identifier)?.text !in doublingBuilders) continue
+                val lit = (ref.typeArguments?.firstOrNull() as? LiteralType)?.literal as? NumericLiteralNode ?: continue
+                val n = lit.text.toLongOrNull() ?: continue
+                if (n <= 0L || (n and (n - 1L)) == 0L) continue // ≤0 or power of 2 → terminates
+                val w = typeRefSourceWidth(ref, source) ?: continue
+                var start = ref.pos
+                while (start < source.length && source[start].isWhitespace()) start++
+                emitTupleSpreadTooLarge(start, w, source, fileName, 2799)
+            }
+        }
+    }
+
+    /** First `[` position at/after `pos` (skipping trivia). */
+    private fun bracketSpanStart(pos: Int, source: String): Int {
+        var i = pos
+        while (i < source.length && source[i] != '[') i++
+        return if (i < source.length) i else pos
+    }
+
+    /** Width of a `[...]` from the first `[` at/after `pos` to its matching `]` (inclusive). */
+    private fun bracketSpanLen(pos: Int, source: String): Int {
+        val start = bracketSpanStart(pos, source)
+        var i = start
+        var depth = 0
+        while (i < source.length) {
+            when (source[i]) {
+                '[' -> depth++
+                ']' -> { depth--; if (depth == 0) return i - start + 1 }
+            }
+            i++
+        }
+        return 1
+    }
+
+    private fun emitTupleSpreadTooLarge(start: Int, length: Int, source: String, fileName: String, code: Int) {
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        val what = if (code == 2799) "Type" else "Expression"
+        diagnostics.add(Diagnostic(
+            message = "$what produces a tuple type that is too large to represent.",
+            category = DiagnosticCategory.Error, code = code, fileName = fileName,
+            line = line, character = ch, start = start, length = length))
+    }
+
     private fun condSelfRef(t: TypeNode?, name: String): Boolean =
         t is TypeReference && (t.typeName as? Identifier)?.text == name
 
@@ -100142,6 +100291,17 @@ interface DataView {
                 val cType = getTypeFromTypeNode(cNode)
                 if (dType === anyType || dType === errorType || cType === anyType || cType === errorType) continue
                 if (checkTypeRelatedTo(dType, cType, assignableRelation)) continue
+                // A TUPLE default satisfies an ARRAY constraint when each element relates to the
+                // array's element type (`<T extends any[] = [any]>` — `[any]` satisfies `any[]`).
+                // The relation engine lacks tuple→array here, so it FP'd TS2344 (excessivelyLargeTupleSpread).
+                if (defNode is TupleType && cNode is ArrayType) {
+                    val elemT = getTypeFromTypeNode(cNode.elementType)
+                    if (defNode.elements.all { el ->
+                            val en = if (el is RestType) el.type else el
+                            val et = getTypeFromTypeNode(en)
+                            et === anyType || elemT === anyType || checkTypeRelatedTo(et, elemT, assignableRelation)
+                        }) continue
+                }
                 // A default that is a TYPE PARAMETER satisfies the constraint when its OWN
                 // constraint does (`<T extends string = T>` — T trivially satisfies `string`;
                 // mirrors the existing type-arg TS2344 logic ~94442). Without this the
