@@ -1318,6 +1318,10 @@ class Checker(
         checkLambdaToFunctionSubtypeArgs()
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
         checkNamedImportExistence()
+        // tsxResolveExternalModuleExportsTypes — `import { Test } from 'a'` where 'a' is a bare
+        // @types `export = <namespace>` module and `Test` is only an EMPTY/uninstantiated
+        // `namespace Test {}` added by a cross-file `declare module 'a'` augmentation → TS2305.
+        checkBareAtTypesExportEqualsMissingNamedImport()
         // 14c'. Check for imports from `@types/...` packages (TS6137)
         checkTypesPackageImports()
         // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
@@ -34771,6 +34775,86 @@ class Checker(
                 }
             }
         }
+    }
+
+    /** tsxResolveExternalModuleExportsTypes: `import { NAME } from '<bare>'` where '<bare>' resolves
+     *  to a `@types`/node_modules `.d.ts` with `export = <ns>`, and NAME is NOT a member of <ns>'s
+     *  own exports but IS only an EMPTY/uninstantiated `namespace NAME {}` added by a cross-file
+     *  `declare module '<bare>'` augmentation → TS2305 (the empty augmentation namespace is not an
+     *  importable export). The standard named-import check doesn't resolve bare @types export=
+     *  namespaces, so this is purely ADDITIVE. FP firewall (corpus-unique, verified): NAME must
+     *  resolve ONLY to an empty/uninstantiated augmentation namespace and be absent from the export=
+     *  namespace's own AST members (a non-empty/instantiated augmentation member like
+     *  augmentExportEquals5's `Request` is excluded). */
+    private fun checkBareAtTypesExportEqualsMissingNamedImport() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val clause = stmt.importClause ?: continue
+                if (clause.isTypeOnly) continue
+                val named = clause.namedBindings as? NamedImports ?: continue
+                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                if (spec.startsWith(".") || spec.startsWith("/")) continue
+                val resolved = resolveBareSpecifierViaNodeModules(spec, fileName) ?: continue
+                if (!isDtsFile(resolved)) continue
+                val targetFile = fileResults[resolved]?.sourceFile ?: continue
+                val exportEq = targetFile.statements
+                    .firstOrNull { it is ExportAssignment && it.isExportEquals } as? ExportAssignment ?: continue
+                val exportEqName = (exportEq.expression as? Identifier)?.text ?: continue
+                // Own AST members of `export = <ns>` (avoids merge-pollution of the symbol table).
+                val ownExports = HashSet<String>()
+                var isNamespace = false
+                for (s in targetFile.statements) {
+                    if (s is ModuleDeclaration && (s.name as? Identifier)?.text == exportEqName) {
+                        isNamespace = true
+                        (s.body as? ModuleBlock)?.statements?.forEach { m -> declMemberName(m)?.let { ownExports.add(it) } }
+                    }
+                }
+                if (!isNamespace) continue
+                for (el in named.elements) {
+                    if (el.isTypeOnly) continue
+                    val importedName = (el.propertyName ?: el.name).text
+                    if (importedName == "default" || importedName in ownExports) continue
+                    if (!isEmptyAugmentationNamespaceOnly(spec, importedName)) continue
+                    emitTs2305(source, fileName, spec, importedName, el.propertyName ?: el.name)
+                }
+            }
+        }
+    }
+
+    /** The declared name of a module/namespace member statement (for the export= member set). */
+    private fun declMemberName(m: Statement): String? = when (m) {
+        is InterfaceDeclaration -> m.name.text
+        is ClassDeclaration -> m.name?.text
+        is FunctionDeclaration -> m.name?.text
+        is EnumDeclaration -> m.name.text
+        is TypeAliasDeclaration -> m.name.text
+        is ModuleDeclaration -> (m.name as? Identifier)?.text
+        is VariableStatement -> (m.declarationList.declarations.firstOrNull()?.name as? Identifier)?.text
+        else -> null
+    }
+
+    /** True iff `name`, in ANY `declare module '<spec>'` augmentation, is ONLY an empty/uninstantiated
+     *  `namespace name {}` — never a var/class/function/interface/type-alias/instantiated-namespace
+     *  (those are genuine importable members → return false, suppressing the TS2305). */
+    private fun isEmptyAugmentationNamespaceOnly(spec: String, name: String): Boolean {
+        var foundEmptyNs = false
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                val mod = stmt as? ModuleDeclaration ?: continue
+                if ((mod.name as? StringLiteralNode)?.text != spec) continue
+                val body = mod.body as? ModuleBlock ?: continue
+                for (m in body.statements) {
+                    if (declMemberName(m) != name) continue
+                    if (m is ModuleDeclaration && !isNamespaceInstantiated(m)) foundEmptyNs = true
+                    else return false
+                }
+            }
+        }
+        return foundEmptyNs
     }
 
     private fun emitTs2305(
