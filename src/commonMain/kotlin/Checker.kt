@@ -1289,6 +1289,7 @@ class Checker(
         checkDtsTopLevelDeclarations()
         // 14b. Check default imports from modules without default export (TS1192)
         checkDefaultImports()
+        checkNamespaceImportSyntheticDefaultCall()
         // 8a-bis. B235: TS2339 for absent members of `await import('<esm-pkg>')` namespaces.
         checkDynamicImportNamespaceMembers()
         // 8a-ter. B494: TS2339 for absent members of `import * as foo from "<bare>"` where
@@ -34259,7 +34260,20 @@ class Checker(
                         (it is ClassDeclaration && it.name?.text == exportEqName) ||
                             (it is FunctionDeclaration && it.name?.text == exportEqName)
                     }
-                    if (targetIsClassOrFn && aliasName.isNotEmpty() &&
+                    // esModuleInteropPrettyErrorRelatedInformation: when the export= target ALSO
+                    // merges with a namespace or variable (tsc: it carries SymbolFlags.Module|Variable),
+                    // TS2497 is SUPPRESSED — the namespace-style import yields a synthetic-default value
+                    // `{ default: <value> }`, not the bare class/fn, so the value-position use isn't a
+                    // hard TS2497. The dedicated walker `checkNamespaceImportSyntheticDefaultCall` then
+                    // owns the resulting TS2345/TS7038. (es6ImportEqualsExportModuleCommonJsError's pure
+                    // `class a` has no merge → still fires.)
+                    val targetHasNsOrVarMerge = exportEqName != null && targetFile.statements.any {
+                        (it is ModuleDeclaration && (it.name as? Identifier)?.text == exportEqName) ||
+                            (it is VariableStatement && it.declarationList.declarations.any { d ->
+                                (d.name as? Identifier)?.text == exportEqName
+                            })
+                    }
+                    if (targetIsClassOrFn && !targetHasNsOrVarMerge && aliasName.isNotEmpty() &&
                         isIdentifierReferencedAsValue(aliasName, result.sourceFile.statements, stmt)) {
                         val specStart = specifier.pos
                         val specLength = moduleName.length + 2
@@ -34275,6 +34289,86 @@ class Checker(
                             length = specLength,
                         ))
                     }
+                }
+            }
+        }
+    }
+
+    /** esModuleInteropPrettyErrorRelatedInformation: under @esModuleInterop + CJS, a namespace
+     *  import `import * as X from "./m"` of a module whose `export = N` merges a FUNCTION with a
+     *  NAMESPACE yields a synthetic-default VALUE `{ default: <fn> }` (not the bare fn — the merge
+     *  carries SymbolFlags.Module, so the namespace object is what's bound). Passing X to a
+     *  CALLABLE param → TS2345 (the `{ default: … }` object provides no call signature) with a
+     *  related TS7038 anchored at the import. We don't model the synthetic-default type, so the
+     *  general arg-check path emits nothing → purely additive. Corpus-unique (TS7038 appears in
+     *  only this baseline; the export=(fn+namespace) + namespace-import + bare-Identifier-call-arg
+     *  shape is the firewall). Pairs with the TS2497 suppression above (the merge case). */
+    private fun checkNamespaceImportSyntheticDefaultCall() {
+        if (!options.esModuleInterop || options.esModuleInteropExplicitlyFalse) return
+        if (binderResults.size <= 1 && !isMultiFileSource) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            // Collect namespace-import aliases of export=(function + namespace) modules.
+            // aliasName -> (importStmt, syntheticDefaultDisplay `{ default: <fn arrow> ; }`)
+            val aliases = HashMap<String, Pair<ImportDeclaration, String>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val nsBinding = stmt.importClause?.namedBindings as? NamespaceImport ?: continue
+                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val resolved = resolveModuleSpecifier(spec) ?: resolveRelativeIncludingIndex(spec, fileName) ?: continue
+                val targetFile = fileResults[resolved]?.sourceFile ?: continue
+                if (targetFile.statements.none { it is ExportAssignment && it.isExportEquals }) continue
+                val exportEq = targetFile.statements.first { it is ExportAssignment && it.isExportEquals } as ExportAssignment
+                val exportEqName = (exportEq.expression as? Identifier)?.text ?: continue
+                val fnDecl = targetFile.statements.firstOrNull {
+                    it is FunctionDeclaration && it.name?.text == exportEqName
+                } as? FunctionDeclaration ?: continue
+                val hasNs = targetFile.statements.any {
+                    it is ModuleDeclaration && (it.name as? Identifier)?.text == exportEqName
+                }
+                if (!hasNs) continue
+                val fnParams = fnDecl.parameters.joinToString(", ") { formatParameterDecl(it) }
+                val fnRet = fnDecl.type?.let { formatTypeForDisplay(it) } ?: "any"
+                aliases[nsBinding.name.text] = stmt to "{ default: ($fnParams) => $fnRet; }"
+            }
+            if (aliases.isEmpty()) continue
+            // Local function declarations (name -> FunctionDeclaration) for callee resolution.
+            val localFns = HashMap<String, FunctionDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration) stmt.name?.text?.let { if (it !in localFns) localFns[it] = stmt }
+            }
+            // Scan top-level call statements `f(alias)` where f's matching param is a FunctionType.
+            for (stmt in result.sourceFile.statements) {
+                val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = (call.expression as? Identifier)?.text ?: continue
+                val fn = localFns[callee] ?: continue
+                for ((argIdx, arg) in call.arguments.withIndex()) {
+                    val argName = (arg as? Identifier)?.text ?: continue
+                    val (importStmt, synthDisplay) = aliases[argName] ?: continue
+                    val paramFt = fn.parameters.getOrNull(argIdx)?.type as? FunctionType ?: continue
+                    val paramDisplay = formatTypeForDisplay(paramFt) ?: continue
+                    val ftParams = paramFt.parameters.joinToString(", ") { formatParameterDecl(it) }
+                    val ftRet = formatTypeForDisplay(paramFt.type) ?: "any"
+                    val sigColon = "($ftParams): $ftRet"
+                    val (al, ac) = getLineAndCharacterOfPosition(source, arg.pos)
+                    val semi = source.indexOf(';', importStmt.pos)
+                    val impLen = (if (semi >= 0) semi + 1 else importStmt.end) - importStmt.pos
+                    val (il, ic) = getLineAndCharacterOfPosition(source, importStmt.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$synthDisplay' is not assignable to parameter of type '$paramDisplay'.",
+                        category = DiagnosticCategory.Error, code = 2345,
+                        fileName = fileName, line = al, character = ac,
+                        start = arg.pos, length = argName.length,
+                        messageChain = listOf("  Type '$synthDisplay' provides no match for the signature '$sigColon'."),
+                        relatedInformation = listOf(Diagnostic(
+                            message = "Type originates at this import. A namespace-style import cannot be called or constructed, and will cause a failure at runtime. Consider using a default import or import require here instead.",
+                            category = DiagnosticCategory.Message, code = 7038,
+                            fileName = fileName, line = il, character = ic,
+                            start = importStmt.pos, length = impLen,
+                        )),
+                    ))
                 }
             }
         }
