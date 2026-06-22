@@ -14422,13 +14422,44 @@ class Checker(
         }
     }
 
+    /** strictModeReservedWordInClassDeclaration: a class constructor/method parameter
+     *  NAMED with a strict-mode reserved word (`constructor(private, public, static)`)
+     *  parses as a normal named param (the word is a contextual keyword, isIdentifier()
+     *  true) so it escapes the missing-name TS7006 recovery above — but tsc still reports
+     *  TS7006 for it in default mode (the reserved name is a parse-recovery). Squiggle: the
+     *  NAME, except a parameter-property (has modifiers, `public public`) squiggles the
+     *  WHOLE param. Corpus-unique gate (a reserved-word class param exists in 1 test). */
+    private fun emit7006ForReservedClassParams(params: List<Parameter>, source: String, fileName: String) {
+        for (param in params) {
+            if (param.type != null || param.initializer != null || param.dotDotDotToken) continue
+            val name = param.name as? Identifier ?: continue
+            if (name.text !in STRICT_MODE_RESERVED_WORDS) continue
+            val isParamProp = param.modifiers.isNotEmpty()
+            val start = if (isParamProp) param.pos else name.pos
+            val length = if (isParamProp) (name.pos + name.text.length) - param.pos else name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error, code = 7006,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+            ))
+        }
+    }
+
     private fun walkVarFn7006Stmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
             is FunctionDeclaration -> maybeEmit7006ForRecoveredParams(stmt.parameters, source, fileName)
             is ClassDeclaration -> for (m in stmt.members) {
                 when (m) {
-                    is MethodDeclaration -> maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
-                    is Constructor -> maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
+                    is MethodDeclaration -> {
+                        maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
+                        emit7006ForReservedClassParams(m.parameters, source, fileName)
+                    }
+                    is Constructor -> {
+                        maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
+                        emit7006ForReservedClassParams(m.parameters, source, fileName)
+                    }
                     else -> {}
                 }
             }
@@ -20847,6 +20878,40 @@ class Checker(
                         if (clause.token == SyntaxKind.ImplementsKeyword) {
                             checkHeritagePropertyAccessForNamespaceMember(type.expression, source, fileName)
                         }
+                        // strictModeReservedWordInClassDeclaration: a heritage base whose
+                        // LEFTMOST identifier is a strict-mode reserved word. Classes are
+                        // automatically strict → TS1213 always; plus TS2702 when it resolves
+                        // to a TYPE used as a namespace qualifier (`implements public.private.B`)
+                        // or TS2304 when it doesn't resolve at all (`extends package`/`package.A`).
+                        // The reserved-word gate is the FP firewall — the only `extends/implements
+                        // <reserved>` corpus tests are this + strictModeReservedWord.ts — so this
+                        // never touches legitimate `implements Namespace.Member` heritage.
+                        run {
+                            val leftmost = heritageLeftmostIdentifier(type.expression)
+                            if (leftmost != null && leftmost.text in STRICT_MODE_RESERVED_WORDS) {
+                                val lname = leftmost.text
+                                checkIdentForStrictReserved(leftmost, source, fileName, inClass = true, isModule = false)
+                                val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
+                                val (l2702, c2702) = getLineAndCharacterOfPosition(source, leftmost.pos)
+                                if (type.expression is PropertyAccessExpression && leftSym != null &&
+                                    leftSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias) &&
+                                    !leftSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum)) {
+                                    diagnostics.add(Diagnostic(
+                                        message = "'$lname' only refers to a type, but is being used as a namespace here.",
+                                        category = DiagnosticCategory.Error, code = 2702,
+                                        fileName = fileName, line = l2702, character = c2702,
+                                        start = leftmost.pos, length = lname.length,
+                                    ))
+                                } else if (leftSym == null && !scope.has(lname) && !classScope.isTypeParam(lname)) {
+                                    diagnostics.add(Diagnostic(
+                                        message = "Cannot find name '$lname'.",
+                                        category = DiagnosticCategory.Error, code = 2304,
+                                        fileName = fileName, line = l2702, character = c2702,
+                                        start = leftmost.pos, length = lname.length,
+                                    ))
+                                }
+                            }
+                        }
                     }
                 }
                 val ctorParamNames = extractCtorParamNames(stmt.members)
@@ -21408,6 +21473,13 @@ class Checker(
             is OptionalType -> walkTypeNodeForOwnTPRefs(node.type, ownTypeParamNames, source, fileName)
             else -> {}
         }
+    }
+
+    /** The leftmost Identifier of a heritage base expression (`A` in `A`, `A.B.C`). */
+    private fun heritageLeftmostIdentifier(expr: Expression): Identifier? = when (expr) {
+        is Identifier -> expr
+        is PropertyAccessExpression -> heritageLeftmostIdentifier(expr.expression)
+        else -> null
     }
 
     private fun emitTs2304ForHeritageExtendsTypeParam(
@@ -65417,6 +65489,15 @@ interface DataView {
                     if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(decl.name, source, fileName, inClass, isModule)
                     // TS2480 fires unconditionally for 'let' in let/const declarations
                     checkLetInLetOrConst(decl.name, stmt.declarationList.flags, source, fileName)
+                    // strictModeReservedWordInClassDeclaration: a named function EXPRESSION
+                    // initializer (`var z = function let() {}`) — its name is an identifier
+                    // position too. The function-expression body isn't a Statement so it's
+                    // not otherwise walked here.
+                    if (isStrict) {
+                        (decl.initializer as? FunctionExpression)?.name?.let {
+                            checkIdentForStrictReserved(it, source, fileName, inClass, isModule)
+                        }
+                    }
                 }
             }
             is FunctionDeclaration -> if (isStrict) {
@@ -65443,6 +65524,11 @@ interface DataView {
                 // reports TS1213 regardless of file strictness, and a STRING-named
                 // "constructor" field is TS18006 (both convertKeywordsYes variants).
                 stmt.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass = true, isModule = false) }
+                // strictModeReservedWordInClassDeclaration: class TYPE-PARAMETER names
+                // are identifier positions too — `class D<public, private>` → TS1213 at each.
+                stmt.typeParameters?.forEach { tp ->
+                    checkIdentForStrictReserved(tp.name, source, fileName, inClass = true, isModule = false)
+                }
                 for (member in stmt.members) {
                     val nm = (member as? PropertyDeclaration)?.name as? StringLiteralNode ?: continue
                     if (nm.text != "constructor") continue
@@ -65462,10 +65548,12 @@ interface DataView {
                     when (member) {
                         is MethodDeclaration -> {
                             checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
+                            checkParamTypeAnnotsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
                             member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
                         }
                         is Constructor -> {
                             checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
+                            checkParamTypeAnnotsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
                             member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
                         }
                         else -> {}
@@ -65589,6 +65677,20 @@ interface DataView {
         }
     }
 
+    /** strictModeReservedWordInClassDeclaration: a class-member param whose TYPE
+     *  annotation is a bare TypeReference to a strict-reserved word (`banana(x: public)`
+     *  → TS1213 at `public`). Mirrors the FunctionDeclaration branch's inline loop. */
+    private fun checkParamTypeAnnotsForStrictReserved(
+        params: List<Parameter>, source: String, fileName: String,
+        inClass: Boolean, isModule: Boolean,
+    ) {
+        for (p in params) {
+            val tr = p.type as? TypeReference ?: continue
+            val tn = tr.typeName as? Identifier ?: continue
+            if (tr.typeArguments.isNullOrEmpty()) checkIdentForStrictReserved(tn, source, fileName, inClass, isModule)
+        }
+    }
+
     /** Check all identifiers in an expression tree for strict-mode reserved words */
     private fun checkExprForStrictReservedIdents(expr: Expression, source: String, fileName: String, inClass: Boolean = false) {
         when (expr) {
@@ -65612,6 +65714,12 @@ interface DataView {
             }
             is BinaryExpression -> {
                 checkExprForStrictReserved(expr.left, source, fileName, inClass)
+                // strictModeReservedWordInClassDeclaration: a `private = public = static`
+                // assignment chain reports a reserved word in every operand, not just the
+                // leftmost — walk the RHS too. checkExprForStrictReserved only descends
+                // Identifier/BinaryExpression, so this stays conservative (reserved words
+                // in expression position are always errors in strict mode).
+                checkExprForStrictReserved(expr.right, source, fileName, inClass)
             }
             else -> {}
         }
