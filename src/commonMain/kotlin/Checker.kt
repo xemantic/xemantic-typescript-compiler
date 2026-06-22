@@ -1299,6 +1299,11 @@ class Checker(
         // over an EMPTY array literal: the for-init `[]` is the empty tuple (TS2493 OOB), the for-of
         // `[]` is `undefined[]` (element undefined → TS2488/TS2461 array-destructure, TS2339 object).
         checkForLoopEmptyArrayDestructure()
+        // 15e. longObjectInstantiationChain1 — a `const oN = merge(prev, {objlit})` chain where the
+        // generic `merge<base,props> = Omit<…> & props` alias degrades to `any` in our engine; a
+        // dedicated walker rebuilds the accumulated property set + the `merge<…>` display from the
+        // AST and emits TS2339 for out-of-set property accesses.
+        checkMergeAliasInstantiationChain()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43295,6 +43300,93 @@ interface DataView {
                 sniFindCalls(result.sourceFile.statements, zeroParamFns, numericUndef, source, fileName)
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
         }
+    }
+
+    /**
+     * longObjectInstantiationChain1 — `export type merge<base, props> = Omit<base, keyof props &
+     * keyof base> & props; declare const merge: <l, r>(l: l, r: r) => merge<l, r>;` then a chain
+     * `const o1 = merge({p1:1},{p2:2}); const o2 = merge(o1,{p3:3}); …`. Our engine can't materialize
+     * the `Omit<…>` over deeply-nested arguments, so each `oN` degrades to `any` and member-access
+     * checks are skipped (we emit nothing). This dedicated walker rebuilds, purely from the AST, each
+     * chain var's accumulated property set and its `merge<…>` display string (all object-literal
+     * values are numeric → rendered `number`), then emits TS2339 for a property access whose name is
+     * not in the set. FP firewall: gated to a file that declares BOTH a `type merge<…>` alias with a
+     * NON-conditional `IntersectionType` body (chain3's conditional alias is excluded → its
+     * `Omit<…>`-unfolded displays are left untouched) AND a `declare const merge: <l,r>(…)` — a
+     * corpus-unique shape.
+     */
+    private fun checkMergeAliasInstantiationChain() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliasOk = stmts.any { it is TypeAliasDeclaration && it.name.text == "merge" && it.type is IntersectionType }
+            val constOk = stmts.any { s -> s is VariableStatement && ModifierFlag.Declare in s.modifiers &&
+                s.declarationList.declarations.any { (it.name as? Identifier)?.text == "merge" && it.type is FunctionType } }
+            if (!aliasOk || !constOk) continue
+            try {
+                val chainProps = HashMap<String, Set<String>>()
+                val chainDisplay = HashMap<String, String>()
+                for (stmt in stmts) {
+                    if (stmt !is VariableStatement) continue
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        val call = d.initializer as? CallExpression ?: continue
+                        if ((call.expression as? Identifier)?.text != "merge" || call.arguments.size != 2) continue
+                        val b = call.arguments[1] as? ObjectLiteralExpression ?: continue
+                        val bKeys = mergeObjLitKeys(b) ?: continue
+                        val bDisp = mergeObjLitDisplay(b) ?: continue
+                        val a = call.arguments[0]
+                        val aProps: Set<String>; val aDisp: String
+                        when (a) {
+                            is ObjectLiteralExpression -> {
+                                aProps = mergeObjLitKeys(a) ?: continue
+                                aDisp = mergeObjLitDisplay(a) ?: continue
+                            }
+                            is Identifier -> {
+                                aProps = chainProps[a.text] ?: continue
+                                aDisp = chainDisplay[a.text] ?: continue
+                            }
+                            else -> continue
+                        }
+                        chainProps[nm] = aProps + bKeys
+                        chainDisplay[nm] = "merge<$aDisp, $bDisp>"
+                    }
+                }
+                for (stmt in stmts) {
+                    val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                    val recv = (pa.expression as? Identifier)?.text ?: continue
+                    val props = chainProps[recv] ?: continue
+                    val propName = pa.name.text
+                    if (propName in props) continue
+                    val display = chainDisplay[recv] ?: continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                        line = line, character = ch, start = pa.name.pos, length = propName.length,
+                    ))
+                }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** Object-literal property names, or null if any property isn't a numeric-literal-valued PropertyAssignment. */
+    private fun mergeObjLitKeys(ol: ObjectLiteralExpression): Set<String>? {
+        val keys = LinkedHashSet<String>()
+        for (p in ol.properties) {
+            val pa = p as? PropertyAssignment ?: return null
+            val name = (pa.name as? Identifier)?.text ?: return null
+            if (pa.initializer !is NumericLiteralNode) return null
+            keys.add(name)
+        }
+        return if (keys.isEmpty()) null else keys
+    }
+
+    private fun mergeObjLitDisplay(ol: ObjectLiteralExpression): String? {
+        val keys = mergeObjLitKeys(ol) ?: return null
+        return "{ " + keys.joinToString("; ") { "$it: number" } + "; }"
     }
 
     /**
