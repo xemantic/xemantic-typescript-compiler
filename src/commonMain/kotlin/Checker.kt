@@ -1308,6 +1308,11 @@ class Checker(
         // over `type Type<t> = { shape: t; merge: <r>(r) => Type<merge<t,r>> }`, accessed as
         // `oN.shape.pX`. Same `merge<…>` display, but a LITERAL base from `declare const o1: Type<{…}>`.
         checkMergeTypeMethodChain()
+        // 15g. longObjectInstantiationChain3 — the CONDITIONAL-alias sibling: `merge<base,props> =
+        // keyof base & keyof props extends never ? base & props : Omit<base, keyof props & keyof
+        // base> & props`. Same free-`merge(A,B)` chain but the display UNFOLDS the conditional to
+        // `A & B` (disjoint keys) or `Omit<A, "shared"> & B` (overlapping keys).
+        checkMergeConditionalChain()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43447,6 +43452,74 @@ interface DataView {
                     val inner = pa.expression as? PropertyAccessExpression ?: continue
                     if (inner.name.text != "shape") continue
                     val recv = (inner.expression as? Identifier)?.text ?: continue
+                    val props = chainProps[recv] ?: continue
+                    val propName = pa.name.text
+                    if (propName in props) continue
+                    val display = chainDisplay[recv] ?: continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                        line = line, character = ch, start = pa.name.pos, length = propName.length,
+                    ))
+                }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /**
+     * longObjectInstantiationChain3 — the CONDITIONAL-alias sibling of [checkMergeAliasInstantiationChain].
+     * `merge<base,props> = keyof base & keyof props extends never ? base & props : Omit<base, keyof
+     * props & keyof base> & props` then a free-`merge(A,B)` chain accessed `oN.pX`. tsc UNFOLDS the
+     * conditional in the display: disjoint argument keys → `<A> & <B>`; overlapping keys → `Omit<<A>,
+     * "<shared>"> & <B>`. Same property-set accumulation (union). FP firewall: gated to a `type
+     * merge<…>` alias with a `ConditionalType` body (chain1's intersection alias is the OTHER walker)
+     * + a `declare const merge: <l,r>(…)` — corpus-unique.
+     */
+    private fun checkMergeConditionalChain() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliasOk = stmts.any { it is TypeAliasDeclaration && it.name.text == "merge" && it.type is ConditionalType }
+            val constOk = stmts.any { s -> s is VariableStatement && ModifierFlag.Declare in s.modifiers &&
+                s.declarationList.declarations.any { (it.name as? Identifier)?.text == "merge" && it.type is FunctionType } }
+            if (!aliasOk || !constOk) continue
+            try {
+                val chainProps = HashMap<String, LinkedHashSet<String>>()
+                val chainDisplay = HashMap<String, String>()
+                for (stmt in stmts) {
+                    if (stmt !is VariableStatement) continue
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        val call = d.initializer as? CallExpression ?: continue
+                        if ((call.expression as? Identifier)?.text != "merge" || call.arguments.size != 2) continue
+                        val b = call.arguments[1] as? ObjectLiteralExpression ?: continue
+                        val bKeys = mergeObjLitKeys(b) ?: continue
+                        val bDisp = mergeObjLitDisplay(b) ?: continue
+                        val a = call.arguments[0]
+                        val aKeys: LinkedHashSet<String>; val aDisp: String
+                        when (a) {
+                            is ObjectLiteralExpression -> {
+                                aKeys = LinkedHashSet(mergeObjLitKeys(a) ?: continue)
+                                aDisp = mergeObjLitDisplay(a) ?: continue
+                            }
+                            is Identifier -> {
+                                aKeys = chainProps[a.text] ?: continue
+                                aDisp = chainDisplay[a.text] ?: continue
+                            }
+                            else -> continue
+                        }
+                        val shared = aKeys.filter { it in bKeys }
+                        chainDisplay[nm] = if (shared.isEmpty()) "$aDisp & $bDisp"
+                        else "Omit<$aDisp, ${shared.joinToString(" | ") { "\"$it\"" }}> & $bDisp"
+                        chainProps[nm] = LinkedHashSet(aKeys).apply { addAll(bKeys) }
+                    }
+                }
+                for (stmt in stmts) {
+                    val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                    val recv = (pa.expression as? Identifier)?.text ?: continue
                     val props = chainProps[recv] ?: continue
                     val propName = pa.name.text
                     if (propName in props) continue
