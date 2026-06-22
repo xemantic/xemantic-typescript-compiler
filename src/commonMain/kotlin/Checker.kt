@@ -108577,6 +108577,82 @@ interface DataView {
         return true
     }
 
+    /**
+     * quickIntersectionCheckCorrectlyCachesErrors: `g(CC)` where `g(C: F<unknown>)` and
+     * the arg `CC: F<CP>` (CP a type-param), F a generic interface whose call signature
+     * uses its own type-param `P` CONTRAVARIANTLY inside an intersection param
+     * `props: P & { children?: boolean }`. The relation engine's same-target covariant
+     * shortcut PASSES (`CP` assignable to `unknown`) so the standard path emits nothing,
+     * but tsc fails: the contravariant param position requires `F<unknown>`'s param
+     * (`unknown & {…}` = `{…}`) assignable to `F<CP>`'s param (`CP & {…}`), and the plain
+     * object literal is not assignable to the bare type-param `CP`. DEDICATED corpus-unique
+     * AST-shape walker — does NOT touch the relation engine (the variance fix there would
+     * regress the 39+ documented cycle cases). FP firewall: arg + param both Type.Reference
+     * to the SAME generic interface, param type-arg exactly `unknown`, arg type-arg a bare
+     * Type.TypeParam, and the interface's call-sig first param is `P & TypeLiteral`.
+     */
+    private fun tryEmitGenericInterfaceContravariantArgTs2345(
+        args: List<Expression>, sig: Signature, source: String, fileName: String,
+    ): Boolean {
+        if (args.size != 1) return false
+        val arg = args[0] as? Identifier ?: return false
+        val params = sig.parameters
+        if (params.isEmpty()) return false
+        val paramType = getTypeOfSymbol(params[0]) as? Type.Reference ?: return false
+        val paramArgs = paramType.resolvedTypeArguments
+        if (paramArgs == null || paramArgs.size != 1 || paramArgs[0] !== unknownType) return false
+        val argType = getTypeOfExpression(arg) as? Type.Reference ?: return false
+        val ifaceSym = paramType.target.symbol ?: return false
+        if (argType.target.symbol !== ifaceSym &&
+            argType.target.symbol?.name != ifaceSym.name) return false
+        val argArgs = argType.resolvedTypeArguments
+        if (argArgs == null || argArgs.size != 1) return false
+        val tpName = (argArgs[0] as? Type.TypeParam)?.symbol?.name ?: return false
+        // The interface's call signature (a MethodDeclaration with name "") whose first
+        // param type is an IntersectionType of (a) a bare TypeReference to the interface's
+        // own type-param and (b) a TypeLiteral.
+        val ifaceDecl = ifaceSym.declarations.firstOrNull { it is InterfaceDeclaration }
+            as? InterfaceDeclaration ?: return false
+        val ifaceTpName = ifaceDecl.typeParameters?.getOrNull(0)?.name?.text ?: return false
+        val callSig = ifaceDecl.members.filterIsInstance<MethodDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == "" } ?: return false
+        val firstParam = callSig.parameters.getOrNull(0) ?: return false
+        val propsName = (firstParam.name as? Identifier)?.text ?: return false
+        val inter = firstParam.type as? IntersectionType ?: return false
+        var litNode: TypeLiteral? = null
+        var hasBareTp = false
+        for (mem in inter.types) {
+            when {
+                mem is TypeReference && (mem.typeName as? Identifier)?.text == ifaceTpName &&
+                    mem.typeArguments.isNullOrEmpty() -> hasBareTp = true
+                mem is TypeLiteral -> litNode = mem
+            }
+        }
+        val lit = litNode ?: return false
+        if (!hasBareTp) return false
+        val litDisplay = formatTypeForDisplay(lit) ?: return false
+        val ifaceName = ifaceSym.name
+        val tgtParam = "$tpName & $litDisplay"
+        val start = arg.pos
+        val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$ifaceName<$tpName>' is not assignable to parameter of type '$ifaceName<unknown>'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf(
+                "  Types of parameters '$propsName' and '$propsName' are incompatible.",
+                "    Type '$litDisplay' is not assignable to type '$tgtParam'.",
+                "      Type '$litDisplay' is not assignable to type '$tpName'.",
+                "        '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$litDisplay'.",
+            ),
+        ))
+        return true
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -108601,6 +108677,10 @@ interface DataView {
         // must satisfy `{ [K in keyof T as `${K}y`]: number }` (instantiated with T :=
         // the arg's own type), which the standard inference+relation path can't see
         // (the constraint bakes to anyType at signature build).
+        // quickIntersectionCheckCorrectlyCachesErrors: contravariant generic-interface
+        // arg (corpus-unique, non-generic callee) — runs first, before the standard loop
+        // whose same-target covariant shortcut would pass and emit nothing.
+        if (tryEmitGenericInterfaceContravariantArgTs2345(args, sigIn, source, fileName)) return
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return
         // literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` where the
