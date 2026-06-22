@@ -1012,6 +1012,11 @@ class Checker(
         // TS2353 at the excess key. The relation engine passes these (it only checks index-sig
         // PRESENCE for nominal/function sources), so this dedicated AST-shape walker owns them.
         checkIntersectionIndexSigValueExcess()
+        // 6a''''. requiredMappedTypeModifierTrumpsVariance — `Required<{..}>` is unmodeled (→
+        // errorType, engine emits nothing), so a dedicated AST walker owns: TS2741 (assigning
+        // between Required<{..}> vars), TS2322 (assigning between Foo<{..}> vars where Foo has
+        // a `Required<T>` member), TS2339 (chained `aa.a.b` member-missing on the Required<arg>).
+        checkRequiredMappedVariance()
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
@@ -50528,6 +50533,134 @@ interface DataView {
             if (annotated.isEmpty()) continue
             try { scanIntersectionIndexAssignments(statements, annotated, source, fileName) }
             catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** requiredMappedTypeModifierTrumpsVariance: `Required<{..}>` is unmodeled by the relation
+     *  engine (resolves to errorType, emits nothing), so this dedicated AST walker owns the
+     *  variance/access errors. Corpus-unique gates (the exact `Required<TypeLiteral>` / Foo<TL>
+     *  shapes); purely AST + the proven `formatTypeForDisplay` rendering of the inner literal. */
+    private fun checkRequiredMappedVariance() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try { rmvScan(result.sourceFile.statements, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun rmvMemberNames(tl: TypeLiteral): List<Pair<String, Identifier>> =
+        tl.members.mapNotNull { m -> (m as? PropertyDeclaration)?.let { pd -> (pd.name as? Identifier)?.let { it.text to it } } }
+
+    private fun rmvEmit2728(missing: String, tl: TypeLiteral, source: String, fileName: String): Diagnostic? {
+        val node = rmvMemberNames(tl).firstOrNull { it.first == missing }?.second ?: return null
+        val (l, c) = getLineAndCharacterOfPosition(source, node.pos)
+        return Diagnostic(message = "'$missing' is declared here.", category = DiagnosticCategory.Message,
+            code = 2728, fileName = fileName, line = l, character = c, start = node.pos, length = missing.length)
+    }
+
+    private fun rmvScan(stmts: List<Statement>, source: String, fileName: String) {
+        val varDecls = HashMap<String, VariableDeclaration>()
+        val interfaces = HashMap<String, InterfaceDeclaration>()
+        for (s in stmts) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                (d.name as? Identifier)?.text?.let { if (it !in varDecls) varDecls[it] = d }
+            }
+            is InterfaceDeclaration -> if (s.name.text !in interfaces) interfaces[s.name.text] = s
+            else -> {}
+        }
+
+        // Resolve a var's annotation, following a 1-hop alias (`export let A = a`).
+        fun varAnnotation(name: String): TypeNode? {
+            val d = varDecls[name] ?: return null
+            d.type?.let { return it }
+            val initId = (d.initializer as? Identifier)?.text ?: return null
+            return varDecls[initId]?.type
+        }
+        fun requiredInner(name: String): TypeLiteral? {
+            val tr = varAnnotation(name) as? TypeReference ?: return null
+            if (getTypeReferenceLastName(tr.typeName) != "Required") return null
+            return tr.typeArguments?.singleOrNull() as? TypeLiteral
+        }
+        // (Foo<{TL}> arg literal, interface name, member name) for a Foo with single `m: Required<TP>`.
+        fun fooVar(name: String): Triple<TypeLiteral, String, String>? {
+            val tr = varAnnotation(name) as? TypeReference ?: return null
+            val ifaceName = getTypeReferenceLastName(tr.typeName) ?: return null
+            val iface = interfaces[ifaceName] ?: return null
+            val tp = iface.typeParameters?.singleOrNull()?.name?.text ?: return null
+            val member = iface.members.singleOrNull() as? PropertyDeclaration ?: return null
+            val mName = (member.name as? Identifier)?.text ?: return null
+            val mt = member.type as? TypeReference ?: return null
+            if (getTypeReferenceLastName(mt.typeName) != "Required") return null
+            val innerArg = mt.typeArguments?.singleOrNull() as? TypeReference ?: return null
+            if (getTypeReferenceLastName(innerArg.typeName) != tp) return null
+            val argLit = tr.typeArguments?.singleOrNull() as? TypeLiteral ?: return null
+            return Triple(argLit, ifaceName, mName)
+        }
+
+        for (s in stmts) {
+            val e = (s as? ExpressionStatement)?.expression ?: continue
+            if (e is BinaryExpression && e.operator == SyntaxKind.Equals) {
+                val left = e.left as? Identifier ?: continue
+                val right = e.right as? Identifier ?: continue
+                val li = requiredInner(left.text); val ri = requiredInner(right.text)
+                if (li != null && ri != null) {
+                    // (1) TS2741 — Required-var = Required-var.
+                    val lkeys = rmvMemberNames(li).map { it.first }
+                    val rkeys = rmvMemberNames(ri).map { it.first }.toSet()
+                    val missing = lkeys.firstOrNull { it !in rkeys } ?: continue
+                    val lDisp = formatTypeForDisplay(li) ?: continue
+                    val rDisp = formatTypeForDisplay(ri) ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, left.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$missing' is missing in type 'Required<$rDisp>' but required in type 'Required<$lDisp>'.",
+                        category = DiagnosticCategory.Error, code = 2741,
+                        fileName = fileName, line = l, character = c,
+                        start = left.pos, length = left.text.length,
+                        relatedInformation = listOfNotNull(rmvEmit2728(missing, li, source, fileName)),
+                    ))
+                    continue
+                }
+                val lf = fooVar(left.text); val rf = fooVar(right.text)
+                if (lf != null && rf != null && lf.second == rf.second) {
+                    // (2) TS2322 — Foo<{..}> = Foo<{..}> (variance via Required member).
+                    val lkeys = rmvMemberNames(lf.first).map { it.first }
+                    val rkeys = rmvMemberNames(rf.first).map { it.first }.toSet()
+                    val missing = lkeys.firstOrNull { it !in rkeys } ?: continue
+                    val lDisp = formatTypeForDisplay(lf.first) ?: continue
+                    val rDisp = formatTypeForDisplay(rf.first) ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, left.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${lf.second}<$rDisp>' is not assignable to type '${lf.second}<$lDisp>'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = l, character = c,
+                        start = left.pos, length = left.text.length,
+                        messageChain = listOf(
+                            "  Types of property '${lf.third}' are incompatible.",
+                            "    Property '$missing' is missing in type 'Required<$rDisp>' but required in type 'Required<$lDisp>'.",
+                        ),
+                        relatedInformation = listOfNotNull(rmvEmit2728(missing, lf.first, source, fileName)),
+                    ))
+                }
+            } else if (e is PropertyAccessExpression) {
+                // (3) TS2339 — chained `aa.a.b`: recv `aa.a` is a Foo-member Required<arg>; `.b` ∉ arg keys.
+                val recv = e.expression as? PropertyAccessExpression ?: continue
+                val rootName = (recv.expression as? Identifier)?.text ?: continue
+                val fv = fooVar(rootName) ?: continue
+                if (recv.name.text != fv.third) continue
+                val argKeys = rmvMemberNames(fv.first).map { it.first }.toSet()
+                val finalName = e.name.text
+                if (finalName.isEmpty() || finalName in argKeys || finalName in RUNTIME_PROPERTIES) continue
+                val disp = formatTypeForDisplay(fv.first) ?: continue
+                val (l, c) = getLineAndCharacterOfPosition(source, e.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$finalName' does not exist on type 'Required<$disp>'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = l, character = c,
+                    start = e.name.pos, length = finalName.length,
+                ))
+            }
         }
     }
 
