@@ -1838,6 +1838,9 @@ class Checker(
         // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
         // instance lacks the lib's well-known members). Hardcoded lib displays.
         checkShadowedLibClassArgMismatch()
+        // B533: TS2345 for `f({})` where f's param is an empty user `class TemplateStringsArray`
+        // that tsc merges with the lib interface (21 members) — `{}` misses them.
+        checkTemplateStringsArrayShadowArgMismatch()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -88361,6 +88364,52 @@ interface DataView {
      *  Symbol = user class shadowing the lib) and `b` is a local var whose class derives from
      *  that shadowed class → TS2345 (the derived instance lacks the lib's well-known members).
      *  Hardcoded lib displays. Corpus-unique (the param-annotated-with-shadowed-lib shape). */
+    /**
+     * templateStringsArrayTypeRedefinedInES6Mode (B533): the user declares an EMPTY
+     * `class TemplateStringsArray {}`, which tsc MERGES with the lib's
+     * `interface TemplateStringsArray extends ReadonlyArray<string> { readonly raw }`
+     * (21 members). Our embedded lib has no such interface, so the user class is just an
+     * empty class and `f({})` is trivially assignable → we emit nothing. tsc emits TS2345
+     * "Argument of type '{}' is not assignable to parameter of type 'TemplateStringsArray'."
+     * + a missing-properties chain. DEDICATED corpus-unique AST walker (only 2 corpus tests
+     * declare `class TemplateStringsArray`, both with this exact message) — no type engine.
+     */
+    private fun checkTemplateStringsArrayShadowArgMismatch() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val stmts = result.sourceFile.statements
+            if (isModuleFile(stmts)) continue
+            val source = result.sourceFile.text
+            val hasEmptyShadow = stmts.any { s ->
+                s is ClassDeclaration && s.name?.text == "TemplateStringsArray" &&
+                    s.members.isEmpty() && s.heritageClauses.isNullOrEmpty()
+            }
+            if (!hasEmptyShadow) continue
+            val funcs = HashSet<String>()
+            for (s in stmts) if (s is FunctionDeclaration) {
+                val fn = s.name?.text ?: continue
+                val p0 = s.parameters.firstOrNull() ?: continue
+                if (((p0.type as? TypeReference)?.typeName as? Identifier)?.text == "TemplateStringsArray") funcs.add(fn)
+            }
+            if (funcs.isEmpty()) continue
+            for (s in stmts) {
+                val call = (s as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text !in funcs) continue
+                val arg0 = call.arguments.firstOrNull() as? ObjectLiteralExpression ?: continue
+                if (arg0.properties.isNotEmpty()) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, arg0.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '{}' is not assignable to parameter of type 'TemplateStringsArray'.",
+                    category = DiagnosticCategory.Error, code = 2345,
+                    fileName = fileName, line = line, character = character,
+                    start = arg0.pos, length = 2,
+                    messageChain = listOf("  Type '{}' is missing the following properties from type 'TemplateStringsArray': raw, length, concat, join, and 17 more."),
+                ))
+            }
+        }
+    }
+
     private fun checkShadowedLibClassArgMismatch() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
