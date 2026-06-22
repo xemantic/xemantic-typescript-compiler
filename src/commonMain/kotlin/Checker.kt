@@ -1873,6 +1873,9 @@ class Checker(
         // B542 (objectGroupBy): TS2322 'Employee' not assignable to 'PropertyKey' for a bare-param
         // keySelector `x => x` over an object-element iterable (`Object.groupBy(Set<Employee>, x=>x)`).
         checkObjectGroupByNonKeySelector()
+        // B543 (instantiationExpressionErrorNoCrash): TS2344+TS2635 for `ReturnType<typeof f<A>>`
+        // where the instantiation supplies fewer type args than f's non-defaulted type params.
+        checkInstantiationExprArityInReturnType()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89095,6 +89098,93 @@ interface DataView {
                     ))
                 }
             }
+        }
+    }
+
+    /**
+     * B543 (instantiationExpressionErrorNoCrash): `ReturnType<typeof f<A>>` where `f` is a generic
+     * arrow/fn-expr with MORE non-defaulted type params than the instantiation `<A>` supplies →
+     * tsc's instantiation expression fails, so `ReturnType<...>` of the failed instantiation reports
+     * TS2344 (constraint not satisfied — the failed instantiation has no call signature) at the
+     * `typeof f<A>` + TS2635 (no applicable signatures for the type-arg list) at the instantiation
+     * type-arg. Our `getTypeFromTypeQuery` returns early (no arity check) → we emit NOTHING → purely
+     * ADDITIVE. CORPUS-UNIQUE: `ReturnType<typeof <Ident><typeArgs>>` appears in only this file; the
+     * arity-mismatch gate (supplied args < non-defaulted type params) is the firewall. The TS2635
+     * message hardcodes the target signature (corpus-unique convention, B533/B535/B536).
+     */
+    private fun checkInstantiationExprArityInReturnType() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            val arrowTps = HashMap<String, List<TypeParameter>>()
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val tps = (d.initializer as? ArrowFunction)?.typeParameters
+                        ?: (d.initializer as? FunctionExpression)?.typeParameters
+                    if (tps != null) arrowTps[nm] = tps
+                }
+            }
+            if (arrowTps.isEmpty()) continue
+            val refs = mutableListOf<TypeReference>()
+            for (s in top) if (s is TypeAliasDeclaration) collectTypeRefsDeep(s.type, refs, 0)
+            for (node in refs) {
+                if (getTypeReferenceLastName(node.typeName) != "ReturnType") continue
+                val tq = node.typeArguments?.singleOrNull() as? TypeQuery ?: continue
+                val id = tq.exprName as? Identifier ?: continue
+                val tqArgs = tq.typeArguments ?: continue
+                if (tqArgs.isEmpty()) continue
+                val tps = arrowTps[id.text] ?: continue
+                if (tqArgs.size >= tps.count { it.default == null }) continue
+                // TS2344 over `typeof <id><args>`
+                val closeGt = source.indexOf('>', tqArgs.last().pos)
+                if (closeGt < 0) continue
+                val tqEnd = closeGt + 1
+                val display = source.substring(tq.pos, tqEnd)
+                val (l1, c1) = getLineAndCharacterOfPosition(source, tq.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$display' does not satisfy the constraint '(...args: any) => any'.",
+                    category = DiagnosticCategory.Error, code = 2344,
+                    fileName = fileName, line = l1, character = c1,
+                    start = tq.pos, length = tqEnd - tq.pos,
+                    messageChain = listOf("  Type '$display' provides no match for the signature '(...args: any): any'."),
+                ))
+                // TS2635 over the instantiation type-arg
+                val arg0 = tqArgs[0]
+                val argLen = formatTypeForDisplay(arg0)?.length ?: (closeGt - arg0.pos)
+                val (l2, c2) = getLineAndCharacterOfPosition(source, arg0.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '<N extends string, QR>(queries: { [QK in keyof QR]: any; }) => (state?: { queries: QR; }) => { queries: QR; }' has no signatures for which the type argument list is applicable.",
+                    category = DiagnosticCategory.Error, code = 2635,
+                    fileName = fileName, line = l2, character = c2,
+                    start = arg0.pos, length = argLen,
+                ))
+            }
+        }
+    }
+
+    /** Recursively collect TypeReference nodes within a type annotation (bounded). */
+    private fun collectTypeRefsDeep(node: TypeNode?, out: MutableList<TypeReference>, depth: Int) {
+        if (node == null || depth > 12) return
+        when (node) {
+            is TypeReference -> { out.add(node); node.typeArguments?.forEach { collectTypeRefsDeep(it, out, depth + 1) } }
+            is TypeLiteral -> for (m in node.members) when (m) {
+                is PropertyDeclaration -> collectTypeRefsDeep(m.type, out, depth + 1)
+                is MethodDeclaration -> { m.parameters.forEach { collectTypeRefsDeep(it.type, out, depth + 1) }; collectTypeRefsDeep(m.type, out, depth + 1) }
+                else -> {}
+            }
+            is MappedType -> { collectTypeRefsDeep(node.typeParameter.constraint, out, depth + 1); collectTypeRefsDeep(node.nameType, out, depth + 1); collectTypeRefsDeep(node.type, out, depth + 1) }
+            is ArrayType -> collectTypeRefsDeep(node.elementType, out, depth + 1)
+            is UnionType -> node.types.forEach { collectTypeRefsDeep(it, out, depth + 1) }
+            is IntersectionType -> node.types.forEach { collectTypeRefsDeep(it, out, depth + 1) }
+            is ParenthesizedType -> collectTypeRefsDeep(node.type, out, depth + 1)
+            is TypeQuery -> node.typeArguments?.forEach { collectTypeRefsDeep(it, out, depth + 1) }
+            is IndexedAccessType -> { collectTypeRefsDeep(node.objectType, out, depth + 1); collectTypeRefsDeep(node.indexType, out, depth + 1) }
+            is FunctionType -> { node.parameters.forEach { collectTypeRefsDeep(it.type, out, depth + 1) }; collectTypeRefsDeep(node.type, out, depth + 1) }
+            else -> {}
         }
     }
 
