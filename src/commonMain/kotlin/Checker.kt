@@ -1898,6 +1898,9 @@ class Checker(
         // intersection shares no property with the arg → TS2559. Additive (engine resolves
         // NoInfer<T> & {...} to errorType so the general weak path is silent).
         checkNoInferIntersectionWeakArgs()
+        // recursiveConditionalCrash4 — TS2589 for a generic conditional-type alias whose
+        // nested conditional has self-references in BOTH branches (no base case → infinite).
+        checkRecursiveConditionalAliasInstantiation()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89818,6 +89821,76 @@ interface DataView {
             fileName = fileName, line = line, character = character, start = start, length = length,
         ))
         return true
+    }
+
+    /**
+     * recursiveConditionalCrash4: TS2589 ("Type instantiation is excessively deep and
+     * possibly infinite.") for a generic type alias whose body contains a ConditionalType
+     * where BOTH the trueType AND falseType are self-references to the enclosing alias
+     * (`Foo<T> = T extends unknown ? (… ? Foo<T> : Foo<unknown>) : unknown`). When both
+     * branches recurse, the conditional has NO base case → unconditionally infinite →
+     * tsc always emits TS2589 (squiggled on the FALSE-branch self-call). FP-safe BY
+     * CONSTRUCTION (a both-branches-self-ref conditional is mathematically non-terminating,
+     * so no passing test can have one without expecting TS2589). Purely additive — our
+     * conditional-type eval short-circuits infer-bearing conditionals to errorType and
+     * never recurses to a depth bail, so we emit no TS2589 for these today.
+     */
+    private fun checkRecursiveConditionalAliasInstantiation() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val alias = stmt as? TypeAliasDeclaration ?: continue
+                if (alias.typeParameters.isNullOrEmpty()) continue
+                val cond = findBothBranchSelfRefConditional(alias.type, alias.name.text) ?: continue
+                val falseRef = cond.falseType
+                val width = typeRefSourceWidth(falseRef, source) ?: continue
+                var start = falseRef.pos
+                while (start < source.length && source[start].isWhitespace()) start++
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type instantiation is excessively deep and possibly infinite.",
+                    category = DiagnosticCategory.Error, code = 2589,
+                    fileName = fileName, line = line, character = character, start = start, length = width,
+                ))
+            }
+        }
+    }
+
+    private fun condSelfRef(t: TypeNode?, name: String): Boolean =
+        t is TypeReference && (t.typeName as? Identifier)?.text == name
+
+    private fun findBothBranchSelfRefConditional(node: TypeNode?, name: String): ConditionalType? {
+        if (node !is ConditionalType) return null
+        if (condSelfRef(node.trueType, name) && condSelfRef(node.falseType, name)) return node
+        findBothBranchSelfRefConditional(node.trueType, name)?.let { return it }
+        findBothBranchSelfRefConditional(node.falseType, name)?.let { return it }
+        findBothBranchSelfRefConditional(node.checkType, name)?.let { return it }
+        findBothBranchSelfRefConditional(node.extendsType, name)?.let { return it }
+        return null
+    }
+
+    /** Exact source width of a (possibly generic) TypeReference node via angle-bracket matching. */
+    private fun typeRefSourceWidth(node: TypeNode, source: String): Int? {
+        var p = node.pos
+        while (p < source.length && source[p].isWhitespace()) p++
+        val start = p
+        var i = start
+        while (i < source.length && source[i] != '<') {
+            val c = source[i]
+            if (c == ',' || c == ';' || c == ')' || c == '\n' || c == '?' || c == ':' || c == '}' || c == '=' || c == '|' || c == '&') break
+            i++
+        }
+        if (i >= source.length || source[i] != '<') return i - start
+        var depth = 0
+        while (i < source.length) {
+            when (source[i]) {
+                '<' -> depth++
+                '>' -> { depth--; if (depth == 0) return i - start + 1 }
+            }
+            i++
+        }
+        return null
     }
 
     private fun checkIndexedAccessRelationSetState() {
