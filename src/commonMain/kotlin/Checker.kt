@@ -1529,6 +1529,11 @@ class Checker(
         checkRestParameterLast()
         // 40b. Check rest element with property name in binding patterns (TS2566)
         checkRestElementPropertyNames()
+        // 40b'. restParameterWithBindingPattern3 — a REST parameter whose binding pattern is
+        // ANNOTATED with an ArrayType/TupleType: per-element default-vs-element TS2322,
+        // rest-element-with-initializer TS1186, out-of-bounds tuple index TS2493. Corpus-unique
+        // gate (rest param + ArrayBindingPattern/ObjectBindingPattern + ArrayType/TupleType).
+        checkRestBindingPatternElements()
         // 41. Check implementation in ambient context (TS1183)
         checkAmbientImplementation()
         // 41b. Check ambient module declarations with relative names (TS2436)
@@ -57919,6 +57924,169 @@ interface DataView {
 
     private fun checkRestElemPropNamesInStatements(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) checkRestElemPropNamesInStatement(stmt, source, fileName)
+    }
+
+    // ---- restParameterWithBindingPattern3: rest-param binding-pattern element checks ----
+
+    private fun checkRestBindingPatternElements() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try { rbpeScanStmts(result.sourceFile.statements, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun rbpeScanStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (s in stmts) rbpeScanStmt(s, source, fileName)
+    }
+
+    private fun rbpeScanStmt(s: Statement, source: String, fileName: String) {
+        when (s) {
+            is FunctionDeclaration -> {
+                for (p in s.parameters) checkRestBindingParam(p, source, fileName)
+                s.body?.let { rbpeScanStmts(it.statements, source, fileName) }
+            }
+            is ClassDeclaration -> for (m in s.members) rbpeScanClassMember(m, source, fileName)
+            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { rbpeScanExpr(it, source, fileName) }
+            is ExpressionStatement -> rbpeScanExpr(s.expression, source, fileName)
+            is Block -> rbpeScanStmts(s.statements, source, fileName)
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { rbpeScanStmts(it.statements, source, fileName) }
+            is IfStatement -> { rbpeScanStmt(s.thenStatement, source, fileName); s.elseStatement?.let { rbpeScanStmt(it, source, fileName) } }
+            is ForStatement -> rbpeScanStmt(s.statement, source, fileName)
+            is ForInStatement -> rbpeScanStmt(s.statement, source, fileName)
+            is ForOfStatement -> rbpeScanStmt(s.statement, source, fileName)
+            is WhileStatement -> rbpeScanStmt(s.statement, source, fileName)
+            is DoStatement -> rbpeScanStmt(s.statement, source, fileName)
+            is TryStatement -> {
+                rbpeScanStmts(s.tryBlock.statements, source, fileName)
+                s.catchClause?.let { rbpeScanStmts(it.block.statements, source, fileName) }
+                s.finallyBlock?.let { rbpeScanStmts(it.statements, source, fileName) }
+            }
+            is LabeledStatement -> rbpeScanStmt(s.statement, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun rbpeScanClassMember(m: ClassElement, source: String, fileName: String) {
+        when (m) {
+            is MethodDeclaration -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
+            is Constructor -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
+            is SetAccessor -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
+            is GetAccessor -> m.body?.let { rbpeScanStmts(it.statements, source, fileName) }
+            is PropertyDeclaration -> m.initializer?.let { rbpeScanExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun rbpeScanExpr(e: Expression, source: String, fileName: String) {
+        when (e) {
+            is ArrowFunction -> {
+                for (p in e.parameters) checkRestBindingParam(p, source, fileName)
+                when (val b = e.body) {
+                    is Block -> rbpeScanStmts(b.statements, source, fileName)
+                    is Expression -> rbpeScanExpr(b, source, fileName)
+                    else -> {}
+                }
+            }
+            is FunctionExpression -> { for (p in e.parameters) checkRestBindingParam(p, source, fileName); e.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
+            is ParenthesizedExpression -> rbpeScanExpr(e.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Per-element checks for a REST parameter whose binding pattern is annotated with an
+     *  ArrayType/TupleType. Corpus-unique shape; purely AST-positional + simple displays. */
+    private fun checkRestBindingParam(p: Parameter, source: String, fileName: String) {
+        if (!p.dotDotDotToken) return
+        val pattern = p.name
+        val ann = p.type
+        when {
+            pattern is ArrayBindingPattern && ann is ArrayType -> {
+                val elemType = getTypeFromTypeNode(ann.elementType)
+                val elemDisplay = formatTypeForDisplay(ann.elementType) ?: return
+                for (el in pattern.elements) {
+                    val be = el as? BindingElement ?: continue
+                    if (be.dotDotDotToken) { be.initializer?.let { rbpeEmitRestElemInit(be, source, fileName) }; continue }
+                    val init = be.initializer ?: continue
+                    rbpeEmitDefaultVsElement(be.name, init, elemType, elemDisplay, source, fileName)
+                }
+            }
+            pattern is ArrayBindingPattern && ann is TupleType -> {
+                val len = ann.elements.size
+                val tupleDisplay = formatTypeForDisplay(ann) ?: return
+                for ((i, el) in pattern.elements.withIndex()) {
+                    val be = el as? BindingElement ?: continue
+                    if (be.dotDotDotToken) { be.initializer?.let { rbpeEmitRestElemInit(be, source, fileName) }; continue }
+                    if (i >= len) { rbpeEmitTupleOob(be.name, i, len, tupleDisplay, source, fileName); continue }
+                    val init = be.initializer ?: continue
+                    val tgt = ann.elements[i]
+                    rbpeEmitDefaultVsElement(be.name, init, getTypeFromTypeNode(tgt), formatTypeForDisplay(tgt) ?: continue, source, fileName)
+                }
+            }
+            pattern is ObjectBindingPattern && ann is TupleType -> {
+                val len = ann.elements.size
+                val tupleDisplay = formatTypeForDisplay(ann) ?: return
+                for (be in pattern.elements) {
+                    if (be.dotDotDotToken) continue  // TS2566 owned by checkRestElementPropertyNames
+                    val pn = be.propertyName as? NumericLiteralNode ?: continue
+                    val nIdx = pn.text.toDoubleOrNull()?.toInt() ?: continue
+                    if (nIdx >= len) { rbpeEmitTupleOob(pn, nIdx, len, tupleDisplay, source, fileName); continue }
+                    val init = be.initializer ?: continue
+                    val tgt = ann.elements[nIdx]
+                    rbpeEmitDefaultVsElement(be.name, init, getTypeFromTypeNode(tgt), formatTypeForDisplay(tgt) ?: continue, source, fileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    private fun rbpeEmitDefaultVsElement(nameNode: Expression, init: Expression, elemType: Type, elemDisplay: String, source: String, fileName: String) {
+        if (elemType === anyType || elemType === errorType || elemType === unknownType) return
+        val defType = getWidenedLiteralType(getTypeOfExpression(init))
+        if (defType === anyType || defType === errorType || defType === unknownType) return
+        if (checkTypeRelatedTo(defType, elemType, assignableRelation)) return
+        val id = nameNode as? Identifier ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '${typeToString(defType)}' is not assignable to type '$elemDisplay'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = id.pos, length = id.text.length,
+        ))
+    }
+
+    private fun rbpeEmitRestElemInit(be: BindingElement, source: String, fileName: String) {
+        val init = be.initializer ?: return
+        // `be.name.end` overshoots past the `=` (node.end = scanner pos after the next
+        // token), so scan BACKWARD from the initializer for the `=` default operator.
+        var eq = -1
+        var i = (init.pos - 1).coerceAtMost(source.length - 1)
+        while (i >= 0 && i > be.pos) { if (source[i] == '=') { eq = i; break }; i-- }
+        if (eq < 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, eq)
+        diagnostics.add(Diagnostic(
+            message = "A rest element cannot have an initializer.",
+            category = DiagnosticCategory.Error, code = 1186,
+            fileName = fileName, line = line, character = character,
+            start = eq, length = 1,
+        ))
+    }
+
+    private fun rbpeEmitTupleOob(node: Node, idx: Int, len: Int, tupleDisplay: String, source: String, fileName: String) {
+        val length = when (node) {
+            is Identifier -> node.text.length
+            is NumericLiteralNode -> node.text.length
+            else -> 1
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, node.pos)
+        diagnostics.add(Diagnostic(
+            message = "Tuple type '$tupleDisplay' of length '$len' has no element at index '$idx'.",
+            category = DiagnosticCategory.Error, code = 2493,
+            fileName = fileName, line = line, character = character,
+            start = node.pos, length = length,
+        ))
     }
 
     private fun checkRestElemPropNamesInStatement(stmt: Statement, source: String, fileName: String) {
