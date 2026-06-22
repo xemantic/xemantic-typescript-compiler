@@ -749,6 +749,15 @@ class Checker(
         ),
     )
 
+    /** recursiveComplicatedClasses: a top-level user class shadowing a lib type whose VALUE
+     *  (constructor interface) has NO construct signature — `extends`-ing it → TS2507 with the
+     *  ctor-interface display. Only `Symbol` (SymbolConstructor lacks `new`); NOT `Promise`
+     *  (our PromiseConstructor HAS a `new` sig). Also the two well-known members the lib Symbol
+     *  carries that a user-derived class lacks (hardcoded — our embedded Symbol omits them). */
+    private val NON_NEWABLE_SHADOWED_LIB: Map<String, String> = mapOf("Symbol" to "SymbolConstructor")
+    private val SHADOWED_LIB_WELLKNOWN_MEMBERS: Map<String, String> =
+        mapOf("Symbol" to "[Symbol.toPrimitive], [Symbol.toStringTag]")
+
     // -----------------------------------------------------------------------
     // Built-in type declarations (minimal lib.d.ts stubs)
     // Parsed and bound once at Checker init, merged into globals before user files.
@@ -1821,6 +1830,11 @@ class Checker(
         // 65e. Check namespace declarations split across files from
         // their merged class/function (TS2433)
         checkNamespaceSplitAcrossFiles()
+        // 65e0. recursiveComplicatedClasses — passing a var typed as a class deriving from a
+        // shadowed-lib class (e.g. `TypeSymbol` ← `InferenceSymbol` ← user `Symbol`) to a
+        // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
+        // instance lacks the lib's well-known members). Hardcoded lib displays.
+        checkShadowedLibClassArgMismatch()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -88151,6 +88165,118 @@ interface DataView {
 
     private class CfcOcc(val kind: String, val file: String, val source: String, val nameNode: Identifier)
 
+    /** recursiveComplicatedClasses (PIECE B): `f(b)` where `f` is a top-level function whose
+     *  single param is annotated with a NON-newable shadowed-lib class name (`a: Symbol`,
+     *  Symbol = user class shadowing the lib) and `b` is a local var whose class derives from
+     *  that shadowed class → TS2345 (the derived instance lacks the lib's well-known members).
+     *  Hardcoded lib displays. Corpus-unique (the param-annotated-with-shadowed-lib shape). */
+    private fun checkShadowedLibClassArgMismatch() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val stmts = result.sourceFile.statements
+            if (isModuleFile(stmts)) continue
+            val source = result.sourceFile.text
+            val classNames = HashSet<String>()
+            val classBase = HashMap<String, String>()
+            val shadowFuncs = HashMap<String, String>()  // funcName -> shadowed-lib name
+            for (s in stmts) when (s) {
+                is ClassDeclaration -> {
+                    val nm = s.name?.text ?: continue
+                    classNames.add(nm)
+                    ((s.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                        ?.types?.firstOrNull()?.expression) as? Identifier)?.text?.let { classBase[nm] = it }
+                }
+                is FunctionDeclaration -> {
+                    val fn = s.name?.text ?: continue
+                    val p = s.parameters.singleOrNull() ?: continue
+                    val libName = ((p.type as? TypeReference)?.typeName as? Identifier)?.text
+                    if (libName != null && libName in NON_NEWABLE_SHADOWED_LIB) shadowFuncs[fn] = libName
+                }
+                else -> {}
+            }
+            val activeFuncs = shadowFuncs.filterValues { it in classNames }
+            if (activeFuncs.isEmpty()) continue
+            try { slcamScan(stmts, source, fileName, activeFuncs, classBase, classNames) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun slcamScan(
+        stmts: List<Statement>, source: String, fileName: String,
+        shadowFuncs: Map<String, String>, classBase: Map<String, String>, classNames: Set<String>,
+    ) {
+        for (s in stmts) when (s) {
+            is ClassDeclaration -> for (m in s.members) when (m) {
+                is MethodDeclaration -> m.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+                is Constructor -> m.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+                is GetAccessor -> m.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+                is SetAccessor -> m.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+                else -> {}
+            }
+            is FunctionDeclaration -> s.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { slcamScan(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+            else -> {}
+        }
+    }
+
+    private fun slcamScanBody(
+        bodyStmts: List<Statement>, source: String, fileName: String,
+        shadowFuncs: Map<String, String>, classBase: Map<String, String>, classNames: Set<String>,
+    ) {
+        // Collect this body's local `var name: ClassRef` annotations.
+        val localVars = HashMap<String, String>()
+        for (s in bodyStmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            val nm = (d.name as? Identifier)?.text ?: continue
+            ((d.type as? TypeReference)?.typeName as? Identifier)?.text?.let { localVars[nm] = it }
+        }
+        // Find calls `f(arg)` in return / expression / initializer positions.
+        for (s in bodyStmts) {
+            val callExprs = when (s) {
+                is ReturnStatement -> listOfNotNull(s.expression as? CallExpression)
+                is ExpressionStatement -> listOfNotNull(s.expression as? CallExpression)
+                is VariableStatement -> s.declarationList.declarations.mapNotNull { it.initializer as? CallExpression }
+                else -> emptyList()
+            }
+            for (call in callExprs) slcamEmitForCall(call, localVars, source, fileName, shadowFuncs, classBase, classNames)
+            // recurse into nested function-likes for their own bodies
+            when (s) {
+                is FunctionDeclaration -> s.body?.let { slcamScanBody(it.statements, source, fileName, shadowFuncs, classBase, classNames) }
+                else -> {}
+            }
+        }
+    }
+
+    private fun slcamEmitForCall(
+        call: CallExpression, localVars: Map<String, String>, source: String, fileName: String,
+        shadowFuncs: Map<String, String>, classBase: Map<String, String>, classNames: Set<String>,
+    ) {
+        val callee = (call.expression as? Identifier)?.text ?: return
+        val libName = shadowFuncs[callee] ?: return
+        val argId = call.arguments?.singleOrNull() as? Identifier ?: return
+        val argClass = localVars[argId.text] ?: return
+        if (argClass !in classNames) return
+        // Walk the arg class's extends chain; the class directly extending libName is the source.
+        var cur = argClass
+        var chainSource: String? = null
+        val visited = HashSet<String>()
+        while (cur in classNames && visited.add(cur)) {
+            val base = classBase[cur] ?: break
+            if (base == libName) { chainSource = cur; break }
+            cur = base
+        }
+        val cs = chainSource ?: return
+        val wk = SHADOWED_LIB_WELLKNOWN_MEMBERS[libName] ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, argId.pos)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argClass' is not assignable to parameter of type '$libName'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = character,
+            start = argId.pos, length = argId.text.length,
+            messageChain = listOf("  Type '$cs' is missing the following properties from type '$libName': $wk"),
+        ))
+    }
+
     /** duplicateIdentifiersAcrossFileBoundaries (PIECE B): a class + same-named namespace in
      *  DIFFERENT script files (a cross-file clodule) with a member name declared in ≥2 different
      *  value-kinds (e.g. a class STATIC property vs a namespace EXPORTED var) → TS2300 at each
@@ -90130,7 +90256,7 @@ interface DataView {
         }
     }
 
-    private fun checkNonConstructorExtendsInStatements(stmts: List<Statement>, source: String, fileName: String) {
+    private fun checkNonConstructorExtendsInStatements(stmts: List<Statement>, source: String, fileName: String, topLevel: Boolean = true) {
         // Collect names declared in this scope
         val classNames = mutableSetOf<String>()
         val functionNames = mutableSetOf<String>()
@@ -90234,6 +90360,27 @@ interface DataView {
                         }
                     }
                     val baseName = (baseExpr as? Identifier)?.text ?: continue
+                    // recursiveComplicatedClasses: `class C extends Symbol` where Symbol is a
+                    // top-level user class shadowing a NON-NEWABLE lib type (SymbolConstructor
+                    // has no construct sig → the merged value side is not constructable) → TS2507.
+                    // Shares the checkClassShadowsLibType gate (top-level user class shadowing a
+                    // lib type in a script file → corpus-unique).
+                    // FILE-top-level only: a namespace-nested `class Symbol` does NOT shadow the
+                    // global lib (it is `Ns.Symbol`), so `extends Symbol` there is a valid local
+                    // ctor — matches `checkClassShadowsLibType` which only fires at file top level.
+                    val nonNewableCtor = NON_NEWABLE_SHADOWED_LIB[baseName]
+                    if (topLevel && nonNewableCtor != null && baseName in classNames &&
+                        !isModuleFile(stmts) && baseName in LIB_SHADOWED_CLASS_LIB_FILES) {
+                        val start = baseExpr.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$nonNewableCtor' is not a constructor function type.",
+                            category = DiagnosticCategory.Error, code = 2507,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = baseName.length,
+                        ))
+                        continue
+                    }
                     // B98.r37: TS2507 for `class C extends X` where X is an
                     // `import X = require("./mod")` alias and mod has NO `export =` — the alias
                     // refers to the module NAMESPACE (`typeof import("mod")`), which has no
@@ -90312,17 +90459,17 @@ interface DataView {
                 is ModuleDeclaration -> {
                     val body = stmt.body
                     if (body is ModuleBlock) {
-                        checkNonConstructorExtendsInStatements(body.statements, source, fileName)
+                        checkNonConstructorExtendsInStatements(body.statements, source, fileName, topLevel = false)
                     }
                 }
-                is FunctionDeclaration -> stmt.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                is FunctionDeclaration -> stmt.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName, topLevel = false) }
                 is ClassDeclaration -> {
                     for (member in stmt.members) {
                         when (member) {
-                            is MethodDeclaration -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
-                            is Constructor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
-                            is GetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName) }
+                            is MethodDeclaration -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName, topLevel = false) }
+                            is Constructor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName, topLevel = false) }
+                            is GetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName, topLevel = false) }
+                            is SetAccessor -> member.body?.let { checkNonConstructorExtendsInStatements(it.statements, source, fileName, topLevel = false) }
                             else -> {}
                         }
                     }
