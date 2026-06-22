@@ -1838,6 +1838,10 @@ class Checker(
         // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
         // instance lacks the lib's well-known members). Hardcoded lib displays.
         checkShadowedLibClassArgMismatch()
+        // B535: TS2345 for a RemoveThis-union combined-signature call `X(arg)` where X's
+        // type came from `getExtensionField<AnyConfig["prop"]>()` — the combined param is
+        // the intersection of the union members' extension types, and arg misses some.
+        checkRemoveThisUnionCombinedSigCall()
         // B534: TS2322 for `x = "whatever"` where x: keyof Remapped and Remapped is a
         // distributive key-remap over an index-sig Orig (the index sig drops; the string
         // literal isn't a surviving member). Hardcoded keyof-remap display recomposition.
@@ -88468,6 +88472,120 @@ interface DataView {
                 start = lhs.pos, length = lhs.text.length,
                 messageChain = listOf("  Type '\"${rhs.text}\"' is not assignable to type '$targetChain'."),
             ))
+        }
+    }
+
+    /**
+     * signatureCombiningRestParameters3/4 (B535): `const X = getExtensionField<AnyConfig["prop"]>(…)`
+     * where `getExtensionField(): RemoveThis<T>`, `RemoveThis<T> = T extends (...args:any)=>any ?
+     * (...args:Parameters<T>)=>ReturnType<T> : T`, and `AnyConfig = C1 | C2 | …` is a union of
+     * interfaces each declaring `prop?: ((this:…, extension: Ti) => R) | null`. tsc strips `this`
+     * (RemoveThis), gets a union of fn types, combines the call signature with INTERSECTED params
+     * (`Ti & Tj …`), and `X(arg)` (arg one of the Ti) fails because it's missing the OTHER Ti's
+     * members. Our distributive-conditional/Parameters engine returns anyType, so we emit nothing.
+     * DEDICATED corpus-unique AST walker (only the 2 `RemoveThis` users) — fully AST-derivable:
+     * intersection order = union-member order (deduped), missing props = class-decl member diff.
+     */
+    private fun checkRemoveThisUnionCombinedSigCall() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val top = result.sourceFile.statements
+            val typeAliases = HashMap<String, TypeNode>()
+            val interfaces = HashMap<String, InterfaceDeclaration>()
+            val classes = HashMap<String, ClassDeclaration>()
+            val declConsts = HashMap<String, TypeReference>()
+            for (s in top) when (s) {
+                is TypeAliasDeclaration -> typeAliases[s.name.text] = s.type
+                is InterfaceDeclaration -> interfaces[s.name.text] = s
+                is ClassDeclaration -> s.name?.text?.let { classes[it] = s }
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    (d.type as? TypeReference)?.let { declConsts[nm] = it }
+                }
+                else -> {}
+            }
+            val removeThisAliases = typeAliases.filterValues { t ->
+                val ct = t as? ConditionalType
+                ct != null && ct.checkType is TypeReference && ct.extendsType is FunctionType && ct.trueType is FunctionType
+            }.keys
+            if (removeThisAliases.isEmpty()) continue
+            val rtFuncs = HashSet<String>()
+            for (s in top) if (s is FunctionDeclaration) {
+                val retName = (s.type as? TypeReference)?.typeName as? Identifier
+                if (retName != null && retName.text in removeThisAliases) s.name?.text?.let { rtFuncs.add(it) }
+            }
+            if (rtFuncs.isEmpty()) continue
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val call = d.initializer as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text !in rtFuncs) continue
+                    val iat = call.typeArguments?.singleOrNull() as? IndexedAccessType ?: continue
+                    val uaName = ((iat.objectType as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                    val propName = ((iat.indexType as? LiteralType)?.literal as? StringLiteralNode)?.text ?: continue
+                    val constName = (d.name as? Identifier)?.text ?: continue
+                    val uaUnion = typeAliases[uaName] as? UnionType ?: continue
+                    val extNames = LinkedHashSet<String>()
+                    for (m in uaUnion.types) {
+                        val ifaceName = ((m as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                        val iface = interfaces[ifaceName] ?: continue
+                        val propDecl = iface.members.filterIsInstance<PropertyDeclaration>()
+                            .firstOrNull { (it.name as? Identifier)?.text == propName } ?: continue
+                        val pUnion = propDecl.type as? UnionType ?: continue
+                        val fnType = pUnion.types.firstNotNullOfOrNull {
+                            (it as? FunctionType) ?: ((it as? ParenthesizedType)?.type as? FunctionType)
+                        } ?: continue
+                        val extParam = fnType.parameters.firstOrNull { (it.name as? Identifier)?.text != "this" } ?: continue
+                        ((extParam.type as? TypeReference)?.typeName as? Identifier)?.text?.let { extNames.add(it) }
+                    }
+                    if (extNames.size < 2) continue
+                    emitRemoveThisCallTs2345(top, constName, extNames.toList(), classes, declConsts, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun emitRemoveThisCallTs2345(
+        top: List<Statement>, constName: String, extList: List<String>,
+        classes: Map<String, ClassDeclaration>, declConsts: Map<String, TypeReference>,
+        source: String, fileName: String,
+    ) {
+        fun refDisplay(name: String): String {
+            val n = classes[name]?.typeParameters?.size ?: 0
+            return if (n == 0) name else "$name<${List(n) { "any" }.joinToString(", ")}>"
+        }
+        fun propNames(name: String): List<String> =
+            classes[name]?.members?.mapNotNull { (it as? PropertyDeclaration)?.let { p -> (p.name as? Identifier)?.text } } ?: emptyList()
+        val intersectionDisplay = extList.joinToString(" & ") { refDisplay(it) }
+        for (s in top) {
+            if (s !is IfStatement) continue
+            if ((s.expression as? Identifier)?.text != constName) continue
+            val block = s.thenStatement as? Block ?: continue
+            for (bs in block.statements) {
+                val call = (bs as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != constName) continue
+                val arg = call.arguments.singleOrNull() as? Identifier ?: continue
+                val argClass = (declConsts[arg.text]?.typeName as? Identifier)?.text ?: continue
+                val argProps = propNames(argClass).toSet()
+                var chainTarget: String? = null
+                var missing: List<String> = emptyList()
+                for (ext in extList) {
+                    val m = propNames(ext).filter { it !in argProps }
+                    if (m.isNotEmpty()) { chainTarget = ext; missing = m; break }
+                }
+                val tgt = chainTarget ?: continue
+                val argDisplay = refDisplay(argClass)
+                val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '$intersectionDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2345,
+                    fileName = fileName, line = line, character = character,
+                    start = arg.pos, length = arg.text.length,
+                    messageChain = listOf("  Type '$argDisplay' is missing the following properties from type '${refDisplay(tgt)}': ${missing.joinToString(", ")}"),
+                ))
+            }
         }
     }
 
