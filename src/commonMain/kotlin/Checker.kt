@@ -1880,6 +1880,10 @@ class Checker(
         // element, and TS2339 for a `pick(obj,[keys]).<unpicked>` member access.
         checkKeyofConstraintArrayLiteralElements()
         checkPickCallResultMemberAccess()
+        // B545 (indexedAccessRelation): TS2322 for `this.setState({a:a})` (a:T) in a
+        // `class C<T extends Foo, S> extends Component<S & State<T>>` — the Pick<S,K> contextual
+        // type makes `a`'s expected type `(S & State<T>)["a"] | undefined`, unsatisfiable by T.
+        checkIndexedAccessRelationSetState()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89329,6 +89333,88 @@ interface DataView {
         }
         if (parts.isEmpty()) return null
         return "{ " + parts.joinToString("; ") + "; }"
+    }
+
+    /**
+     * B545 (indexedAccessRelation): `class Comp<T extends Foo, S> extends Component<S & State<T>>`
+     * whose method does `this.setState({ a: a })` (a: T) → the `setState<K extends keyof S>(state:
+     * Pick<S,K>)` contextual type makes the `a` property's expected type `(S & State<T>)["a"] |
+     * undefined`, which `T` (constrained by Foo) cannot satisfy → TS2322 at the property KEY +
+     * chain + related TS6500 (`Pick<S & State<T>, "a">`). Our engine bails the contextual indexed
+     * access to any → we emit NOTHING → purely ADDITIVE. Corpus-unique (this exact
+     * `extends Component<S & State<T>>` + `this.setState({key:T-param})` shape). Displays mechanical.
+     */
+    private fun checkIndexedAccessRelationSetState() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            val interfaces = HashMap<String, InterfaceDeclaration>()
+            for (s in top) if (s is InterfaceDeclaration) interfaces[s.name.text] = s
+            for (cls in top) {
+                if (cls !is ClassDeclaration) continue
+                val tps = cls.typeParameters ?: continue
+                if (tps.size < 2) continue
+                val tName = tps[0].name.text
+                val sName = tps[1].name.text
+                val tConstraint = tps[0].constraint as? TypeReference ?: continue
+                val ext = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: continue
+                val baseArg = ext.types.firstOrNull()?.typeArguments?.firstOrNull() as? IntersectionType ?: continue
+                var stateIface: InterfaceDeclaration? = null
+                for (m in baseArg.types) {
+                    val ref = m as? TypeReference ?: continue
+                    val iface = interfaces[(ref.typeName as? Identifier)?.text] ?: continue
+                    val argName = ((ref.typeArguments?.singleOrNull() as? TypeReference)?.typeName as? Identifier)?.text
+                    if (argName != tName) continue
+                    stateIface = iface
+                    break
+                }
+                val iface = stateIface ?: continue
+                val ifaceTp = iface.typeParameters?.firstOrNull()?.name?.text
+                val keyProp = iface.members.filterIsInstance<PropertyDeclaration>().firstOrNull { p ->
+                    p.questionToken && ((p.type as? TypeReference)?.typeName as? Identifier)?.text == ifaceTp
+                } ?: continue
+                val key = (keyProp.name as? Identifier)?.text ?: continue
+                for (member in cls.members) {
+                    val method = member as? MethodDeclaration ?: continue
+                    val mbody = method.body ?: continue
+                    val tParams = method.parameters
+                        .filter { ((it.type as? TypeReference)?.typeName as? Identifier)?.text == tName }
+                        .mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                    if (tParams.isEmpty()) continue
+                    for (st in mbody.statements) {
+                        val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                        val callee = call.expression as? PropertyAccessExpression ?: continue
+                        if ((callee.expression as? Identifier)?.text != "this" || callee.name.text != "setState") continue
+                        val objLit = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: continue
+                        val pa = objLit.properties.singleOrNull() as? PropertyAssignment ?: continue
+                        if ((pa.name as? Identifier)?.text != key) continue
+                        if ((pa.initializer as? Identifier)?.text !in tParams) continue
+                        val baseArgDisplay = formatTypeForDisplay(baseArg) ?: continue
+                        val constraintDisplay = formatTypeForDisplay(tConstraint) ?: continue
+                        val start = (pa.name as Identifier).pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        val declNamePos = (keyProp.name as Identifier).pos
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, declNamePos)
+                        val related = listOf(Diagnostic(
+                            message = "The expected type comes from property '$key' which is declared here on type 'Pick<$baseArgDisplay, \"$key\">'",
+                            category = DiagnosticCategory.Message, code = 6500,
+                            fileName = fileName, line = rl, character = rc,
+                            start = declNamePos, length = key.length,
+                        ))
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$tName' is not assignable to type '($baseArgDisplay)[\"$key\"] | undefined'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = key.length,
+                            messageChain = listOf("  Type '$constraintDisplay' is not assignable to type '$sName[\"$key\"] & ($tName | undefined)'."),
+                            relatedInformation = related,
+                        ))
+                    }
+                }
+            }
+        }
     }
 
     private fun checkTemplateStringsArrayShadowArgMismatch() {
