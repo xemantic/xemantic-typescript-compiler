@@ -4645,6 +4645,10 @@ class Checker(
                             // `export import x = A.y;` inside `declare global` registers `x` as a
                             // global alias (importAliasInModuleAugmentation) — suppress TS2304 on `x`.
                             is ImportEqualsDeclaration -> globalAugmentationNames.add(inner.name.text)
+                            // B555: `declare global { namespace X { ... } }` introduces global `X`
+                            // (a value namespace) — register it so a bare `X.member` reference does
+                            // not fall through to the UMD-global TS2686 reporter (exportAsNamespace_augment).
+                            is ModuleDeclaration -> (inner.name as? Identifier)?.text?.let { globalAugmentationNames.add(it) }
                             else -> {}
                         }
                     }
@@ -131502,6 +131506,44 @@ interface DataView {
             }
         }
 
+        // B555: a `declare global { namespace X { export const Y } }` member ALSO merges into the
+        // module projected by `export as namespace X` (a UMD-global module), so project those onto
+        // the module's (targetFile, name) conflict groups (exportAsNamespace_augment).
+        val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
+        val umdToModuleFile = mutableMapOf<String, String>()
+        for (result in binderResults) {
+            for (m in umdRegex.findAll(result.sourceFile.text)) {
+                m.groups[1]?.value?.let { umdToModuleFile.putIfAbsent(it, result.sourceFile.fileName) }
+            }
+        }
+        if (umdToModuleFile.isNotEmpty()) {
+            for (result in binderResults) {
+                val fileName = result.sourceFile.fileName
+                val source = result.sourceFile.text
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt !is ModuleDeclaration) continue
+                    if ((stmt.name as? Identifier)?.text != "global") continue
+                    if (ModifierFlag.Declare !in stmt.modifiers) continue
+                    val gbody = stmt.body as? ModuleBlock ?: continue
+                    for (ns in gbody.statements) {
+                        if (ns !is ModuleDeclaration) continue
+                        val nsName = (ns.name as? Identifier)?.text ?: continue
+                        val moduleFile = umdToModuleFile[nsName] ?: continue
+                        val nsBody = ns.body as? ModuleBlock ?: continue
+                        for (inner in nsBody.statements) {
+                            if (inner is VariableStatement && isBlockScopedExport(inner)) {
+                                for (d in inner.declarationList.declarations) {
+                                    val nm = d.name as? Identifier ?: continue
+                                    augByTarget.getOrPut(moduleFile to nm.text) { mutableListOf() }
+                                        .add(Decl(nm.text, nm, fileName, source))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         fun emit2451(decl: Decl, related: List<Decl>) {
             val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
             val rel = related.mapIndexed { idx, other ->
@@ -131532,10 +131574,10 @@ interface DataView {
             val others: List<Decl>
             if (own != null) {
                 hub = own
-                others = augs
+                others = augs.sortedWith(compareBy({ it.fileName }, { it.nameNode.pos }))
             } else {
                 hub = augs.first()
-                others = augs.drop(1)
+                others = augs.drop(1).sortedWith(compareBy({ it.fileName }, { it.nameNode.pos }))
             }
             emit2451(hub, others)
             for (o in others) emit2451(o, listOf(hub))
