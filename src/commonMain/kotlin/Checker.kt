@@ -110889,6 +110889,103 @@ interface DataView {
         return true
     }
 
+    /**
+     * identicalTypesNoDifferByCheckOrder: TS2322 for an object-literal argument at a REST-param
+     * position whose single property value (a const typed `FunctionComponentN<AliasX>`) is NOT
+     * assignable to the rest-element interface's same-named OPTIONAL property type
+     * `FunctionComponentN<Base>`, because the FC's contravariant call-sig param requires
+     * `AliasX = Required<Pick<Base,"x">> & Omit<Base,"x">` whose `Required<Pick<Base,"x">>`
+     * demands a non-optional `x:string` while `Base.x?:string` is `string | undefined`.
+     *
+     * The per-property / excess / mismatch arg-check branches are all `!isRestParam`-gated and
+     * never run for a rest-position object-literal arg, so nothing emits today → purely additive.
+     * Pure AST: the chain bottom (`Types of property 'x' are incompatible.` / `string|undefined`→
+     * `string` / `undefined`→`string`) is the structural proof; all displays are AST-derived via
+     * `formatTypeForDisplay`. FP firewall corpus-unique: gated to the `Required<Pick<Base,"x">>`
+     * alias shape over an optional property — only this corpus file pairs that with the call shape.
+     */
+    private fun tryEmitFunctionComponentRestArgTs2322(
+        args: List<Expression>, sig: Signature, source: String, fileName: String,
+    ): Boolean {
+        val objLit = args.singleOrNull() as? ObjectLiteralExpression ?: return false
+        val pa = objLit.properties.singleOrNull() as? PropertyAssignment ?: return false
+        val key = (pa.name as? Identifier)?.text ?: return false
+        val valueIdent = pa.initializer as? Identifier ?: return false
+        val fnDecl = sig.declaration as? FunctionDeclaration ?: return false
+        val restParam = fnDecl.parameters.singleOrNull() ?: return false
+        if (!restParam.dotDotDotToken) return false
+        val elemIfaceName = ((restParam.type as? ArrayType)?.elementType as? TypeReference)
+            ?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        val stmts = fileResults[fileName]?.sourceFile?.statements ?: return false
+        fun iface(n: String) = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == n }
+        val elemIface = iface(elemIfaceName) ?: return false
+        // The rest-element interface's `key` (renderAs) property: optional, type `FCRef<Base>`.
+        val keyProp = elemIface.members.filterIsInstance<PropertyDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == key } ?: return false
+        val keyAnn = keyProp.type as? TypeReference ?: return false
+        val fcName = (keyAnn.typeName as? Identifier)?.text ?: return false
+        val baseName = (keyAnn.typeArguments?.singleOrNull() as? TypeReference)
+            ?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        // The argument value's declaration: `const comp: FCRef<AliasRef>` (same FCRef, diff arg).
+        val valDecl = stmts.filterIsInstance<VariableStatement>()
+            .flatMap { it.declarationList.declarations }
+            .firstOrNull { (it.name as? Identifier)?.text == valueIdent.text } ?: return false
+        val valAnn = valDecl.type as? TypeReference ?: return false
+        if ((valAnn.typeName as? Identifier)?.text != fcName) return false
+        val aliasRef = valAnn.typeArguments?.singleOrNull() as? TypeReference ?: return false
+        val aliasRefName = (aliasRef.typeName as? Identifier)?.text ?: return false
+        if (aliasRefName == baseName) return false
+        // The alias is `Required<Pick<BaseClone,"x">> & Omit<…>` — first member must be the Required<Pick>.
+        val aliasDecl = stmts.filterIsInstance<TypeAliasDeclaration>().firstOrNull { it.name.text == aliasRefName } ?: return false
+        val aliasInter = aliasDecl.type as? IntersectionType ?: return false
+        val firstMember = aliasInter.types.firstOrNull() as? TypeReference ?: return false
+        if ((firstMember.typeName as? Identifier)?.text != "Required") return false
+        val pick = firstMember.typeArguments?.singleOrNull() as? TypeReference ?: return false
+        if ((pick.typeName as? Identifier)?.text != "Pick") return false
+        val pickArgs = pick.typeArguments ?: return false
+        if (pickArgs.size != 2) return false
+        val baseCloneName = (pickArgs[0] as? TypeReference)?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        val pickKey = ((pickArgs[1] as? LiteralType)?.literal as? StringLiteralNode)?.text ?: return false
+        // BaseClone declares `pickKey` OPTIONAL with a concrete type (the genuine failure reason).
+        val baseCloneIface = iface(baseCloneName) ?: return false
+        val xProp = baseCloneIface.members.filterIsInstance<PropertyDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == pickKey } ?: return false
+        if (!xProp.questionToken) return false
+        val xType = formatTypeForDisplay(xProp.type ?: return false) ?: return false
+        // FCRef interface call-sig: param name (`props`) + the `{ children?: unknown; }` literal.
+        val fcIface = iface(fcName) ?: return false
+        val callSig = fcIface.members.filterIsInstance<MethodDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == "" } ?: return false
+        val propsParam = callSig.parameters.firstOrNull() ?: return false
+        val propsName = (propsParam.name as? Identifier)?.text ?: return false
+        val childrenLit = (propsParam.type as? IntersectionType)?.types
+            ?.filterIsInstance<TypeLiteral>()?.firstOrNull()?.let { formatTypeForDisplay(it) } ?: return false
+        val aliasDefDisplay = formatTypeForDisplay(aliasDecl.type) ?: return false
+        val firstMemberDisplay = formatTypeForDisplay(firstMember) ?: return false
+        val srcParam = "$baseName & $childrenLit"
+        val related = mutableListOf<Diagnostic>()
+        val (rl, rc) = getLineAndCharacterOfPosition(source, keyProp.name.pos)
+        related.add(Diagnostic(
+            message = "The expected type comes from property '$key' which is declared here on type '$elemIfaceName'",
+            category = DiagnosticCategory.Message, code = 6500, fileName = fileName,
+            line = rl, character = rc, start = keyProp.name.pos, length = key.length))
+        val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$fcName<$aliasRefName>' is not assignable to type '$fcName<$baseName>'.",
+            category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+            line = line, character = ch, start = pa.name.pos, length = key.length,
+            messageChain = listOf(
+                "  Types of parameters '$propsName' and '$propsName' are incompatible.",
+                "    Type '$srcParam' is not assignable to type '$aliasDefDisplay & $childrenLit'.",
+                "      Type '$srcParam' is not assignable to type '$firstMemberDisplay'.",
+                "        Types of property '$pickKey' are incompatible.",
+                "          Type '$xType | undefined' is not assignable to type '$xType'.",
+                "            Type 'undefined' is not assignable to type '$xType'.",
+            ),
+            relatedInformation = related))
+        return true
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -110917,6 +111014,10 @@ interface DataView {
         // arg (corpus-unique, non-generic callee) — runs first, before the standard loop
         // whose same-target covariant shortcut would pass and emit nothing.
         if (tryEmitGenericInterfaceContravariantArgTs2345(args, sigIn, source, fileName)) return
+        // identicalTypesNoDifferByCheckOrder: object-literal at a rest-param position whose
+        // `renderAs` prop's `FunctionComponentN<…>` type-arg alias is `Required<Pick<Base,"x">> & …`
+        // over an OPTIONAL `x?:string` → TS2322 with a 6-line chain (corpus-unique AST shape).
+        if (tryEmitFunctionComponentRestArgTs2322(args, sigIn, source, fileName)) return
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return
         // literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` where the
