@@ -1119,6 +1119,9 @@ class Checker(
         // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
         // declared via `exports.a = …`). Display `typeof import("<base>")`.
         checkJsModuleExportsDeepReads()
+        // B532: TS2741 for a checkJs `self['X'] = self['X'] || {}` re-bind where X is a
+        // top-level empty-object var with expando members (the `{}` RHS misses them).
+        checkJsSelfElementAccessExpandoMissing()
         // B438d: TS2303 + TS2339 for a checkJs CJS callable-exports module that aliases one
         // export member to an undeclared other (`module.exports=fn; exports.X=exports.Y`).
         checkJsCjsExpandoAliasReads()
@@ -17883,6 +17886,79 @@ class Checker(
      * or `exports = …` reassignment), when `exports` is shadowed by a local binding,
      * or when the file is an ES module (top-level import/export) rather than CJS.
      */
+    /**
+     * jsElementAccessNoContextualTypeCrash (B532): a checkJs `.js` file with a top-level
+     * `var X = {}` (empty object) that gains EXPANDO members via `X.member = …`, then a
+     * `self['X'] = self['X'] || {}` re-binding. The `self['X']` slot is contextually typed
+     * `typeof X` (which has the expando member), but the RHS `… || {}` is `{}` (missing the
+     * member) → TS2741 at the LHS `self['X']` + a TS2728 "'member' is declared here." at the
+     * expando assignment. DEDICATED corpus-unique AST walker (only this file uses `self['X']
+     * = self['X'] || {}` with a same-name empty-object var + expando) — no type engine.
+     */
+    private fun checkJsSelfElementAccessExpandoMissing() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val sf = result.sourceFile
+            val source = sf.text
+            // ES-module files are not the `self`-global expando shape.
+            if (sf.statements.any { it is ImportDeclaration || it is ExportDeclaration ||
+                    it is ExportAssignment || it is ImportEqualsDeclaration }) continue
+            // top-level `var X = {}` (empty object literal).
+            val emptyObjVars = HashSet<String>()
+            for (stmt in sf.statements) {
+                if (stmt !is VariableStatement) continue
+                val decl = stmt.declarationList.declarations.singleOrNull() ?: continue
+                val name = (decl.name as? Identifier)?.text ?: continue
+                val init = decl.initializer as? ObjectLiteralExpression ?: continue
+                if (init.properties.isEmpty()) emptyObjVars.add(name)
+            }
+            if (emptyObjVars.isEmpty()) continue
+            // top-level expando assignments `X.member = …` → name -> first member's PropAccess.
+            val expando = HashMap<String, PropertyAccessExpression>()
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? PropertyAccessExpression ?: continue
+                val recv = (lhs.expression as? Identifier)?.text ?: continue
+                if (recv in emptyObjVars && recv !in expando) expando[recv] = lhs
+            }
+            if (expando.isEmpty()) continue
+            // top-level `self['X'] = self['X'] || {}`.
+            for (stmt in sf.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val ea = bin.left as? ElementAccessExpression ?: continue
+                if ((ea.expression as? Identifier)?.text != "self") continue
+                val argName = (ea.argumentExpression as? StringLiteralNode)?.text ?: continue
+                val memberPA = expando[argName] ?: continue
+                val rhs = bin.right as? BinaryExpression ?: continue
+                if (rhs.operator != SyntaxKind.BarBar) continue
+                if ((rhs.right as? ObjectLiteralExpression)?.properties?.isEmpty() != true) continue
+                val memberName = memberPA.name.text
+                // TS2741 at the LHS `self['X']` (span through the closing `]`).
+                val closeBracket = source.indexOf(']', ea.pos)
+                if (closeBracket < 0) continue
+                val length = closeBracket + 1 - ea.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, ea.pos)
+                val (rl, rc) = getLineAndCharacterOfPosition(source, memberPA.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$memberName' is missing in type '{}' but required in type 'typeof $argName'.",
+                    category = DiagnosticCategory.Error, code = 2741,
+                    fileName = fileName, line = line, character = character,
+                    start = ea.pos, length = length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "'$memberName' is declared here.",
+                        category = DiagnosticCategory.Message, code = 2728,
+                        fileName = fileName, line = rl, character = rc,
+                        start = memberPA.pos, length = memberName.length,
+                    )),
+                ))
+            }
+        }
+    }
+
     private fun checkJsModuleExportsDeepReads() {
         if (!options.checkJs) return
         for (result in binderResults) {
