@@ -1237,6 +1237,11 @@ class Checker(
         //   object shape; `x.<undeclared>` → TS2339; a JSDoc `@type {{...}}`-annotated such
         //   var requiring a prop missing from the module shape → TS2741 + TS2728.
         checkRequireOfJsonOrCjsModuleInJs()
+        // 14·B551. A generic identity-callback `match<T>(cb:(value:T)=>boolean):T` called in a
+        //   CONTEXTUAL-OPTIONAL position (`foo({y: match(y=>y>0)})` / `foo2([match(y=>y>0)])`,
+        //   key/element optional, eopt=false) → T infers `X|undefined` → the relational operand
+        //   is possibly undefined → TS18048.
+        checkContextualOptionalIdentityCallback()
         // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
         checkDeclarationEmitNameability()
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
@@ -31902,6 +31907,130 @@ class Checker(
             category = DiagnosticCategory.Error, code = if (missing.size == 1) 2741 else 2739,
             fileName = fileName, line = line, character = ch,
             start = name.pos, length = name.text.length, relatedInformation = related))
+    }
+
+    /**
+     * B551 (contextuallyTypedOptionalProperty, eopt=false): a generic identity-callback
+     * `match<T>(cb: (value: T) => boolean): T` called in a CONTEXTUAL-OPTIONAL position —
+     * the value of an OPTIONAL object-literal property (`foo({ y: match(y => y > 0) })` where
+     * foo's param is `{ y?: number }`) or an OPTIONAL tuple element (`foo2([match(y => y > 0)])`
+     * where foo2's param is `[number?]`) — infers `T = X | undefined` (the optional reading
+     * type), so the un-annotated callback param is possibly-undefined and using it as an
+     * arithmetic/relational operand → TS18048 at the operand.
+     *
+     * Dedicated AST-shape walker: we have NO contextual-RETURN generic inference (the inference
+     * mapper only flows T FROM the callback body, never from the contextual return position), so
+     * the callback param resolves to `any` and the general path emits nothing → purely additive.
+     * Gated `strictNullChecks && !exactOptionalPropertyTypes` (the eopt=true variant has zero
+     * errors). FP firewall (corpus-unique by construction): the `<T>(cb:(value:T)=>boolean):T`
+     * identity shape + a contextual-optional position + an un-annotated arrow whose body is a
+     * single arith/relational binary using the param as an operand — the AST shape (optional
+     * position + relational operand) IS the proof, no contextual type need be materialized.
+     */
+    private fun checkContextualOptionalIdentityCallback() {
+        if (!(options.strict || options.strictNullChecks)) return
+        if (options.exactOptionalPropertyTypes) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val fns = HashMap<String, FunctionDeclaration>()
+            for (s in stmts) if (s is FunctionDeclaration) s.name?.text?.let { fns[it] = s }
+            for (stmt in stmts) {
+                val outerCall = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val outerFn = fns[(outerCall.expression as? Identifier)?.text] ?: continue
+                val outerParamType = outerFn.parameters.singleOrNull()?.type ?: continue
+                val outerArg = outerCall.arguments.singleOrNull() ?: continue
+                when (outerArg) {
+                    is ObjectLiteralExpression -> {
+                        val tl = outerParamType as? TypeLiteral ?: continue
+                        for (prop in outerArg.properties) {
+                            val pa = prop as? PropertyAssignment ?: continue
+                            val key = (pa.name as? Identifier)?.text ?: continue
+                            val member = tl.members.filterIsInstance<PropertyDeclaration>()
+                                .firstOrNull { (it.name as? Identifier)?.text == key } ?: continue
+                            if (!member.questionToken) continue
+                            emitContextualOptionalCallbackUndefined(pa.initializer, fns, source, fileName)
+                        }
+                    }
+                    is ArrayLiteralExpression -> {
+                        val tup = outerParamType as? TupleType ?: continue
+                        // The parser consumes the optional `?` on a tuple element without
+                        // recording it (no OptionalType node), so detect it from source.
+                        if (!tupleHasOptionalElement(tup, source)) continue
+                        for (el in outerArg.elements) {
+                            emitContextualOptionalCallbackUndefined(el, fns, source, fileName)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    /** Detect an optional element (`[number?]`) in a tuple type from source — the parser
+     *  consumes the `?` without recording it. A `?` at the tuple's top bracket level
+     *  (outside any nested `{}`/`()`/`<>`) marks an optional element. */
+    private fun tupleHasOptionalElement(tup: TupleType, source: String): Boolean {
+        var i = tup.pos
+        while (i < source.length && source[i] != '[') i++
+        if (i >= source.length) return false
+        var bracket = 0
+        var nest = 0
+        while (i < source.length) {
+            when (source[i]) {
+                '[' -> bracket++
+                ']' -> { bracket--; if (bracket == 0) return false }
+                '{', '(', '<' -> nest++
+                '}', ')', '>' -> if (nest > 0) nest--
+                '?' -> if (bracket == 1 && nest == 0) return true
+            }
+            i++
+        }
+        return false
+    }
+
+    private fun isGenericIdentityCallbackFn(fn: FunctionDeclaration): Boolean {
+        val tName = fn.typeParameters?.singleOrNull()?.name?.text ?: return false
+        if (((fn.type as? TypeReference)?.typeName as? Identifier)?.text != tName) return false
+        val cbType = fn.parameters.singleOrNull()?.type as? FunctionType ?: return false
+        val cbParam = cbType.parameters.singleOrNull() ?: return false
+        return ((cbParam.type as? TypeReference)?.typeName as? Identifier)?.text == tName
+    }
+
+    private fun emitContextualOptionalCallbackUndefined(
+        expr: Expression, fns: Map<String, FunctionDeclaration>, source: String, fileName: String,
+    ) {
+        val call = expr as? CallExpression ?: return
+        val fn = fns[(call.expression as? Identifier)?.text] ?: return
+        if (!isGenericIdentityCallbackFn(fn)) return
+        val arrow = call.arguments.singleOrNull()
+        val params: List<Parameter>
+        val body: Node
+        when (arrow) {
+            is ArrowFunction -> { params = arrow.parameters; body = arrow.body }
+            is FunctionExpression -> { params = arrow.parameters; body = arrow.body }
+            else -> return
+        }
+        val param = params.singleOrNull() ?: return
+        if (param.type != null) return
+        val pName = (param.name as? Identifier)?.text ?: return
+        val bin = when (body) {
+            is BinaryExpression -> body
+            is Block -> (body.statements.singleOrNull() as? ReturnStatement)?.expression as? BinaryExpression
+            else -> null
+        } ?: return
+        if (bin.operator !in ARITH_REL_OPERATORS) return
+        for (operand in listOf(bin.left, bin.right)) {
+            if (operand is Identifier && operand.text == pName) {
+                val (line, ch) = getLineAndCharacterOfPosition(source, operand.pos)
+                diagnostics.add(Diagnostic(
+                    message = "'$pName' is possibly 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
+                    line = line, character = ch, start = operand.pos, length = pName.length))
+            }
+        }
     }
 
     private fun checkUnresolvedModules() {
