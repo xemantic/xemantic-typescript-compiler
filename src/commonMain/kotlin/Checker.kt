@@ -1821,6 +1821,12 @@ class Checker(
         // 65e. Check namespace declarations split across files from
         // their merged class/function (TS2433)
         checkNamespaceSplitAcrossFiles()
+        // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
+        // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
+        // class + same-named namespace in different files with a colliding member name →
+        // TS2300 (+TS6203). Pure AST over binderResults (no symbol-table conflation).
+        checkCrossFileClassFunctionMerge()
+        checkCrossFileCloduleMemberConflict()
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
         checkTsSyntaxInJsFiles()
         // 67. Check export specifiers for non-local declarations (TS2661)
@@ -88074,6 +88080,142 @@ interface DataView {
                             relatedInformation = listOf(related),
                         ))
                     }
+                }
+            }
+        }
+    }
+
+    /** duplicateIdentifiersAcrossFileBoundaries (PIECE A): a top-level class in one SCRIPT file +
+     *  a top-level function-WITH-BODY of the same name in a DIFFERENT script file cannot merge
+     *  (a non-ambient class can't merge with a bodied function across files) → TS2813 at each
+     *  class name, TS2814 at each function name, both with a TS6506 "add 'declare'" related info
+     *  anchored at the class. Cross-file-only (same-file pairs are owned by checkDuplicateDeclarations);
+     *  corpus-unique. */
+    private fun checkCrossFileClassFunctionMerge() {
+        val classes = HashMap<String, MutableList<Triple<ClassDeclaration, String, String>>>()
+        val funcs = HashMap<String, MutableList<Triple<FunctionDeclaration, String, String>>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val stmts = result.sourceFile.statements
+            if (isModuleFile(stmts)) continue
+            val source = result.sourceFile.text
+            for (s in stmts) when (s) {
+                is ClassDeclaration -> if (s.name != null && ModifierFlag.Declare !in s.modifiers)
+                    classes.getOrPut(s.name!!.text) { mutableListOf() }.add(Triple(s, fileName, source))
+                is FunctionDeclaration -> if (s.name != null && hasPresentBody(s.body) && ModifierFlag.Declare !in s.modifiers)
+                    funcs.getOrPut(s.name!!.text) { mutableListOf() }.add(Triple(s, fileName, source))
+                else -> {}
+            }
+        }
+        for ((name, clsList) in classes) {
+            val fnList = funcs[name] ?: continue
+            val classFiles = clsList.map { it.second }.toSet()
+            val funcFiles = fnList.map { it.second }.toSet()
+            // Cross-file ONLY: no file contains both a class and a bodied function of this name
+            // (same-file is owned by checkDuplicateDeclarations → avoid double-emit).
+            if (classFiles.intersect(funcFiles).isNotEmpty()) continue
+            val (clsDecl, clsFile, clsSource) = clsList.first()
+            val clsName = clsDecl.name!!
+            val (clsL, clsC) = getLineAndCharacterOfPosition(clsSource, clsName.pos)
+            val related = Diagnostic(
+                message = "Consider adding a 'declare' modifier to this class.",
+                category = DiagnosticCategory.Message, code = 6506,
+                fileName = clsFile, line = clsL, character = clsC,
+                start = clsName.pos, length = clsName.text.length,
+            )
+            for ((cls, cf, cs) in clsList) {
+                val n = cls.name!!
+                val (line, character) = getLineAndCharacterOfPosition(cs, n.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Class declaration cannot implement overload list for '$name'.",
+                    category = DiagnosticCategory.Error, code = 2813,
+                    fileName = cf, line = line, character = character,
+                    start = n.pos, length = n.text.length,
+                    relatedInformation = listOf(related),
+                ))
+            }
+            for ((fn, ff, fs) in fnList) {
+                val n = fn.name!!
+                val (line, character) = getLineAndCharacterOfPosition(fs, n.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Function with bodies can only merge with classes that are ambient.",
+                    category = DiagnosticCategory.Error, code = 2814,
+                    fileName = ff, line = line, character = character,
+                    start = n.pos, length = n.text.length,
+                    relatedInformation = listOf(related),
+                ))
+            }
+        }
+    }
+
+    private class CfcOcc(val kind: String, val file: String, val source: String, val nameNode: Identifier)
+
+    /** duplicateIdentifiersAcrossFileBoundaries (PIECE B): a class + same-named namespace in
+     *  DIFFERENT script files (a cross-file clodule) with a member name declared in ≥2 different
+     *  value-kinds (e.g. a class STATIC property vs a namespace EXPORTED var) → TS2300 at each
+     *  occurrence + cross-referencing TS6203. Same-file clodules are owned by
+     *  checkCloduleValueSpaceConflicts (excluded by the ≥2-distinct-file gate). */
+    private fun checkCrossFileCloduleMemberConflict() {
+        val classByName = HashMap<String, MutableList<Pair<ClassDeclaration, Pair<String, String>>>>()
+        val nsByName = HashMap<String, MutableList<Pair<ModuleDeclaration, Pair<String, String>>>>()
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val stmts = result.sourceFile.statements
+            if (isModuleFile(stmts)) continue
+            val source = result.sourceFile.text
+            for (s in stmts) when (s) {
+                is ClassDeclaration -> s.name?.let { classByName.getOrPut(it.text) { mutableListOf() }.add(s to (fileName to source)) }
+                is ModuleDeclaration -> { val nm = s.name; if (nm is Identifier && nm.text != "global") nsByName.getOrPut(nm.text) { mutableListOf() }.add(s to (fileName to source)) }
+                else -> {}
+            }
+        }
+        for ((name, clsList) in classByName) {
+            val nsList = nsByName[name] ?: continue
+            val occs = HashMap<String, MutableList<CfcOcc>>()
+            for ((cls, fs) in clsList) for (m in cls.members) {
+                val (mName, kind) = when (m) {
+                    is PropertyDeclaration -> if (ModifierFlag.Static in m.modifiers) (m.name as? Identifier) to "property" else null to null
+                    is MethodDeclaration -> if (ModifierFlag.Static in m.modifiers) (m.name as? Identifier) to "method" else null to null
+                    is GetAccessor -> if (ModifierFlag.Static in m.modifiers) (m.name as? Identifier) to "accessor" else null to null
+                    is SetAccessor -> if (ModifierFlag.Static in m.modifiers) (m.name as? Identifier) to "accessor" else null to null
+                    else -> null to null
+                }
+                if (mName != null && kind != null) occs.getOrPut(mName.text) { mutableListOf() }.add(CfcOcc(kind, fs.first, fs.second, mName))
+            }
+            for ((ns, fs) in nsList) {
+                val body = ns.body as? ModuleBlock ?: continue
+                for (s in body.statements) when (s) {
+                    is FunctionDeclaration -> if (s.name != null && ModifierFlag.Export in s.modifiers)
+                        occs.getOrPut(s.name!!.text) { mutableListOf() }.add(CfcOcc("function", fs.first, fs.second, s.name!!))
+                    is VariableStatement -> if (ModifierFlag.Export in s.modifiers) for (d in s.declarationList.declarations) {
+                        (d.name as? Identifier)?.let { occs.getOrPut(it.text) { mutableListOf() }.add(CfcOcc("var", fs.first, fs.second, it)) }
+                    }
+                    else -> {}
+                }
+            }
+            for ((mName, list) in occs) {
+                if (list.map { it.kind }.distinct().size < 2) continue
+                if (list.map { it.file }.distinct().size < 2) continue
+                for (o in list) {
+                    val related = list.filter { it !== o }.map { other ->
+                        val (rl, rc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
+                        Diagnostic(
+                            message = "'$mName' was also declared here.",
+                            category = DiagnosticCategory.Message, code = 6203,
+                            fileName = other.file, line = rl, character = rc,
+                            start = other.nameNode.pos, length = mName.length,
+                        )
+                    }
+                    val (l, c) = getLineAndCharacterOfPosition(o.source, o.nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate identifier '$mName'.",
+                        category = DiagnosticCategory.Error, code = 2300,
+                        fileName = o.file, line = l, character = c,
+                        start = o.nameNode.pos, length = mName.length,
+                        relatedInformation = related,
+                    ))
                 }
             }
         }
