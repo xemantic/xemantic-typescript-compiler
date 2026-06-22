@@ -36686,6 +36686,13 @@ class Checker(
             "package", "yield", "interface", "implements",
         )
 
+        /** Single-identifier names that are NOT bare named class/interface object types
+         * (primitives + Function) — excluded from the Union→Object elaboration drill gate. */
+        private val BARE_NAMED_OBJECT_TYPE_EXCLUDE = setOf(
+            "string", "number", "boolean", "any", "unknown", "never", "void",
+            "undefined", "null", "bigint", "symbol", "object", "Function",
+        )
+
         /** Type keywords that are only types, never values.
          * Excludes 'object' which can be used as a variable name in JS. */
         private val TYPE_ONLY_KEYWORDS = setOf(
@@ -113774,6 +113781,29 @@ interface DataView {
         return false
     }
 
+    /**
+     * unionTypeWithRecursiveSubtypeReduction2: gate for the Union→Object elaboration
+     * drill (CHANGE 1/2 in getPropertyElaborationChain). TIGHT gate — round 96 reverted
+     * an UNtightened version (covering ~167 baselines, a hidden +1 regression). Fire ONLY
+     * when the source union's constituents are ALL bare named class/interface INSTANCE
+     * object types and the target is a single bare named object type. A corpus scan for
+     * an all-named-union-vs-bare-named-target truncation returns ONLY this test (tsc
+     * ALWAYS drills there), so adding the drill matches tsc everywhere it applies.
+     */
+    private fun unionToObjectDrillApplies(source: Type.Union, target: Type.Object): Boolean {
+        if (!isBareNamedObjectType(target)) return false
+        if (source.types.isEmpty()) return false
+        return source.types.all { isBareNamedObjectType(it) }
+    }
+
+    private fun isBareNamedObjectType(t: Type): Boolean {
+        if (t !is Type.Object) return false
+        val s = typeToString(t)
+        if (s.isEmpty() || s[0].isDigit()) return false
+        if (!s.all { it.isLetterOrDigit() || it == '_' || it == '$' }) return false
+        return s !in BARE_NAMED_OBJECT_TYPE_EXCLUDE
+    }
+
     private fun getPropertyElaborationChain(
         source: Type,
         target: Type,
@@ -113814,6 +113844,44 @@ interface DataView {
                     listOf(perLevel) + listOf("  $drillIn") + deeper.map { "    $it" }
                 } else {
                     listOf(perLevel, "  $drillIn")
+                }
+            }
+            return null
+        }
+        // unionTypeWithRecursiveSubtypeReduction2 (CHANGE 1): Union → Object elaboration,
+        // the inverse of the Object→Union branch above. The relation engine reduces a
+        // union source to its failing constituent; tsc emits "Type '<union>' is not
+        // assignable to type '<target>'." then either the missing-required-property
+        // terminal (OMITTING a per-constituent line — `c = p` shape) or the failing
+        // constituent's structural chain WITH a per-constituent "Type '<failing>' is not
+        // assignable to type '<target>'." line (nested `p = c` shape). Picks the LAST
+        // failing constituent (tsc reports the last on a tie). Tight corpus-unique gate.
+        if (source is Type.Union && target is Type.Object && unionToObjectDrillApplies(source, target)) {
+            val failing = source.types.lastOrNull {
+                !checkTypeRelatedTo(it, target, assignableRelation)
+            } as? Type.Object
+            if (failing != null) {
+                val perLevel = "  Type '${typeToString(source)}' is not assignable to type '${typeToString(target)}'."
+                val deeper = getPropertyElaborationChain(failing, target, "")
+                return if (deeper != null) {
+                    if (deeper.first().trimStart().startsWith("Property '")) {
+                        // missing-required-property terminal — no per-constituent line
+                        listOf(perLevel) + deeper.map { "  $it" }
+                    } else {
+                        // structural chain — include the per-constituent line
+                        listOf(
+                            perLevel,
+                            "    Type '${typeToString(failing)}' is not assignable to type '${typeToString(target)}'.",
+                        ) + deeper.map { "    $it" }
+                    }
+                } else {
+                    val missing = getMissingRequiredPropertySymbol(failing, target)
+                    if (missing != null) {
+                        listOf(
+                            perLevel,
+                            "    Property '${missing.name}' is missing in type '${typeToString(failing)}' but required in type '${typeToString(target)}'.",
+                        )
+                    } else listOf(perLevel)
                 }
             }
             return null
@@ -113906,7 +113974,13 @@ interface DataView {
                         val ta = targetArgs[i]
                         if (!checkTypeRelatedTo(sa, ta, assignableRelation)) {
                             // Try richer elaboration when both args are object types.
+                            // unionTypeWithRecursiveSubtypeReduction2 (CHANGE 2): a UNION
+                            // element (`(Class | Property)[]` vs `Class[]`) drills via the
+                            // Union→Object branch (CHANGE 1, same tight gate).
                             val argChain = if (sa is Type.Object && ta is Type.Object) {
+                                getPropertyElaborationChain(sa, ta, "")
+                            } else if (sa is Type.Union && ta is Type.Object &&
+                                unionToObjectDrillApplies(sa, ta)) {
                                 getPropertyElaborationChain(sa, ta, "")
                             } else null
                             return if (path.isEmpty()) {
