@@ -14733,9 +14733,17 @@ class Transformer(
                 b.body.pos in 0..<b.body.end && b.body.end <= sourceText.length &&
                     Regex("\\bsuper\\b").containsMatchIn(sourceText.substring(b.body.pos, b.body.end))
             }
+            // B556: a `super.X` read in a static FIELD initializer (`static yy = super.x`) needs
+            // the same Reflect.get rewrite + heritage/alias capture as a static block (superAccess2).
+            val staticPropsWithSuper = staticProperties.filter { prop ->
+                val i = prop.initializer
+                i != null && options.effectiveTarget < ScriptTarget.ES2022 &&
+                    i.pos in 0..<i.end && i.end <= sourceText.length &&
+                    Regex("\\bsuper\\b").containsMatchIn(sourceText.substring(i.pos, i.end))
+            }
             val staticBlockNeedsAlias = staticBlocks.any { b ->
                 b.body.statements.any { containsThisInStmt(it) }
-            } || staticBlocksWithSuper.isNotEmpty()
+            } || staticBlocksWithSuper.isNotEmpty() || staticPropsWithSuper.isNotEmpty()
             classTempVar = staticMethodAlias ?: if (staticPropsWithThis.isNotEmpty() || staticBlockNeedsAlias) {
                 val tv = nextTempVarName()
                 hoistedVarScopes.lastOrNull()?.add(tv)
@@ -14745,7 +14753,8 @@ class Transformer(
             // B344: heritage capture for super-in-static-block — single extends base,
             // declarations only.
             val extendsTypes = finalHeritage?.firstOrNull()?.types
-            if (staticBlocksWithSuper.isNotEmpty() && classTempVar != null && !isClassExpression &&
+            if ((staticBlocksWithSuper.isNotEmpty() || staticPropsWithSuper.isNotEmpty()) &&
+                classTempVar != null && !isClassExpression &&
                 finalHeritage?.size == 1 && extendsTypes?.size == 1) {
                 val ht = nextTempVarName()
                 hoistedVarScopes.lastOrNull()?.add(ht)
@@ -14921,6 +14930,11 @@ class Transformer(
                         val tvForName = classTempVar
                         if (tvForName != null && !isClassExpression && name != null) {
                             finalInit = replaceIdentifierInExpr(finalInit, name.text, tvForName)
+                        }
+                        // B556: rewrite `super.X` reads in the static field initializer to
+                        // Reflect.get(heritageTemp, "X", classAlias) (superAccess2).
+                        if (heritageTempVar != null && classTempVar != null) {
+                            finalInit = replaceSuperReadsInExpr(finalInit, heritageTempVar!!, classTempVar!!)
                         }
                         trailingStatements.add(
                             ExpressionStatement(
