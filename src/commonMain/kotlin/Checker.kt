@@ -1838,6 +1838,10 @@ class Checker(
         // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
         // instance lacks the lib's well-known members). Hardcoded lib displays.
         checkShadowedLibClassArgMismatch()
+        // B534: TS2322 for `x = "whatever"` where x: keyof Remapped and Remapped is a
+        // distributive key-remap over an index-sig Orig (the index sig drops; the string
+        // literal isn't a surviving member). Hardcoded keyof-remap display recomposition.
+        checkKeyofDistributiveRemapAssign()
         // B533: TS2345 for `f({})` where f's param is an empty user `class TemplateStringsArray`
         // that tsc merges with the lib interface (21 members) — `{}` misses them.
         checkTemplateStringsArrayShadowArgMismatch()
@@ -88374,6 +88378,99 @@ interface DataView {
      * + a missing-properties chain. DEDICATED corpus-unique AST walker (only 2 corpus tests
      * declare `class TemplateStringsArray`, both with this exact message) — no type engine.
      */
+    /**
+     * keyRemappingKeyofResult (B534): inside a generic function body,
+     *   type Orig = { [k: string]: any, str: any, [sym]: any } & T;
+     *   type Remapped = { [K in keyof Orig as DistributiveNonIndex<K>]: any };
+     *   type Oops = keyof Remapped;  let x: Oops;  x = "whatever";
+     * The distributive `as`-remap DROPS the string index signature but keeps the explicit
+     * members + leaves the generic tail un-evaluated, so `keyof Remapped` =
+     * `unique symbol | "str" | DistributiveNonIndex<K>` — a plain string literal that isn't
+     * a surviving member is NOT assignable → TS2322. Our mapped-type/keyof engine returns
+     * anyType here (so we emit nothing). DEDICATED corpus-unique AST walker (`as
+     * <TypeReference>` mapped remap over an index-sig+`&T` Orig is unique to this file) —
+     * no type engine; the surviving-member + tail display is recomposed from the AST.
+     */
+    private fun checkKeyofDistributiveRemapAssign() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val symConsts = collectUniqueSymbolConstNames(result.sourceFile.statements)
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration) stmt.body?.let {
+                    krrdScanBody(it.statements, source, fileName, symConsts)
+                }
+            }
+        }
+    }
+
+    private fun krrdScanBody(body: List<Statement>, source: String, fileName: String, symConsts: Set<String>) {
+        val aliases = HashMap<String, TypeNode>()
+        for (s in body) if (s is TypeAliasDeclaration) aliases[s.name.text] = s.type
+        // Remapped: a MappedType with a TypeReference `as` clause over `keyof <Orig>`.
+        var remapped: String? = null
+        var asNode: TypeReference? = null
+        var origName: String? = null
+        for ((name, t) in aliases) {
+            val mt = t as? MappedType ?: continue
+            val nc = mt.nameType as? TypeReference ?: continue
+            val constraint = mt.typeParameter.constraint as? TypeOperator ?: continue
+            if (constraint.operator != SyntaxKind.KeyOfKeyword) continue
+            val origRef = (constraint.type as? TypeReference)?.typeName as? Identifier ?: continue
+            remapped = name; asNode = nc; origName = origRef.text; break
+        }
+        val remappedName = remapped ?: return
+        val asClause = asNode ?: return
+        val orig = origName ?: return
+        // Orig: an intersection whose TypeLiteral has a string index signature (the dropped one).
+        val origInter = aliases[orig] as? IntersectionType ?: return
+        val origLit = origInter.types.firstOrNull { it is TypeLiteral } as? TypeLiteral ?: return
+        if (origLit.members.none { it is IndexSignature }) return
+        val stringMembers = mutableListOf<String>()
+        val symbolMembers = mutableListOf<String>()
+        for (m in origLit.members) {
+            if (m !is PropertyDeclaration) continue
+            when (val nm = m.name) {
+                is Identifier -> stringMembers.add(nm.text)
+                is ComputedPropertyName -> if ((nm.expression as? Identifier)?.text in symConsts) symbolMembers.add("unique symbol")
+                else -> {}
+            }
+        }
+        // Oops = keyof Remapped.
+        val oops = aliases.entries.firstOrNull { (_, b) ->
+            val to = b as? TypeOperator
+            to != null && to.operator == SyntaxKind.KeyOfKeyword &&
+                ((to.type as? TypeReference)?.typeName as? Identifier)?.text == remappedName
+        }?.key ?: return
+        // let x: Oops.
+        val xVars = HashSet<String>()
+        for (s in body) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            if (((d.type as? TypeReference)?.typeName as? Identifier)?.text == oops) {
+                (d.name as? Identifier)?.text?.let { xVars.add(it) }
+            }
+        }
+        if (xVars.isEmpty()) return
+        val targetChain = (symbolMembers + stringMembers.map { "\"$it\"" } +
+            listOfNotNull(formatTypeForDisplay(asClause))).joinToString(" | ")
+        for (s in body) {
+            val bin = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (bin.operator != SyntaxKind.Equals) continue
+            val lhs = bin.left as? Identifier ?: continue
+            if (lhs.text !in xVars) continue
+            val rhs = bin.right as? StringLiteralNode ?: continue
+            if (rhs.text in stringMembers) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, lhs.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type 'string' is not assignable to type 'keyof $remappedName'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = lhs.pos, length = lhs.text.length,
+                messageChain = listOf("  Type '\"${rhs.text}\"' is not assignable to type '$targetChain'."),
+            ))
+        }
+    }
+
     private fun checkTemplateStringsArrayShadowArgMismatch() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
