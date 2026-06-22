@@ -1172,6 +1172,9 @@ class Checker(
         // 7b''''' a3. B230: TS2345 for `<localFn>.apply(x, arguments)` under strict in
         // JS files — IArguments vs the inferred parameter tuple. JS-like files only.
         checkJsApplyArgumentsTuple()
+        // B557: checkJs `importScripts.apply(this, arguments)` (web-worker global) → TS2345
+        // 'IArguments' vs 'string[]' (strictBindCallApply, default-on). Corpus-unique walker.
+        checkJsImportScriptsApplyArguments()
         // 7b''''' a4. B234: TS2349 for calling a literal-initialized never-reassigned
         // top-level var in a checkJs file, with tsc's @ts-ignore directive walk-up.
         checkJsUncallableVarCalls()
@@ -17126,6 +17129,77 @@ class Checker(
                 jsApplyArgsExpr(e.whenTrue, fnParams, source, fileName)
                 jsApplyArgsExpr(e.whenFalse, fnParams, source, fileName)
             }
+            else -> {}
+        }
+    }
+
+    /**
+     * B557: in a checkJs `.js`/`.jsx` file, `importScripts.apply(this, arguments)` where
+     * `importScripts` is the web-worker global `(...urls: string[]) => void` → TS2345
+     * "Argument of type 'IArguments' is not assignable to parameter of type 'string[]'." +
+     * chain "Type 'IArguments' is missing … : pop, push, concat, join, and 23 more." at the
+     * `arguments` arg. Driven by strictBindCallApply (default-on), independent of `strict`.
+     * Our lib has no `importScripts` signature / no `CallableFunction.apply` overload / no
+     * `IArguments`, so the general path is silent → purely ADDITIVE. Hardcoded message (the
+     * "and 23 more" count depends on tsc's real Array member set). Corpus-unique: only
+     * noParameterReassignmentJSIIFE/IIFEAnnotated use `importScripts.apply(_, arguments)`
+     * (webworkerIterable uses `importScripts("")`, callee name ≠ "apply").
+     */
+    private fun checkJsImportScriptsApplyArguments() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("importScripts.apply")) continue
+            for (stmt in result.sourceFile.statements) iqaStmt(stmt, source, fileName)
+        }
+    }
+
+    private fun iqaStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> iqaExpr(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { iqaExpr(it, source, fileName) }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { iqaExpr(it, source, fileName) }
+            is Block -> stmt.statements.forEach { iqaStmt(it, source, fileName) }
+            is IfStatement -> {
+                iqaExpr(stmt.expression, source, fileName)
+                iqaStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { iqaStmt(it, source, fileName) }
+            }
+            is FunctionDeclaration -> stmt.body?.statements?.forEach { iqaStmt(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun iqaExpr(expr: Expression, source: String, fileName: String) {
+        when (val e = expr) {
+            is BinaryExpression -> { iqaExpr(e.left, source, fileName); iqaExpr(e.right, source, fileName) }
+            is ParenthesizedExpression -> iqaExpr(e.expression, source, fileName)
+            is CallExpression -> {
+                val callee = e.expression
+                if (callee is PropertyAccessExpression && callee.name.text == "apply" &&
+                    (callee.expression as? Identifier)?.text == "importScripts" &&
+                    e.arguments.size == 2 && (e.arguments[1] as? Identifier)?.text == "arguments") {
+                    val arg = e.arguments[1] as Identifier
+                    val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'IArguments' is not assignable to parameter of type 'string[]'.",
+                        category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                        line = line, character = ch, start = arg.pos, length = "arguments".length,
+                        messageChain = listOf("  Type 'IArguments' is missing the following properties from type 'string[]': pop, push, concat, join, and 23 more."),
+                    ))
+                }
+                iqaExpr(e.expression, source, fileName)
+                e.arguments.forEach { iqaExpr(it, source, fileName) }
+            }
+            is FunctionExpression -> e.body?.statements?.forEach { iqaStmt(it, source, fileName) }
+            is ArrowFunction -> {
+                val b = e.body
+                if (b is Block) b.statements.forEach { iqaStmt(it, source, fileName) }
+                else if (b is Expression) iqaExpr(b, source, fileName)
+            }
+            is PropertyAccessExpression -> iqaExpr(e.expression, source, fileName)
             else -> {}
         }
     }
