@@ -65713,6 +65713,13 @@ interface DataView {
                     isModule ||
                     hasUseStrict
             }
+            // interfaceNaming1: `interface`/`implements` are future-reserved DECLARATION
+            // keywords; tsc emits TS1212 for them ONLY under REAL strict mode (module /
+            // "use strict" / strict / alwaysStrict), NOT target-derived ES2015 strictness
+            // (let/yield/public/... keep the target-derived path). Class (TS1213) / module
+            // (TS1214) contexts are themselves real-strict and still fire.
+            strictReservedRealStrict = isModule || hasUseStrict ||
+                options.strict == true || options.alwaysStrict == true
             // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
             walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule)
         }
@@ -65722,6 +65729,12 @@ interface DataView {
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must not fire
      *  there (tsc only has TS2480 for `let let` in non-strict code; commonMissingSemicolons). */
     private var strictReservedExplicitNonStrict = false
+
+    /** True when the file is in REAL strict mode (module / "use strict" / strict / alwaysStrict).
+     *  Gates the `interface`/`implements` TS1212 emission — tsc does NOT fire it for those two
+     *  future-reserved declaration keywords under merely target-derived ES2015 strictness
+     *  (interfaceNaming1). Assigned imperatively in checkStrictModeReservedWords before the walk. */
+    private var strictReservedRealStrict = false
 
     private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
         for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
@@ -65955,6 +65968,11 @@ interface DataView {
         when (expr) {
             is Identifier -> {
                 if (expr.text in STRICT_MODE_RESERVED_WORDS) {
+                    // interfaceNaming1: `interface`/`implements` fire TS1212 only under real
+                    // strict mode, not target-derived ES2015 strictness (inClass→TS1213 keeps
+                    // firing — class bodies are auto-strict).
+                    if ((expr.text == "interface" || expr.text == "implements") &&
+                        !strictReservedRealStrict && !inClass) return
                     // Only in assignment context (let = 30)
                     // Actually, all uses of reserved words as identifiers in expressions count
                     reportTS1212(expr, source, fileName, inClass)
@@ -65975,6 +65993,12 @@ interface DataView {
 
     private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
         if (id.text in STRICT_MODE_RESERVED_WORDS) {
+            // interfaceNaming1: `interface`/`implements` fire TS1212 only under real strict
+            // mode, not target-derived ES2015 strictness. inClass→TS1213 / isModule→TS1214
+            // are themselves real-strict contexts and must still fire (convertKeywordsYes,
+            // strictModeReservedWord2).
+            if ((id.text == "interface" || id.text == "implements") &&
+                !strictReservedRealStrict && !inClass && !isModule) return
             reportTS1212(id, source, fileName, inClass, isModule)
         }
     }
@@ -125896,6 +125920,26 @@ interface DataView {
 
         val leftType = getTypeOfExpression(expr.left)
         val rightType = getTypeOfExpression(expr.right)
+
+        // interfaceNaming1: `interface & { }` — a bare type-only keyword (`interface`/
+        // `implements`) used as a value (it gets TS2693) resolves to error/any, which makes
+        // the any/error early-returns below bail BEFORE checking the OTHER operand. tsc still
+        // checks the object-literal operand of a bitwise/arithmetic op → TS2362/TS2363.
+        // Corpus-unique shape (a strict-reserved keyword identifier opposite an object literal
+        // under a bitwise/arithmetic op appears only in this malformed-recovery test), and the
+        // `return` guarantees exactly one emission (no double-emit with the normal path below).
+        if (isArithmetic) {
+            if (expr.right is ObjectLiteralExpression &&
+                (expr.left as? Identifier)?.text in STRICT_MODE_RESERVED_WORDS) {
+                emitTs2363(expr.right, source, fileName)
+                return
+            }
+            if (expr.left is ObjectLiteralExpression &&
+                (expr.right as? Identifier)?.text in STRICT_MODE_RESERVED_WORDS) {
+                emitTs2362(expr.left, source, fileName)
+                return
+            }
+        }
 
         // Skip if either side is anyType or errorType (unresolvable)
         if (leftType === anyType || leftType === errorType) return
