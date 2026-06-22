@@ -1233,6 +1233,10 @@ class Checker(
         checkUnresolvedModules()
         // 14·B472. TS2339 for a missing member of a `.`/`..` dir-index default import.
         checkDotDirIndexDefaultImports()
+        // 14·B550. checkJs `const x = require("./y.json"|"./y.js")` → x has the module's
+        //   object shape; `x.<undeclared>` → TS2339; a JSDoc `@type {{...}}`-annotated such
+        //   var requiring a prop missing from the module shape → TS2741 + TS2728.
+        checkRequireOfJsonOrCjsModuleInJs()
         // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
         checkDeclarationEmitNameability()
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
@@ -31730,6 +31734,174 @@ class Checker(
                 if (stmt is ExpressionStatement) visitExpr(stmt.expression)
             }
         }
+    }
+
+    /**
+     * B550 (requireOfJsonFileInJsFile): in a checkJs `.js` file, a top-level
+     * `const x = require("./y.json")` or `const x = require("./y.js")` (where y.js is exactly
+     * `module.exports = {objLit}`) gives `x` the module's object shape. Reading `x.<undeclared>`
+     * → TS2339; a `/** @type {{...}} */`-annotated such var whose annotation requires a property
+     * MISSING from the module shape → TS2741 at the var name + TS2728 at the property inside the
+     * JSDoc comment.
+     *
+     * Dedicated walker (NOT an un-gating of the load-bearing `.js` checkPropertyAccess skip,
+     * B152/B153) — `require()`-vars resolve to `any` today (the `require` global is `any`), so
+     * the general property-access / assignability paths emit nothing here → purely additive.
+     * FP firewall: closed-shape modules ONLY (a resolvable JSON object literal of simple-valued
+     * props, OR a JS file whose ONLY export form is a single `module.exports = {objLit}`); a
+     * require-as-local/param, a non-object module shape, or any `exports.X=` form bails the var.
+     */
+    private fun checkRequireOfJsonOrCjsModuleInJs() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // require-var name -> (module-shape display, key set), for vars WITHOUT a @type annotation.
+            val plainVars = HashMap<String, Pair<String, Set<String>>>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val name = (d.name as? Identifier)?.text ?: continue
+                    val call = d.initializer as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "require") continue
+                    val spec = (call.arguments.singleOrNull() as? StringLiteralNode)?.text ?: continue
+                    val shape = resolveRequireModuleShape(spec, fileName) ?: continue
+                    // A leading JSDoc `@type {{...}}` types the var by the annotation (not the
+                    // module shape) → TS2741 for a required annotation prop missing from the
+                    // module, and the var is NOT member-access-checked below.
+                    val annLit = if (stmt.leadingComments != null)
+                        Parser("", "").parseJsDocTypeNodeFromComments(stmt.leadingComments) as? TypeLiteral else null
+                    if (annLit != null) {
+                        emitRequireTypeAnnotationMissing(d, annLit, stmt.leadingComments!!, shape, source, fileName)
+                    } else {
+                        plainVars[name] = shape
+                    }
+                }
+            }
+            if (plainVars.isEmpty()) continue
+            fun checkAccess(pa: PropertyAccessExpression) {
+                val recv = pa.expression as? Identifier ?: return
+                val (display, keys) = plainVars[recv.text] ?: return
+                val prop = pa.name.text
+                if (prop in keys || prop in RUNTIME_PROPERTIES) return
+                if (prop.isEmpty() || prop[0].isDigit()) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$prop' does not exist on type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = ch, start = pa.name.pos, length = prop.length))
+            }
+            fun visitExpr(e: Expression?) {
+                when (e) {
+                    is PropertyAccessExpression -> { checkAccess(e); visitExpr(e.expression) }
+                    is ElementAccessExpression -> { visitExpr(e.expression); visitExpr(e.argumentExpression) }
+                    is CallExpression -> { visitExpr(e.expression); e.arguments.forEach { visitExpr(it) } }
+                    is BinaryExpression -> { visitExpr(e.left); visitExpr(e.right) }
+                    is ParenthesizedExpression -> visitExpr(e.expression)
+                    else -> {}
+                }
+            }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ExpressionStatement) visitExpr(stmt.expression)
+            }
+        }
+    }
+
+    /** Resolve a `require("<spec>")` to a closed object shape (display, key set), or null. */
+    private fun resolveRequireModuleShape(spec: String, fileName: String): Pair<String, Set<String>>? {
+        if (spec.endsWith(".json")) {
+            val content = resolveJsonModuleContent(spec) ?: return null
+            val parsed = try { Parser("const __m = ($content);", fileName).parse() } catch (_: Throwable) { return null }
+            val vs = parsed.statements.firstOrNull() as? VariableStatement ?: return null
+            val init = vs.declarationList.declarations.firstOrNull()?.initializer
+            val objLit = (init as? ParenthesizedExpression)?.expression as? ObjectLiteralExpression
+                ?: init as? ObjectLiteralExpression ?: return null
+            return requireObjLitShape(objLit)
+        }
+        val target = resolveSpecifierAnywhere(spec, fileName) ?: return null
+        val targetResult = fileResults[target] ?: return null
+        var objLit: ObjectLiteralExpression? = null
+        for (st in targetResult.sourceFile.statements) {
+            val be = (st as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (be.operator != SyntaxKind.Equals) continue
+            val lhs = be.left as? PropertyAccessExpression ?: continue
+            val recvId = (lhs.expression as? Identifier)?.text
+            if (recvId == "module" && (lhs.name as? Identifier)?.text == "exports") {
+                if (objLit != null) return null // multiple module.exports → not a closed shape
+                objLit = be.right as? ObjectLiteralExpression ?: return null
+            } else if (recvId == "exports") {
+                return null // exports.X = ... → open shape, bail
+            }
+        }
+        return objLit?.let { requireObjLitShape(it) }
+    }
+
+    /** Build a (display, keys) shape from an object literal of simple-valued props; null on
+     *  any non-`key: <simple literal>` shape (so unknown/complex modules never fire). */
+    private fun requireObjLitShape(objLit: ObjectLiteralExpression): Pair<String, Set<String>>? {
+        val parts = mutableListOf<String>()
+        val keys = mutableSetOf<String>()
+        for (p in objLit.properties) {
+            val pa = p as? PropertyAssignment ?: return null
+            val name = (pa.name as? Identifier)?.text ?: (pa.name as? StringLiteralNode)?.text ?: return null
+            val vdisp = requireJsonValueDisplay(pa.initializer) ?: return null
+            keys.add(name)
+            parts.add("$name: $vdisp")
+        }
+        val display = if (parts.isEmpty()) "{}" else "{ ${parts.joinToString("; ")}; }"
+        return display to keys
+    }
+
+    private fun requireJsonValueDisplay(e: Expression): String? = when (e) {
+        is NumericLiteralNode -> "number"
+        is StringLiteralNode -> "string"
+        is NoSubstitutionTemplateLiteralNode -> "string"
+        is Identifier -> if (e.text == "true" || e.text == "false") "boolean" else null
+        is PrefixUnaryExpression -> if (e.operand is NumericLiteralNode) "number" else null
+        else -> null
+    }
+
+    private fun emitRequireTypeAnnotationMissing(
+        d: VariableDeclaration, annLit: TypeLiteral, comments: List<Comment>,
+        shape: Pair<String, Set<String>>, source: String, fileName: String,
+    ) {
+        val (moduleDisplay, moduleKeys) = shape
+        val missing = annLit.members.filterIsInstance<PropertyDeclaration>()
+            .filter { !it.questionToken }
+            .mapNotNull { (it.name as? Identifier)?.text }
+            .filter { it !in moduleKeys }
+        if (missing.isEmpty()) return
+        val annDisplay = formatTypeForDisplay(annLit) ?: return
+        val name = d.name as? Identifier ?: return
+        val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+        val related = mutableListOf<Diagnostic>()
+        val jsdoc = comments.firstOrNull { it.kind == SyntaxKind.MultiLineComment && it.text.startsWith("/**") }
+        if (jsdoc != null && missing.size == 1) {
+            val ct = jsdoc.text
+            val atIdx = ct.indexOf("@type")
+            val brace = if (atIdx >= 0) ct.indexOf('{', atIdx) else -1
+            if (brace >= 0) {
+                val m = Regex("\\b" + Regex.escape(missing[0]) + "\\b").find(ct, brace)
+                if (m != null) {
+                    val abs = jsdoc.pos + m.range.first
+                    val (dl, dc) = getLineAndCharacterOfPosition(source, abs)
+                    related.add(Diagnostic(
+                        message = "'${missing[0]}' is declared here.",
+                        category = DiagnosticCategory.Message, code = 2728, fileName = fileName,
+                        line = dl, character = dc, start = abs, length = missing[0].length))
+                }
+            }
+        }
+        val msg = if (missing.size == 1)
+            "Property '${missing[0]}' is missing in type '$moduleDisplay' but required in type '$annDisplay'."
+        else "  " + formatTs2740Message(moduleDisplay, annDisplay, missing)
+        diagnostics.add(Diagnostic(
+            message = if (missing.size == 1) msg else "Type '$moduleDisplay' is not assignable to type '$annDisplay'.",
+            messageChain = if (missing.size == 1) emptyList() else listOf(msg),
+            category = DiagnosticCategory.Error, code = if (missing.size == 1) 2741 else 2739,
+            fileName = fileName, line = line, character = ch,
+            start = name.pos, length = name.text.length, relatedInformation = related))
     }
 
     private fun checkUnresolvedModules() {
