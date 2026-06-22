@@ -6920,6 +6920,18 @@ class Parser(
                     nextToken()
                     continue
                 }
+                // errorRecoveryInClassDeclaration: mirror tsc parseDelimitedList recovery for
+                // ArgumentExpressions (isListElement = isStartOfExpression) — a non-comma
+                // expression-start follow token reports ',' expected and RE-ENTERS the list
+                // (`foo( public blaz() {} )` → arguments `public`, `blaz()`, `{}`). Abort on the
+                // list/statement closers so we never run past the call. Conservative vs the
+                // array-literal sibling (no `Expression expected` skip path).
+                if (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile &&
+                    token != SyntaxKind.CloseBrace && token != SyntaxKind.Semicolon &&
+                    isStartOfExpression()) {
+                    reportError("',' expected.", code = 1005)
+                    continue
+                }
                 break
             }
         }
