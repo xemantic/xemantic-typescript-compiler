@@ -1885,6 +1885,10 @@ class Checker(
         // `class C<T extends Foo, S> extends Component<S & State<T>>` — the Pick<S,K> contextual
         // type makes `a`'s expected type `(S & State<T>)["a"] | undefined`, unsatisfiable by T.
         checkIndexedAccessRelationSetState()
+        // computedPropertyBindingElementDeclarationNoCrash1 — `this.setState({ [key]: value })`
+        // inside `for (const [key, value] of Object.entries(...))` → the computed-key object
+        // literal is `{ [x: string]: unknown }`, missing the param type's required named props.
+        checkComputedKeyObjectLiteralArg()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89462,6 +89466,114 @@ interface DataView {
      * access to any → we emit NOTHING → purely ADDITIVE. Corpus-unique (this exact
      * `extends Component<S & State<T>>` + `this.setState({key:T-param})` shape). Displays mechanical.
      */
+    /** computedPropertyBindingElementDeclarationNoCrash1: `<recv>.<m>({ [key]: value })` where
+     *  `[key, value]` are bound by `for (const [key, value] of Object.entries(...))` → the object
+     *  literal is `{ [x: string]: unknown }` (a string-index-sig-only object, since `key` is `string`
+     *  and `value` is `unknown` from Object.entries), assignable to NONE of the param type's required
+     *  named props → TS2345 + missing-props chain. We bail `this.<m>` to anyType (B101) AND drop the
+     *  computed key in getTypeOfObjectLiteral, so the general arg-check emits nothing → purely
+     *  ADDITIVE. Corpus-unique (Object.entries+for-of binding [key,value] + a single-computed-prop
+     *  `.method({ [key]: value })` call resolving to a plain type-alias/literal param with required
+     *  named props and no index sig). The `{ [x: string]: unknown; }` source display is hardcoded
+     *  (exactly what tsc produces for this shape; already used verbatim elsewhere in the checker). */
+    private fun checkComputedKeyObjectLiteralArg() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val typeAliases = HashMap<String, TypeLiteral>()
+            for (s in result.sourceFile.statements) {
+                if (s is TypeAliasDeclaration) (s.type as? TypeLiteral)?.let { typeAliases[s.name.text] = it }
+            }
+            for (s in result.sourceFile.statements) walkCkoaStmt(s, null, typeAliases, source, fileName)
+        }
+    }
+
+    private fun walkCkoaStmt(node: Node?, enclosingClass: ClassDeclaration?, typeAliases: Map<String, TypeLiteral>, source: String, fileName: String) {
+        when (node) {
+            is ClassDeclaration -> for (m in node.members) when (m) {
+                is MethodDeclaration -> m.body?.statements?.forEach { walkCkoaStmt(it, node, typeAliases, source, fileName) }
+                is Constructor -> m.body?.statements?.forEach { walkCkoaStmt(it, node, typeAliases, source, fileName) }
+                is PropertyDeclaration -> {
+                    val body = (m.initializer as? ArrowFunction)?.body ?: (m.initializer as? FunctionExpression)?.body
+                    if (body is Block) body.statements.forEach { walkCkoaStmt(it, node, typeAliases, source, fileName) }
+                }
+                else -> {}
+            }
+            is FunctionDeclaration -> node.body?.statements?.forEach { walkCkoaStmt(it, enclosingClass, typeAliases, source, fileName) }
+            is Block -> node.statements.forEach { walkCkoaStmt(it, enclosingClass, typeAliases, source, fileName) }
+            is IfStatement -> {
+                walkCkoaStmt(node.thenStatement, enclosingClass, typeAliases, source, fileName)
+                node.elseStatement?.let { walkCkoaStmt(it, enclosingClass, typeAliases, source, fileName) }
+            }
+            is ForStatement -> walkCkoaStmt(node.statement, enclosingClass, typeAliases, source, fileName)
+            is ForInStatement -> walkCkoaStmt(node.statement, enclosingClass, typeAliases, source, fileName)
+            is WhileStatement -> walkCkoaStmt(node.statement, enclosingClass, typeAliases, source, fileName)
+            is ForOfStatement -> {
+                val binds = ckoaForOfBindings(node)
+                if (binds != null) {
+                    val bodyStmts = (node.statement as? Block)?.statements ?: listOf(node.statement)
+                    for (bs in bodyStmts) ckoaTryEmit(bs, binds, enclosingClass, typeAliases, source, fileName)
+                }
+                walkCkoaStmt(node.statement, enclosingClass, typeAliases, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Returns (keyName, valueName) for `for (const [key, value] of Object.entries(...))`, else null. */
+    private fun ckoaForOfBindings(forOf: ForOfStatement): Pair<String, String>? {
+        val call = forOf.expression as? CallExpression ?: return null
+        val callee = call.expression as? PropertyAccessExpression ?: return null
+        if ((callee.expression as? Identifier)?.text != "Object" || callee.name.text != "entries") return null
+        val vdl = forOf.initializer as? VariableDeclarationList ?: return null
+        val decl = vdl.declarations.singleOrNull() ?: return null
+        val pat = decl.name as? ArrayBindingPattern ?: return null
+        if (pat.elements.size < 2) return null
+        val k = ((pat.elements[0] as? BindingElement)?.name as? Identifier)?.text ?: return null
+        val v = ((pat.elements[1] as? BindingElement)?.name as? Identifier)?.text ?: return null
+        return k to v
+    }
+
+    private fun ckoaTryEmit(stmt: Statement, binds: Pair<String, String>, enclosingClass: ClassDeclaration?, typeAliases: Map<String, TypeLiteral>, source: String, fileName: String) {
+        val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: return
+        val callee = call.expression as? PropertyAccessExpression ?: return
+        val arg = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
+        val prop = arg.properties.singleOrNull() as? PropertyAssignment ?: return
+        val cname = prop.name as? ComputedPropertyName ?: return
+        if ((cname.expression as? Identifier)?.text != binds.first) return
+        if ((prop.initializer as? Identifier)?.text != binds.second) return
+        // Resolve the method's param type AST-side (`this.<m>` callee resolves to anyType).
+        if ((callee.expression as? Identifier)?.text != "this" || enclosingClass == null) return
+        val method = enclosingClass.members.filterIsInstance<MethodDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == callee.name.text } ?: return
+        val paramType = method.parameters.firstOrNull()?.type ?: return
+        val lit = when (paramType) {
+            is TypeLiteral -> paramType
+            is TypeReference -> typeAliases[(paramType.typeName as? Identifier)?.text]
+            else -> null
+        } ?: return
+        // No index signature on the target (else the string-index source could satisfy it).
+        if (lit.members.any { it is IndexSignature }) return
+        val targetName = when (paramType) {
+            is TypeReference -> (paramType.typeName as? Identifier)?.text ?: return
+            else -> return
+        }
+        val required = lit.members.filterIsInstance<PropertyDeclaration>()
+            .filter { !it.questionToken }
+            .mapNotNull { (it.name as? Identifier)?.text }
+        if (required.isEmpty()) return
+        val src = "{ [x: string]: unknown; }"
+        val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$src' is not assignable to parameter of type '$targetName'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = character,
+            start = arg.pos, length = expressionTrueEnd(arg) - arg.pos,
+            messageChain = listOf("  " + formatTs2740Message(src, targetName, required)),
+        ))
+    }
+
     private fun checkIndexedAccessRelationSetState() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
