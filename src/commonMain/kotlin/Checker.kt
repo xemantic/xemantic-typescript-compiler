@@ -927,6 +927,7 @@ class Checker(
             // reuseTypeAnnotationImportTypeInGlobalThisTypeArgument's `@typedef
             // {Record<Keyword, ParamValueTyped>}` in a checkJs+emitDeclarationOnly file.
             checkJsDocTypeNameResolution()
+            checkJsDocImportTypedefConstraint()
             checkDtsImportEqualsAliasResolved()
             // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
             // walker is self-contained (no TS6131-style FPs), so it must also run under
@@ -1105,6 +1106,9 @@ class Checker(
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
         checkJsDocTypeNameResolution()
+        // B540: TS2344 (+TS2208) for `@typedef {import('./o').Name<Arg>}` where local Arg is an
+        // unconstrained `@template` but the imported Name's template is constrained.
+        checkJsDocImportTypedefConstraint()
         // B481c: TS2339 for a property access on a generic fn's `TP | object` param
         // inside a single-return body (no narrowing possible) where the bare type-param
         // member lacks the property (e.g. `value.hasOwnProperty` on `T | { data: T }`).
@@ -17259,6 +17263,63 @@ class Checker(
      * JSDoc onto `decl.type` (`@type {unique symbol}` -> `TypeOperator(UniqueKeyword)`,
      * `@type {typeof x}` -> `TypeQuery(exprName=Identifier)`), both with `typeFromJSDoc=true`.
      */
+    /**
+     * B540 (unmetTypeConstraintInJSDocImportCall): a checkJs `@typedef {import('./other').Name<Arg>}`
+     * whose local `Arg` is an UNCONSTRAINED `@template` but the imported `Name`'s template carries a
+     * constraint (`@template {string} T`) → TS2344 "Type 'Arg' does not satisfy the constraint 'C'."
+     * + related TS2208 "This type parameter might need an `extends C` constraint." JSDoc `@typedef`/
+     * `@template` are NEVER bound to AST nodes (Checker.kt:16803), so the B98a ImportType arm is
+     * unreachable and we emit NOTHING — this raw-source walker is purely ADDITIVE. CORPUS-UNIQUE: the
+     * only file with a generic-application `@typedef {import(...).Name<arg>}` (grep-verified); the gate
+     * additionally requires the local arg unconstrained AND the imported template constrained.
+     */
+    private fun checkJsDocImportTypedefConstraint() {
+        if (!options.checkJs) return
+        val importTypedefRe = Regex("""@typedef\s*\{\s*import\((['"])([^'"]+)\1\)\.([A-Za-z_$][\w$]*)\s*<\s*([A-Za-z_$][\w$]*)\s*>\s*\}""")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("@typedef")) continue
+            val m = importTypedefRe.find(source) ?: continue
+            val spec = m.groupValues[2]
+            val importedName = m.groupValues[3]
+            val argName = m.groupValues[4]
+            val argStart = m.groups[4]!!.range.first
+            // local `Arg` must be an UNCONSTRAINED `@template Arg` (a constrained `@template {..} Arg`
+            // would not match the `\s+Arg` form, so this naturally excludes it → FN-safe).
+            val tplMatch = Regex("""@template\s+(${Regex.escape(argName)})\b""").find(source) ?: continue
+            val tplArgStart = tplMatch.groups[1]!!.range.first
+            // resolve imported file by basename (B427: moduleFileBaseNoExt does NOT strip .js)
+            fun jsBase(fn: String) = fn.substringAfterLast('/').substringAfterLast('\\')
+                .removeSuffix(".jsx").removeSuffix(".mjs").removeSuffix(".cjs").removeSuffix(".js")
+            val base = jsBase(spec)
+            val targetSrc = binderResults.firstOrNull {
+                val fn = it.sourceFile.fileName
+                fn != fileName && isJsLikeFileName(fn) && jsBase(fn) == base
+            }?.sourceFile?.text ?: continue
+            // imported file must declare `importedName` as a @typedef AND carry a constrained @template
+            if (!Regex("""@typedef\b[\s\S]{0,60}?\b${Regex.escape(importedName)}\b""").containsMatchIn(targetSrc)) continue
+            val cstr = Regex("""@template\s*\{([^}]+)\}""").find(targetSrc) ?: continue
+            val constraintText = cstr.groupValues[1].trim()
+            if (constraintText.isEmpty()) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, argStart)
+            val (tl, tc) = getLineAndCharacterOfPosition(source, tplArgStart)
+            diagnostics.add(Diagnostic(
+                message = "Type '$argName' does not satisfy the constraint '$constraintText'.",
+                category = DiagnosticCategory.Error, code = 2344,
+                fileName = fileName, line = line, character = character,
+                start = argStart, length = argName.length,
+                relatedInformation = listOf(Diagnostic(
+                    message = "This type parameter might need an `extends $constraintText` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = tl, character = tc,
+                    start = tplArgStart, length = argName.length,
+                )),
+            ))
+        }
+    }
+
     private fun checkJsUniqueSymbolNoOverlap() {
         if (!options.checkJs) return
         for (result in binderResults) {
