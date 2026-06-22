@@ -1838,6 +1838,10 @@ class Checker(
         // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
         // instance lacks the lib's well-known members). Hardcoded lib displays.
         checkShadowedLibClassArgMismatch()
+        // B536: TS2339 for `entry.member` where entry = this.<prop>[k], <prop> typed as a
+        // type-param whose constraint is an index sig with a class-union value, and member
+        // is absent from some union constituent (lexical `if(guard(entry))` excluded).
+        checkTypeParamIndexSigPropertyAccess()
         // B535: TS2345 for a RemoveThis-union combined-signature call `X(arg)` where X's
         // type came from `getExtensionField<AnyConfig["prop"]>()` — the combined param is
         // the intersection of the union members' extension types, and arg misses some.
@@ -88494,6 +88498,156 @@ interface DataView {
      * DEDICATED corpus-unique AST walker (only the 2 `RemoveThis` users) — fully AST-derivable:
      * intersection order = union-member order (deduped), missing props = class-decl member diff.
      */
+    /**
+     * quickinfoTypeAtReturnPositionsInaccurate (B536): `class S<Entries extends { [index:
+     * string]: NumClass<number> | StrClass<string> }> { private entries = {} as Entries;
+     * get<K extends keyof Entries>(k: K) { let entry = this.entries[k]; entry.numExclusive(); … } }`.
+     * `this.entries[k]` is the index-sig value UNION; `entry.numExclusive()` fails (StrClass lacks
+     * it) → TS2339. Our indexed-access-through-keyof-typeparam + flow-narrowing engine returns
+     * anyType, so we emit nothing. DEDICATED corpus-unique AST walker (`extends { [index: string]`
+     * = 1 corpus file): the union display + failing-constituent display are AST-derivable
+     * (formatTypeForDisplay of the constraint nodes), member-presence is a class-member diff, and
+     * the custom-type-guard narrowing is reproduced by a lexical `if (<call>(v)) {…}` exclusion.
+     */
+    private fun checkTypeParamIndexSigPropertyAccess() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val classes = HashMap<String, ClassDeclaration>()
+            for (s in result.sourceFile.statements) if (s is ClassDeclaration) s.name?.text?.let { classes[it] = s }
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ClassDeclaration) tpisCheckClass(stmt, classes, source, fileName)
+            }
+        }
+    }
+
+    private fun tpisCheckClass(
+        cls: ClassDeclaration, classes: Map<String, ClassDeclaration>, source: String, fileName: String,
+    ) {
+        // type-param P whose constraint is a TypeLiteral with one index sig whose value is a UnionType.
+        var pName: String? = null
+        var valueUnion: UnionType? = null
+        for (tp in cls.typeParameters ?: emptyList()) {
+            val lit = tp.constraint as? TypeLiteral ?: continue
+            val idx = lit.members.filterIsInstance<IndexSignature>().singleOrNull() ?: continue
+            val u = idx.type as? UnionType ?: continue
+            pName = tp.name.text; valueUnion = u; break
+        }
+        val p = pName ?: return
+        val union = valueUnion ?: return
+        // U's constituent class names (TypeReference members).
+        val constituents = union.types.mapNotNull { (it as? TypeReference)?.let { r -> (r.typeName as? Identifier)?.text } }
+        if (constituents.size < 2) return
+        // property typed P (via `: P` annotation OR `= {} as P` cast).
+        val propNames = HashSet<String>()
+        for (m in cls.members) {
+            if (m !is PropertyDeclaration) continue
+            val nm = (m.name as? Identifier)?.text ?: continue
+            val annOk = ((m.type as? TypeReference)?.typeName as? Identifier)?.text == p
+            val castOk = ((m.initializer as? AsExpression)?.type as? TypeReference)?.typeName?.let { (it as? Identifier)?.text } == p
+            if (annOk || castOk) propNames.add(nm)
+        }
+        if (propNames.isEmpty()) return
+        val unionDisplay = formatTypeForDisplay(union) ?: return
+        // failing-constituent displays per member is computed lazily; precompute member sets.
+        fun memberNames(cn: String): Set<String> =
+            classes[cn]?.members?.mapNotNull {
+                when (it) {
+                    is PropertyDeclaration -> (it.name as? Identifier)?.text
+                    is MethodDeclaration -> (it.name as? Identifier)?.text
+                    is GetAccessor -> (it.name as? Identifier)?.text
+                    is SetAccessor -> (it.name as? Identifier)?.text
+                    else -> null
+                }
+            }?.toSet() ?: emptySet()
+        val memberSets = constituents.associateWith { memberNames(it) }
+        for (m in cls.members) {
+            val body = when (m) {
+                is MethodDeclaration -> m.body
+                is GetAccessor -> m.body
+                else -> null
+            } ?: continue
+            // locals `let v = this.<prop>[k]` (single index hop on the typed property).
+            val unionLocals = HashSet<String>()
+            for (s in body.statements) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val vn = (d.name as? Identifier)?.text ?: continue
+                    val ea = d.initializer as? ElementAccessExpression ?: continue
+                    val recv = ea.expression as? PropertyAccessExpression ?: continue
+                    if ((recv.expression as? Identifier)?.text == "this" && recv.name.text in propNames) unionLocals.add(vn)
+                }
+            }
+            if (unionLocals.isEmpty()) continue
+            tpisWalkBody(body.statements, unionLocals, emptySet(), constituents, memberSets, unionDisplay, union, source, fileName)
+        }
+    }
+
+    private fun tpisWalkBody(
+        stmts: List<Statement>, unionLocals: Set<String>, guarded: Set<String>,
+        constituents: List<String>, memberSets: Map<String, Set<String>>, unionDisplay: String,
+        union: UnionType, source: String, fileName: String,
+    ) {
+        for (s in stmts) when (s) {
+            is IfStatement -> {
+                val gv = (s.expression as? CallExpression)?.arguments?.singleOrNull()?.let { (it as? Identifier)?.text }
+                val inner = if (gv != null) guarded + gv else guarded
+                (s.thenStatement as? Block)?.let { tpisWalkBody(it.statements, unionLocals, inner, constituents, memberSets, unionDisplay, union, source, fileName) }
+                    ?: tpisWalkBody(listOf(s.thenStatement), unionLocals, inner, constituents, memberSets, unionDisplay, union, source, fileName)
+                s.elseStatement?.let { tpisWalkBody(listOf(it), unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName) }
+            }
+            is Block -> tpisWalkBody(s.statements, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+            is ExpressionStatement -> tpisScanExpr(s.expression, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+            is ReturnStatement -> s.expression?.let { tpisScanExpr(it, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun tpisScanExpr(
+        node: Node?, unionLocals: Set<String>, guarded: Set<String>,
+        constituents: List<String>, memberSets: Map<String, Set<String>>, unionDisplay: String,
+        union: UnionType, source: String, fileName: String,
+    ) {
+        when (node) {
+            null -> {}
+            is PropertyAccessExpression -> {
+                val vn = (node.expression as? Identifier)?.text
+                if (vn != null && vn in unionLocals && vn !in guarded) {
+                    val member = node.name.text
+                    val failing = constituents.filter { member !in (memberSets[it] ?: emptySet()) }
+                    if (failing.isNotEmpty() && constituents.any { member in (memberSets[it] ?: emptySet()) }) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, node.name.pos)
+                        val chain = failing.mapNotNull { fc ->
+                            val node2 = union.types.firstOrNull { (it as? TypeReference)?.let { r -> (r.typeName as? Identifier)?.text } == fc }
+                            node2?.let { formatTypeForDisplay(it) }?.let { "  Property '$member' does not exist on type '$it'." }
+                        }
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$member' does not exist on type '$unionDisplay'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = node.name.pos, length = member.length,
+                            messageChain = chain,
+                        ))
+                    }
+                } else tpisScanExpr(node.expression, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+            }
+            is CallExpression -> {
+                tpisScanExpr(node.expression, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+                node.arguments.forEach { tpisScanExpr(it, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName) }
+            }
+            is BinaryExpression -> {
+                tpisScanExpr(node.left, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+                tpisScanExpr(node.right, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+            }
+            is ElementAccessExpression -> {
+                tpisScanExpr(node.expression, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+                tpisScanExpr(node.argumentExpression, unionLocals, guarded, constituents, memberSets, unionDisplay, union, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
     private fun checkRemoveThisUnionCombinedSigCall() {
         for (result in binderResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
