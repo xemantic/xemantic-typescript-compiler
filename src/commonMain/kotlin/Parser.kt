@@ -497,6 +497,12 @@ class Parser(
         relatedMessage: String, relatedCode: Int, relatedPos: Int,
     ) {
         val start = scanner.getTokenPos()
+        // Mirror reportError / tsc parseErrorAtPosition same-start dedup: when several
+        // close-token-at-EOF recoveries fire at the SAME position (e.g. multiple unclosed
+        // blocks at EOF), keep only the first (innermost) — its TS1007 related points at the
+        // innermost open token, matching tsc (errorRecoveryWithDotFollowedByNamespaceKeyword).
+        val lastDiag = diagnostics.lastOrNull()
+        if (lastDiag != null && lastDiag.start == start) return
         val length = (scanner.getPos() - start).coerceAtLeast(0)
         val (line, character) = getLineAndCharacterOfPosition(start)
         val (relLine, relChar) = getLineAndCharacterOfPosition(relatedPos)
@@ -5482,9 +5488,16 @@ class Parser(
                     //   - If next token closes enclosing context (e.g. `}`, EOF)
                     //     → report at the next token's position (getPos())
                     val name = when {
-                        newLineAfterDot && isKeyword() && !isIdentifier() &&
-                                lookAhead { nextToken(); isIdentifier() || isKeyword() } -> {
-                            // Statement-starting keyword (var, let, function, etc.) → report at afterDotPos
+                        // tsc parseRightSideOfDot: a newline-dot followed by an identifier-OR-keyword
+                        // that is itself followed by another identifier/keyword ON THE SAME LINE means
+                        // the token starts a new statement (no ASI between the two), so the property
+                        // name is missing. This must fire even when the token is a CONTEXTUAL keyword
+                        // that `isIdentifierToken` accepts (e.g. `namespace`/`type`) — gating on
+                        // `!isIdentifier()` wrongly consumes `namespace`/`type` as the property name and
+                        // derails recovery of the following declaration (errorRecoveryWithDotFollowedByNamespaceKeyword).
+                        newLineAfterDot && (isIdentifier() || isKeyword()) &&
+                                lookAhead { nextToken(); (isIdentifier() || isKeyword()) && !scanner.hasPrecedingLineBreak() } -> {
+                            // Statement-starting token → report at afterDotPos (right after the dot)
                             reportError("Identifier expected.", code = 1003, overrideStart = afterDotPos, overrideLength = 0)
                             Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
