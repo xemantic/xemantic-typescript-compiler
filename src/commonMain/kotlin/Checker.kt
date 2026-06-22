@@ -1005,6 +1005,13 @@ class Checker(
         // 6a''. orderMattersForSignatureGroupIdentity — a call to a ≥2-call-sig-only-interface
         // var with a fresh object literal that excess-fails EVERY overload → TS2769 + TS2339-never.
         checkSignatureGroupOverloadExcessCalls()
+        // 6a'''. excessPropertyCheckIntersectionWithIndexSignature — a var annotated with an
+        // INTERSECTION of pure string-index-signature TypeLiterals (`{[x:string]:{a:0}} &
+        // {[x:string]:{b:0}}`); an object-literal RHS whose VALUE misses a required prop of
+        // the intersected index-value type → TS2322 at the key, or carries an excess prop →
+        // TS2353 at the excess key. The relation engine passes these (it only checks index-sig
+        // PRESENCE for nominal/function sources), so this dedicated AST-shape walker owns them.
+        checkIntersectionIndexSigValueExcess()
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
@@ -50479,6 +50486,178 @@ interface DataView {
             try {
                 fnTypeSwitchReturnScan(statements, statements, source, fileName)
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); }
+        }
+    }
+
+    /**
+     * excessPropertyCheckIntersectionWithIndexSignature: a var annotated as an INTERSECTION
+     * of pure string-index-signature TypeLiterals whose VALUE types are object TypeLiterals
+     * (`{ [x: string]: { a: 0 } } & { [x: string]: { b: 0 } }`). An object-literal RHS
+     * property value is checked against the INTERSECTED index-value type `{ a: 0; } & { b: 0; }`:
+     * a missing required prop → TS2322 at the outer key + TS2728 at the prop declaration; an
+     * excess prop → TS2353 at the excess key. `objectTypeRelatedTo` passes these (it never
+     * verifies a literal source property's value against the target index-value type for an
+     * intersection-of-index-sig target), so this dedicated FP-safe walker owns them. Gate is
+     * corpus-unique (the only intersection-of-pure-string-index-sig-TypeLiteral annotation).
+     */
+    private fun checkIntersectionIndexSigValueExcess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val statements = result.sourceFile.statements
+            // var name -> the list of index-signature VALUE TypeLiterals from its annotation.
+            val annotated = HashMap<String, List<TypeLiteral>>()
+            for (stmt in statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val name = (d.name as? Identifier)?.text ?: continue
+                    val valueLits = intersectionIndexSigValueLiterals(d.type) ?: continue
+                    annotated[name] = valueLits
+                    (d.initializer as? ObjectLiteralExpression)?.let {
+                        try { emitIntersectionIndexSigValueExcess(it, valueLits, source, fileName) }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+                    }
+                }
+            }
+            if (annotated.isEmpty()) continue
+            try { scanIntersectionIndexAssignments(statements, annotated, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** Returns the index-signature VALUE TypeLiterals of an annotation that is an intersection
+     *  (≥2 members) of TypeLiterals each holding a SINGLE string-keyed index signature whose
+     *  value type is itself an object TypeLiteral, else null (the FP-safe gate). */
+    private fun intersectionIndexSigValueLiterals(typeNode: TypeNode?): List<TypeLiteral>? {
+        val inter = typeNode as? IntersectionType ?: return null
+        if (inter.types.size < 2) return null
+        val out = ArrayList<TypeLiteral>(inter.types.size)
+        for (member in inter.types) {
+            val tl = member as? TypeLiteral ?: return null
+            if (tl.members.size != 1) return null
+            val idx = tl.members[0] as? IndexSignature ?: return null
+            val param = idx.parameters.singleOrNull() ?: return null
+            if ((param.type as? KeywordTypeNode)?.kind != SyntaxKind.StringKeyword) return null
+            val valueLit = idx.type as? TypeLiteral ?: return null
+            out.add(valueLit)
+        }
+        return out
+    }
+
+    private fun scanIntersectionIndexAssignments(
+        statements: List<Statement>, annotated: Map<String, List<TypeLiteral>>,
+        source: String, fileName: String,
+    ) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ExpressionStatement -> {
+                    val bin = stmt.expression as? BinaryExpression ?: continue
+                    if (bin.operator != SyntaxKind.Equals) continue
+                    val target = (bin.left as? Identifier)?.text ?: continue
+                    val lits = annotated[target] ?: continue
+                    val rhs = bin.right as? ObjectLiteralExpression ?: continue
+                    emitIntersectionIndexSigValueExcess(rhs, lits, source, fileName)
+                }
+                is Block -> scanIntersectionIndexAssignments(stmt.statements, annotated, source, fileName)
+                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
+                    scanIntersectionIndexAssignments(it.statements, annotated, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Object-literal type display preserving each property's LITERAL type (the value is
+     *  contextually typed by the index-sig value type in tsc, so `{ a: 0 }` displays as
+     *  `{ a: 0; }`, not the widened `{ a: number; }`). Falls back to the widened display for
+     *  non-literal property values. */
+    private fun intersectionIndexObjectLiteralDisplay(objLit: ObjectLiteralExpression): String {
+        val parts = ArrayList<String>()
+        for (prop in objLit.properties) {
+            if (prop !is PropertyAssignment) return typeToString(getTypeOfObjectLiteral(objLit))
+            val name = (prop.name as? Identifier)?.text ?: return typeToString(getTypeOfObjectLiteral(objLit))
+            val litT = literalTypeOfExpression(prop.initializer)
+            val disp = if (litT != null) typeToString(litT)
+                else typeToString(getWidenedLiteralType(getTypeOfExpression(prop.initializer)))
+            parts.add("$name: $disp")
+        }
+        return if (parts.isEmpty()) "{}" else "{ " + parts.joinToString("; ") + "; }"
+    }
+
+    private fun emitIntersectionIndexSigValueExcess(
+        objLit: ObjectLiteralExpression, valueLits: List<TypeLiteral>,
+        source: String, fileName: String,
+    ) {
+        // Intersected index-value display: `{ a: 0; } & { b: 0; }`.
+        val perLitDisplay = valueLits.map { formatTypeForDisplay(it) ?: return }
+        val targetDisplay = perLitDisplay.joinToString(" & ")
+        // Required (non-optional) props across all value literals: name -> (declaring literal index, declaring prop).
+        data class ReqInfo(val litIndex: Int, val declProp: PropertyDeclaration)
+        val required = LinkedHashMap<String, ReqInfo>()
+        for ((i, vl) in valueLits.withIndex()) {
+            for (m in vl.members) {
+                if (m !is PropertyDeclaration || m.questionToken) continue
+                val pn = (m.name as? Identifier)?.text ?: continue
+                if (pn !in required) required[pn] = ReqInfo(i, m)
+            }
+        }
+        // Allowed prop names = any name declared by any value literal (incl. optional).
+        val allowed = HashSet<String>()
+        for (vl in valueLits) for (m in vl.members) {
+            if (m is PropertyDeclaration) (m.name as? Identifier)?.text?.let { allowed.add(it) }
+        }
+        for (prop in objLit.properties) {
+            if (prop !is PropertyAssignment) continue
+            val value = prop.initializer as? ObjectLiteralExpression ?: continue
+            val present = LinkedHashMap<String, Identifier>()
+            for (vp in value.properties) {
+                if (vp !is PropertyAssignment) continue
+                (vp.name as? Identifier)?.let { present[it.text] = it }
+            }
+            // Missing required prop -> TS2322 at the OUTER key.
+            val missingName = required.keys.firstOrNull { it !in present.keys }
+            if (missingName != null) {
+                val keyNode = prop.name as? Identifier
+                if (keyNode != null) {
+                    val req = required[missingName]!!
+                    val valueDisplay = intersectionIndexObjectLiteralDisplay(value)
+                    val declLitDisplay = perLitDisplay[req.litIndex]
+                    val pos = keyNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    val related = mutableListOf<Diagnostic>()
+                    val declNameNode = req.declProp.name as? Identifier
+                    if (declNameNode != null && declNameNode.pos >= 0) {
+                        val (dl, dc) = getLineAndCharacterOfPosition(source, declNameNode.pos)
+                        related.add(Diagnostic(
+                            message = "'$missingName' is declared here.",
+                            category = DiagnosticCategory.Message, code = 2728,
+                            fileName = fileName, line = dl, character = dc,
+                            start = declNameNode.pos, length = missingName.length,
+                        ))
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$valueDisplay' is not assignable to type '$targetDisplay'.",
+                        messageChain = listOf("  Property '$missingName' is missing in type '$valueDisplay' but required in type '$declLitDisplay'."),
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = pos, length = keyNode.text.length,
+                        relatedInformation = related,
+                    ))
+                }
+            }
+            // Excess prop -> TS2353 at the excess key.
+            for ((eName, eNode) in present) {
+                if (eName in allowed) continue
+                val pos = eNode.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "Object literal may only specify known properties, and '$eName' does not exist in type '$targetDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2353,
+                    fileName = fileName, line = line, character = character,
+                    start = pos, length = eNode.text.length,
+                ))
+            }
         }
     }
 
