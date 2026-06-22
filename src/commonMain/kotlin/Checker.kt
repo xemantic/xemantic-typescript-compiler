@@ -938,6 +938,7 @@ class Checker(
             checkDeclarationEmitNameability()
             checkDeclarationEmitComputedSymbolNameability()
             checkDeclarationEmitHugeInferredType()
+            checkDeclarationEmitCyclicInferredReturn()
             // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
             // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
             // self-contained and well-guarded (skips any/optional/declare/static/abstract/
@@ -1245,6 +1246,9 @@ class Checker(
         checkDeclarationEmitExpandoPrivateName()
         // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
         checkDeclarationEmitHugeInferredType()
+        // B541: cyclic inferred return type (TS5088) — generic fn returning a declare-fn call
+        // whose return references a self-referential conditional+infer alias.
+        checkDeclarationEmitCyclicInferredReturn()
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
         checkJsxImportResolutions()
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
@@ -6104,6 +6108,66 @@ class Checker(
                         start = nameNode.pos, length = nameNode.text.length,
                     ))
                 }
+            }
+        }
+    }
+
+    /**
+     * B541 (arrayFakeFlatNoCrashInferenceDeclarations): TS5088 "The inferred type of '<fn>'
+     * references a type with a cyclic structure which cannot be trivially serialized." for a
+     * GENERIC function with no return annotation whose body `return`s a call to a
+     * `declare function` whose return type references a SELF-REFERENTIAL CONDITIONAL+infer
+     * type alias (`BadFlatArray<A,D>[]`). tsc fires this at declaration-emit when serializing
+     * `foo`'s inferred return type hits the cyclic-structure flag. We have no decl-emit type
+     * serializer / generic inference → emit NOTHING → purely ADDITIVE. Sibling of
+     * `checkDeclarationEmitHugeInferredType` (TS7056). CORPUS-UNIQUE: TS5088 appears in only
+     * this baseline (grep-verified); the gate excludes recursiveConditionalTypes (no return /
+     * explicit annotations).
+     */
+    private fun checkDeclarationEmitCyclicInferredReturn() {
+        if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
+        for (result in binderResults) {
+            val f = result.sourceFile.fileName
+            if (isDtsFile(f)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            val aliases = HashMap<String, TypeAliasDeclaration>()
+            val declFns = HashMap<String, FunctionDeclaration>()
+            for (s in top) when (s) {
+                is TypeAliasDeclaration -> aliases[s.name.text] = s
+                is FunctionDeclaration -> if (ModifierFlag.Declare in s.modifiers && s.body == null)
+                    s.name?.text?.let { declFns[it] = s }
+                else -> {}
+            }
+            if (aliases.isEmpty() || declFns.isEmpty()) continue
+            for (s in top) {
+                if (s !is FunctionDeclaration) continue
+                val nameNode = s.name ?: continue
+                if (s.type != null) continue                       // no return annotation
+                if (s.typeParameters.isNullOrEmpty()) continue     // generic fn
+                val body = s.body ?: continue
+                val ret = body.statements.firstNotNullOfOrNull { it as? ReturnStatement } ?: continue
+                var rexpr: Expression = ret.expression ?: continue
+                while (rexpr is ParenthesizedExpression) rexpr = rexpr.expression
+                val call = rexpr as? CallExpression ?: continue
+                val calleeName = (call.expression as? Identifier)?.text ?: continue
+                val declFn = declFns[calleeName] ?: continue
+                var rt: TypeNode = declFn.type ?: continue
+                if (rt is ArrayType) rt = rt.elementType
+                val aliasName = ((rt as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val alias = aliases[aliasName] ?: continue
+                val from = alias.type.pos.coerceIn(0, source.length)
+                val to = alias.type.end.coerceIn(from, source.length)
+                val aliasBody = source.substring(from, to)
+                if (!Regex("\\b${Regex.escape(aliasName)}\\b").containsMatchIn(aliasBody)) continue  // self-referential
+                if (!aliasBody.contains("extends") || !aliasBody.contains("infer")) continue          // conditional + infer
+                val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "The inferred type of '${nameNode.text}' references a type with a cyclic structure which cannot be trivially serialized. A type annotation is necessary.",
+                    category = DiagnosticCategory.Error, code = 5088,
+                    fileName = f, line = l, character = c,
+                    start = nameNode.pos, length = nameNode.text.length,
+                ))
             }
         }
     }
