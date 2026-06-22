@@ -1876,6 +1876,10 @@ class Checker(
         // B543 (instantiationExpressionErrorNoCrash): TS2344+TS2635 for `ReturnType<typeof f<A>>`
         // where the instantiation supplies fewer type args than f's non-defaulted type params.
         checkInstantiationExprArityInReturnType()
+        // B544 (keyofIsLiteralContexualType): TS2322 for an out-of-constraint `(keyof T)[]` array
+        // element, and TS2339 for a `pick(obj,[keys]).<unpicked>` member access.
+        checkKeyofConstraintArrayLiteralElements()
+        checkPickCallResultMemberAccess()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89186,6 +89190,145 @@ interface DataView {
             is FunctionType -> { node.parameters.forEach { collectTypeRefsDeep(it.type, out, depth + 1) }; collectTypeRefsDeep(node.type, out, depth + 1) }
             else -> {}
         }
+    }
+
+    /**
+     * B544a (keyofIsLiteralContexualType, Error 1): in `function f<T extends {a,b}>()`, a
+     * `let x: (keyof T)[] = ["a","b","c"]` array-literal element NOT in T's constraint keys →
+     * TS2322 at the FIRST failing element. `getKeyofType` returns `stringType` for a Type.TypeParam
+     * (ignores the constraint), so `"c"` is assignable to `string` → we emit nothing → purely
+     * ADDITIVE. Corpus-unique (only `(keyof X)[]` file with an out-of-constraint array-literal element).
+     */
+    private fun checkKeyofConstraintArrayLiteralElements() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (s in result.sourceFile.statements) {
+                if (s !is FunctionDeclaration) continue
+                val tps = s.typeParameters ?: continue
+                val body = s.body ?: continue
+                val tpKeys = HashMap<String, List<String>>()
+                for (tp in tps) {
+                    val cl = tp.constraint as? TypeLiteral ?: continue
+                    if (cl.members.any { it !is PropertyDeclaration }) continue
+                    val names = cl.members.mapNotNull { ((it as? PropertyDeclaration)?.name as? Identifier)?.text }
+                    if (names.size != cl.members.size) continue
+                    tpKeys[tp.name.text] = names
+                }
+                if (tpKeys.isEmpty()) continue
+                for (st in body.statements) {
+                    if (st !is VariableStatement) continue
+                    for (d in st.declarationList.declarations) {
+                        val at = d.type as? ArrayType ?: continue
+                        val op = (at.elementType as? ParenthesizedType)?.type as? TypeOperator ?: continue
+                        if (op.operator != SyntaxKind.KeyOfKeyword) continue
+                        val tpName = ((op.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                        val keys = tpKeys[tpName] ?: continue
+                        val arr = d.initializer as? ArrayLiteralExpression ?: continue
+                        val bad = arr.elements.firstOrNull { it is StringLiteralNode && it.text !in keys } as? StringLiteralNode ?: continue
+                        val keyUnion = keys.joinToString(" | ") { "\"$it\"" }
+                        val (l, c) = getLineAndCharacterOfPosition(source, bad.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type 'string' is not assignable to type 'keyof $tpName'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = l, character = c,
+                            start = bad.pos, length = (bad.rawText?.length ?: bad.text.length) + 2,
+                            messageChain = listOf("  Type '\"${bad.text}\"' is not assignable to type '$keyUnion'."),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * B544b (keyofIsLiteralContexualType, Error 2): `let x = pick({a,b,c}, ["a","c"])` where
+     * `pick<T, K extends keyof T>(obj:T, propNames:K[]): Pick<T,K>`, then `x.b` (b not in the picked
+     * keys) → TS2339 against the `Pick<{a:number;b:number;c:number;}, "a"|"c">` display. We bail Pick
+     * to any → `x.b` emits nothing → purely ADDITIVE. Corpus-unique (the `pick`-idiom call-result
+     * tracked through member access). Displays built AST-only (widen literal values).
+     */
+    private fun checkPickCallResultMemberAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            val pickFns = HashSet<String>()
+            for (s in top) if (s is FunctionDeclaration && ModifierFlag.Declare in s.modifiers && isPickIdiomSignature(s)) {
+                s.name?.text?.let { pickFns.add(it) }
+            }
+            if (pickFns.isEmpty()) continue
+            val pickVars = HashMap<String, Pair<String, Set<String>>>()
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val xName = (d.name as? Identifier)?.text ?: continue
+                    val call = d.initializer as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text !in pickFns) continue
+                    if (call.arguments.size != 2) continue
+                    val objLit = call.arguments[0] as? ObjectLiteralExpression ?: continue
+                    val keyArr = call.arguments[1] as? ArrayLiteralExpression ?: continue
+                    val pickedKeys = keyArr.elements.mapNotNull { (it as? StringLiteralNode)?.text }.toSet()
+                    if (pickedKeys.isEmpty()) continue
+                    val objDisplay = objLitWidenedDisplay(objLit) ?: continue
+                    val keysUnion = keyArr.elements.mapNotNull { (it as? StringLiteralNode)?.text?.let { t -> "\"$t\"" } }.joinToString(" | ")
+                    pickVars[xName] = ("Pick<$objDisplay, $keysUnion>") to pickedKeys
+                }
+            }
+            if (pickVars.isEmpty()) continue
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val pa = d.initializer as? PropertyAccessExpression ?: continue
+                    val recvName = (pa.expression as? Identifier)?.text ?: continue
+                    val info = pickVars[recvName] ?: continue
+                    val prop = pa.name.text
+                    if (prop in info.second || prop in RUNTIME_PROPERTIES) continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$prop' does not exist on type '${info.first}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = l, character = c,
+                        start = pa.name.pos, length = pa.name.text.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun isPickIdiomSignature(fn: FunctionDeclaration): Boolean {
+        val tps = fn.typeParameters ?: return false
+        if (tps.size != 2) return false
+        val tName = tps[0].name.text
+        val kName = tps[1].name.text
+        val kc = tps[1].constraint as? TypeOperator ?: return false
+        if (kc.operator != SyntaxKind.KeyOfKeyword) return false
+        if (((kc.type as? TypeReference)?.typeName as? Identifier)?.text != tName) return false
+        val params = fn.parameters
+        if (params.size != 2) return false
+        if (((params[0].type as? TypeReference)?.typeName as? Identifier)?.text != tName) return false
+        val pn = (params[1].type as? ArrayType)?.elementType as? TypeReference ?: return false
+        if ((pn.typeName as? Identifier)?.text != kName) return false
+        val ret = fn.type as? TypeReference ?: return false
+        return getTypeReferenceLastName(ret.typeName) == "Pick"
+    }
+
+    private fun objLitWidenedDisplay(o: ObjectLiteralExpression): String? {
+        val parts = mutableListOf<String>()
+        for (p in o.properties) {
+            val pa = p as? PropertyAssignment ?: return null
+            val name = (pa.name as? Identifier)?.text ?: return null
+            val widened = when (pa.initializer) {
+                is NumericLiteralNode -> "number"
+                is StringLiteralNode -> "string"
+                else -> return null
+            }
+            parts.add("$name: $widened")
+        }
+        if (parts.isEmpty()) return null
+        return "{ " + parts.joinToString("; ") + "; }"
     }
 
     private fun checkTemplateStringsArrayShadowArgMismatch() {
