@@ -1304,6 +1304,10 @@ class Checker(
         // dedicated walker rebuilds the accumulated property set + the `merge<…>` display from the
         // AST and emits TS2339 for out-of-set property accesses.
         checkMergeAliasInstantiationChain()
+        // 15f. longObjectInstantiationChain2 — the METHOD-call sibling: `const oN = o(N-1).merge({…})`
+        // over `type Type<t> = { shape: t; merge: <r>(r) => Type<merge<t,r>> }`, accessed as
+        // `oN.shape.pX`. Same `merge<…>` display, but a LITERAL base from `declare const o1: Type<{…}>`.
+        checkMergeTypeMethodChain()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43387,6 +43391,90 @@ interface DataView {
     private fun mergeObjLitDisplay(ol: ObjectLiteralExpression): String? {
         val keys = mergeObjLitKeys(ol) ?: return null
         return "{ " + keys.joinToString("; ") { "$it: number" } + "; }"
+    }
+
+    /**
+     * longObjectInstantiationChain2 — the method-call sibling of [checkMergeAliasInstantiationChain]:
+     * `type Type<t> = { shape: t; merge: <r>(r: r) => Type<merge<t, r>> }; declare const o1: Type<{
+     * p1: 1 }>;` then `const o2 = o1.merge({ p2: 2 }); …`, accessed as `oN.shape.pX`. Same `merge<…>`
+     * display as chain1 but the BASE keeps its literal value (`{ p1: 1; }`, from the `Type<{…}>` type
+     * argument). FP firewall: gated to a file with a `type merge<…>` non-conditional-intersection
+     * alias + a `type Type<…>` alias + NO `declare const merge` (which distinguishes it from chain1/3).
+     */
+    private fun checkMergeTypeMethodChain() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliasOk = stmts.any { it is TypeAliasDeclaration && it.name.text == "merge" && it.type is IntersectionType }
+            val typeOk = stmts.any { it is TypeAliasDeclaration && it.name.text == "Type" }
+            val hasConstMerge = stmts.any { s -> s is VariableStatement &&
+                s.declarationList.declarations.any { (it.name as? Identifier)?.text == "merge" } }
+            if (!aliasOk || !typeOk || hasConstMerge) continue
+            try {
+                val chainProps = HashMap<String, Set<String>>()
+                val chainDisplay = HashMap<String, String>()
+                for (stmt in stmts) {
+                    if (stmt !is VariableStatement) continue
+                    for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        if (ModifierFlag.Declare in stmt.modifiers) {
+                            // base: `declare const o1: Type<{ p1: 1 }>` → literal display.
+                            val tref = d.type as? TypeReference ?: continue
+                            if ((tref.typeName as? Identifier)?.text != "Type") continue
+                            val arg = tref.typeArguments?.singleOrNull() as? TypeLiteral ?: continue
+                            val (keys, disp) = typeLitLiteralDisplay(arg) ?: continue
+                            chainProps[nm] = keys
+                            chainDisplay[nm] = disp
+                            continue
+                        }
+                        val call = d.initializer as? CallExpression ?: continue
+                        val callee = call.expression as? PropertyAccessExpression ?: continue
+                        if (callee.name.text != "merge") continue
+                        val recv = (callee.expression as? Identifier)?.text ?: continue
+                        val b = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: continue
+                        val bKeys = mergeObjLitKeys(b) ?: continue
+                        val bDisp = mergeObjLitDisplay(b) ?: continue
+                        val aProps = chainProps[recv] ?: continue
+                        val aDisp = chainDisplay[recv] ?: continue
+                        chainProps[nm] = aProps + bKeys
+                        chainDisplay[nm] = "merge<$aDisp, $bDisp>"
+                    }
+                }
+                for (stmt in stmts) {
+                    val pa = (stmt as? ExpressionStatement)?.expression as? PropertyAccessExpression ?: continue
+                    val inner = pa.expression as? PropertyAccessExpression ?: continue
+                    if (inner.name.text != "shape") continue
+                    val recv = (inner.expression as? Identifier)?.text ?: continue
+                    val props = chainProps[recv] ?: continue
+                    val propName = pa.name.text
+                    if (propName in props) continue
+                    val display = chainDisplay[recv] ?: continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                        line = line, character = ch, start = pa.name.pos, length = propName.length,
+                    ))
+                }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** (keys, literal display `{ p1: 1; }`) for a type literal whose members are numeric-literal-typed
+     *  properties, or null otherwise. */
+    private fun typeLitLiteralDisplay(tl: TypeLiteral): Pair<Set<String>, String>? {
+        val keys = LinkedHashSet<String>()
+        val parts = mutableListOf<String>()
+        for (m in tl.members) {
+            val pd = m as? PropertyDeclaration ?: return null
+            val name = (pd.name as? Identifier)?.text ?: return null
+            val lit = (pd.type as? LiteralType)?.literal as? NumericLiteralNode ?: return null
+            keys.add(name)
+            parts.add("$name: ${lit.text}")
+        }
+        return if (keys.isEmpty()) null else keys to ("{ " + parts.joinToString("; ") + "; }")
     }
 
     /**

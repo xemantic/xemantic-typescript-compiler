@@ -13,7 +13,7 @@ below) — this file tells you how to use them.
 
 ## 0. Current state (2026-06-21)
 
-- **~271 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
+- **~270 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
 - The campaign is **blocker-first**. A 34-agent triage classified all failing tests by their ACTUAL
   diff. The deep type-engine buckets dominate: **mapped-conditional ~63, structural ~42,
   generic-inference ~38**, then parser ~31, js-emit ~28, cross-file ~22, flow ~11, lib ~8.
