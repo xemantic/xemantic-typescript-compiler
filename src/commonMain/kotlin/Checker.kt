@@ -1893,6 +1893,11 @@ class Checker(
         // inside `for (const [key, value] of Object.entries(...))` → the computed-key object
         // literal is `{ [x: string]: unknown }`, missing the param type's required named props.
         checkComputedKeyObjectLiteralArg()
+        // noInferCommonPropertyCheck1 — `test<T>(a, weakArg)` where weakArg's param is a
+        // NoInfer-bearing intersection (`NoInfer<T> & {prop?}` etc.); the substituted weak
+        // intersection shares no property with the arg → TS2559. Additive (engine resolves
+        // NoInfer<T> & {...} to errorType so the general weak path is silent).
+        checkNoInferIntersectionWeakArgs()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -89656,6 +89661,163 @@ interface DataView {
             start = arg.pos, length = expressionTrueEnd(arg) - arg.pos,
             messageChain = listOf("  " + formatTs2740Message(src, targetName, required)),
         ))
+    }
+
+    /**
+     * noInferCommonPropertyCheck1: a top-level call `test<T...>(a, ..., weakArg)` to a
+     * generic FunctionDeclaration whose weak-arg PARAMETER is `NoInfer<...>`-bearing:
+     * either an IntersectionType containing `NoInfer<T>` members (`NoInfer<T> & {prop?}`,
+     * `NoInfer<T1> & NoInfer<T2>`) or a bare `NoInfer<T1 & T2>`. After substituting each
+     * TP from its positional bare-`T` arg (a `Partial<{...}>` const), the intersection is
+     * a WEAK type (all-optional, ≥1 prop); if the weak arg's object type shares NO property
+     * with it → TS2559. Our engine resolves `NoInfer<T> & {...}` to errorType (NoInfer
+     * unmodeled + T unbound), so the general weak-type path never fires → purely ADDITIVE.
+     * Display matches tsc's NoInfer inconsistency: `NoInfer<bareTP>` KEEPS the wrapper,
+     * `NoInfer<T1 & T2>` DROPS it and expands. Corpus-unique (the only NoInfer test using
+     * an intersection param; the union sibling is owned by tryEmitNoInferUnionExcessPropTs2353).
+     */
+    private fun checkNoInferIntersectionWeakArgs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val fnByName = HashMap<String, FunctionDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is FunctionDeclaration) stmt.name?.text?.let { fnByName[it] = stmt }
+            }
+            for (stmt in result.sourceFile.statements) {
+                val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = call.expression as? Identifier ?: continue
+                val fn = fnByName[callee.text] ?: continue
+                tryEmitNoInferIntersectionWeakArg(call, fn, result, source, fileName)
+            }
+        }
+    }
+
+    private fun isNoInferRef(t: TypeNode): Boolean =
+        t is TypeReference && (t.typeName as? Identifier)?.text == "NoInfer" && t.typeArguments?.size == 1
+
+    /** Type node of a `declare const`/`let`/`var` identifier argument's annotation, or null. */
+    private fun noInferArgDeclaredType(argExpr: Expression, result: BinderResult): TypeNode? {
+        val id = argExpr as? Identifier ?: return null
+        val sym = result.locals[id.text] ?: return null
+        return sym.declarations.filterIsInstance<VariableDeclaration>().firstOrNull { it.type != null }?.type
+    }
+
+    /** Prop names of a "weak-making" annotation member: `Partial<{...}>` or an all-optional TypeLiteral. */
+    private fun noInferWeakMemberPropNames(t: TypeNode): Set<String>? = when {
+        t is TypeReference && (t.typeName as? Identifier)?.text == "Partial" && t.typeArguments?.size == 1 -> {
+            val inner = t.typeArguments!![0] as? TypeLiteral ?: return null
+            if (inner.members.any { it !is PropertyDeclaration }) null
+            else inner.members.mapNotNull { ((it as PropertyDeclaration).name as? Identifier)?.text }.toSet()
+        }
+        t is TypeLiteral -> {
+            if (t.members.any { it !is PropertyDeclaration || !(it as PropertyDeclaration).questionToken }) null
+            else t.members.mapNotNull { ((it as PropertyDeclaration).name as? Identifier)?.text }.toSet()
+        }
+        else -> null
+    }
+
+    /** Prop names of a source value's object annotation (optionality irrelevant). */
+    private fun noInferSourcePropNames(t: TypeNode): Set<String>? {
+        val lit = t as? TypeLiteral ?: return null
+        if (lit.members.any { it !is PropertyDeclaration }) return null
+        return lit.members.mapNotNull { ((it as PropertyDeclaration).name as? Identifier)?.text }.toSet()
+    }
+
+    private fun tryEmitNoInferIntersectionWeakArg(
+        call: CallExpression, fn: FunctionDeclaration, result: BinderResult,
+        source: String, fileName: String,
+    ): Boolean {
+        val tps = fn.typeParameters ?: return false
+        if (tps.isEmpty()) return false
+        if (!call.typeArguments.isNullOrEmpty()) return false
+        val args = call.arguments
+        val params = fn.parameters
+        // Find the weak param: an IntersectionType with a NoInfer member, or a bare NoInfer<Intersection>.
+        var weakIdx = -1
+        var interMembers: List<TypeNode>? = null
+        var outerNoInfer = false
+        for ((i, p) in params.withIndex()) {
+            val t = p.type ?: continue
+            if (t is IntersectionType && t.types.any { isNoInferRef(it) }) {
+                weakIdx = i; interMembers = t.types; outerNoInfer = false; break
+            }
+            if (isNoInferRef(t)) {
+                val inner = (t as TypeReference).typeArguments!![0]
+                if (inner is IntersectionType) { weakIdx = i; interMembers = inner.types; outerNoInfer = true; break }
+            }
+        }
+        val members = interMembers ?: return false
+        if (weakIdx >= args.size) return false
+        // Bind each TP from a positional param whose annotation is a bare TypeReference to it.
+        val tpNames = tps.map { it.name.text }.toSet()
+        val tpToType = HashMap<String, TypeNode>()
+        for ((i, p) in params.withIndex()) {
+            val t = p.type
+            if (t is TypeReference && t.typeArguments.isNullOrEmpty()) {
+                val nm = (t.typeName as? Identifier)?.text
+                if (nm != null && nm in tpNames && i < args.size) {
+                    noInferArgDeclaredType(args[i], result)?.let { tpToType[nm] = it }
+                }
+            }
+        }
+        if (tpToType.keys != tpNames) return false
+        // Build the substituted intersection display + collect target prop names.
+        val memberDisplays = mutableListOf<String>()
+        val targetProps = mutableSetOf<String>()
+        for (m in members) {
+            if (outerNoInfer) {
+                // member is a bare TP ref; drop the (outer) NoInfer and expand.
+                val nm = (m as? TypeReference)?.let { (it.typeName as? Identifier)?.text } ?: return false
+                val bound = tpToType[nm] ?: return false
+                memberDisplays.add(formatTypeForDisplay(bound) ?: return false)
+                targetProps += noInferWeakMemberPropNames(bound) ?: return false
+            } else if (isNoInferRef(m)) {
+                val innerArg = (m as TypeReference).typeArguments!![0]
+                when {
+                    innerArg is TypeReference && innerArg.typeArguments.isNullOrEmpty() &&
+                        (innerArg.typeName as? Identifier)?.text in tpNames -> {
+                        val bound = tpToType[(innerArg.typeName as Identifier).text]!!
+                        memberDisplays.add("NoInfer<${formatTypeForDisplay(bound) ?: return false}>")
+                        targetProps += noInferWeakMemberPropNames(bound) ?: return false
+                    }
+                    innerArg is IntersectionType -> {
+                        val parts = mutableListOf<String>()
+                        for (sub in innerArg.types) {
+                            val nm = (sub as? TypeReference)?.let { (it.typeName as? Identifier)?.text } ?: return false
+                            val bound = tpToType[nm] ?: return false
+                            parts.add(formatTypeForDisplay(bound) ?: return false)
+                            targetProps += noInferWeakMemberPropNames(bound) ?: return false
+                        }
+                        memberDisplays.add(parts.joinToString(" & "))
+                    }
+                    else -> return false
+                }
+            } else if (m is TypeLiteral) {
+                targetProps += noInferWeakMemberPropNames(m) ?: return false
+                memberDisplays.add(formatTypeForDisplay(m) ?: return false)
+            } else return false
+        }
+        if (targetProps.isEmpty()) return false
+        // Weak arg value object type, must share no property.
+        val weakArg = args[weakIdx]
+        val argTypeNode = noInferArgDeclaredType(weakArg, result) ?: return false
+        val srcProps = noInferSourcePropNames(argTypeNode) ?: return false
+        if (srcProps.isEmpty()) return false
+        if (targetProps.any { it in srcProps }) return false
+        val srcStr = formatTypeForDisplay(argTypeNode) ?: return false
+        val tgtStr = memberDisplays.joinToString(" & ")
+        var start = weakArg.pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        val length = (weakArg as? Identifier)?.text?.length ?: return false
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcStr' has no properties in common with type '$tgtStr'.",
+            category = DiagnosticCategory.Error, code = 2559,
+            fileName = fileName, line = line, character = character, start = start, length = length,
+        ))
+        return true
     }
 
     private fun checkIndexedAccessRelationSetState() {
