@@ -13,7 +13,7 @@ below) — this file tells you how to use them.
 
 ## 0. Current state (2026-06-21)
 
-- **~269 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
+- **~268 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
 - The campaign is **blocker-first**. A 34-agent triage classified all failing tests by their ACTUAL
   diff. The deep type-engine buckets dominate: **mapped-conditional ~63, structural ~42,
   generic-inference ~38**, then parser ~31, js-emit ~28, cross-file ~22, flow ~11, lib ~8.
@@ -73,7 +73,7 @@ exact display strings to hardcode. Run a read-only hunt (§4) over the bounded m
 for dedicated walkers** — start with the SWAP bucket and bounded-NONE multi-error tests. Then the harder
 options below.
 
-0. **`staticMemberExportAccess`** (hunt-3 SCOPEABLE c3, NOT yet done) — 3 additive branches in
+0. **TWO open hunt-3 SCOPEABLE wins (do these FIRST):** (i) **`excessPropertyCheckIntersectionWithIndexSignature`** (c4) — a dedicated walker for `let x: {[k:string]:{a:0}} & {[k:string]:{b:0}}; x = {y:{a:0}}` → TS2322 (value missing intersection member) / TS2353 (excess); gate to an IntersectionType-of-pure-string-index-sig-TypeLiterals annotation + object-literal RHS (corpus-unique); full plan in hunt `wf_79e9fb6b-b3e`. (ii) **`staticMemberExportAccess`** (hunt-3 SCOPEABLE c3, NOT yet done) — 3 additive branches in
    `checkMemberAccessMissing`'s non-Identifier path for a `$.sammy`-chained receiver (TS2576 static-access
    + TS2351 not-constructable are LOW-risk/structurally-FP-impossible; TS2339 namespace-member is MEDIUM-risk,
    touches the B153 shared-path — gate tightly per the hunt-3 plan in `wf_79e9fb6b-b3e`). Deferred this

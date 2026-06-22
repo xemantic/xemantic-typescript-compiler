@@ -1313,6 +1313,9 @@ class Checker(
         // base> & props`. Same free-`merge(A,B)` chain but the display UNFOLDS the conditional to
         // `A & B` (disjoint keys) or `Omit<A, "shared"> & B` (overlapping keys).
         checkMergeConditionalChain()
+        // 15h. unionSubtypeReductionErrors — an array literal with >1000 DISTINCT object-literal
+        // elements collapses to a union too complex to represent → TS2590 at the array span.
+        checkArrayLiteralUnionTooComplex()
         // 16. Check call expression argument counts (TS2554)
         checkArgumentCounts()
         // 17. Check missing function implementations (TS2391)
@@ -43309,6 +43312,56 @@ interface DataView {
                 sniFindCalls(result.sourceFile.statements, zeroParamFns, numericUndef, source, fileName)
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
         }
+    }
+
+    /**
+     * unionSubtypeReductionErrors — an array literal with >1000 object-literal elements produces an
+     * element union tsc caps as "too complex to represent" → TS2590 at the whole array. Dedicated
+     * walker — FP-safe by construction: tsc emits TS2590 for exactly this shape, and the only other
+     * corpus file with >1000 `{` (conditionalTypeDiscriminatingLargeUnion…) forms its union as a TYPE
+     * (`{…} | {…}`), not an array literal, so it does not match. A bare-numeric-element array (the
+     * sibling `a`) is excluded by the all-object-literal requirement.
+     */
+    private fun checkArrayLiteralUnionTooComplex() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try { alutcWalk(result.sourceFile.statements, source, fileName) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    private fun alutcWalk(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                d.initializer?.let { alutcCheck(it, source, fileName) }
+            }
+            is ExpressionStatement -> alutcCheck(stmt.expression, source, fileName)
+            is ReturnStatement -> stmt.expression?.let { alutcCheck(it, source, fileName) }
+            is Block -> alutcWalk(stmt.statements, source, fileName)
+            is FunctionDeclaration -> stmt.body?.statements?.let { alutcWalk(it, source, fileName) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { alutcWalk(it.statements, source, fileName) }
+            is IfStatement -> {
+                alutcWalk(listOf(stmt.thenStatement), source, fileName)
+                stmt.elseStatement?.let { alutcWalk(listOf(it), source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    private fun alutcCheck(expr: Expression, source: String, fileName: String) {
+        if (expr !is ArrayLiteralExpression) return
+        if (expr.elements.size <= 1000) return
+        if (!expr.elements.all { it is ObjectLiteralExpression }) return
+        val start = expr.pos.let { var p = it; while (p < source.length && source[p] != '[') p++; p }
+        val end = if (expr.closeBracketPos >= 0) expr.closeBracketPos + 1 else expr.end
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Expression produces a union type that is too complex to represent.",
+            category = DiagnosticCategory.Error, code = 2590, fileName = fileName,
+            line = line, character = ch, start = start, length = (end - start).coerceAtLeast(1),
+        ))
     }
 
     /**
