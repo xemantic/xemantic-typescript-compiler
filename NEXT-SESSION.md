@@ -13,8 +13,8 @@ below) — this file tells you how to use them.
 
 ## 0. Current state (2026-06-22)
 
-- **~221 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
-- **The cheap dedicated-walker/surgical pool is EXHAUSTED** (rounds 276–280: 3 read-only hunts × ~25 candidates + manual triage of ~10 = ~85 of 221 classified, all remaining ENGINE/multi-piece-PARTIAL). The next session should attack a Blocker substep (§3.1 / §4) with revert-on-regression discipline, not hunt for more surgical walkers (low yield now). See the top PLAN-PHASE-4.md note for the vetted-PARTIAL list and the engine roadmap.
+- **~220 failing / 10,086** (the live number is the headline of `STATUS.md` — trust it, not this line).
+- **The cheap dedicated-walker/surgical pool is EXHAUSTED** (rounds 276–281: 4 read-only hunts × ~25 candidates + manual triage of ~10 = ~110 of 220 classified, all remaining ENGINE/multi-piece-PARTIAL; hit-rate down to ~1-clean-per-24). The next session should attack a Blocker substep (§3.1 / §4) with revert-on-regression discipline, not hunt for more surgical walkers (low yield now). See the top PLAN-PHASE-4.md note for the vetted-PARTIAL list and the engine roadmap.
 - The campaign is **blocker-first**. A 34-agent triage classified all failing tests by their ACTUAL
   diff. The deep type-engine buckets dominate: **mapped-conditional ~63, structural ~42,
   generic-inference ~38**, then parser ~31, js-emit ~28, cross-file ~22, flow ~11, lib ~8.
