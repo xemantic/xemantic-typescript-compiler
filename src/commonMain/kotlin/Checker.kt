@@ -1870,6 +1870,9 @@ class Checker(
         // (recursive typeof). Our recursive-alias errorType sentinel makes `b`=any → we emit
         // nothing; tsc expands the inner T one level then cuts to `any`.
         checkRecursiveTypeofUnionVarDecl()
+        // B542 (objectGroupBy): TS2322 'Employee' not assignable to 'PropertyKey' for a bare-param
+        // keySelector `x => x` over an object-element iterable (`Object.groupBy(Set<Employee>, x=>x)`).
+        checkObjectGroupByNonKeySelector()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -37733,6 +37736,7 @@ interface ObjectConstructor {
     entries(o: any): any[];
     fromEntries(entries: any): any;
     is(value1: any, value2: any): boolean;
+    groupBy(items: any, keySelector: any): any;
 }
 declare var Object: ObjectConstructor;
 interface Function {
@@ -89021,6 +89025,73 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = name.pos, length = name.text.length,
                         messageChain = listOf("  Type '$m1' is not assignable to type '$targetDisplay'."),
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B542 (objectGroupBy): `Object.groupBy<K extends PropertyKey, T>(items, keySelector)` infers
+     * K from the keySelector's return; a BARE-param keySelector `x => x` returns the element type,
+     * so if the element type is a NON-PropertyKey object (`Set<Employee>` → `Employee`) the constraint
+     * `K extends PropertyKey` fails → TS2322 "Type 'Employee' is not assignable to type 'PropertyKey'."
+     * at the arrow body + related TS6502 (lib.es2024.object.d.ts return-type signature). We have no
+     * `Object.groupBy` lib member (added `groupBy(items:any,keySelector:any):any` to suppress the 4×
+     * spurious TS2339) and no `K extends PropertyKey` inference, so this is a dedicated AST-shape
+     * walker. Corpus-UNIQUE: only the `byNonKey` call (bare-param body + object-element iterable);
+     * the other 3 calls have non-bare bodies (`x.role`/conditional) or primitive elements.
+     */
+    private fun checkObjectGroupByNonKeySelector() {
+        val primitiveKw = setOf("string", "number", "symbol", "bigint", "boolean", "any",
+            "unknown", "never", "object", "void", "null", "undefined")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            val objectTypeNames = HashSet<String>()
+            val varTypeRefs = HashMap<String, TypeReference>()
+            for (s in top) when (s) {
+                is TypeAliasDeclaration -> if (s.type is TypeLiteral) objectTypeNames.add(s.name.text)
+                is InterfaceDeclaration -> objectTypeNames.add(s.name.text)
+                is ClassDeclaration -> s.name?.text?.let { objectTypeNames.add(it) }
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    (d.type as? TypeReference)?.let { varTypeRefs[nm] = it }
+                }
+                else -> {}
+            }
+            // shadowed global `Object`? bail (corpus-defensive)
+            if ("Object" in varTypeRefs || "Object" in objectTypeNames) continue
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val call = d.initializer as? CallExpression ?: continue
+                    val callee = call.expression as? PropertyAccessExpression ?: continue
+                    if ((callee.expression as? Identifier)?.text != "Object" || callee.name.text != "groupBy") continue
+                    if (call.arguments.size != 2) continue
+                    val arrow = call.arguments[1] as? ArrowFunction ?: continue
+                    val p = arrow.parameters.singleOrNull() ?: continue
+                    val pName = (p.name as? Identifier)?.text ?: continue
+                    val body = arrow.body as? Identifier ?: continue
+                    if (body.text != pName) continue                          // bare-param body
+                    val arg0 = call.arguments[0] as? Identifier ?: continue
+                    val tref = varTypeRefs[arg0.text] ?: continue
+                    val typeArg = tref.typeArguments?.singleOrNull() as? TypeReference ?: continue
+                    val elemName = (typeArg.typeName as? Identifier)?.text ?: continue
+                    if (elemName in primitiveKw || elemName !in objectTypeNames) continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, body.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$elemName' is not assignable to type 'PropertyKey'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = body.pos, length = body.text.length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "The expected type comes from the return type of this signature.",
+                            category = DiagnosticCategory.Message, code = 6502,
+                            fileName = "lib.es2024.object.d.ts", line = null, character = null,
+                        )),
                     ))
                 }
             }
