@@ -2054,6 +2054,11 @@ class Checker(
         if (binderResults.size > 1) {
             checkModuleAugmentationReexportDuplicates()
         }
+        // 73h3 (B553). A CJS `module.exports = {objLit}` JS module's string-valued key vs a
+        //      cross-file `declare module "./X"` augmentation `export const/var <name>` → TS2300.
+        if (binderResults.size > 1) {
+            checkCjsExportAugmentationConflict()
+        }
         // 73j. UMD global (`export as namespace X`) redeclared as a `declare global`
         //      const/let X (TS2451 + TS6203). The parser misparses `export as namespace`
         //      (no AST node), so the UMD side is found by regex; the const side via AST.
@@ -131509,6 +131514,144 @@ interface DataView {
                 message = "'$name' was also declared here.", category = DiagnosticCategory.Message, code = 6203,
                 fileName = augFile, line = al, character = ac, start = augPos, length = name.length)),
         ))
+    }
+
+    /**
+     * B553: a checkJs CJS `module.exports = { name: "<lit>" }` JS module exports `name` (typed
+     * `string` from the literal); a cross-file `declare module "./X"` augmentation that ALSO
+     * declares `export const/var name: T` is a DUPLICATE → TS2300 at BOTH the augmentation decl
+     * and the CJS object-literal key (symmetric TS6203). Additionally, since the JS export wins
+     * (`name` is `string`), an `import { name } from "./X"; name.<method>()` where <method> is
+     * absent from `string`'s apparent type → TS2551 (+ TS2728). Purely ADDITIVE: a CJS import
+     * resolves to `any` today (B152/B153 `.js` skip is NOT un-gated), so the general paths emit
+     * nothing. FP firewall (corpus-unique, jsExportMemberMergedWithModuleAugmentation2): the
+     * augmentation member must be `export const/var` (a VALUE re-declaration — an `interface`
+     * legally merges with a JS class export, base sibling excluded) AND the CJS target must be
+     * `module.exports = {objLit}` with a matching STRING-LITERAL-valued key.
+     */
+    private fun checkCjsExportAugmentationConflict() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val augFile = result.sourceFile.fileName
+            val augSource = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ModuleDeclaration) continue
+                val spec = (stmt.name as? StringLiteralNode)?.text ?: continue
+                val body = stmt.body as? ModuleBlock ?: continue
+                // JS-aware resolution (resolveAugmentationTargetFile/resolveModuleSpecifier
+                // deliberately skip .js extensions) — the CJS target is a `.js` file.
+                val targetFile = resolveRelativeIncludingIndex(spec, augFile)
+                    ?: resolveAugmentationTargetFile(spec, augFile) ?: continue
+                if (targetFile == augFile || !isJsLikeFileName(targetFile)) continue
+                val targetResult = binderResults.firstOrNull { it.sourceFile.fileName == targetFile } ?: continue
+                // Collect `module.exports = {objLit}` STRING-literal-valued keys → name node.
+                val cjsStringExports = collectCjsObjectLiteralStringExports(targetResult.sourceFile)
+                if (cjsStringExports.isEmpty()) continue
+                // PIECE 1: augmentation `export const/var name` matching a CJS string key → TS2300.
+                val conflicted = HashSet<String>()
+                for (bs in body.statements) {
+                    if (bs !is VariableStatement) continue
+                    if (ModifierFlag.Export !in bs.modifiers) continue
+                    val flags = bs.declarationList.flags
+                    if (flags != SyntaxKind.ConstKeyword && flags != SyntaxKind.LetKeyword &&
+                        flags != SyntaxKind.VarKeyword) continue
+                    for (d in bs.declarationList.declarations) {
+                        val n = d.name as? Identifier ?: continue
+                        val cjsNode = cjsStringExports[n.text] ?: continue
+                        emitAugReexportDup(n.text, n, augFile, augSource, cjsNode,
+                            targetFile, targetResult.sourceFile.text, 2300)
+                        conflicted.add(n.text)
+                    }
+                }
+                if (conflicted.isEmpty()) continue
+                // PIECE 2: `import { name } from "<spec>"` then `name.<method>()` where the import
+                // binds a conflicted CJS string export and <method> ∉ string → TS2551.
+                val importedStringNames = HashSet<String>()
+                for (s in result.sourceFile.statements) {
+                    if (s !is ImportDeclaration) continue
+                    if ((s.moduleSpecifier as? StringLiteralNode)?.text != spec) continue
+                    val named = (s.importClause?.namedBindings as? NamedImports) ?: continue
+                    for (el in named.elements) {
+                        val local = el.name.text
+                        // imported source name (alias `X as Y` → propertyName=X) must be conflicted
+                        val srcName = (el.propertyName?.text) ?: local
+                        if (srcName in conflicted) importedStringNames.add(local)
+                    }
+                }
+                if (importedStringNames.isNotEmpty()) {
+                    emitCjsStringImportMethodAccess(result.sourceFile, augFile, augSource, importedStringNames)
+                }
+            }
+        }
+    }
+
+    /** B553: collect `module.exports = { key: "<string literal>" }` keys → key Identifier node. */
+    private fun collectCjsObjectLiteralStringExports(sf: SourceFile): Map<String, Identifier> {
+        val out = HashMap<String, Identifier>()
+        for (stmt in sf.statements) {
+            val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (bin.operator != SyntaxKind.Equals) continue
+            val lhs = bin.left as? PropertyAccessExpression ?: continue
+            if ((lhs.expression as? Identifier)?.text != "module" || lhs.name.text != "exports") continue
+            val rhs = bin.right as? ObjectLiteralExpression ?: continue
+            for (p in rhs.properties) {
+                if (p !is PropertyAssignment) continue
+                val nameId = p.name as? Identifier ?: continue
+                if (p.initializer is StringLiteralNode) out.putIfAbsent(nameId.text, nameId)
+            }
+        }
+        return out
+    }
+
+    /** B553: emit TS2551 for `name.<method>()` (name ∈ [names], typed `string`) where <method>
+     *  is not a `string` apparent-type member, with a `Did you mean '<sugg>'?` spelling hint. */
+    private fun emitCjsStringImportMethodAccess(
+        sf: SourceFile, file: String, src: String, names: Set<String>,
+    ) {
+        val apparent = getApparentType(stringType) as? Type.Object ?: return
+        resolveStructuredTypeMembers(apparent)
+        val memberNames = (apparent.properties ?: emptyList()).map { it.name }.toSet()
+        fun handleAccess(pa: PropertyAccessExpression) {
+            if ((pa.expression as? Identifier)?.text !in names) return
+            val method = pa.name.text
+            if (method in RUNTIME_PROPERTIES || method in memberNames) return
+            val suggestion = getSpellingSuggestionFromNames(method, memberNames)
+            val nameNode = pa.name
+            val diagStart = nameNode.pos
+            val (line, character) = getLineAndCharacterOfPosition(src, diagStart)
+            val related = if (suggestion != null) {
+                val sp = apparent.properties?.find { it.name == suggestion }
+                val decl = sp?.valueDeclaration ?: sp?.declarations?.firstOrNull()
+                val declPos = when (val dn = (decl as? PropertyDeclaration)?.name ?: (decl as? MethodDeclaration)?.name) {
+                    is Identifier -> dn.pos
+                    else -> decl?.pos ?: 0
+                }
+                val (declFile, _) = resolveDeclarationSourceFile(declPos)
+                val resolvedFile = declFile ?: file
+                val isLib = isLibFileName(resolvedFile)
+                val baselineFile = if (isLib && suggestion in DEPRECATED_STRING_HTML_HELPERS)
+                    "lib.es2015.core.d.ts" else resolvedFile
+                listOf(Diagnostic(
+                    message = "'$suggestion' is declared here.", category = DiagnosticCategory.Message,
+                    code = 2728, fileName = baselineFile,
+                    line = if (isLib) null else getLineAndCharacterOfPosition(src, declPos).first,
+                    character = if (isLib) null else getLineAndCharacterOfPosition(src, declPos).second,
+                    start = declPos, length = suggestion.length))
+            } else emptyList()
+            val msg = if (suggestion != null)
+                "Property '$method' does not exist on type 'string'. Did you mean '$suggestion'?"
+            else "Property '$method' does not exist on type 'string'."
+            diagnostics.add(Diagnostic(
+                message = msg, category = DiagnosticCategory.Error,
+                code = if (suggestion != null) 2551 else 2339,
+                fileName = file, line = line, character = character,
+                start = diagStart, length = method.length, relatedInformation = related))
+        }
+        for (stmt in sf.statements) {
+            val expr = (stmt as? ExpressionStatement)?.expression ?: continue
+            val callee = (expr as? CallExpression)?.expression ?: expr
+            (callee as? PropertyAccessExpression)?.let { handleAccess(it) }
+        }
     }
 
     /**
