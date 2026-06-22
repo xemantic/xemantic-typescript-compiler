@@ -1857,6 +1857,11 @@ class Checker(
         // for `fn(...args)` where `fn` came from iterating a mapped type whose values are
         // functions with a conditional rest param — the combined signature's param is `never`.
         checkCombinedRestParamForOfSpreadCall()
+        // B539 (unionTypeWithRecursiveSubtypeReduction3): TS2322 for `var s: <primitive> = b`
+        // where `b: T`, `type T = typeof V`, and `V`'s union annotation references T back
+        // (recursive typeof). Our recursive-alias errorType sentinel makes `b`=any → we emit
+        // nothing; tsc expands the inner T one level then cuts to `any`.
+        checkRecursiveTypeofUnionVarDecl()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -88820,6 +88825,77 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2345,
                         fileName = fileName, line = line, character = character,
                         start = inner.pos - 3, length = 3 + inner.text.length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * B539 (unionTypeWithRecursiveSubtypeReduction3): a recursive `type T = typeof V` whose
+     * target var `V` has a UNION annotation with a member referencing T back
+     * (`declare var a27: { prop: number } | { prop: T27 }; type T27 = typeof a27`) assigned to
+     * a primitive (`var s: string = b`, `b: T27`) → TS2322. Our recursive-alias resolution
+     * stores an errorType sentinel for T (displays 'any'), so `b` resolves to errorType and
+     * `string = any` PASSES → we emit NOTHING (confirmed NONE, not a SWAP). tsc expands the
+     * inner T one level then cuts the recursion to `any`, yielding the display
+     * `{ prop: number; } | { prop: { prop: number; } | any; }`. Dedicated ADDITIVE walker —
+     * the general var-decl path stays silent (any source). CORPUS-UNIQUE: the only
+     * `type T = typeof V` whose union target references T (reduction1/2 are class-based, B530).
+     */
+    private fun checkRecursiveTypeofUnionVarDecl() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val top = result.sourceFile.statements
+            val aliases = HashMap<String, TypeNode>()
+            val varAnnots = HashMap<String, TypeNode>()
+            for (s in top) when (s) {
+                is TypeAliasDeclaration -> if (s.typeParameters.isNullOrEmpty()) aliases[s.name.text] = s.type
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    d.type?.let { varAnnots[nm] = it }
+                }
+                else -> {}
+            }
+            if (aliases.isEmpty()) continue
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val name = d.name as? Identifier ?: continue
+                    val targetKw = d.type as? KeywordTypeNode ?: continue
+                    // only primitives an object type can never satisfy (exclude any/unknown/object)
+                    if (targetKw.kind == SyntaxKind.AnyKeyword || targetKw.kind == SyntaxKind.UnknownKeyword ||
+                        targetKw.kind == SyntaxKind.ObjectKeyword) continue
+                    val initId = d.initializer as? Identifier ?: continue
+                    val bRef = varAnnots[initId.text] as? TypeReference ?: continue
+                    val aliasName = (bRef.typeName as? Identifier)?.text ?: continue
+                    val tq = aliases[aliasName] as? TypeQuery ?: continue
+                    val vName = (tq.exprName as? Identifier)?.text ?: continue
+                    val vUnion = varAnnots[vName] as? UnionType ?: continue
+                    if (vUnion.types.size < 2) continue
+                    var recPropName: String? = null
+                    var nonRecMember: TypeNode? = null
+                    for (m in vUnion.types) {
+                        val tl = m as? TypeLiteral ?: continue
+                        val recProp = tl.members.filterIsInstance<PropertyDeclaration>().firstOrNull { p ->
+                            ((p.type as? TypeReference)?.typeName as? Identifier)?.text == aliasName
+                        }
+                        if (recProp != null) recPropName = (recProp.name as? Identifier)?.text
+                        else nonRecMember = m
+                    }
+                    val rp = recPropName ?: continue
+                    val m1 = nonRecMember?.let { formatTypeForDisplay(it) } ?: continue
+                    val targetDisplay = formatTypeForDisplay(targetKw) ?: continue
+                    val topDisplay = "$m1 | { $rp: $m1 | any; }"
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$topDisplay' is not assignable to type '$targetDisplay'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = name.pos, length = name.text.length,
+                        messageChain = listOf("  Type '$m1' is not assignable to type '$targetDisplay'."),
                     ))
                 }
             }
