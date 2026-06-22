@@ -537,6 +537,9 @@ class Checker(
      *  plain object-literal var goes through (mirrors Readonly<T> not widening). */
     private val frozenObjectTypeIds = mutableSetOf<Int>()
 
+    /** B554: per-file enum+namespace-merge context (lazy), keyed by fileName; null = no merge. */
+    private val enumNsMergeCtxCache = HashMap<String, EnumNsMergeCtx?>()
+
     /** B57.3b: depth counter for [getTypeFromMappedType] recursion. When a mapped
      *  type's value type recursively references another mapped type / generic alias
      *  that expands deeply, the resolution can loop. Bails at [MAPPED_TYPE_MAX_DEPTH]
@@ -76455,6 +76458,10 @@ interface DataView {
             if (tryEmitLiteralUnionDidYouMean(init, ann, name, source, fileName)) return
         } }
 
+        // B554: enum+namespace merge `W` — value-position `W`/`W.a`/`typeof W`/`typeof W.a`/
+        // `WStatic`-structural assignability table (enumAssignmentCompat / enumAssignmentCompat2).
+        if (tryEmitEnumNamespaceMergeVarDecl(decl, name, source, fileName)) return
+
         // B470: `const x: { [k:string]: typeof v } = {...}` inside a block narrowing `v`.
         if (tryEmitTypeofIndexSigNarrowing(decl, source, fileName)) return
 
@@ -125867,6 +125874,142 @@ interface DataView {
             ))
             return
         }
+    }
+
+    // ---- B554: enum+namespace merge `W` var-decl assignability (enumAssignmentCompat[2]) ----
+    private class EnumNsMergeCtx(
+        val name: String, val info: EnumAsgInfo, val structuralIfaces: Set<String>,
+    )
+    private sealed class EmSrc {
+        object VW : EmSrc()                                    // value `W` (typeof W)
+        object EM : EmSrc()                                    // enum member `W.a` (type W)
+        class Lit(val value: Double?, val text: String) : EmSrc()  // numeric literal
+    }
+    private sealed class EmTgt {
+        object TNum : EmTgt()
+        object TEnum : EmTgt()                                 // `W`
+        object TYofW : EmTgt()                                 // `typeof W`
+        class TYofMember(val member: String) : EmTgt()        // `typeof W.a`
+        class TWStatic(val display: String) : EmTgt()         // structural interface `WStatic`
+        object TClass : EmTgt()                               // `W.D` (namespace class)
+    }
+
+    /** B554: lazily build the per-file enum+namespace-merge context (null = no merge). */
+    private fun enumNsMergeContext(fileName: String): EnumNsMergeCtx? {
+        if (enumNsMergeCtxCache.containsKey(fileName)) return enumNsMergeCtxCache[fileName]
+        val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+        if (result == null || isDtsFile(fileName) || isJsLikeFileName(fileName)) {
+            enumNsMergeCtxCache[fileName] = null; return null
+        }
+        val stmts = result.sourceFile.statements
+        val enumNames = stmts.filterIsInstance<EnumDeclaration>().map { it.name.text }.toSet()
+        val nsNames = stmts.filterIsInstance<ModuleDeclaration>()
+            .mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        val merged = enumNames.intersect(nsNames).firstOrNull()
+        if (merged == null) { enumNsMergeCtxCache[fileName] = null; return null }
+        val enums = LinkedHashMap<String, EnumAsgInfo>()
+        collectEnumsForAsg(stmts, null, enums)
+        val info = enums[merged]
+        if (info == null) { enumNsMergeCtxCache[fileName] = null; return null }
+        // Structural interface = every member typed as a TypeReference to the merged enum name.
+        val structIfaces = HashSet<String>()
+        for (st in stmts) {
+            if (st !is InterfaceDeclaration || st.members.isEmpty()) continue
+            if (st.members.all { m ->
+                m is PropertyDeclaration && ((m.type as? TypeReference)?.typeName as? Identifier)?.text == merged
+            }) structIfaces.add(st.name.text)
+        }
+        val ctx = EnumNsMergeCtx(merged, info, structIfaces)
+        enumNsMergeCtxCache[fileName] = ctx
+        return ctx
+    }
+
+    private fun classifyEmSource(init: Expression?, ctx: EnumNsMergeCtx): EmSrc? = when {
+        init is Identifier && init.text == ctx.name -> EmSrc.VW
+        init is PropertyAccessExpression && (init.expression as? Identifier)?.text == ctx.name &&
+            init.name.text in ctx.info.memberOrder -> EmSrc.EM
+        init is NumericLiteralNode -> EmSrc.Lit(init.text.toDoubleOrNull(), init.text)
+        else -> null
+    }
+
+    private fun classifyEmTarget(ann: TypeNode?, ctx: EnumNsMergeCtx): EmTgt? = when (ann) {
+        is KeywordTypeNode -> if (ann.kind == SyntaxKind.NumberKeyword) EmTgt.TNum else null
+        is TypeQuery -> {
+            val en = ann.exprName
+            when {
+                en is Identifier && en.text == ctx.name -> EmTgt.TYofW
+                en is QualifiedName && (en.left as? Identifier)?.text == ctx.name &&
+                    en.right.text in ctx.info.memberOrder -> EmTgt.TYofMember(en.right.text)
+                else -> null
+            }
+        }
+        is TypeReference -> {
+            val tn = ann.typeName
+            when {
+                tn is Identifier && tn.text == ctx.name -> EmTgt.TEnum
+                tn is Identifier && tn.text in ctx.structuralIfaces -> EmTgt.TWStatic(tn.text)
+                tn is QualifiedName && (tn.left as? Identifier)?.text == ctx.name -> EmTgt.TClass
+                else -> null
+            }
+        }
+        else -> null
+    }
+
+    /** B554: the hardcoded enum+namespace-merge assignability table. Returns (srcDisplay,
+     *  tgtDisplay) when NOT assignable (→ TS2322), or null when assignable. */
+    private fun emMergeError(src: EmSrc, tgt: EmTgt, ctx: EnumNsMergeCtx): Pair<String, String>? {
+        val W = ctx.name
+        if (tgt is EmTgt.TClass) return null
+        val tgtDisplay = when (tgt) {
+            is EmTgt.TNum -> "number"
+            is EmTgt.TEnum -> W
+            is EmTgt.TYofW -> "typeof $W"
+            is EmTgt.TYofMember -> "$W.${tgt.member}"
+            is EmTgt.TWStatic -> tgt.display
+            is EmTgt.TClass -> return null
+        }
+        fun err(srcDisplay: String) = srcDisplay to tgtDisplay
+        return when (src) {
+            is EmSrc.VW -> when (tgt) {            // value W = `typeof W`
+                is EmTgt.TWStatic, is EmTgt.TYofW -> null   // structurally OK
+                else -> err("typeof $W")
+            }
+            is EmSrc.EM -> when (tgt) {            // enum member `W.a` : type W
+                is EmTgt.TNum, is EmTgt.TEnum, is EmTgt.TYofMember -> null
+                else -> err(W)                              // typeof W / WStatic
+            }
+            is EmSrc.Lit -> when (tgt) {
+                is EmTgt.TNum -> null
+                is EmTgt.TEnum ->
+                    if (ctx.info.values?.values?.contains(src.value) == true) null else err(src.text)
+                is EmTgt.TYofMember ->
+                    if (src.value != null && ctx.info.values?.get(tgt.member) == src.value) null else err(src.text)
+                is EmTgt.TYofW, is EmTgt.TWStatic -> err("number")   // literal widened for object targets
+                is EmTgt.TClass -> null
+            }
+        }
+    }
+
+    private fun tryEmitEnumNamespaceMergeVarDecl(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        val ctx = enumNsMergeContext(fileName) ?: return false
+        val tgt = classifyEmTarget(decl.type, ctx) ?: return false
+        val src = classifyEmSource(decl.initializer, ctx) ?: return false
+        // require at least one side to reference the merged name (don't claim `number = 5`)
+        val srcRefsW = src is EmSrc.VW || src is EmSrc.EM
+        val tgtRefsW = tgt !is EmTgt.TNum
+        if (!srcRefsW && !tgtRefsW) return false
+        val err = emMergeError(src, tgt, ctx)
+        if (err != null) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '${err.first}' is not assignable to type '${err.second}'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = name.pos, length = name.text.length))
+        }
+        return true
     }
 
     private fun checkEnumToEnumAssignments() {
