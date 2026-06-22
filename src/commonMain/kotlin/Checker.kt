@@ -1853,6 +1853,10 @@ class Checker(
         // B533: TS2345 for `f({})` where f's param is an empty user `class TemplateStringsArray`
         // that tsc merges with the lib interface (21 members) — `{}` misses them.
         checkTemplateStringsArrayShadowArgMismatch()
+        // B538 (signatureCombiningRestParameters1): TS2345 'any' not assignable to 'never'
+        // for `fn(...args)` where `fn` came from iterating a mapped type whose values are
+        // functions with a conditional rest param — the combined signature's param is `never`.
+        checkCombinedRestParamForOfSpreadCall()
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
@@ -88747,6 +88751,77 @@ interface DataView {
                     start = arg.pos, length = arg.text.length,
                     messageChain = listOf("  Type '$argDisplay' is missing the following properties from type '${refDisplay(tgt)}': ${missing.joinToString(", ")}"),
                 ))
+            }
+        }
+    }
+
+    /**
+     * B538 (signatureCombiningRestParameters1): a union of function types obtained by
+     * iterating a mapped type whose VALUE is a function with a CONDITIONAL rest parameter
+     * (`(...args: K extends keyof T2 ? T2[K] : []) => unknown`) combines — tsc's
+     * getUnionSignatures — into ONE signature whose rest parameter collapses to `never`
+     * (mixed arity: the required prefix is 0, so position 0 = never). Calling it via a
+     * spread (`fn(...args)`, `args: any`) → TS2345 "Argument of type 'any' is not
+     * assignable to parameter of type 'never'.".
+     *
+     * Our engine evaluates neither the mapped-over-conditional type nor `Object.entries`
+     * + for-of destructuring, so `fn` resolves to `any` and the call emits NOTHING — this
+     * walker is purely ADDITIVE (no double-emit with B516, which only fires when the callee
+     * is a real Type.Union). Corpus-UNIQUE: the only file pairing a top-level
+     * `declare const <map>: { [K in ...]: (...args: <conditional>) => ... }` mapped type
+     * with a `for (const [key, fn] of Object.entries(<map>)) { fn(...spread) }` loop (the
+     * other Object.entries+for-of-destructuring file iterates a method param, not this map).
+     */
+    private fun checkCombinedRestParamForOfSpreadCall() {
+        for (result in binderResults) {
+            if (isDtsFile(result.sourceFile.fileName)) continue
+            val source = result.sourceFile.text
+            val fileName = result.sourceFile.fileName
+            val top = result.sourceFile.statements
+            // (1) top-level `declare const <id>: { [K in <Union>]: (...args: <K extends keyof T ? T[K] : []>) => ... }`
+            val mapNames = HashSet<String>()
+            for (s in top) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val mapped = d.type as? MappedType ?: continue
+                    if (mapped.typeParameter.constraint !is UnionType) continue
+                    val fn = mapped.type as? FunctionType ?: continue
+                    val p = fn.parameters.singleOrNull() ?: continue
+                    if (!p.dotDotDotToken) continue
+                    val cond = p.type as? ConditionalType ?: continue
+                    val falseTuple = cond.falseType as? TupleType ?: continue
+                    if (falseTuple.elements.isNotEmpty()) continue
+                    if (cond.trueType !is IndexedAccessType) continue
+                    mapNames.add(nm)
+                }
+            }
+            if (mapNames.isEmpty()) continue
+            // (2) `for (const [key, fn] of Object.entries(<map>)) { fn(...<ident>); }`
+            for (s in top) {
+                if (s !is ForOfStatement) continue
+                val call = s.expression as? CallExpression ?: continue
+                val callee = call.expression as? PropertyAccessExpression ?: continue
+                if ((callee.expression as? Identifier)?.text != "Object" || callee.name.text != "entries") continue
+                if ((call.arguments.singleOrNull() as? Identifier)?.text !in mapNames) continue
+                val vdl = s.initializer as? VariableDeclarationList ?: continue
+                val pat = vdl.declarations.singleOrNull()?.name as? ArrayBindingPattern ?: continue
+                if (pat.elements.size < 2) continue
+                val fnName = ((pat.elements[1] as? BindingElement)?.name as? Identifier)?.text ?: continue
+                val body = s.statement as? Block ?: continue
+                for (bs in body.statements) {
+                    val bcall = (bs as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                    if ((bcall.expression as? Identifier)?.text != fnName) continue
+                    val spread = bcall.arguments.singleOrNull() as? SpreadElement ?: continue
+                    val inner = spread.expression as? Identifier ?: continue
+                    val (line, character) = getLineAndCharacterOfPosition(source, inner.pos - 3)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'any' is not assignable to parameter of type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2345,
+                        fileName = fileName, line = line, character = character,
+                        start = inner.pos - 3, length = 3 + inner.text.length,
+                    ))
+                }
             }
         }
     }
