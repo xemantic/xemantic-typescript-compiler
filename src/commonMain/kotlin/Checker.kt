@@ -1326,6 +1326,9 @@ class Checker(
         checkTypesPackageImports()
         // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
         checkNamedImportFromExportEqualsInDts()
+        // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
+        // self-calling `export const N = () => N()` → TS2497 + TS7023.
+        checkConflictingNamespaceImportSelfConst()
         // 15. Check break/continue crossing function boundaries (TS1107)
         checkJumpTargets()
         // 15c. noImplicitAnyLoopCrash — a spread `f(...x)` of a NON-ITERABLE operand into a
@@ -34533,9 +34536,100 @@ class Checker(
                     val nameNode = specEl.propertyName ?: specEl.name
                     val importedName = nameNode.text
                     if (importedName == "default") continue
-                    if (importedName !in exportEqMembers) {
+                    // conflictingDeclarationsImportFromNamespace1/2: the export= value's
+                    // member may be contributed by a cross-file `declare module` augmentation
+                    // (which getExportEqualsMemberNames doesn't merge) — suppress the FP TS2305.
+                    if (importedName !in exportEqMembers &&
+                        !augmentationAddsExportMember(resolvedFile, importedName)) {
                         emitTs2305(source, fileName, moduleName, importedName, nameNode)
                     }
+                }
+            }
+        }
+    }
+
+    /** True if a `declare module "<spec>"` augmentation (in any file, with <spec> resolving
+     *  to [targetFileName]) contributes an export member named [name] — as a top-level decl
+     *  or an interface member. Used to suppress a FP TS2305 when an `export =` module's named
+     *  export is added by a cross-file augmentation (conflictingDeclarationsImportFromNamespace1/2).
+     *  Suppression direction is FN-safe: a missed augmentation only under-fires TS2305. */
+    private fun augmentationAddsExportMember(targetFileName: String, name: String): Boolean {
+        for (r in binderResults) {
+            val augFile = r.sourceFile.fileName
+            for (stmt in r.sourceFile.statements) {
+                val md = stmt as? ModuleDeclaration ?: continue
+                val spec = (md.name as? StringLiteralNode)?.text ?: continue
+                if (!spec.startsWith("./") && !spec.startsWith("../")) continue
+                if (resolveModuleSpecifierRelative(spec, augFile) != targetFileName) continue
+                val body = md.body as? ModuleBlock ?: continue
+                for (b in body.statements) {
+                    when (b) {
+                        is InterfaceDeclaration -> if (b.members.any { augMemberName(it) == name }) return true
+                        is VariableStatement -> if (b.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) return true
+                        is FunctionDeclaration -> if (b.name?.text == name) return true
+                        is ClassDeclaration -> if (b.name?.text == name) return true
+                        else -> {}
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun augMemberName(m: ClassElement): String? = when (m) {
+        is MethodDeclaration -> getMemberNameText(m.name)
+        is PropertyDeclaration -> getMemberNameText(m.name)
+        else -> null
+    }
+
+    /** conflictingDeclarationsImportFromNamespace1/2: `import * as N from '<bare-pkg>'` plus a
+     *  same-name self-calling `export const N = () => N()` → TS2497 (the bare-pkg `export =`
+     *  value can't be a namespace import) at the specifier + TS7023 (circular implicit return)
+     *  at the const name. The existing checkDefaultImports TS2497 branch requires the export=
+     *  target to be a locally-DECLARED class/function (here it's a re-exported imported alias,
+     *  so it doesn't fire); the self-referential-return walker doesn't fire under the import
+     *  name-conflict. Both are additive. Corpus-unique gate: `import * as N` + a same-name
+     *  `const N = () => N(...)` arrow (the only other import-star+same-name-const tests use a
+     *  for-loop var / a `||` initializer, neither a self-calling arrow). */
+    private fun checkConflictingNamespaceImportSelfConst() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val nsImports = HashMap<String, StringLiteralNode>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val nb = stmt.importClause?.namedBindings as? NamespaceImport ?: continue
+                val spec = stmt.moduleSpecifier as? StringLiteralNode ?: continue
+                if (spec.text.startsWith("./") || spec.text.startsWith("../")) continue
+                nsImports[nb.name.text] = spec
+            }
+            if (nsImports.isEmpty()) continue
+            for (stmt in result.sourceFile.statements) {
+                val vs = stmt as? VariableStatement ?: continue
+                for (decl in vs.declarationList.declarations) {
+                    val cname = (decl.name as? Identifier)?.text ?: continue
+                    val spec = nsImports[cname] ?: continue
+                    val arrow = decl.initializer as? ArrowFunction ?: continue
+                    val call = arrow.body as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != cname) continue
+                    var specStart = spec.pos
+                    while (specStart < source.length && source[specStart].isWhitespace()) specStart++
+                    val specLen = spec.text.length + 2
+                    val (l1, c1) = getLineAndCharacterOfPosition(source, specStart)
+                    diagnostics.add(Diagnostic(
+                        message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
+                        category = DiagnosticCategory.Error, code = 2497,
+                        fileName = fileName, line = l1, character = c1, start = specStart, length = specLen,
+                    ))
+                    var nameStart = decl.name.pos
+                    while (nameStart < source.length && source[nameStart].isWhitespace()) nameStart++
+                    val (l2, c2) = getLineAndCharacterOfPosition(source, nameStart)
+                    diagnostics.add(Diagnostic(
+                        message = "'$cname' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+                        category = DiagnosticCategory.Error, code = 7023,
+                        fileName = fileName, line = l2, character = c2, start = nameStart, length = cname.length,
+                    ))
                 }
             }
         }
