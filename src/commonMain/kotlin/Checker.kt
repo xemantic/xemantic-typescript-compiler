@@ -86889,6 +86889,26 @@ interface DataView {
         return null
     }
 
+    /**
+     * staticMemberExportAccess landmine: a property-access chain whose LEFTMOST identifier
+     * resolves to a namespace/module/import-alias is NAMESPACE-QUALIFIED — its leaf member
+     * (a class) is the class VALUE (static, constructable) NOT a genuine instance, even
+     * though our checker mis-resolves a namespace-member class's value position to its
+     * INSTANCE type. So the class-instance "new on instance" (TS2351) and static-via-instance
+     * (TS2576/TS2339) checks must BAIL for such chains. A chain rooted at a plain
+     * variable/parameter (`$.sammy` where `$: JQueryStatic`) is a genuine instance access.
+     * Returns true (→ bail) for any unresolvable / non-identifier / namespace-qualified root.
+     */
+    private fun propertyAccessChainIsNamespaceQualified(expr: Expression): Boolean {
+        var cur: Expression = expr
+        while (cur is PropertyAccessExpression) cur = cur.expression
+        val root = cur as? Identifier ?: return true
+        val sym = currentFileLocals?.get(root.text) ?: globals[root.text] ?: return true
+        return sym.flags.hasAny(
+            SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule or SymbolFlags.Alias
+        )
+    }
+
     /** Get the type of an element access expression (e.g., `obj["prop"]`, `arr[0]`). */
     private fun getTypeOfElementAccess(expr: ElementAccessExpression): Type {
         val objectType = getTypeOfExpression(expr.expression)
@@ -100846,6 +100866,39 @@ interface DataView {
                     return
                 }
             }
+            // staticMemberExportAccess: a CHAINED PropertyAccess receiver (`$.sammy.bar`,
+            // `$.sammy.x`) resolving to a class-INSTANCE Type.Interface. The class-instance
+            // TS2576/TS2339 helpers are invoked only for Identifier receivers (the B153 trap
+            // forbids a general PropertyAccess-receiver TS2339 against NAMED INTERFACE bags),
+            // so this narrowly-gated branch owns the chained class-instance case: TS2576 for a
+            // static-via-instance access, TS2339 for a genuinely-missing member (e.g. a
+            // namespace export of the merged namespace — never an instance member). FP firewall:
+            // single non-generic ClassDeclaration NOT merged with an interface/type-alias (a
+            // namespace/ModuleDeclaration sibling is safe — it adds no instance members), and
+            // the chain-walk must return `false` (genuinely missing, not "unresolvable base").
+            if (objectExpr is PropertyAccessExpression && recvType is Type.Interface && propName.isNotEmpty() &&
+                !propertyAccessChainIsNamespaceQualified(objectExpr)) {
+                val tsym = recvType.symbol
+                if (tsym != null && tsym.flags.hasAny(SymbolFlags.Class)) {
+                    val mergedWithTypeShape = tsym.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration }
+                    val classDecl = tsym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+                    if (!mergedWithTypeShape && classDecl != null && classDecl.typeParameters.isNullOrEmpty()) {
+                        if (tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return
+                        if (lookupInstanceMemberInResolvableChain(classDecl, propName) == false &&
+                            !isStaticMemberOfClass(classDecl, propName) && propName !in RUNTIME_PROPERTIES) {
+                            val typeName = classDecl.name?.text ?: tsym.name
+                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$propName' does not exist on type '$typeName'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = diagStart, length = diagLength,
+                            ))
+                        }
+                        return
+                    }
+                }
+            }
         }
 
         // === Static method "this" access ===
@@ -105526,6 +105579,33 @@ interface DataView {
                         length = ce.text.length,
                         messageChain = listOf("  Type '$typeName' has no construct signatures."),
                     ))
+                }
+            }
+            // staticMemberExportAccess: `new $.sammy()` — a chained PropertyAccess callee
+            // resolving to a class-INSTANCE Type.Interface (no construct signatures). LANDMINE:
+            // `new ns.ClassA()` is VALID but our checker resolves a namespace-member class's
+            // value position to its INSTANCE type (no construct sigs) — so bail when the accessed
+            // property itself resolves to a CLASS symbol (the constructable static side).
+            if (ce is PropertyAccessExpression && calleeType is Type.Interface &&
+                !propertyAccessChainIsNamespaceQualified(ce)) {
+                val tsym = calleeType.symbol
+                if (tsym != null && tsym.flags.hasAny(SymbolFlags.Class)) {
+                    val accessedSym = resolvePropertyAccessToSymbol(ce)
+                    if (accessedSym == null || !accessedSym.flags.hasAny(SymbolFlags.Class)) {
+                        val typeName = tsym.name
+                        val start = ce.pos
+                        val length = expressionTrueEnd(ce) - start
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "This expression is not constructable.",
+                                category = DiagnosticCategory.Error, code = 2351,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                messageChain = listOf("  Type '$typeName' has no construct signatures."),
+                            ))
+                        }
+                    }
                 }
             }
             return
