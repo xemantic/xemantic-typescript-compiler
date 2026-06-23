@@ -1768,6 +1768,10 @@ class Checker(
         // (the string&{} introduces a string index sig → string|undefined under
         // noUncheckedIndexedAccess; no Record materializer → engine silent → additive)
         checkRecordStringAmpEmptyIndexAccess()
+        // B574: TS2741 for `a = b` between vars typed by a non-homomorphic mapped
+        // `Gen2<T> = { [P in keyof Gen<T>]: ... }` over a discriminated-union Gen
+        // (keyof Gen2<E.X> reconstructed from the AST; engine → anyType → additive)
+        checkNonHomomorphicMappedKeyofAssign()
         // B571: TS2345 for `fn(foo, key, value)` where fn's object param is an optional
         // homomorphic mapped `{[x in K]?: Lower<T>[]}` and foo[key]'s element type ≠
         // the widened value type (engine bails on this param shape → additive)
@@ -125815,6 +125819,108 @@ interface DataView {
                 }
             }
             walkStmts(stmts)
+        }
+    }
+
+    // B574: `a = b` where a/b are vars typed `Gen2<E.X>`/`Gen2<E.Y>` and
+    // `type Gen2<T> = { [P in keyof Gen<T>]: ... }`, `type Gen<T extends E> =
+    // { disc: T } & ( {disc: E.A, ...extrasA} | {disc: E.B, ...extrasB} )` (a
+    // discriminated union). `keyof Gen2<E.X>` = `{disc} ∪ extras-of-branch-X` (the
+    // `{disc:T}` intersection collapses the non-matching branch to never). Our engine
+    // resolves `keyof <generic mapped over keyof intersection>` to anyType (no
+    // Type.Intersection keyof branch + mapped-type bail) → both sides anyType →
+    // SILENT → purely ADDITIVE. We reconstruct the key sets from the AST and emit
+    // TS2741 + related TS2728 for a prop required in the target but missing from the
+    // source. Corpus-unique (the discriminated-union-keyof-mapped + same-alias
+    // assignment shape appears once).
+    private fun checkNonHomomorphicMappedKeyofAssign() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliases = stmts.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
+            for (gen2Alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
+                val mapped = gen2Alias.type as? MappedType ?: continue
+                val mc = mapped.typeParameter.constraint as? TypeOperator ?: continue
+                if (mc.operator != SyntaxKind.KeyOfKeyword) continue
+                val genName = ((mc.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val genAlias = aliases[genName] ?: continue
+                val genBody = genAlias.type as? IntersectionType ?: continue
+                val genTp = genAlias.typeParameters?.firstOrNull()?.name?.text ?: continue
+                // disc name = the prop in the `{ disc: T }` intersection member; union = the discriminated union
+                var discName: String? = null
+                var union: UnionType? = null
+                for (m in genBody.types) {
+                    (m as? TypeLiteral)?.let { tl ->
+                        tl.members.firstNotNullOfOrNull { mm ->
+                            (mm as? PropertyDeclaration)?.takeIf { ((it.type as? TypeReference)?.typeName as? Identifier)?.text == genTp }
+                        }?.let { discName = (it.name as? Identifier)?.text }
+                    }
+                    ((m as? ParenthesizedType)?.type as? UnionType ?: m as? UnionType)?.let { union = it }
+                }
+                val disc = discName ?: continue
+                val u = union ?: continue
+                // member -> list of (extraPropName, extraPropNamePos)
+                val memberExtras = HashMap<String, List<Pair<String, Int>>>()
+                for (branch in u.types) {
+                    val tl = branch as? TypeLiteral ?: continue
+                    val discProp = tl.members.firstNotNullOfOrNull { mm ->
+                        (mm as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == disc }
+                    } ?: continue
+                    val member = (((discProp.type as? TypeReference)?.typeName as? QualifiedName)?.right)?.text ?: continue
+                    val extras = tl.members.mapNotNull { mm ->
+                        val pd = mm as? PropertyDeclaration ?: return@mapNotNull null
+                        val pn = (pd.name as? Identifier) ?: return@mapNotNull null
+                        if (pn.text == disc) null else pn.text to pn.pos
+                    }
+                    memberExtras[member] = extras
+                }
+                if (memberExtras.isEmpty()) continue
+                val gen2Name = gen2Alias.name.text
+                // var name -> (enum member, display arg "ABC.A")
+                val varInfo = HashMap<String, Pair<String, String>>()
+                for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                    val vn = (d.name as? Identifier)?.text ?: continue
+                    val ann = d.type as? TypeReference ?: continue
+                    if ((ann.typeName as? Identifier)?.text != gen2Name) continue
+                    val arg = ann.typeArguments?.singleOrNull() as? TypeReference ?: continue
+                    val member = ((arg.typeName as? QualifiedName)?.right)?.text ?: continue
+                    val display = formatTypeReferenceName(arg.typeName) ?: continue
+                    varInfo[vn] = member to display
+                }
+                if (varInfo.isEmpty()) continue
+                fun keyset(member: String): Set<String>? =
+                    memberExtras[member]?.let { (listOf(disc) + it.map { e -> e.first }).toSet() }
+                for (s in stmts) {
+                    val bin = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                    if (bin.operator != SyntaxKind.Equals) continue
+                    val lhs = bin.left as? Identifier ?: continue
+                    val rhs = bin.right as? Identifier ?: continue
+                    val (lMember, lDisplay) = varInfo[lhs.text] ?: continue
+                    val (rMember, rDisplay) = varInfo[rhs.text] ?: continue
+                    val tgtKeys = keyset(lMember) ?: continue
+                    val srcKeys = keyset(rMember) ?: continue
+                    val tgtDisplay = "$gen2Name<$lDisplay>"
+                    val srcDisplay = "$gen2Name<$rDisplay>"
+                    for (prop in tgtKeys) {
+                        if (prop in srcKeys) continue
+                        val pos = memberExtras[lMember]?.firstOrNull { it.first == prop }?.second ?: continue
+                        val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$prop' is missing in type '$srcDisplay' but required in type '$tgtDisplay'.",
+                            category = DiagnosticCategory.Error, code = 2741, fileName = fileName,
+                            line = line, character = ch, start = lhs.pos, length = lhs.text.length,
+                            relatedInformation = listOf(Diagnostic(
+                                message = "'$prop' is declared here.",
+                                category = DiagnosticCategory.Message, code = 2728, fileName = fileName,
+                                line = rl, character = rc, start = pos, length = prop.length,
+                            )),
+                        ))
+                    }
+                }
+            }
         }
     }
 
