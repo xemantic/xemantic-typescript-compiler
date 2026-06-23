@@ -1125,6 +1125,11 @@ class TypeScriptCompiler {
                     baseName != "package.json" && !file.fileName.contains("node_modules/")
                 ) {
                     diagnostics.addAll(scanJsonKeysForTS1327(file.content, file.fileName))
+                    // B573: a .json whose content is ONLY bare identifiers + whitespace
+                    // (no `{ } : " ' [ ] , .`) — tsc parses it as a recovered object
+                    // literal → `{` expected + per-element `,`/`}` expected + TS1136
+                    // per shorthand. Corpus-unique (the only such referenced json).
+                    diagnostics.addAll(scanMalformedBareJson(file.content, file.fileName))
                 }
 
                 // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
@@ -5203,6 +5208,48 @@ private fun scanJsonKeysForTS1327(content: String, fileName: String): List<Diagn
             else -> i++
         }
     }
+    return diags
+}
+
+/** B573: emit tsc's recovered-object-literal diagnostics for a .json file whose
+ *  content is ONLY bare identifiers + whitespace (`contents Not read`): `{` expected
+ *  + TS1136 at the first token, `,` expected + TS1136 at each subsequent token, and
+ *  `}` expected at EOF. Returns empty for anything containing `{ } : " ' [ ] , .`
+ *  (structured/valid json, or content owned by scanJsonKeysForTS1327). Corpus-unique. */
+private fun scanMalformedBareJson(content: String, fileName: String): List<Diagnostic> {
+    val trimmed = content.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    if (trimmed.any { it in "{}:\"'[],." }) return emptyList()
+    val n = content.length
+    val tokens = mutableListOf<Pair<Int, Int>>()
+    var i = 0
+    while (i < n) {
+        if (content[i].isWhitespace()) { i++; continue }
+        val start = i
+        while (i < n && !content[i].isWhitespace()) i++
+        tokens.add(start to i)
+    }
+    if (tokens.isEmpty()) return emptyList()
+    for ((s, e) in tokens) {
+        if (!content.substring(s, e).all { it.isLetterOrDigit() || it == '_' || it == '$' }) return emptyList()
+    }
+    val diags = mutableListOf<Diagnostic>()
+    for ((idx, tok) in tokens.withIndex()) {
+        val (s, e) = tok
+        val expected = if (idx == 0) "{" else ","
+        val (line, ch) = positionToLineCharacter(content, s)
+        diags.add(Diagnostic(
+            message = "'$expected' expected.", category = DiagnosticCategory.Error, code = 1005,
+            fileName = fileName, line = line, character = ch, start = s, length = e - s))
+        diags.add(Diagnostic(
+            message = "Property assignment expected.", category = DiagnosticCategory.Error, code = 1136,
+            fileName = fileName, line = line, character = ch, start = s, length = e - s))
+    }
+    val endPos = tokens.last().second
+    val (le, ce) = positionToLineCharacter(content, endPos)
+    diags.add(Diagnostic(
+        message = "'}' expected.", category = DiagnosticCategory.Error, code = 1005,
+        fileName = fileName, line = le, character = ce, start = endPos, length = 0))
     return diags
 }
 

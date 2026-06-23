@@ -1248,6 +1248,9 @@ class Checker(
         //   object shape; `x.<undeclared>` → TS2339; a JSDoc `@type {{...}}`-annotated such
         //   var requiring a prop missing from the module shape → TS2741 + TS2728.
         checkRequireOfJsonOrCjsModuleInJs()
+        // B573: `import X = require('./y.json')` in a .ts file where y.json is malformed
+        // (bare identifiers only) → X has shape `{ <id>: any; ... }`; `X.<undeclared>` → TS2339.
+        checkRequireOfMalformedJsonInTs()
         // 14·B551. A generic identity-callback `match<T>(cb:(value:T)=>boolean):T` called in a
         //   CONTEXTUAL-OPTIONAL position (`foo({y: match(y=>y>0)})` / `foo2([match(y=>y>0)])`,
         //   key/element optional, eopt=false) → T infers `X|undefined` → the relational operand
@@ -31987,6 +31990,84 @@ class Checker(
             for (stmt in result.sourceFile.statements) {
                 if (stmt is ExpressionStatement) visitExpr(stmt.expression)
             }
+        }
+    }
+
+    /** B573: keys of a MALFORMED json whose content is ONLY bare identifiers +
+     *  whitespace (`contents Not read`) — tsc types `require('./y.json')` of such a
+     *  file as `{ contents: any; Not: any; read: any; }`. Returns null if the content
+     *  has any of `{ } : " ' [ ] , .` (i.e. is structured/valid json, owned elsewhere). */
+    private fun bareIdentifierJsonKeys(content: String): List<String>? {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.any { it in "{}:\"'[],." }) return null
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return null
+        if (tokens.any { t -> !t.all { it.isLetterOrDigit() || it == '_' || it == '$' } || t[0].isDigit() }) return null
+        return tokens
+    }
+
+    // B573: `import X = require('./y.json')` in a .ts file where y.json is malformed
+    // (bare-identifier content). The require resolves to `any` today (we don't model
+    // the json shape) → the general path is silent → purely ADDITIVE. We give X the
+    // shape `{ <id>: any; ... }` and flag `X.<prop>` for prop ∉ the bare-id key set →
+    // TS2339. The paired TS1005/TS1136 json-parse errors are emitted driver-side
+    // (scanMalformedBareJson). Corpus-unique: a referenced bare-identifier json file
+    // appears only in this test (the duplicatePackage json files have `{`/`"`).
+    private fun checkRequireOfMalformedJsonInTs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val jsonVars = HashMap<String, Pair<String, Set<String>>>()
+            for (stmt in result.sourceFile.statements) {
+                val ieq = stmt as? ImportEqualsDeclaration ?: continue
+                val extRef = ieq.moduleReference as? ExternalModuleReference ?: continue
+                val spec = (extRef.expression as? StringLiteralNode)?.text ?: continue
+                if (!spec.endsWith(".json")) continue
+                val content = resolveJsonModuleContent(spec) ?: continue
+                val keys = bareIdentifierJsonKeys(content) ?: continue
+                val display = "{ " + keys.joinToString(" ") { "$it: any;" } + " }"
+                jsonVars[ieq.name.text] = display to keys.toSet()
+            }
+            if (jsonVars.isEmpty()) continue
+            fun checkAccess(pa: PropertyAccessExpression) {
+                val recv = pa.expression as? Identifier ?: return
+                val (display, keys) = jsonVars[recv.text] ?: return
+                val prop = pa.name.text
+                if (prop in keys || prop in RUNTIME_PROPERTIES) return
+                if (prop.isEmpty() || prop[0].isDigit()) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$prop' does not exist on type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = ch, start = pa.name.pos, length = prop.length))
+            }
+            fun visitExpr(e: Expression?) {
+                when (e) {
+                    is PropertyAccessExpression -> { checkAccess(e); visitExpr(e.expression) }
+                    is ElementAccessExpression -> { visitExpr(e.expression); visitExpr(e.argumentExpression) }
+                    is CallExpression -> { visitExpr(e.expression); e.arguments?.forEach { visitExpr(it) } }
+                    is BinaryExpression -> { visitExpr(e.left); visitExpr(e.right) }
+                    is ParenthesizedExpression -> visitExpr(e.expression)
+                    else -> {}
+                }
+            }
+            fun walkStmts(ss: List<Statement>) {
+                for (st in ss) when (st) {
+                    is ExpressionStatement -> visitExpr(st.expression)
+                    is VariableStatement -> for (d in st.declarationList.declarations) visitExpr(d.initializer)
+                    is ReturnStatement -> visitExpr(st.expression)
+                    is Block -> walkStmts(st.statements)
+                    is IfStatement -> { walkStmts(listOf(st.thenStatement)); st.elseStatement?.let { walkStmts(listOf(it)) } }
+                    is ForOfStatement -> walkStmts(listOf(st.statement))
+                    is ForStatement -> walkStmts(listOf(st.statement))
+                    is WhileStatement -> walkStmts(listOf(st.statement))
+                    is FunctionDeclaration -> st.body?.let { walkStmts(it.statements) }
+                    else -> {}
+                }
+            }
+            walkStmts(result.sourceFile.statements)
         }
     }
 
