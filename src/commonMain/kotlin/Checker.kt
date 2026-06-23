@@ -1703,6 +1703,8 @@ class Checker(
         }
         // 61b. `Awaited<X>` recursive bad-thenable (TS2589) + return-less then-method (TS7010)
         checkAwaitedRecursiveThenable()
+        // 61c. `Promise.all(<const-tuple>).then(p => p[oob])` out-of-bounds tuple index (TS2493)
+        checkPromiseAllConstTupleOutOfBounds()
         // 62. Check block-scoped declarations outside blocks (TS1156)
         checkBlockScopedDeclarationsInSingleBody()
         // 62a2. Check block-NESTED let/const redeclarations (TS2451) — binder doesn't bind these
@@ -90850,6 +90852,117 @@ interface DataView {
             val valueRef = cbFn.parameters.firstOrNull()?.type as? TypeReference ?: return false
             cur = (valueRef.typeName as? Identifier)?.text ?: return false
         }
+    }
+
+    /**
+     * awaitedType (#41831 repro): `Promise.all(<const-tuple>).then((results) => …results[i]…)`
+     * where the const-tuple has N elements and `i >= N` → TS2493 "Tuple type '[…]' of length
+     * 'N' has no element at index 'i'." at the index literal. `Promise.all`/`Promise.resolve`
+     * are `=> any` in the embedded lib so `results` is `any` (no out-of-bounds check) → additive.
+     * Purely AST: the tuple length N + element-type display come from the const-tuple literal
+     * (`Promise.resolve(X)` → awaited element = widened type of X). Corpus-UNIQUE (`Promise.all`
+     * + `as const` only in this test); FP-safe (requires the `as const` cast — a non-const array
+     * is `T[]`, not a fixed-length tuple, so no out-of-bounds).
+     */
+    private fun checkPromiseAllConstTupleOutOfBounds() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            pacotScanScope(result.sourceFile.statements, result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun pacotScanScope(stmts: List<Statement>, source: String, fileName: String) {
+        // collect `const X = [...] as const` tuples declared in this scope
+        val constTuples = HashMap<String, List<Expression>>()
+        for (s in stmts) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val elems = pacotConstTupleElements(d.initializer, source) ?: continue
+                constTuples[nm] = elems
+            }
+        }
+        for (s in stmts) {
+            if (s is Block) { pacotScanScope(s.statements, source, fileName); continue }
+            val exprStmt = s as? ExpressionStatement ?: continue
+            // Promise.all(arg).then(arrow)
+            val thenCall = exprStmt.expression as? CallExpression ?: continue
+            val thenPa = thenCall.expression as? PropertyAccessExpression ?: continue
+            if (thenPa.name.text != "then") continue
+            val allCall = thenPa.expression as? CallExpression ?: continue
+            val allPa = allCall.expression as? PropertyAccessExpression ?: continue
+            if (allPa.name.text != "all" || (allPa.expression as? Identifier)?.text != "Promise") continue
+            val allArg = allCall.arguments.firstOrNull() ?: continue
+            val elems = (if (allArg is Identifier) constTuples[allArg.text]
+                         else pacotConstTupleElements(allArg, source)) ?: continue
+            val n = elems.size
+            if (n == 0) continue
+            val arrow = thenCall.arguments.firstOrNull() as? ArrowFunction ?: continue
+            val param = (arrow.parameters.firstOrNull()?.name as? Identifier)?.text ?: continue
+            val body = arrow.body as? Block ?: continue
+            val elemDisplays = elems.map { pacotElementTypeDisplay(it) }
+            if (elemDisplays.any { it == null }) continue
+            val display = "[" + elemDisplays.filterNotNull().joinToString(", ") + "]"
+            pacotFindOobAccess(body, param, n, display, source, fileName)
+        }
+    }
+
+    /** Returns the element expressions of a `[...] as const` initializer, else null. */
+    private fun pacotConstTupleElements(init: Expression?, source: String): List<Expression>? {
+        val asExpr = init as? AsExpression ?: return null
+        // require `as const` (source-text check — robust to how `const` parses as a type)
+        var ti = asExpr.type.pos
+        while (ti < source.length && source[ti].isWhitespace()) ti++
+        if (!source.regionMatches(ti, "const", 0, 5) ||
+            (ti + 5 < source.length && (source[ti + 5].isLetterOrDigit() || source[ti + 5] == '_'))) return null
+        val arr = asExpr.expression as? ArrayLiteralExpression ?: return null
+        return arr.elements
+    }
+
+    /** Awaited element-type display for a const-tuple element; null (→ skip) when unknown. */
+    private fun pacotElementTypeDisplay(elem: Expression): String? {
+        if (elem is CallExpression) {
+            val pa = elem.expression as? PropertyAccessExpression
+            if (pa != null && pa.name.text == "resolve" && (pa.expression as? Identifier)?.text == "Promise") {
+                val arg = elem.arguments.firstOrNull() ?: return "any"
+                return typeToString(getWidenedLiteralType(getTypeOfExpression(arg)))
+            }
+        }
+        return null
+    }
+
+    private fun pacotFindOobAccess(body: Block, param: String, n: Int, display: String, source: String, fileName: String) {
+        for (s in body.statements) {
+            val exprs = when (s) {
+                is VariableStatement -> s.declarationList.declarations.mapNotNull { it.initializer }
+                is ExpressionStatement -> listOf(s.expression)
+                else -> emptyList()
+            }
+            for (e in exprs) pacotCheckExpr(e, param, n, display, source, fileName)
+        }
+    }
+
+    private fun pacotCheckExpr(e: Expression, param: String, n: Int, display: String, source: String, fileName: String) {
+        if (e !is ElementAccessExpression) return
+        val idx = e.argumentExpression
+        if ((e.expression as? Identifier)?.text == param && idx is NumericLiteralNode) {
+            val i = idx.text.toIntOrNull()
+            if (i != null && i >= n) {
+                val start = idx.pos
+                val length = idx.text.length.coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Tuple type '$display' of length '$n' has no element at index '$i'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2493,
+                    fileName = fileName,
+                    line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
+        }
+        pacotCheckExpr(e.expression, param, n, display, source, fileName)
     }
 
     private fun checkIndexedAccessRelationSetState() {
