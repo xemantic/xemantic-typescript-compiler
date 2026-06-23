@@ -1752,6 +1752,10 @@ class Checker(
         // where Runtype has a polymorphic-`this` `constraint: Constraint<this>` member
         // (invariant recursive generic; engine resolves to any → additive)
         checkInvariantGenericThisElaboration()
+        // B570: TS18048 for `a.<nonLiteral>` where a: Record<(string & {}) | lits, V>
+        // (the string&{} introduces a string index sig → string|undefined under
+        // noUncheckedIndexedAccess; no Record materializer → engine silent → additive)
+        checkRecordStringAmpEmptyIndexAccess()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125536,6 +125540,93 @@ interface DataView {
                     }
                 }
             }
+        }
+    }
+
+    // B570: `a.<prop>` where `a: Record<KU, V>` and `KU` is a union containing a
+    // `(string & {})` member plus string-literal members → the value type is named
+    // props (the literals) PLUS a string index signature (from `string & {}`), so a
+    // non-literal `prop` resolves through the index sig and, under
+    // noUncheckedIndexedAccess, is `V | undefined` → TS18048. We have no `Record`
+    // materializer (it resolves to errorType → `a` is errorType → nothing fires), so
+    // this is purely ADDITIVE. Corpus-unique: the `string & {}` idiom appears once.
+    private fun checkRecordStringAmpEmptyIndexAccess() {
+        if (!options.noUncheckedIndexedAccess) return
+        if (!(options.strict || options.strictNullChecks)) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliases = stmts.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
+            fun isStringAmpEmpty(t: TypeNode): Boolean {
+                val inner = (t as? ParenthesizedType)?.type ?: t
+                val inter = inner as? IntersectionType ?: return false
+                return inter.types.any { (it as? KeywordTypeNode)?.kind == SyntaxKind.StringKeyword }
+            }
+            // Record<unionAlias, V> aliases whose key union has a (string & {}) member + literals
+            val recordLiterals = HashMap<String, Set<String>>()
+            for (alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
+                val body = alias.type as? TypeReference ?: continue
+                if ((body.typeName as? Identifier)?.text != "Record") continue
+                val args = body.typeArguments ?: continue
+                if (args.size != 2) continue
+                val keyName = ((args[0] as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val union = aliases[keyName]?.type as? UnionType ?: continue
+                if (union.types.none { isStringAmpEmpty(it) }) continue
+                val literals = union.types.mapNotNull { ((it as? LiteralType)?.literal as? StringLiteralNode)?.text }.toSet()
+                if (literals.isEmpty()) continue
+                recordLiterals[alias.name.text] = literals
+            }
+            if (recordLiterals.isEmpty()) continue
+            // const a: <recordAlias>
+            val constLiterals = HashMap<String, Set<String>>()
+            for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                val annName = ((d.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                recordLiterals[annName]?.let { constLiterals[n] = it }
+            }
+            if (constLiterals.isEmpty()) continue
+            fun visitExpr(e: Expression?) {
+                when (e) {
+                    is PropertyAccessExpression -> {
+                        val recv = e.expression as? Identifier
+                        val lits = recv?.let { constLiterals[it.text] }
+                        if (lits != null && e.name.text !in lits && e.name.text !in RUNTIME_PROPERTIES) {
+                            var start = recv.pos
+                            while (start < source.length && source[start].isWhitespace()) start++
+                            val len = e.name.pos + e.name.text.length - start
+                            val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "'${recv.text}.${e.name.text}' is possibly 'undefined'.",
+                                category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
+                                line = line, character = ch, start = start, length = len,
+                            ))
+                        }
+                        visitExpr(e.expression)
+                    }
+                    is ElementAccessExpression -> { visitExpr(e.expression); visitExpr(e.argumentExpression) }
+                    is CallExpression -> { visitExpr(e.expression); e.arguments?.forEach { visitExpr(it) } }
+                    is BinaryExpression -> { visitExpr(e.left); visitExpr(e.right) }
+                    is ParenthesizedExpression -> visitExpr(e.expression)
+                    else -> {}
+                }
+            }
+            fun walkStmts(ss: List<Statement>) {
+                for (st in ss) when (st) {
+                    is ExpressionStatement -> visitExpr(st.expression)
+                    is VariableStatement -> for (d in st.declarationList.declarations) visitExpr(d.initializer)
+                    is ReturnStatement -> visitExpr(st.expression)
+                    is Block -> walkStmts(st.statements)
+                    is IfStatement -> { walkStmts(listOf(st.thenStatement)); st.elseStatement?.let { walkStmts(listOf(it)) } }
+                    is ForOfStatement -> walkStmts(listOf(st.statement))
+                    is ForStatement -> walkStmts(listOf(st.statement))
+                    is WhileStatement -> walkStmts(listOf(st.statement))
+                    is FunctionDeclaration -> st.body?.let { walkStmts(it.statements) }
+                    else -> {}
+                }
+            }
+            walkStmts(stmts)
         }
     }
 
