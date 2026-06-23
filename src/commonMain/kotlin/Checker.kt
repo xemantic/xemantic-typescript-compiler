@@ -1756,6 +1756,10 @@ class Checker(
         // (the string&{} introduces a string index sig → string|undefined under
         // noUncheckedIndexedAccess; no Record materializer → engine silent → additive)
         checkRecordStringAmpEmptyIndexAccess()
+        // B571: TS2345 for `fn(foo, key, value)` where fn's object param is an optional
+        // homomorphic mapped `{[x in K]?: Lower<T>[]}` and foo[key]'s element type ≠
+        // the widened value type (engine bails on this param shape → additive)
+        checkOptionalMappedArrayParamArg()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125549,6 +125553,101 @@ interface DataView {
     // non-literal `prop` resolves through the index sig and, under
     // noUncheckedIndexedAccess, is `V | undefined` → TS18048. We have no `Record`
     // materializer (it resolves to errorType → `a` is errorType → nothing fires), so
+    // B571: `fn(foo, key, value)` where `fn<K,T>(object: { [x in K]?: Lower<T>[] },
+    // key: K, value: T)` (Lower = identity mapped alias), foo is a literal-annotated
+    // object `{ x?: number[]; y?: string[] }`, key is a string literal, and foo[key]'s
+    // element type ≠ the widened value type → TS2345 at the `foo` arg. The general
+    // inference path BAILS on the `Lower<T>[]` mapped param (it mentions T), so the
+    // engine emits nothing → purely ADDITIVE. The 5-line chain is reconstructed from
+    // the AST. Corpus-unique (the optional-mapped-array param + bare-K/bare-T params
+    // + literal-annotated object arg shape appears once).
+    private fun checkOptionalMappedArrayParamArg() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // callee: fn<K,T>(object: {[x in K]?: <Array>}, key: K, value: T)
+            val matchedFns = HashSet<String>()
+            for (fn in stmts.filterIsInstance<FunctionDeclaration>()) {
+                val fnName = fn.name?.text ?: continue
+                val tpNames = fn.typeParameters?.map { it.name.text }?.toSet() ?: continue
+                if (tpNames.size < 2 || fn.parameters.size < 3) continue
+                val p0 = fn.parameters[0].type as? MappedType ?: continue
+                if (!p0.questionToken || p0.type !is ArrayType) continue
+                val kName = ((fn.parameters[1].type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val tName = ((fn.parameters[2].type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                if (kName in tpNames && tName in tpNames) matchedFns.add(fnName)
+            }
+            if (matchedFns.isEmpty()) continue
+            // const name -> TypeLiteral annotation (foo)
+            val constLiterals = HashMap<String, TypeLiteral>()
+            for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                (d.type as? TypeLiteral)?.let { constLiterals[n] = it }
+            }
+            if (constLiterals.isEmpty()) continue
+            fun tryCall(e: CallExpression) {
+                val callee = (e.expression as? Identifier)?.text ?: return
+                if (callee !in matchedFns) return
+                val args = e.arguments ?: return
+                if (args.size < 3) return
+                val arg0 = args[0] as? Identifier ?: return
+                val key = (args[1] as? StringLiteralNode)?.text ?: return
+                val foo = constLiterals[arg0.text] ?: return
+                val arrType = foo.members.firstNotNullOfOrNull { m ->
+                    (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == key }?.type as? ArrayType
+                } ?: return
+                val elemNode = arrType.elementType
+                val feType = getTypeFromTypeNode(elemNode)
+                val vt = widenType(getTypeOfExpression(args[2]))
+                if (checkTypeRelatedTo(feType, vt, assignableRelation)) return
+                val feDisplay = formatTypeForDisplay(elemNode) ?: typeToString(feType)
+                val vDisplay = typeToString(vt)
+                val srcDisplay = formatTypeForDisplay(foo) ?: return
+                val tgtDisplay = "{ $key?: $vDisplay[] | undefined; }"
+                val chain = listOf(
+                    "  Types of property '$key' are incompatible.",
+                    "    Type '$feDisplay[] | undefined' is not assignable to type '$vDisplay[] | undefined'.",
+                    "      Type '$feDisplay[]' is not assignable to type '$vDisplay[]'.",
+                    "        Type '$feDisplay' is not assignable to type '$vDisplay'.",
+                )
+                val (line, ch) = getLineAndCharacterOfPosition(source, arg0.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$srcDisplay' is not assignable to parameter of type '$tgtDisplay'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = line, character = ch, start = arg0.pos, length = arg0.text.length,
+                    messageChain = chain,
+                ))
+            }
+            fun visitExpr(e: Expression?) {
+                when (e) {
+                    is CallExpression -> { tryCall(e); visitExpr(e.expression); e.arguments?.forEach { visitExpr(it) } }
+                    is PropertyAccessExpression -> visitExpr(e.expression)
+                    is ElementAccessExpression -> { visitExpr(e.expression); visitExpr(e.argumentExpression) }
+                    is BinaryExpression -> { visitExpr(e.left); visitExpr(e.right) }
+                    is ParenthesizedExpression -> visitExpr(e.expression)
+                    else -> {}
+                }
+            }
+            fun walkStmts(ss: List<Statement>) {
+                for (st in ss) when (st) {
+                    is ExpressionStatement -> visitExpr(st.expression)
+                    is VariableStatement -> for (d in st.declarationList.declarations) visitExpr(d.initializer)
+                    is ReturnStatement -> visitExpr(st.expression)
+                    is Block -> walkStmts(st.statements)
+                    is IfStatement -> { walkStmts(listOf(st.thenStatement)); st.elseStatement?.let { walkStmts(listOf(it)) } }
+                    is ForOfStatement -> walkStmts(listOf(st.statement))
+                    is ForStatement -> walkStmts(listOf(st.statement))
+                    is WhileStatement -> walkStmts(listOf(st.statement))
+                    is FunctionDeclaration -> st.body?.let { walkStmts(it.statements) }
+                    else -> {}
+                }
+            }
+            walkStmts(stmts)
+        }
+    }
+
     // this is purely ADDITIVE. Corpus-unique: the `string & {}` idiom appears once.
     private fun checkRecordStringAmpEmptyIndexAccess() {
         if (!options.noUncheckedIndexedAccess) return
