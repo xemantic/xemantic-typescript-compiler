@@ -99029,23 +99029,42 @@ interface DataView {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         val message = "Property '$memberName' in type '$className' is not assignable to the same property in base type '$baseTypeName'."
                         val chain = mutableListOf<String>()
-                        chain.add("  Type '$derivedDisplayForChain' is not assignable to type '$baseDisplayForChain'.")
-
                         // TS2208 related info: when derived is an unconstrained TypeParam declared
                         // on this class, hint that adding `extends {}` might resolve the mismatch.
                         val relatedInfo = mutableListOf<Diagnostic>()
-                        if (isGenericConstraintMismatch && genericConstraintInfo != null) {
-                            val (dConDisp, bTpName) = genericConstraintInfo
-                            chain.add("    Type '$dConDisp' is not assignable to type '$bTpName'.")
-                            chain.add("      '$bTpName' could be instantiated with an arbitrary type which could be unrelated to '$dConDisp'.")
-                        } else if (isPredicateMismatch && derivedMethodDecl != null) {
-                            val sigColon = methodSigColonDisplay(derivedMethodDecl)
-                            chain.add("    Signature '$sigColon' must be a type predicate.")
+                        // B560: when the derived data-property type is MISSING ≥2 required
+                        // properties from the base property type (no shared-name prop to
+                        // drill), tsc reports the multi-prop "Type 'X' is missing the
+                        // following properties from type 'Y': a, b" form instead of the flat
+                        // "is not assignable" line (incompatibleTypes C4.p1: `{c,d}` vs
+                        // `{a,b}`). getPropertyElaborationChain's leaf produces exactly that
+                        // form when `incompatible` is empty. Adopt it ONLY for the ≥2-missing
+                        // multi-prop shape — a shared-prop mismatch / single-missing stays on
+                        // the existing flat-line + addSignatureElaboration path (no baseline
+                        // churn, FP-safe: no tsc baseline shows the flat line for ≥2 missing).
+                        val missingForm: List<String>? = if (
+                            !isGenericConstraintMismatch && !isPredicateMismatch &&
+                            derivedType is Type.Object && basePropType is Type.Object
+                        ) getPropertyElaborationChain(derivedType, basePropType)
+                            ?.takeIf { it.firstOrNull()?.contains("is missing the following properties from type") == true }
+                        else null
+                        if (missingForm != null) {
+                            chain.addAll(missingForm)
                         } else {
-                            // Add signature elaboration for function types
-                            // (also populates `relatedInfo` with TS2208 when base has a
-                            // method-level TypeParam that derived overrides with a concrete type).
-                            addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
+                            chain.add("  Type '$derivedDisplayForChain' is not assignable to type '$baseDisplayForChain'.")
+                            if (isGenericConstraintMismatch && genericConstraintInfo != null) {
+                                val (dConDisp, bTpName) = genericConstraintInfo
+                                chain.add("    Type '$dConDisp' is not assignable to type '$bTpName'.")
+                                chain.add("      '$bTpName' could be instantiated with an arbitrary type which could be unrelated to '$dConDisp'.")
+                            } else if (isPredicateMismatch && derivedMethodDecl != null) {
+                                val sigColon = methodSigColonDisplay(derivedMethodDecl)
+                                chain.add("    Signature '$sigColon' must be a type predicate.")
+                            } else {
+                                // Add signature elaboration for function types
+                                // (also populates `relatedInfo` with TS2208 when base has a
+                                // method-level TypeParam that derived overrides with a concrete type).
+                                addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
+                            }
                         }
                         if (derivedType is Type.TypeParam && derivedType.constraint == null &&
                             classTypeParams != null) {
@@ -108998,6 +109017,26 @@ interface DataView {
                         val (argFnType, paramFnType) = firstFailingPair
                         val nested = getFunctionMismatchElaboration(argFnType, paramFnType)
                         chain.addAll(nested.map { "    $it" })
+                    } else if (unionSub == null && errorMsg.startsWith("Argument of type '")) {
+                        // B560: drill into an object/class-instance arg-vs-param property
+                        // mismatch — tsc continues "Argument of type 'C1' is not assignable
+                        // to parameter of type 'IFoo1'." with "The types returned by 'p1()'
+                        // are incompatible between these types. Type 'string' is not
+                        // assignable to type 'number'." (incompatibleTypes `if1(c1)`). The
+                        // existing path only drilled function-type args; a class-instance arg
+                        // (no call sig) stopped at the bare "Argument of type" line. Reuse
+                        // getPropertyElaborationChain (which already produces the "types
+                        // returned by"/property-mismatch drill), shifted 4 spaces deeper
+                        // (its lines start at 2/4 → overload chain wants 6/8). Gated to the
+                        // plain "Argument of type" errorMsg so object-literal property errors
+                        // (their own elaboration) and union sub-lines are left untouched.
+                        val pair = getFirstFailingArgObjectTypes(args, sig)
+                        val at = pair?.first; val pt = pair?.second
+                        if (at is Type.Object && pt is Type.Object) {
+                            getPropertyElaborationChain(at, pt)?.let { drill ->
+                                chain.addAll(drill.map { "    $it" })
+                            }
+                        }
                     }
                 }
                 // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
@@ -109072,6 +109111,29 @@ interface DataView {
                     return Pair(argType, paramType)
                 }
                 return null
+            }
+        }
+        return null
+    }
+
+    /**
+     * B560: the (argType, paramType) of the first failing argument for [sig] — the
+     * type pair behind [getFirstArgumentError]'s "Argument of type 'X' is not
+     * assignable to parameter of type 'Y'." line, used to drill a deeper property /
+     * method-return elaboration into the TS2769 overload chain. Mirrors the gating of
+     * `getFirstArgumentError`/`getFirstFailingArgPosition` (skip spread / any / error).
+     */
+    private fun getFirstFailingArgObjectTypes(args: List<Expression>, sig: Signature): Pair<Type, Type>? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = restAwareParamType(params, i) ?: continue
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                return argType to paramType
             }
         }
         return null
@@ -115430,7 +115492,19 @@ interface DataView {
             }
         }
         var emitted = false
-        for ((propName, propPos) in excessProps) {
+        // B560: tsc's `hasExcessProperties` reports the FIRST excess property of a
+        // fresh object literal and returns immediately (Ternary.False) — it does NOT
+        // enumerate every excess prop, nor proceed to the per-property structural check
+        // (which is what recurses into known props). So `var o1: { a; b } = { e: 0,
+        // f: 0 }` reports only `e`, never `f` (incompatibleTypes). We previously
+        // reported every top-level excess. Match tsc: emit the first and stop (skip the
+        // nested-known-prop recursion below too — tsc never reaches it once an excess is
+        // found). FP-safe: no tsc baseline reports 2+ excess from one fresh literal via
+        // this path (the only multi-excess baselines are destructuring/array, separate
+        // emitters), so this can only REMOVE over-emission, never drop a wanted line.
+        val firstExcess = excessProps.firstOrNull()
+        if (firstExcess != null) {
+            val (propName, propPos) = firstExcess
             val (line, character) = getLineAndCharacterOfPosition(source, propPos)
             // Check for spelling suggestion (TS2561) vs plain excess (TS2353)
             val suggestion = getSpellingSuggestionFromNames(propName, targetPropNames)
@@ -115459,7 +115533,7 @@ interface DataView {
                     relatedInformation = listOfNotNull(parentRelated),
                 ))
             }
-            emitted = true
+            return true
         }
         // 16.0: Recurse into non-excess properties whose source value is itself
         // an object literal and whose target type is a resolvable object. This
