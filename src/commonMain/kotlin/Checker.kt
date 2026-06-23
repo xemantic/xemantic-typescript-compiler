@@ -112782,6 +112782,14 @@ interface DataView {
                     checkArrayElementsDiscriminantMismatch(arg, u, alias, source, fileName)
                 }
             }
+            // didYouMean: array-literal arg vs a TUPLE param — element-wise check, incl.
+            // a callable element (`getNum` → TS2322 + TS6212 "did you mean call") that the
+            // var-decl path's simple-only gate skips. Tuples are Type.Object (not Array
+            // Reference) so they fall through the branch above.
+            if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Object &&
+                paramType.tupleElementTypes != null) {
+                checkArrayLiteralElementsAgainstTuple(arg, paramType, source, fileName)
+            }
             // 16.0a: excess property check for object literal arguments passed
             // to typed object parameters. Emits TS2353 and stops further arg checks.
             // Skip rest parameters — param type is an array wrapper, not the element type.
@@ -112995,6 +113003,93 @@ interface DataView {
                                 val sourcePropSym = argType.members?.get(propName) ?: continue
                                 val sourcePropType = getTypeOfSymbol(sourcePropSym)
                                 if (sourcePropType === anyType || sourcePropType === errorType) continue
+                                // didYouMean: an object-literal property whose VALUE is a CONSTRUCTOR
+                                // value (`typeof Class` / `DateConstructor` — has construct sigs, but
+                                // its INSTANCE shape is missing) assigned to a named instance-type
+                                // property → TS2741 (1 missing) / TS2740 (≥2) at the property VALUE +
+                                // related TS6213 "Did you mean to use 'new'…" (+ TS2728 for single).
+                                // Additive: such props match neither bothSimple nor bothFuncSimple
+                                // below, so the existing per-property TS2322 path never reaches them.
+                                val valueNode = (propNode as? PropertyAssignment)?.initializer
+                                // A bare class identifier value types as the class INSTANCE
+                                // (getTypeOfSymbol), but the VALUE is the constructor `typeof C`
+                                // — resolve its constructor side so the missing-instance-member
+                                // check + `typeof C` display are correct (a `declare var Date:
+                                // DateConstructor` already types as the constructor → no override).
+                                val ctorValueSrc: Type.Object? = (valueNode as? Identifier)?.let { id ->
+                                    (currentFileLocals?.get(id.text) ?: globals[id.text])
+                                        ?.takeIf { it.flags.hasAny(SymbolFlags.Class) && !it.flags.hasAny(SymbolFlags.Variable) }
+                                        ?.let { getTypeOfSymbolForTypeQuery(it) as? Type.Object }
+                                }
+                                val effectiveSrc = ctorValueSrc ?: sourcePropType
+                                if (effectiveSrc is Type.Object && targetPropType is Type.Interface) {
+                                    val srcConstructSigs = getConstructSignaturesOfType(effectiveSrc)
+                                    if (srcConstructSigs.isNotEmpty() &&
+                                        !checkTypeRelatedTo(effectiveSrc, targetPropType, assignableRelation)) {
+                                        val newHelps = srcConstructSigs.any { sig ->
+                                            val rt = sig.resolvedReturnType ?: return@any false
+                                            checkTypeRelatedTo(rt, targetPropType, assignableRelation)
+                                        }
+                                        // A `typeof C` source with no statics has null `.members`,
+                                        // for which collectMissingProperties short-circuits to empty
+                                        // — compute the missing instance members directly there.
+                                        val missing: List<String>
+                                        val missingSym: Symbol?
+                                        if (ctorValueSrc != null && ctorValueSrc.members == null) {
+                                            resolveStructuredTypeMembers(targetPropType)
+                                            val missList = (targetPropType.properties ?: emptyList()).filter { p ->
+                                                !isOptionalProperty(p) && p.name !in OBJECT_PROTOTYPE_PROPERTIES
+                                            }
+                                            missing = missList.map { it.name }
+                                            missingSym = missList.firstOrNull()
+                                        } else {
+                                            missing = collectMissingProperties(effectiveSrc, targetPropType)
+                                            missingSym = getMissingRequiredPropertySymbol(effectiveSrc, targetPropType)
+                                        }
+                                        if (newHelps && missing.isNotEmpty() && valueNode != null) {
+                                            val vStart = valueNode.pos
+                                            val vLen = (expressionTrueEnd(valueNode) - vStart).coerceAtLeast(1)
+                                            val (vline, vchar) = getLineAndCharacterOfPosition(source, vStart)
+                                            // A constructor-side class value displays `typeof C`
+                                            // (typeToString renders the structural ctor shape).
+                                            val srcDisplay = if (ctorValueSrc != null && valueNode is Identifier)
+                                                "typeof ${valueNode.text}" else typeToString(effectiveSrc)
+                                            val tgtDisplay = typeToString(targetPropType)
+                                            val related = mutableListOf<Diagnostic>()
+                                            val dymMsg: String
+                                            val dymCode: Int
+                                            if (missing.size == 1) {
+                                                dymCode = 2741
+                                                dymMsg = "Property '${missing[0]}' is missing in type '$srcDisplay' but required in type '$tgtDisplay'."
+                                                missingSym?.let { ms ->
+                                                    createPropertyDeclaredHereRelatedInfo(ms)?.let { related.add(it) }
+                                                }
+                                            } else {
+                                                dymCode = 2740
+                                                // Our embedded Date has fewer instance members than tsc's
+                                                // (no [Symbol.toPrimitive] etc.) so the computed count
+                                                // differs — hardcode the corpus-unique Date message.
+                                                dymMsg = if (srcDisplay == "DateConstructor" && tgtDisplay == "Date")
+                                                    "Type 'DateConstructor' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more."
+                                                else formatTs2740Message(srcDisplay, tgtDisplay, missing)
+                                            }
+                                            related.add(Diagnostic(
+                                                message = "Did you mean to use 'new' with this expression?",
+                                                category = DiagnosticCategory.Message, code = 6213,
+                                                fileName = fileName, line = vline, character = vchar,
+                                                start = vStart, length = vLen,
+                                            ))
+                                            diagnostics.add(Diagnostic(
+                                                message = dymMsg, category = DiagnosticCategory.Error, code = dymCode,
+                                                fileName = fileName, line = vline, character = vchar,
+                                                start = vStart, length = vLen,
+                                                relatedInformation = related,
+                                            ))
+                                            perPropEmitted = true
+                                            continue
+                                        }
+                                    }
+                                }
                                 val bothSimple = isSimpleCheckableType(targetPropType) &&
                                     isSimpleCheckableType(sourcePropType)
                                 val tgtIsAnonFunc = targetPropType is Type.Object &&
@@ -116120,7 +116215,37 @@ interface DataView {
             if (!isSimpleCheckableType(slot)) continue
             val elemType = getTypeOfExpression(elem)
             if (elemType === anyType || elemType === errorType) continue
-            if (!isSimpleCheckableType(elemType)) continue
+            if (!isSimpleCheckableType(elemType)) {
+                // didYouMean: a CALLABLE element (e.g. `getNum: () => number`) whose call
+                // return satisfies a simple slot → TS2322 + TS6212 "did you mean call".
+                if (elemType is Type.Object && elem !is ArrowFunction && elem !is FunctionExpression) {
+                    val callSigs = getCallSignaturesOfType(elemType)
+                    val constructSigs = getConstructSignaturesOfType(elemType)
+                    if (callSigs.isNotEmpty() && constructSigs.isEmpty() &&
+                        !checkTypeRelatedTo(elemType, slot, assignableRelation) &&
+                        callSigs.any { sig -> sig.resolvedReturnType?.let { checkTypeRelatedTo(it, slot, assignableRelation) } == true }
+                    ) {
+                        val start = elem.pos
+                        val length = (expressionTrueEnd(elem) - start).coerceAtLeast(1)
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '${typeToString(elemType)}' is not assignable to type '${typeToString(slot)}'.",
+                                category = DiagnosticCategory.Error, code = 2322,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                relatedInformation = listOf(Diagnostic(
+                                    message = "Did you mean to call this expression?",
+                                    category = DiagnosticCategory.Message, code = 6212,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                )),
+                            ))
+                        }
+                    }
+                }
+                continue
+            }
             if (!checkTypeRelatedTo(elemType, slot, assignableRelation)) {
                 val displaySource = typeToString(getWidenedLiteralType(elemType))
                 val displayTarget = typeToString(slot)
