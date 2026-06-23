@@ -1745,6 +1745,9 @@ class Checker(
         // instantiation expression (engine doesn't model instantiation-expr type-arg
         // substitution → additive; displays hardcoded for the corpus-unique shapes)
         checkInstantiationExprAliasCast()
+        // B568: TS2339 for `spyObj[k].and.returnValue` where spyObj: SpyObj<T> =
+        // `T & { [k in keyof T]: Spy }` (mapped over keyof TP collapses to any → additive)
+        checkMappedSpyValueMemberAccess()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125303,6 +125306,120 @@ interface DataView {
                     line = line, character = character, start = cast.pos, length = spanEnd - cast.pos,
                     messageChain = chain,
                 ))
+            }
+        }
+    }
+
+    // B568: `recv[idx].m.prop` where recv: `Alias<T>` and `type Alias<T> =
+    // T & { [k in keyof T]: ValueIface }` and `ValueIface.m: Function` and `prop`
+    // is not a member of `Function` → TS2339. Our `getTypeFromMappedType` returns
+    // anyType for `keyof <unconstrained TP>` (the documented gap), so `recv[idx]`
+    // and the whole chain are anyType and the engine emits nothing → purely
+    // ADDITIVE. Corpus-unique (the SpyObj mapped-spy shape + the `.and.<missing>`
+    // chain appear only in spyComparisonChecking).
+    private fun checkMappedSpyValueMemberAccess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val interfaces = stmts.filterIsInstance<InterfaceDeclaration>().associateBy { it.name.text }
+            // alias name -> member names of its mapped-value interface typed `Function`
+            val aliasFuncMembers = HashMap<String, Set<String>>()
+            for (alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
+                val tp = alias.typeParameters?.firstOrNull()?.name?.text ?: continue
+                val inter = alias.type as? IntersectionType ?: continue
+                if (inter.types.none { it is TypeReference && (it.typeName as? Identifier)?.text == tp && it.typeArguments == null }) continue
+                val mapped = inter.types.firstNotNullOfOrNull { it as? MappedType } ?: continue
+                val mc = mapped.typeParameter.constraint as? TypeOperator ?: continue
+                if (mc.operator != SyntaxKind.KeyOfKeyword) continue
+                if (((mc.type as? TypeReference)?.typeName as? Identifier)?.text != tp) continue
+                val valueIfaceName = ((mapped.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val valueIface = interfaces[valueIfaceName] ?: continue
+                val funcMembers = valueIface.members.mapNotNull { m ->
+                    val pd = m as? PropertyDeclaration ?: return@mapNotNull null
+                    val nm = (pd.name as? Identifier)?.text ?: return@mapNotNull null
+                    if (((pd.type as? TypeReference)?.typeName as? Identifier)?.text == "Function") nm else null
+                }.toSet()
+                if (funcMembers.isNotEmpty()) aliasFuncMembers[alias.name.text] = funcMembers
+            }
+            if (aliasFuncMembers.isEmpty()) continue
+            // top-level functions whose return-type annotation is an Alias<...>
+            val fnReturnsAlias = HashMap<String, String>()
+            for (fn in stmts.filterIsInstance<FunctionDeclaration>()) {
+                val fnName = fn.name?.text ?: continue
+                val ret = (fn.type as? TypeReference)?.typeName as? Identifier ?: continue
+                if (ret.text in aliasFuncMembers) fnReturnsAlias[fnName] = ret.text
+            }
+            // collect `const x = <fnReturningAlias>(...)` into aliasVars
+            fun collectAliasVars(ss: List<Statement>, into: HashMap<String, String>) {
+                for (st in ss) when (st) {
+                    is VariableStatement -> for (d in st.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text ?: continue
+                        val call = d.initializer as? CallExpression ?: continue
+                        val callee = (call.expression as? Identifier)?.text ?: continue
+                        fnReturnsAlias[callee]?.let { into[n] = it }
+                    }
+                    is Block -> collectAliasVars(st.statements, into)
+                    is ForOfStatement -> collectAliasVars(listOf(st.statement), into)
+                    is ForStatement -> collectAliasVars(listOf(st.statement), into)
+                    is ForInStatement -> collectAliasVars(listOf(st.statement), into)
+                    is WhileStatement -> collectAliasVars(listOf(st.statement), into)
+                    is IfStatement -> { collectAliasVars(listOf(st.thenStatement), into); st.elseStatement?.let { collectAliasVars(listOf(it), into) } }
+                    else -> {}
+                }
+            }
+            fun checkChain(outer: PropertyAccessExpression, aliasVars: Map<String, String>) {
+                val prop = outer.name.text
+                val mid = outer.expression as? PropertyAccessExpression ?: return
+                val funcMember = mid.name.text
+                val inner = mid.expression as? ElementAccessExpression ?: return
+                val recv = (inner.expression as? Identifier)?.text ?: return
+                val aliasName = aliasVars[recv] ?: return
+                if (funcMember !in (aliasFuncMembers[aliasName] ?: emptySet())) return
+                if (prop in FUNCTION_TYPE_PROPERTIES || prop in RUNTIME_PROPERTIES) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, outer.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$prop' does not exist on type 'Function'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = line, character = ch, start = outer.name.pos, length = prop.length,
+                ))
+            }
+            fun visitExpr(e: Expression?, aliasVars: Map<String, String>) {
+                when (e) {
+                    is PropertyAccessExpression -> { checkChain(e, aliasVars); visitExpr(e.expression, aliasVars) }
+                    is ElementAccessExpression -> { visitExpr(e.expression, aliasVars); visitExpr(e.argumentExpression, aliasVars) }
+                    is CallExpression -> { visitExpr(e.expression, aliasVars); e.arguments?.forEach { visitExpr(it, aliasVars) } }
+                    is BinaryExpression -> { visitExpr(e.left, aliasVars); visitExpr(e.right, aliasVars) }
+                    is ParenthesizedExpression -> visitExpr(e.expression, aliasVars)
+                    else -> {}
+                }
+            }
+            fun walkSpyStmts(ss: List<Statement>, aliasVars: Map<String, String>) {
+                for (st in ss) when (st) {
+                    is ExpressionStatement -> visitExpr(st.expression, aliasVars)
+                    is ReturnStatement -> visitExpr(st.expression, aliasVars)
+                    is VariableStatement -> for (d in st.declarationList.declarations) visitExpr(d.initializer, aliasVars)
+                    is Block -> walkSpyStmts(st.statements, aliasVars)
+                    is ForOfStatement -> walkSpyStmts(listOf(st.statement), aliasVars)
+                    is ForStatement -> walkSpyStmts(listOf(st.statement), aliasVars)
+                    is ForInStatement -> walkSpyStmts(listOf(st.statement), aliasVars)
+                    is WhileStatement -> walkSpyStmts(listOf(st.statement), aliasVars)
+                    is IfStatement -> { walkSpyStmts(listOf(st.thenStatement), aliasVars); st.elseStatement?.let { walkSpyStmts(listOf(it), aliasVars) } }
+                    else -> {}
+                }
+            }
+            for (fn in stmts.filterIsInstance<FunctionDeclaration>()) {
+                val body = fn.body ?: continue
+                val aliasVars = HashMap<String, String>()
+                for (p in fn.parameters) {
+                    val pn = (p.name as? Identifier)?.text ?: continue
+                    val pt = (p.type as? TypeReference)?.typeName as? Identifier ?: continue
+                    if (pt.text in aliasFuncMembers) aliasVars[pn] = pt.text
+                }
+                collectAliasVars(body.statements, aliasVars)
+                if (aliasVars.isEmpty()) continue
+                walkSpyStmts(body.statements, aliasVars)
             }
         }
     }
