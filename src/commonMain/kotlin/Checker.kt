@@ -77414,6 +77414,47 @@ interface DataView {
                 // Use annotation text for display (handles generics correctly); B119
                 // unfolds a primitive-resolving type-alias reference to the primitive.
                 val displayTarget = displayTargetAnnotation(typeAnnotation, targetType)
+                // B559: a FRESH empty array literal `[]` is `never[]` in tsc (we type it
+                // `any[]`, B87.6 — do NOT change globally), and tsc lists a missing-property
+                // set OWN-first (own members before inherited). For `var x: <named class/
+                // interface> = []` the array source has NONE of the target's required
+                // members → override the source display to `never[]` and reorder own-first.
+                // FP-safe: gated to an empty-array-literal init vs a named class/interface
+                // (an array-type target is a Type.Reference, NOT a Type.Interface → excluded)
+                // with ≥1 missing required member; replaces the general `any[]`+base-first
+                // emission below (returns), so no double-emit.
+                if (init is ArrayLiteralExpression && init.elements.isEmpty() &&
+                    targetType is Type.Interface && targetType.symbol != null) {
+                    val missing0 = try { collectMissingProperties(sourceType, targetType) }
+                        catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
+                    if (missing0.isNotEmpty()) {
+                        val own = ownInstanceMemberNamesOfInterface(targetType)
+                        val missing = own.filter { it in missing0 } + missing0.filter { it !in own }
+                        val (eLine, eCh) = getLineAndCharacterOfPosition(source, name.pos)
+                        if (missing.size >= 2) {
+                            diagnostics.add(Diagnostic(
+                                message = formatTs2740Message("never[]", displayTarget, missing),
+                                category = DiagnosticCategory.Error,
+                                code = if (missing.size <= 4) 2739 else 2740,
+                                fileName = fileName, line = eLine, character = eCh,
+                                start = name.pos, length = name.text.length,
+                            ))
+                        } else {
+                            val mpSym = getPropertyOfType(targetType, missing[0])
+                            val declaringDisplay = getDeclaringTypeDisplay(mpSym, targetType, displayTarget)
+                            val missingProp = mpSym?.let { formatPropertyDisplayName(it) } ?: missing[0]
+                            val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                            diagnostics.add(Diagnostic(
+                                message = "Property '$missingProp' is missing in type 'never[]' but required in type '$declaringDisplay'.",
+                                category = DiagnosticCategory.Error, code = 2741,
+                                fileName = fileName, line = eLine, character = eCh,
+                                start = name.pos, length = name.text.length,
+                                relatedInformation = listOfNotNull(relatedInfo),
+                            ))
+                        }
+                        return
+                    }
+                }
                 // 17.216: Suppress TS2322 when assigning a function expression/arrow
                 // to an anonymous multi-overload target (Type.Object with 2+ call
                 // signatures, no construct sigs, no properties, no symbol).
@@ -113801,6 +113842,43 @@ interface DataView {
         return out
     }
 
+    /** B559: instance member names declared DIRECTLY in [t]'s own class/interface
+     *  body (non-static), in source order. Used to reorder a missing-property set
+     *  own-first for the empty-array-literal → named-type display (tsc lists a type's
+     *  OWN members before inherited ones). */
+    private fun ownInstanceMemberNamesOfInterface(t: Type.Interface): List<String> {
+        val sym = t.symbol ?: return emptyList()
+        val names = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+        for (d in sym.declarations) {
+            val members = when (d) {
+                is ClassDeclaration -> d.members
+                is InterfaceDeclaration -> d.members
+                else -> continue
+            }
+            for (m in members) {
+                val nameNode: NameNode
+                val mods: Set<ModifierFlag>
+                when (m) {
+                    is PropertyDeclaration -> { nameNode = m.name; mods = m.modifiers }
+                    is MethodDeclaration -> { nameNode = m.name; mods = m.modifiers }
+                    is GetAccessor -> { nameNode = m.name; mods = m.modifiers }
+                    is SetAccessor -> { nameNode = m.name; mods = m.modifiers }
+                    else -> continue
+                }
+                if (ModifierFlag.Static in mods) continue
+                val nm = when (nameNode) {
+                    is Identifier -> nameNode.text
+                    is StringLiteralNode -> nameNode.text
+                    is NumericLiteralNode -> nameNode.text
+                    else -> null
+                } ?: continue
+                if (nm !in seen) { seen.add(nm); names.add(nm) }
+            }
+        }
+        return names
+    }
+
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
         resolveStructuredTypeMembers(sourceType)
@@ -116622,7 +116700,12 @@ interface DataView {
                                     // etc.), include the header to identify the parent
                                     // arg pair being compared (matches `generics4`-style output).
                                     val firstTrimmed = argChain.first().trimStart()
-                                    if (firstTrimmed.startsWith("Property '")) {
+                                    // B559: both the single-prop "Property 'X' is missing…"
+                                    // and the multi-prop "Type 'X' is missing the following
+                                    // properties from type 'Y': …" lines are missing-property
+                                    // TERMINALS that already name both types → no header.
+                                    if (firstTrimmed.startsWith("Property '") ||
+                                        firstTrimmed.contains("is missing the following properties")) {
                                         argChain
                                     } else {
                                         listOf(header) + argChain.map { "  $it" }
@@ -116707,9 +116790,26 @@ interface DataView {
                 // type 'Animal' but required in type 'Giraffe'.").
                 val missing = getMissingRequiredPropertySymbol(source, target)
                 if (missing != null) {
-                    return listOf(
-                        "  Property '${missing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
-                    )
+                    // B559: tsc reports ≥2 missing required props as a single
+                    // "Type 'X' is missing the following properties from type 'Y': a, b"
+                    // line (own-members-first), and exactly 1 as "Property 'X' is missing
+                    // in type 'Y' but required in type 'Z'." (Our leaf previously always
+                    // used the single-prop form.) Gate kept at `missing != null` so this
+                    // only changes the FORMAT, never whether the chain line appears.
+                    val allMissing = collectMissingProperties(source, target)
+                    return if (allMissing.size >= 2) {
+                        // tsc attaches NO single "declared here" TS2728 for a multi-prop
+                        // missing line (there is no single property to point at), so clear
+                        // the symbol `getMissingRequiredPropertySymbol` just set.
+                        lastChainMissingPropSymbol = null
+                        val own = if (target is Type.Interface) ownInstanceMemberNamesOfInterface(target) else emptyList()
+                        val ordered = own.filter { it in allMissing } + allMissing.filter { it !in own }
+                        listOf("  " + formatTs2740Message(typeToString(source), typeToString(target), ordered))
+                    } else {
+                        listOf(
+                            "  Property '${missing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
+                        )
+                    }
                 }
                 return null
             }
