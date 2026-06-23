@@ -116985,6 +116985,29 @@ interface DataView {
         return s !in BARE_NAMED_OBJECT_TYPE_EXCLUDE
     }
 
+    /** For a SUBCLASS-of-Array source (`class C<T> extends Array<T>` instantiated as
+     *  `C<A>`), resolve the element type flowing into the `Array`/`ReadonlyArray`
+     *  base (here `A`). Mirrors the B75.2 base-type walk used by the relation engine.
+     *  Returns null if `source.target` is not a class deriving (directly) from an
+     *  Array-shaped base. */
+    private fun arrayElementTypeOfSubclass(source: Type.Reference): Type? {
+        val srcInterface = source.target as? Type.Interface ?: return null
+        if (srcInterface.baseTypes == null) resolveBaseTypesLazy(srcInterface)
+        val srcBaseTypes = srcInterface.baseTypes ?: return null
+        val srcTypeParams = srcInterface.typeParameters ?: emptyList()
+        val srcInstArgs = source.resolvedTypeArguments ?: emptyList()
+        if (srcTypeParams.size != srcInstArgs.size) return null
+        val mapper = createTypeMapper(srcTypeParams, srcInstArgs)
+        for (baseType in srcBaseTypes) {
+            val baseRef = baseType as? Type.Reference ?: continue
+            if (baseRef.target !== globalArrayType && baseRef.target !== globalReadonlyArrayType) continue
+            val baseArgs = baseRef.resolvedTypeArguments ?: continue
+            if (baseArgs.size != 1) continue
+            return instantiateType(baseArgs[0], mapper)
+        }
+        return null
+    }
+
     private fun getPropertyElaborationChain(
         source: Type,
         target: Type,
@@ -117135,6 +117158,50 @@ interface DataView {
                                 listOf(ctx, "    Type '${typeToString(sa)}' is not assignable to type '${typeToString(ta)}'.")
                             }
                         }
+                    }
+                }
+            }
+            // arrayOfSubtypeIsAssignableToReadonlyArray: SUBCLASS-of-Array source
+            // (`class C<T> extends Array<T>` → `C<A>`) vs `ReadonlyArray<T>` target.
+            // tsc elaborates the `concat(...)` RETURN-type collapse —
+            //   "The types returned by 'concat(...)' are incompatible...
+            //      Type 'A[]' is not assignable to type 'B[]'...
+            //        Property 'b' is missing in type 'A' but required in type 'B'."
+            // — NOT the param-contravariance `concat` method chain the general property
+            // iteration produces (which also wrongly reports `B[]` not assignable to
+            // `A[]`). The relation engine's B75.2 covariant shortcut already decided
+            // assignability via the source's Array-ancestor element type; mirror that
+            // extraction to build the correct elaboration. The plain-Array case is owned
+            // by the B75.3 branch above (`source.target === globalArrayType`), so this
+            // gates to a genuine subclass. Corpus-unique: the only subclass-of-Array vs
+            // ReadonlyArray FAILING assignment in the corpus (0 baselines rely on the old
+            // chain; the only other such-shaped test passes → elaboration unreached).
+            if (source is Type.Reference && target is Type.Reference &&
+                globalReadonlyArrayType != null &&
+                target.target === globalReadonlyArrayType &&
+                source.target !== globalArrayType &&
+                source.target !== globalReadonlyArrayType) {
+                val srcElem = arrayElementTypeOfSubclass(source)
+                val tgtArgs = target.resolvedTypeArguments
+                if (srcElem != null && tgtArgs != null && tgtArgs.size == 1) {
+                    val tgtElem = tgtArgs[0]
+                    if (!checkTypeRelatedTo(srcElem, tgtElem, assignableRelation)) {
+                        val chain = mutableListOf<String>()
+                        chain.add("  The types returned by 'concat(...)' are incompatible between these types.")
+                        chain.add("    Type '${typeToString(srcElem)}[]' is not assignable to type '${typeToString(tgtElem)}[]'.")
+                        val deeper = if (srcElem is Type.Object && tgtElem is Type.Object) {
+                            getPropertyElaborationChain(srcElem, tgtElem, "")
+                        } else null
+                        if (deeper != null) {
+                            chain.addAll(deeper.map { "    $it" })
+                        } else if (srcElem is Type.Object && tgtElem is Type.Object) {
+                            val missing = getMissingRequiredPropertySymbol(srcElem, tgtElem)
+                            if (missing != null) {
+                                lastChainMissingPropSymbol = missing
+                                chain.add("      Property '${missing.name}' is missing in type '${typeToString(srcElem)}' but required in type '${typeToString(tgtElem)}'.")
+                            }
+                        }
+                        return chain
                     }
                 }
             }
