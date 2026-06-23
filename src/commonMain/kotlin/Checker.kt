@@ -1828,6 +1828,8 @@ class Checker(
         checkCircularTypeAlias()
         // 64f3a-2. Check class base via default-type-arg indexed-access cycle (TS2310)
         checkCircularClassBaseViaDefaultTypeArg()
+        // B566: indexed-access-alias / homomorphic-mapped base-type cycles (TS2310/2456/2313/2751)
+        checkCircularBaseTypeReferences()
         // 64f3b. Check non-constructor extends (TS2507)
         checkNonConstructorExtends()
         // 64f5. Check interface multi-base property conflicts (TS2320)
@@ -92108,6 +92110,108 @@ interface DataView {
             try {
                 checkCircularInterfaceBasesInStatements(result.sourceFile.statements, source, fileName)
             } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);}
+        }
+    }
+
+    // B566: two AST-only base-type cycles the per-name interface/alias checks miss
+    // (both purely additive — our engine cycle-breaks these to `any` so it emits
+    // nothing). CYCLE 1 (indexed-access alias ↔ interface base-arg):
+    //   `type A = I[..]` + `interface I extends Base<A>` (A appears in I's extends
+    //   type-args) → TS2310 on I + TS2456 on A. CYCLE 2 (homomorphic-mapped alias
+    //   self-instantiation): `interface S extends Alias<S>` where Alias's body
+    //   contains `{ [K in keyof <Alias-param>]: .. }` → TS2313 on K (squiggle the
+    //   `keyof T`) + related TS2751 at S + TS2310 on S.
+    // FP firewall (verified corpus-unique by the hunt): cycle 1 requires the alias
+    // body be `Interface[..]` whose interface extends-args contain the alias name;
+    // cycle 2 requires the mapped constraint be exactly `keyof <Alias's-own-param>`.
+    private fun checkCircularBaseTypeReferences() {
+        fun typeContainsRef(node: TypeNode?, name: String): Boolean = when (node) {
+            is TypeReference -> ((node.typeName as? Identifier)?.text == name) ||
+                (node.typeArguments?.any { typeContainsRef(it, name) } ?: false)
+            is IndexedAccessType -> typeContainsRef(node.objectType, name) || typeContainsRef(node.indexType, name)
+            is IntersectionType -> node.types.any { typeContainsRef(it, name) }
+            is UnionType -> node.types.any { typeContainsRef(it, name) }
+            is ArrayType -> typeContainsRef(node.elementType, name)
+            is ParenthesizedType -> typeContainsRef(node.type, name)
+            else -> false
+        }
+        fun indexedRoot(t: TypeNode?): TypeReference? = when (t) {
+            is IndexedAccessType -> indexedRoot(t.objectType)
+            is TypeReference -> t
+            else -> null
+        }
+        fun findMapped(node: TypeNode?): MappedType? = when (node) {
+            is MappedType -> node
+            is IntersectionType -> node.types.firstNotNullOfOrNull { findMapped(it) }
+            is UnionType -> node.types.firstNotNullOfOrNull { findMapped(it) }
+            is ParenthesizedType -> findMapped(node.type)
+            else -> null
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val interfaces = stmts.filterIsInstance<InterfaceDeclaration>().associateBy { it.name.text }
+            val aliases = stmts.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
+            // CYCLE 1
+            for (alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
+                if (alias.type !is IndexedAccessType) continue
+                val root = indexedRoot(alias.type) ?: continue
+                val iName = (root.typeName as? Identifier)?.text ?: continue
+                val iface = interfaces[iName] ?: continue
+                val extendsClause = iface.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: continue
+                val refsAlias = extendsClause.types.any { ewta -> ewta.typeArguments?.any { typeContainsRef(it, alias.name.text) } ?: false }
+                if (!refsAlias) continue
+                val (il, ic) = getLineAndCharacterOfPosition(source, iface.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${iface.name.text}' recursively references itself as a base type.",
+                    category = DiagnosticCategory.Error, code = 2310, fileName = fileName,
+                    line = il, character = ic, start = iface.name.pos, length = iface.name.text.length,
+                ))
+                val (al, ac) = getLineAndCharacterOfPosition(source, alias.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type alias '${alias.name.text}' circularly references itself.",
+                    category = DiagnosticCategory.Error, code = 2456, fileName = fileName,
+                    line = al, character = ac, start = alias.name.pos, length = alias.name.text.length,
+                ))
+            }
+            // CYCLE 2
+            for (iface in stmts.filterIsInstance<InterfaceDeclaration>()) {
+                val extendsClause = iface.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: continue
+                for (base in extendsClause.types) {
+                    val headName = (base.expression as? Identifier)?.text ?: continue
+                    val alias = aliases[headName] ?: continue
+                    // S (this interface) appears in the Alias<...> type args
+                    if (base.typeArguments?.any { typeContainsRef(it, iface.name.text) } != true) continue
+                    val ownParam = alias.typeParameters?.firstOrNull()?.name?.text ?: continue
+                    val mapped = findMapped(alias.type) ?: continue
+                    val mc = mapped.typeParameter.constraint as? TypeOperator ?: continue
+                    if (mc.operator != SyntaxKind.KeyOfKeyword) continue
+                    if (((mc.type as? TypeReference)?.typeName as? Identifier)?.text != ownParam) continue
+                    // TS2313 on K — squiggle the `keyof <ownParam>` constraint.
+                    var kStart = mc.pos
+                    while (kStart < source.length && source[kStart].isWhitespace()) kStart++
+                    val kLen = "keyof ".length + ownParam.length
+                    val (kl, kc) = getLineAndCharacterOfPosition(source, kStart)
+                    val (sl, sc) = getLineAndCharacterOfPosition(source, iface.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type parameter '${mapped.typeParameter.name.text}' has a circular constraint.",
+                        category = DiagnosticCategory.Error, code = 2313, fileName = fileName,
+                        line = kl, character = kc, start = kStart, length = kLen,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "Circularity originates in type at this location.",
+                            category = DiagnosticCategory.Message, code = 2751, fileName = fileName,
+                            line = sl, character = sc, start = iface.name.pos, length = iface.name.text.length,
+                        )),
+                    ))
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${iface.name.text}' recursively references itself as a base type.",
+                        category = DiagnosticCategory.Error, code = 2310, fileName = fileName,
+                        line = sl, character = sc, start = iface.name.pos, length = iface.name.text.length,
+                    ))
+                }
+            }
         }
     }
 
