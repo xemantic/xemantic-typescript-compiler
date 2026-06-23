@@ -1828,6 +1828,7 @@ class Checker(
         checkNamespaceEnumUnionAssignments()
         // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
         checkEnumToEnumAssignments()
+        checkEnumAsgInFunctionScopes()
         // B463: nominal enum mismatches in class-override / overload / member-access contexts
         checkEnumNominalClassMismatches()
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
@@ -128724,8 +128725,15 @@ interface DataView {
         val isConst: Boolean,
         val isString: Boolean,
         val decl: EnumDeclaration,
+        /** member -> string value (B554/enumAssignmentCompat6); null for non-string enums. */
+        val stringValues: Map<String, String>? = null,
+        /** A `declare namespace` enum — numeric but un-evaluable ("unknown numeric value"). */
+        val isAmbient: Boolean = false,
+        /** Explicit display (e.g. `import("f").DiagnosticCategory` for a shadowed module export). */
+        val displayOverride: String? = null,
     ) {
-        val qualifiedDisplay: String get() = if (namespacePath != null) "$namespacePath.$simpleName" else simpleName
+        val qualifiedDisplay: String get() =
+            displayOverride ?: if (namespacePath != null) "$namespacePath.$simpleName" else simpleName
     }
 
     /**
@@ -129473,6 +129481,7 @@ interface DataView {
      *  their namespace-qualified name. */
     private fun collectEnumsForAsg(
         stmts: List<Statement>, nsPath: String?, into: LinkedHashMap<String, EnumAsgInfo>,
+        ambient: Boolean = false,
     ) {
         val byKey = LinkedHashMap<String, MutableList<EnumDeclaration>>()
         for (st in stmts) {
@@ -129484,7 +129493,8 @@ interface DataView {
                 is ModuleDeclaration -> {
                     val n = (st.name as? Identifier)?.text ?: continue
                     val body = st.body as? ModuleBlock ?: continue
-                    collectEnumsForAsg(body.statements, if (nsPath != null) "$nsPath.$n" else n, into)
+                    val nsAmbient = ambient || ModifierFlag.Declare in st.modifiers
+                    collectEnumsForAsg(body.statements, if (nsPath != null) "$nsPath.$n" else n, into, nsAmbient)
                 }
                 else -> {}
             }
@@ -129496,6 +129506,7 @@ interface DataView {
             var evaluable = true
             val memberOrder = mutableListOf<String>()
             val values = LinkedHashMap<String, Double>()
+            val strVals = LinkedHashMap<String, String>()
             for (d in decls) {
                 if (ModifierFlag.Const in d.modifiers) isConst = true
                 var auto = 0.0
@@ -129504,7 +129515,7 @@ interface DataView {
                     if (mName == null) { evaluable = false; continue }
                     if (mName !in memberOrder) memberOrder.add(mName)
                     val init = m.initializer
-                    if (init is StringLiteralNode) { isString = true; evaluable = false }
+                    if (init is StringLiteralNode) { isString = true; evaluable = false; strVals[mName] = init.text }
                     val v = if (init == null) auto else evalEnumConstExpr(init)
                     if (v == null) evaluable = false else { values[mName] = v; auto = v + 1 }
                 }
@@ -129512,6 +129523,8 @@ interface DataView {
             into[key] = EnumAsgInfo(
                 simple, nsPath, memberOrder,
                 if (evaluable && !isString) values else null, isConst, isString, decls[0],
+                stringValues = if (isString) strVals else null,
+                isAmbient = ambient,
             )
         }
     }
@@ -129548,20 +129561,187 @@ interface DataView {
             if (src.decl === tgt.decl) return null
             return top to emptyList() // const only assignable to itself, no chain
         }
-        val sv = src.values ?: return null // string/un-evaluable → conservatively assignable
-        val tv = tgt.values ?: return null
+        // B554/enumAssignmentCompat6: value-KIND comparison (numeric-known / numeric-unknown
+        // ambient / string). The chain reports the FIRST mismatching (or missing) member.
         for (m in src.memberOrder) {
-            if (m !in tv) return top to listOf("  Property '$m' is missing in type '$tgtD'.")
-            val tval = tv[m]!!; val sval = sv[m]!!
-            if (tval != sval) return top to listOf(
-                "  Each declaration of '${src.simpleName}.$m' differs in its value, where '${fmtEnumAsgVal(tval)}' was expected but '${fmtEnumAsgVal(sval)}' was given."
-            )
+            if (m !in tgt.memberOrder) return top to listOf("  Property '$m' is missing in type '$tgtD'.")
+            val chain = enumMemberMismatch(src, tgt, m) ?: continue
+            return top to listOf(chain)
         }
         return null
     }
 
+    private enum class EnumValKind { NUMERIC_KNOWN, NUMERIC_UNKNOWN, STRING }
+
+    private fun enumValKind(info: EnumAsgInfo): EnumValKind = when {
+        info.isString -> EnumValKind.STRING
+        info.isAmbient -> EnumValKind.NUMERIC_UNKNOWN
+        else -> EnumValKind.NUMERIC_KNOWN
+    }
+
+    /** Formatted value of member `m` for a known side (numeric → plain, string → double-quoted); null for unknown. */
+    private fun enumValFmt(info: EnumAsgInfo, m: String): String? = when {
+        info.isString -> "\"" + (info.stringValues?.get(m) ?: return null) + "\""
+        info.values != null -> fmtEnumAsgVal(info.values[m] ?: return null)
+        else -> null
+    }
+
+    /** null = member `m` is compatible across src/tgt; else the mismatch chain line. */
+    private fun enumMemberMismatch(src: EnumAsgInfo, tgt: EnumAsgInfo, m: String): String? {
+        val sk = enumValKind(src); val tk = enumValKind(tgt)
+        // both numeric (known or unknown) → compatible unless BOTH known and values differ
+        if (sk != EnumValKind.STRING && tk != EnumValKind.STRING) {
+            if (sk == EnumValKind.NUMERIC_KNOWN && tk == EnumValKind.NUMERIC_KNOWN) {
+                val sv = src.values?.get(m); val tv = tgt.values?.get(m)
+                if (sv != null && tv != null && sv != tv)
+                    return "  Each declaration of '${src.simpleName}.$m' differs in its value, where '${fmtEnumAsgVal(tv)}' was expected but '${fmtEnumAsgVal(sv)}' was given."
+            }
+            return null
+        }
+        // both string → compatible unless values differ
+        if (sk == EnumValKind.STRING && tk == EnumValKind.STRING) {
+            val sv = src.stringValues?.get(m); val tv = tgt.stringValues?.get(m)
+            if (sv != null && tv != null && sv != tv)
+                return "  Each declaration of '${src.simpleName}.$m' differs in its value, where '\"$tv\"' was expected but '\"$sv\"' was given."
+            return null
+        }
+        // string vs numeric-unknown (ambient) → symmetric "unknown numeric value" message
+        if (sk == EnumValKind.NUMERIC_UNKNOWN || tk == EnumValKind.NUMERIC_UNKNOWN) {
+            val strInfo = if (sk == EnumValKind.STRING) src else tgt
+            val strV = strInfo.stringValues?.get(m) ?: return null
+            return "  One value of '${src.simpleName}.$m' is the string '\"$strV\"', and the other is assumed to be an unknown numeric value."
+        }
+        // string vs numeric-known → "differs in its value" with mixed formatting
+        val expectedV = enumValFmt(tgt, m) ?: return null
+        val givenV = enumValFmt(src, m) ?: return null
+        return "  Each declaration of '${src.simpleName}.$m' differs in its value, where '$expectedV' was expected but '$givenV' was given."
+    }
+
     private fun fmtEnumAsgVal(v: Double): String =
         if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+
+    // ===== enumAssignmentCompat6 (B583) =====
+    // The B425 `checkEnumToEnumAssignments` walker scans only TOP-LEVEL `var X: E` + top-level
+    // `X = Y`. enumAssignmentCompat6 puts every assignment inside FUNCTIONS with enum-typed
+    // PARAMETERS (a.ts) and inside a block-scoped enum in an IIFE (f.ts). This walker descends
+    // into function / IIFE bodies (disjoint from the top-level walker → no double-emit), builds
+    // per-scope param/var → enum maps, and emits the nominal enum mismatch via `enumAsgFailure`
+    // (now value-KIND-aware). For the f.ts IIFE, a block-scoped enum shadows a module-exported
+    // top-level enum of the same name → the outer one displays as `import("<base>").<name>`.
+    private fun checkEnumAsgInFunctionScopes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val enums = LinkedHashMap<String, EnumAsgInfo>()
+            collectEnumsForAsg(stmts, null, enums)
+            if (enums.isEmpty()) continue
+            val fileVarEnum = HashMap<String, String>()
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    enumKeyOfTypeNode(d.type, enums)?.let { fileVarEnum[n] = it }
+                }
+            }
+            for (st in stmts) {
+                when (st) {
+                    is FunctionDeclaration -> eafsEnterFunction(st, source, fileName, enums, fileVarEnum)
+                    is ExpressionStatement -> eafsIifeArrow(st.expression)?.let {
+                        eafsScanIife(it, source, fileName, enums, fileVarEnum)
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun eafsIifeArrow(e: Expression): ArrowFunction? {
+        val call = e as? CallExpression ?: return null
+        if (call.arguments.isNotEmpty()) return null
+        val callee = call.expression
+        val inner = (callee as? ParenthesizedExpression)?.expression ?: callee
+        return inner as? ArrowFunction
+    }
+
+    private fun eafsEnterFunction(
+        fn: FunctionDeclaration, source: String, fileName: String,
+        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
+    ) {
+        val body = fn.body ?: return
+        val child = HashMap(varEnum)
+        for (p in fn.parameters) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            enumKeyOfTypeNode(p.type, enums)?.let { child[pn] = it }
+        }
+        eafsScanBody(body.statements, source, fileName, enums, child)
+    }
+
+    private fun eafsScanBody(
+        stmts: List<Statement>, source: String, fileName: String,
+        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
+    ) {
+        for (st in stmts) {
+            when (st) {
+                is FunctionDeclaration -> eafsEnterFunction(st, source, fileName, enums, varEnum)
+                is Block -> eafsScanBody(st.statements, source, fileName, enums, varEnum)
+                is ExpressionStatement -> {
+                    val arrow = eafsIifeArrow(st.expression)
+                    if (arrow != null) { eafsScanIife(arrow, source, fileName, enums, varEnum); continue }
+                    val be = st.expression as? BinaryExpression ?: continue
+                    if (be.operator != SyntaxKind.Equals) continue
+                    val lhs = be.left as? Identifier ?: continue
+                    val rhs = be.right as? Identifier ?: continue
+                    val tgtKey = varEnum[lhs.text] ?: continue
+                    val srcKey = varEnum[rhs.text] ?: continue
+                    if (srcKey == tgtKey) continue
+                    val src = enums[srcKey] ?: continue
+                    val tgt = enums[tgtKey] ?: continue
+                    val (top, chain) = enumAsgFailure(src, tgt) ?: continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                    diagnostics.add(Diagnostic(
+                        message = top, category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = lhs.pos, length = lhs.text.length, messageChain = chain,
+                    ))
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun eafsScanIife(
+        arrow: ArrowFunction, source: String, fileName: String,
+        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
+    ) {
+        val body = arrow.body as? Block ?: return
+        val innerEnums = LinkedHashMap<String, EnumAsgInfo>()
+        collectEnumsForAsg(body.statements, null, innerEnums)
+        val childEnums = LinkedHashMap(enums)
+        val shadowed = HashMap<String, String>() // shadowed simpleName -> import-display key
+        val moduleBase = fileName.removePrefix("./").substringAfterLast('/')
+            .removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
+        for ((nm, inner) in innerEnums) {
+            val outer = enums[nm]
+            if (outer != null && outer.namespacePath == null && ModifierFlag.Export in outer.decl.modifiers) {
+                val importKey = "$nm@import"
+                childEnums[importKey] = EnumAsgInfo(
+                    outer.simpleName, outer.namespacePath, outer.memberOrder, outer.values,
+                    outer.isConst, outer.isString, outer.decl, outer.stringValues, outer.isAmbient,
+                    displayOverride = "import(\"$moduleBase\").$nm",
+                )
+                shadowed[nm] = importKey
+            }
+            childEnums[nm] = inner
+        }
+        val childVarEnum = HashMap<String, String>()
+        for ((vn, ek) in varEnum) {
+            val en = enums[ek]
+            childVarEnum[vn] = if (en != null && shadowed.containsKey(en.simpleName)) shadowed[en.simpleName]!! else ek
+        }
+        eafsScanBody(body.statements, source, fileName, childEnums, childVarEnum)
+    }
 
     private fun checkGenericIndexWrite() {
         for (result in binderResults) {
