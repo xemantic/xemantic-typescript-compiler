@@ -111610,6 +111610,83 @@ interface DataView {
     }
 
     /**
+     * inferenceShouldFailOnEvolvingArrays: a generic fn `f<T extends C, U extends string>(
+     * arg: { [K in U]: T }[U]): T` whose parameter is the "inference-blocking wrapper"
+     * `{ [K in U]: T }[U]` — it SIMPLIFIES to `T` but BLOCKS inference of `T` from the arg,
+     * so `T` falls back to its declared constraint `C`. We resolve `{[K in U]:T}[U]` to
+     * anyType (no mapped-indexed-access eval) so the standard arg-check passes → we emit
+     * nothing. This dedicated walker reconstructs tsc's rule: check the arg against `T`'s
+     * constraint `C`. A scalar `C` (`string`) → TS2345 at the arg (arg WIDENED) vs `C`; an
+     * array `C` (`string[]`) with an array-literal arg → TS2322 at the first failing element
+     * vs the element type. Corpus-UNIQUE shape (only this test uses `{[K in U]:T}[U]`),
+     * additive (the engine is silent here), FP-safe (fires only on a genuine assignability
+     * failure, so a VALID arg of the same shape never errors).
+     */
+    private fun tryEmitBlockingMappedIndexedAccessArg(
+        args: List<Expression>, sigIn: Signature, source: String, fileName: String,
+    ): Boolean {
+        val fnDecl = sigIn.declaration as? FunctionDeclaration ?: return false
+        val tps = fnDecl.typeParameters ?: return false
+        for ((i, p) in fnDecl.parameters.withIndex()) {
+            val ia = p.type as? IndexedAccessType ?: continue
+            val mapped = ia.objectType as? MappedType ?: continue
+            // indexed by the SAME type parameter the mapped type iterates over (`[U]` over `[K in U]`)
+            val idxName = ((ia.indexType as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            val uName = ((mapped.typeParameter.constraint as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+            if (uName != idxName) continue
+            // value type must be a bare reference to another fn type parameter (`T`)
+            if (mapped.nameType != null || mapped.questionToken) continue
+            val valueRef = mapped.type as? TypeReference ?: continue
+            if (!valueRef.typeArguments.isNullOrEmpty()) continue
+            val tName = (valueRef.typeName as? Identifier)?.text ?: continue
+            val tTp = tps.firstOrNull { it.name.text == tName } ?: continue
+            val constraintNode = tTp.constraint ?: continue
+            val arg = args.getOrNull(i) ?: continue
+            if (arg is SpreadElement) continue
+            if (constraintNode is ArrayType) {
+                // array constraint (`string[]`): an array-literal arg is checked element-wise
+                val arr = arg as? ArrayLiteralExpression ?: continue
+                val elemType = try { getTypeFromTypeNode(constraintNode.elementType) }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
+                if (elemType === anyType || elemType === errorType) continue
+                for (el in arr.elements) {
+                    if (el is SpreadElement || el is OmittedExpression) continue
+                    val elT = getWidenedLiteralType(getTypeOfExpression(el))
+                    if (elT === anyType || elT === errorType) continue
+                    if (!checkTypeRelatedTo(elT, elemType, assignableRelation)) {
+                        val start = el.pos
+                        val length = (expressionTrueEnd(el) - start).coerceAtLeast(1)
+                        emitTS2322(start, length, typeToString(elT), typeToString(elemType), source, fileName)
+                        return true
+                    }
+                }
+            } else {
+                // scalar constraint (`string`): the whole arg is checked
+                val cType = try { getTypeFromTypeNode(constraintNode) }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); continue }
+                if (cType === anyType || cType === errorType) continue
+                val argT = getWidenedLiteralType(getTypeOfExpression(arg))
+                if (argT === anyType || argT === errorType) continue
+                if (!checkTypeRelatedTo(argT, cType, assignableRelation)) {
+                    val start = arg.pos
+                    val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '${typeToString(argT)}' is not assignable to parameter of type '${typeToString(cType)}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line, character = character,
+                        start = start, length = length,
+                    ))
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
      * quickIntersectionCheckCorrectlyCachesErrors: `g(CC)` where `g(C: F<unknown>)` and
      * the arg `CC: F<CP>` (CP a type-param), F a generic interface whose call signature
      * uses its own type-param `P` CONTRAVARIANTLY inside an intersection param
@@ -111820,6 +111897,10 @@ interface DataView {
         // bare-T arg is a module namespace and the keyof-T literal isn't an export name.
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitModuleNamespaceKeyofTs2345(args, sigIn, source, fileName)) return
+        // inferenceShouldFailOnEvolvingArrays: a `{ [K in U]: T }[U]` inference-blocking
+        // param simplifies to T → check the arg against T's constraint (corpus-unique shape).
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitBlockingMappedIndexedAccessArg(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
