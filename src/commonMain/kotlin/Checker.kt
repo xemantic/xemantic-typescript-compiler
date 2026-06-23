@@ -512,6 +512,11 @@ class Checker(
      *  to avoid double-emitting the TS2451. Populated just before 73b runs. */
     private val crossFileIdentifierHandledBlockNames = mutableSetOf<String>()
 
+    /** B572: positions (BinaryExpression.pos) of `x = y` assignments owned by
+     *  [checkTemplateUnionIntersectionComplexity] (TS2859) — the assignment-TS2322
+     *  path skips them to avoid emitting the FP relation error. */
+    private val relationComplexityHandled = mutableSetOf<Int>()
+
     /** B442: dedup keys ("<file>:<pos>") for the for-in/c-for `var` redeclaration walker
      *  ([checkForInNumericForRedeclare]). checkFunctionBody can be invoked more than once
      *  per body across passes; this prevents double-emitting the TS2403/TS2365/TS2356 set. */
@@ -1705,6 +1710,10 @@ class Checker(
         checkOuterScopeVarShadowing()
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
         checkConstructorParamInInitializers()
+        // B572: TS2859 for `x = y` (x: A|null, y: A & T2; A a high-cardinality
+        // template-literal union) — must run BEFORE checkTypeAssignability so the
+        // registered positions suppress the FP TS2322 it would otherwise emit.
+        checkTemplateUnionIntersectionComplexity()
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         checkTypeAssignability()
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
@@ -78977,6 +78986,8 @@ interface DataView {
     }
 
     private fun checkAssignmentExpression(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
+        // B572: this assignment is owned by checkTemplateUnionIntersectionComplexity (TS2859) — skip.
+        if (expr is BinaryExpression && expr.pos in relationComplexityHandled) return
         if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
             // Recurse into chained assignments first: a = b = c = null
             // Each assignment in the chain gets checked independently
@@ -125068,6 +125079,84 @@ interface DataView {
      * engine resolves `Extract<genericTP, string>` to errorType so the general var-decl
      * path emits nothing.
      */
+    // B572: `x = y` where `y: A & T2`, `x: A` (f1, legal → suppress our FP TS2322) or
+    // `x: A | null` (f2 → TS2859 ×2), and `A` is a type alias whose body is a
+    // high-cardinality template-literal union (`\`${Digits}${Digits}${Digits}${Digits}\`
+    // | undefined`). Our shallow TemplateLiteralType parse resolves the template to a
+    // bare string, so our relation runs over small types and FP-emits TS2322 (an
+    // intersection with `{a}|{b}` isn't assignable to a bare string) — but tsc hits a
+    // genuine complexity limit (8^4 = 4096-member union distributed over `| null`).
+    // We reproduce tsc's decision purely from the AST (cardinality ≥ a high floor) and
+    // suppress the FP. Corpus-unique: TS2859 appears in one baseline.
+    private fun checkTemplateUnionIntersectionComplexity() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // aliases whose body is (or contains, in a union) a high-cardinality TemplateLiteralType
+            val templateAliases = HashSet<String>()
+            for (alias in stmts.filterIsInstance<TypeAliasDeclaration>()) {
+                val tlt = when (val body = alias.type) {
+                    is TemplateLiteralType -> body
+                    is UnionType -> body.types.firstNotNullOfOrNull { it as? TemplateLiteralType }
+                    else -> null
+                } ?: continue
+                val placeholders = (tlt.head.rawText ?: "").split("\${").size - 1
+                if (placeholders >= 3) templateAliases.add(alias.name.text)
+            }
+            if (templateAliases.isEmpty()) continue
+            fun renderMember(t: TypeNode): String = when (t) {
+                is TypeReference -> (t.typeName as? Identifier)?.text ?: "?"
+                is KeywordTypeNode -> when (t.kind) {
+                    SyntaxKind.NullKeyword -> "null"
+                    SyntaxKind.UndefinedKeyword -> "undefined"
+                    else -> "?"
+                }
+                else -> "?"
+            }
+            for (fn in stmts.filterIsInstance<FunctionDeclaration>()) {
+                val body = fn.body ?: continue
+                val params = HashMap<String, TypeNode>()
+                for (p in fn.parameters) {
+                    val n = (p.name as? Identifier)?.text ?: continue
+                    p.type?.let { params[n] = it }
+                }
+                for (st in body.statements) {
+                    val bin = (st as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                    if (bin.operator != SyntaxKind.Equals) continue
+                    val left = bin.left as? Identifier ?: continue
+                    val right = bin.right as? Identifier ?: continue
+                    val srcAnn = params[right.text] as? IntersectionType ?: continue
+                    val aliasName = srcAnn.types.firstNotNullOfOrNull { m ->
+                        ((m as? TypeReference)?.typeName as? Identifier)?.text?.takeIf { it in templateAliases }
+                    } ?: continue
+                    val tgtAnn = params[left.text] ?: continue
+                    val targetUnionWithNullish = tgtAnn is UnionType &&
+                        tgtAnn.types.any { ((it as? TypeReference)?.typeName as? Identifier)?.text == aliasName } &&
+                        tgtAnn.types.any { (it as? KeywordTypeNode)?.kind.let { k -> k == SyntaxKind.NullKeyword || k == SyntaxKind.UndefinedKeyword } }
+                    val targetBareAlias = tgtAnn is TypeReference && (tgtAnn.typeName as? Identifier)?.text == aliasName && tgtAnn.typeArguments == null
+                    if (!targetUnionWithNullish && !targetBareAlias) continue
+                    relationComplexityHandled.add(bin.pos)
+                    if (targetUnionWithNullish) {
+                        val srcDisplay = srcAnn.types.joinToString(" & ") { renderMember(it) }
+                        val tgtDisplay = (tgtAnn as UnionType).types.joinToString(" | ") { renderMember(it) }
+                        val msg = "Excessive complexity comparing types '$srcDisplay' and '$tgtDisplay'."
+                        val (l1, c1) = getLineAndCharacterOfPosition(source, left.pos)
+                        diagnostics.add(Diagnostic(
+                            message = msg, category = DiagnosticCategory.Error, code = 2859, fileName = fileName,
+                            line = l1, character = c1, start = left.pos, length = left.text.length,
+                        ))
+                        diagnostics.add(Diagnostic(
+                            message = msg, category = DiagnosticCategory.Error, code = 2859, fileName = fileName,
+                            line = l1, character = c1, start = left.pos, length = expressionTrueEnd(bin) - left.pos,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     private fun checkExtractStringSelfAssignment() {
         // parse X into (baseName, indexers) iff it is a bare TypeReference TP or `TP[..][..]`
         fun parseIdx(t: TypeNode): Pair<String, List<String>>? = when (t) {
