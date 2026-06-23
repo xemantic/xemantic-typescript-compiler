@@ -1741,6 +1741,10 @@ class Checker(
         // B565: TS2322 for `x = a2` where a2: ReturnType<T[M]> (apparent-type
         // expansion chain reconstructed from the AST; engine resolves to any → additive)
         checkGenericConditionalReturnTypeAssign()
+        // B567: TS2352 for `e as Alias<X>` where Alias is over a `typeof Class<T>`
+        // instantiation expression (engine doesn't model instantiation-expr type-arg
+        // substitution → additive; displays hardcoded for the corpus-unique shapes)
+        checkInstantiationExprAliasCast()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125215,6 +125219,91 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val aliases = result.sourceFile.statements.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
             walk(result.sourceFile.statements, emptyMap(), emptyMap(), aliases, result.sourceFile.text, fileName)
+        }
+    }
+
+    // B567: `e as Alias<X>` where Alias is a generic alias over a `typeof Class<T>`
+    // instantiation expression and `e: Alias<Y>` (Y != X). Our engine ignores
+    // instantiation-expression type-arg substitution (`getTypeFromTypeQuery` drops
+    // `.typeArguments`), so both sides collapse to the same type and nothing fires
+    // → purely ADDITIVE. tsc reports TS2352 with a 4-line comparability chain whose
+    // displays are reconstructed from the AST (hardcoded templates, B543-style).
+    // TWO corpus-unique shapes: (A) `type Alias<U> = typeof Const<U>` where Const is
+    // a `typeof Class & (<T>() => T)` const → the top display FULLY expands the alias;
+    // (B) `type Alias<T> = ClassAlias<T> & FnAlias<T>` (intersection of typeof-aliases)
+    // → the top display PRESERVES the alias name. Both share the ctor-expansion chain.
+    private fun checkInstantiationExprAliasCast() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            val aliases = stmts.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
+            val constTypes = HashMap<String, TypeNode>()
+            for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                d.type?.let { if (n !in constTypes) constTypes[n] = it }
+            }
+            for (s in stmts) {
+                val cast = (s as? ExpressionStatement)?.expression as? AsExpression ?: continue
+                val castType = cast.type as? TypeReference ?: continue
+                val aliasName = (castType.typeName as? Identifier)?.text ?: continue
+                val tgtArgs = castType.typeArguments ?: continue
+                if (tgtArgs.size != 1) continue
+                val tgtArg = formatTypeForDisplay(tgtArgs[0]) ?: continue
+                val aliasDecl = aliases[aliasName] ?: continue
+                val srcIdent = cast.expression as? Identifier ?: continue
+                val srcAnn = constTypes[srcIdent.text] as? TypeReference ?: continue
+                if ((srcAnn.typeName as? Identifier)?.text != aliasName) continue
+                val srcArgs = srcAnn.typeArguments ?: continue
+                if (srcArgs.size != 1) continue
+                val srcArg = formatTypeForDisplay(srcArgs[0]) ?: continue
+                if (srcArg == tgtArg) continue
+                var innerClass: String? = null
+                var srcDisplay: String? = null
+                var tgtDisplay: String? = null
+                when (val body = aliasDecl.type) {
+                    is TypeQuery -> {  // shape A: typeof Const<U>
+                        if (body.typeArguments == null) continue
+                        val constName = (body.exprName as? Identifier)?.text ?: continue
+                        val constTy = constTypes[constName] as? IntersectionType ?: continue
+                        val firstTq = constTy.types.firstOrNull() as? TypeQuery ?: continue
+                        innerClass = (firstTq.exprName as? Identifier)?.text ?: continue
+                        srcDisplay = "{ new (): $innerClass<$srcArg>; prototype: $innerClass<any>; } & (() => $srcArg)"
+                        tgtDisplay = "{ new (): $innerClass<$tgtArg>; prototype: $innerClass<any>; } & (() => $tgtArg)"
+                    }
+                    is IntersectionType -> {  // shape B: ClassAlias<T> & FnAlias<T>
+                        val firstMember = body.types.firstOrNull() as? TypeReference ?: continue
+                        val memberAliasName = (firstMember.typeName as? Identifier)?.text ?: continue
+                        val memberBody = aliases[memberAliasName]?.type as? TypeQuery ?: continue
+                        if (memberBody.typeArguments == null) continue
+                        innerClass = (memberBody.exprName as? Identifier)?.text ?: continue
+                        srcDisplay = "$aliasName<$srcArg>"
+                        tgtDisplay = "$aliasName<$tgtArg>"
+                    }
+                    else -> continue
+                }
+                val ic = innerClass ?: continue
+                val sd = srcDisplay ?: continue
+                val td = tgtDisplay ?: continue
+                val ctorTgt = "{ new (): $ic<$tgtArg>; prototype: $ic<any>; }"
+                val message = "Conversion of type '$sd' to type '$td' may be a mistake " +
+                    "because neither type sufficiently overlaps with the other. If this " +
+                    "was intentional, convert the expression to 'unknown' first."
+                val chain = listOf(
+                    "  Type '$sd' is not comparable to type '$ctorTgt'.",
+                    "    Type '$ic<$srcArg>' is not comparable to type '$ic<$tgtArg>'.",
+                    "      Type '$srcArg' is not comparable to type '$tgtArg'.",
+                )
+                val spanEnd = if (cast.tightEnd > cast.pos) cast.tightEnd else cast.end
+                val (line, character) = getLineAndCharacterOfPosition(source, cast.pos)
+                diagnostics.add(Diagnostic(
+                    message = message,
+                    category = DiagnosticCategory.Error, code = 2352, fileName = fileName,
+                    line = line, character = character, start = cast.pos, length = spanEnd - cast.pos,
+                    messageChain = chain,
+                ))
+            }
         }
     }
 
