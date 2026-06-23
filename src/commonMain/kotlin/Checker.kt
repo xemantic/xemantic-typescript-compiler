@@ -110031,6 +110031,169 @@ interface DataView {
      * relation-failed — tsc ALWAYS flags this conjunction.
      */
     /**
+     * B561: a fresh object-literal OR a complete-object-type Identifier ARG vs a param
+     * whose type is a UNION of NAMED object interfaces (errorsOnUnionsOfOverlappingObjects01).
+     * The anonymous-constituent case is owned by [tryEmitUnionDiscriminantPropMismatch]
+     * (it bails on Type.Interface/Reference); this owns the DISJOINT named-interface union
+     * case. The general arg-check bails for union params (no `isSimpleCheckableType`), so
+     * nothing fires today → purely ADDITIVE. tsc's behavior, mirrored:
+     *   - if the arg is assignable to ANY constituent → valid, no error (the FP firewall);
+     *   - a FRESH object literal: an excess prop (in NO constituent) → TS2353 at the key
+     *     (union display); else, vs the BEST-matching constituent (most shared prop names,
+     *     [findBestUnionConstituent]) — a missing required prop → TS2345 (single
+     *     "Property 'X' is missing…" / ≥2 multi-prop "…missing the following properties…")
+     *     + TS2728; a present-but-mismatched prop → TS2322 at the key (no related);
+     *   - a NON-fresh Identifier arg → TS2345 at the arg with [getPropertyElaborationChain]'s
+     *     Object→Union chain (drills the best constituent).
+     * Returns true (one diagnostic emitted) on a hit. FP firewall: ≥2 constituents, ALL
+     * shape constituents are NAMED interfaces with no string index signature; arg fails the
+     * whole-union relation. (Verified additive by full-suite HEAD-diff.)
+     */
+    private fun tryEmitObjectVsNamedUnionArg(
+        arg: Expression, argType: Type.Object, paramType: Type.Union, paramSym: Symbol,
+        source: String, fileName: String,
+    ): Boolean {
+        val constituents = paramType.types
+        if (constituents.size < 2) return false
+        var shapeCount = 0
+        for (c in constituents) {
+            when (c) {
+                is Type.Reference, is Type.Interface -> {
+                    resolveStructuredTypeMembers(c)
+                    val co = c as Type.Object
+                    if (co.stringIndexInfo != null) return false
+                    if ((c as? Type.Interface)?.declaredStringIndexInfo != null) return false
+                    shapeCount++
+                }
+                is Type.Object -> return false  // anonymous → owned by the discriminant walker
+                else -> return false            // primitive / fn-only constituent → bail
+            }
+        }
+        if (shapeCount < 2) return false
+        resolveStructuredTypeMembers(argType)
+        if (argType.properties.isNullOrEmpty()) return false
+        val isFresh = arg is ObjectLiteralExpression
+        // FP firewall. A FRESH object literal is valid only if it is structurally
+        // assignable to a constituent AND has no excess prop vs THAT constituent (tsc's
+        // excess rule for fresh literals). A NON-fresh Identifier is valid on structural
+        // assignability alone (excess does not apply). Either way → no error.
+        if (isFresh) {
+            // tsc: a fresh literal is assignable to a union if it is structurally
+            // assignable to SOME constituent AND has no UNION-excess (every prop lives in
+            // SOME constituent — a prop present in a NON-matched constituent still counts as
+            // known). `h({a,b})` vs `Foo|Bar|Other`: assignable to Bar, `a` is in Foo → valid.
+            val unionPropNames = collectTargetPropertyNames(paramType)
+            val noUnionExcess = unionPropNames != null &&
+                (argType.properties?.all { it.name in unionPropNames } == true)
+            val structurallyAssignable = constituents.any { c ->
+                c is Type.Object && checkTypeRelatedTo(argType, c, assignableRelation)
+            }
+            if (noUnionExcess && structurallyAssignable) return false
+        } else {
+            if (constituents.any { checkTypeRelatedTo(argType, it, assignableRelation) }) return false
+        }
+
+        // Union display: an alias annotation (`a: ExoticAnimal`) renders as the alias name;
+        // an inline union annotation (`x: Foo | Other`) renders expanded.
+        val annot = (paramSym.valueDeclaration as? Parameter)?.type
+        val unionDisplay = if (annot is TypeReference && annot.typeArguments == null) {
+            (annot.typeName as? Identifier)?.text ?: typeToString(paramType)
+        } else typeToString(paramType)
+        val argDisplay = typeToString(argType)
+        val argStart = arg.pos
+        val argLen = expressionTrueEnd(arg) - argStart
+
+        // 1. FRESH-only excess check (TS2353 at the key, union display).
+        if (isFresh && checkExcessProperties(arg as ObjectLiteralExpression, argType, paramType, unionDisplay, source, fileName)) {
+            return true
+        }
+
+        // 2. Missing required props in the best-matching constituent (fresh AND non-fresh):
+        //    TS2345 at the arg + single/multi missing chain + TS2728 (single only).
+        val best = findBestUnionConstituent(argType, paramType) as? Type.Object ?: return false
+        resolveStructuredTypeMembers(best)
+        val constituentDisplay = typeToString(best)
+        val missing = (best.properties ?: emptyList()).filter { tp ->
+            !isOptionalProperty(tp) && tp.name !in OBJECT_PROTOTYPE_PROPERTIES &&
+                argType.members?.get(tp.name) == null
+        }
+        if (missing.isNotEmpty()) {
+            if (argLen <= 0) return false
+            val (aline, achar) = getLineAndCharacterOfPosition(source, argStart)
+            val chain = mutableListOf<String>()
+            val related = mutableListOf<Diagnostic>()
+            if (missing.size == 1) {
+                chain.add("  Property '${missing[0].name}' is missing in type '$argDisplay' but required in type '$constituentDisplay'.")
+                val firstDecl = missing[0].declarations.firstOrNull()
+                if (firstDecl != null) {
+                    val declPos = when (firstDecl) {
+                        is PropertyDeclaration -> firstDecl.name.pos
+                        else -> firstDecl.pos
+                    }
+                    val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                    related.add(Diagnostic(
+                        message = "'${missing[0].name}' is declared here.",
+                        category = DiagnosticCategory.Message, code = 2728,
+                        fileName = fileName, line = dline, character = dchar,
+                        start = declPos, length = missing[0].name.length,
+                    ))
+                }
+            } else {
+                chain.add("  " + formatTs2740Message(argDisplay, constituentDisplay, missing.map { it.name }))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argDisplay' is not assignable to parameter of type '$unionDisplay'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = aline, character = achar,
+                start = argStart, length = argLen,
+                messageChain = chain, relatedInformation = related,
+            ))
+            return true
+        }
+
+        // 3. Property-VALUE mismatch against the best constituent.
+        if (isFresh) {
+            // FRESH → TS2322 at the property key (no related).
+            for (propNode in (arg as ObjectLiteralExpression).properties) {
+                val pa = propNode as? PropertyAssignment ?: continue
+                val nameNode = pa.name as? Identifier ?: continue
+                val targetProp = best.members?.get(nameNode.text) ?: continue
+                val targetPropType = getTypeOfSymbol(targetProp)
+                if (targetPropType === anyType || targetPropType === errorType) continue
+                val srcSym = argType.members?.get(nameNode.text) ?: continue
+                val srcPropType = getTypeOfSymbol(srcSym)
+                if (srcPropType === anyType || srcPropType === errorType) continue
+                if (!isSimpleCheckableType(targetPropType) || !isSimpleCheckableType(srcPropType)) continue
+                if (checkTypeRelatedTo(srcPropType, targetPropType, assignableRelation)) continue
+                val (kline, kchar) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(getWidenedLiteralType(srcPropType))}' is not assignable to type '${typeToString(getWidenedLiteralType(targetPropType))}'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = kline, character = kchar,
+                    start = nameNode.pos, length = nameNode.text.length,
+                ))
+                return true
+            }
+            return false
+        }
+        // NON-fresh Identifier → TS2345 at the arg with the best-constituent chain:
+        // "  Type 'arg' is not assignable to type '<best>'." + the per-property drill.
+        if (argLen <= 0) return false
+        val inner = getPropertyElaborationChain(argType, best) ?: return false
+        if (inner.isEmpty()) return false
+        val chain = listOf("  Type '$argDisplay' is not assignable to type '$constituentDisplay'.") + inner.map { "  $it" }
+        val (aline, achar) = getLineAndCharacterOfPosition(source, argStart)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argDisplay' is not assignable to parameter of type '$unionDisplay'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = aline, character = achar,
+            start = argStart, length = argLen,
+            messageChain = chain,
+        ))
+        return true
+    }
+
+    /**
      * B213: TS2322 for a UNION-discriminant property mismatch in an object-literal
      * arg (indirectDiscriminantAndExcessProperty). `thing({ type: foo1, ... })`
      * against `Blah = {type:"foo",...} | {type:"bar",...}` — tsc checks the prop
@@ -111589,6 +111752,15 @@ interface DataView {
                     checkObjectLiteralFnReturnsAgainstIntersection(arg, paramType, source, fileName)) {
                     break
                 }
+            }
+            // B561: object-literal / complete-object-type-Identifier arg vs a union of
+            // NAMED object interfaces (errorsOnUnionsOfOverlappingObjects01). Disjoint from
+            // the anonymous-constituent discriminant walker below. Additive (union params
+            // are otherwise unchecked here).
+            if (!isRestParam && paramType is Type.Union && argType is Type.Object &&
+                (arg is ObjectLiteralExpression || arg is Identifier) &&
+                tryEmitObjectVsNamedUnionArg(arg, argType, paramType, params[i], source, fileName)) {
+                break
             }
             // B213: union-discriminant property mismatch for object-literal args.
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Union &&
