@@ -458,6 +458,84 @@ class TypeScriptCompiler {
             }
         }
 
+        // TS6059 / TS5011-'..' / TS5055: an `outDir`-but-no-`rootDir` program whose
+        // implicit rootDir (the tsconfig directory) does NOT contain all source files.
+        // A file resolved from an import that lies OUTSIDE the tsconfig dir gets TS6059
+        // at the import specifier; the common source dir collapses to a parent (`..`) →
+        // TS5011; and an external pure-JS input whose outDir-remapped output lands back on
+        // itself → TS5055. The existing TS5011 emitter above is gated on declaration|composite
+        // and returns null for the common-dir-above-tsconfig (`..`) case, so no double-emit.
+        // pathMappingBasedModuleResolution_rootImport_{noAlias,alias}WithRoot_realRootFile.
+        if (options.outDir != null && options.rootDir == null) {
+            val rootDirPos = tsconfigPos["outdir"]
+            val tsconfigDir = rootDirPos?.fileName?.substringBeforeLast('/', "")
+            if (tsconfigDir != null && tsconfigDir.startsWith('/')) {
+                val rootPrefix = if (tsconfigDir.isEmpty()) "/" else "$tsconfigDir/"
+                fun isEmittableSrc(n: String) = (n.endsWith(".ts") || n.endsWith(".tsx") ||
+                    n.endsWith(".js") || n.endsWith(".jsx") || n.endsWith(".cjs") || n.endsWith(".mjs")) &&
+                    !n.endsWith(".d.ts") && "/node_modules/" !in n && !n.startsWith("node_modules/")
+                val srcFiles = parsed.files.filter { isEmittableSrc(it.fileName) }
+                val external = srcFiles.filter { it.fileName.startsWith('/') && !it.fileName.startsWith(rootPrefix) }
+                if (external.isNotEmpty()) {
+                    val allNames = parsed.files.map { it.fileName }.toSet()
+                    fun resolveSpec(spec: String): String? {
+                        if (!spec.startsWith('/')) return null   // only absolute specs (FP firewall)
+                        for (ext in listOf("", ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".cjs", ".mjs")) {
+                            if ((spec + ext) in allNames) return spec + ext
+                        }
+                        return null
+                    }
+                    // TS6059 at each import specifier (in a LOCAL file) resolving to an external file.
+                    val fromRe = Regex("""\bfrom\s*(["'])([^"'\n]+)\1""")
+                    for (lf in srcFiles.filter { it.fileName.startsWith(rootPrefix) }) {
+                        val content = lf.content
+                        for (m in fromRe.findAll(content)) {
+                            val spec = m.groupValues[2]
+                            val resolved = resolveSpec(spec) ?: continue
+                            if (resolved.startsWith('/') && !resolved.startsWith(rootPrefix)) {
+                                val quoteStart = m.groups[1]!!.range.first
+                                val (l, c) = positionToLineCharacter(content, quoteStart)
+                                diagnostics.add(Diagnostic(
+                                    message = "File '$resolved' is not under 'rootDir' '$tsconfigDir'. 'rootDir' is expected to contain all source files.",
+                                    category = DiagnosticCategory.Error, code = 6059,
+                                    fileName = lf.fileName, line = l, character = c,
+                                    start = quoteStart, length = spec.length + 2,
+                                ))
+                            }
+                        }
+                    }
+                    // TS5011 when the common source dir is a strict ANCESTOR of the tsconfig dir.
+                    val parentDirs = srcFiles.map { it.fileName.substringBeforeLast('/', "") }
+                    val commonRaw = longestCommonPathPrefix(parentDirs)
+                    val commonDir = if (commonRaw.isEmpty()) "/" else commonRaw
+                    val tcSegs = tsconfigDir.split('/').filter { it.isNotEmpty() }
+                    val cdSegs = commonDir.split('/').filter { it.isNotEmpty() }
+                    val commonAncestorPrefix = if (commonDir == "/") "/" else "$commonDir/"
+                    if (commonDir != tsconfigDir && tcSegs.size > cdSegs.size &&
+                        tsconfigDir.startsWith(commonAncestorPrefix)) {
+                        val relative = List(tcSegs.size - cdSegs.size) { ".." }.joinToString("/")
+                        diagnostics.add(Diagnostic(
+                            message = "The common source directory of 'tsconfig.json' is '$relative'. The 'rootDir' setting must be explicitly set to this or another path to adjust your output's file layout.",
+                            category = DiagnosticCategory.Error, code = 5011,
+                            fileName = rootDirPos.fileName, line = rootDirPos.keyLine, character = rootDirPos.keyCharacter,
+                            start = rootDirPos.keyStart, length = rootDirPos.keyLength,
+                            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."),
+                        ))
+                    }
+                    // TS5055 for an external pure-JS input whose outDir-remap collides with itself.
+                    for (extFile in external) {
+                        val n = extFile.fileName
+                        if (n.endsWith(".js") || n.endsWith(".jsx") || n.endsWith(".cjs") || n.endsWith(".mjs")) {
+                            diagnostics.add(Diagnostic(
+                                message = "Cannot write file '$n' because it would overwrite input file.",
+                                category = DiagnosticCategory.Error, code = 5055,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+
         // TS5009: outDir set + 2+ input source files that do not share a common
         // filesystem root → no common subdirectory can be computed. TypeScript
         // pops the file name and compares path component 0 (the root): two posix-
