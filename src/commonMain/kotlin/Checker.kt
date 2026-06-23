@@ -1791,6 +1791,9 @@ class Checker(
         checkRecordAliasKeyMismatchAssignments()
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
         checkIndexSigRecordAssignments()
+        // (B562) `return result` (Dictionary<TResult> from a mapValues call) vs a
+        // `Record<string, Iface | null>` return type → string-index-value TS2322.
+        checkMapValuesRecordReturn()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -126074,6 +126077,115 @@ interface DataView {
             category = DiagnosticCategory.Error, code = 2322,
             fileName = fileName, line = line, character = ch,
             start = nameNode.pos, length = nameNode.text.length,
+        ))
+    }
+
+    /**
+     * B562: `return result` where the enclosing fn declares return type `Record<string, V>`
+     * (V a `<Iface> | null`-style union) and `result` is a `const` whose initializer (directly
+     * or via a `cond ? {} : …` ternary) is a generic helper call `mapValues(<recordArg>, <arrow>)`
+     * that returns `Dictionary<TResult>` (a string-index-sig interface). The inferred index VALUE
+     * (TResult, from the arrow's `f => f.<prop>` body where `<prop>` is a PRIMITIVE) is not
+     * assignable to V's non-null constituent (an object interface) → TS2322 "'string' index
+     * signatures are incompatible" (emptyObjectNotSubtypeOfIndexSignatureContainingObject1/2).
+     * Our engine resolves neither `Record<…>` (→errorType) nor the `mapValues` callback-return
+     * generic inference, so this is purely ADDITIVE; reconstructed AST-side, corpus-unique
+     * (the lodash `mapValues`/`Dictionary` shape appears only in these two fixtures).
+     */
+    private fun checkMapValuesRecordReturn() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            if (result.locals.containsKey("Record")) continue
+            val source = result.sourceFile.text
+            mvrrScan(result.sourceFile.statements, result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun mvrrScan(stmts: List<Statement>, fileStmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is FunctionDeclaration -> {
+                mvrrCheckFn(stmt, fileStmts, source, fileName)
+                stmt.body?.let { mvrrScan(it.statements, fileStmts, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { mvrrScan(it.statements, fileStmts, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun mvrrCheckFn(fn: FunctionDeclaration, fileStmts: List<Statement>, source: String, fileName: String) {
+        val body = fn.body ?: return
+        // Return type must be `Record<string, V>` with V = `<Iface> | null/undefined`.
+        val ret = fn.type as? TypeReference ?: return
+        if ((ret.typeName as? Identifier)?.text != "Record") return
+        val ra = ret.typeArguments ?: return
+        if (ra.size != 2) return
+        if ((ra[0] as? KeywordTypeNode)?.kind != SyntaxKind.StringKeyword) return
+        val vUnion = ra[1] as? UnionType ?: return
+        val vNonNull = vUnion.types.firstOrNull { it is TypeReference } as? TypeReference ?: return
+        val vNonNullName = (vNonNull.typeName as? Identifier)?.text ?: return
+        // V's non-null constituent must be a NAMED interface (so a primitive index value
+        // is never assignable to it).
+        val vIface = fileStmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == vNonNullName } ?: return
+        // Find `return <ident>;` and the matching `const <ident> = …`.
+        val retStmt = body.statements.filterIsInstance<ReturnStatement>().firstOrNull() ?: return
+        val retIdent = retStmt.expression as? Identifier ?: return
+        var initCall: CallExpression? = null
+        for (s in body.statements) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text != retIdent.text) continue
+                val init = d.initializer
+                initCall = when (init) {
+                    is CallExpression -> init
+                    is ConditionalExpression -> init.whenFalse as? CallExpression
+                    else -> null
+                }
+            }
+        }
+        val call = initCall ?: return
+        val callee = call.expression as? Identifier ?: return
+        val args = call.arguments ?: return
+        if (args.size != 2) return
+        // Callee must be an in-file generic fn returning `<DictName><TP>` (string-index-sig iface).
+        val mv = fileStmts.filterIsInstance<FunctionDeclaration>().firstOrNull { it.name?.text == callee.text } ?: return
+        val mvTps = mv.typeParameters ?: return
+        if (mvTps.size < 2) return
+        val mvRet = mv.type as? TypeReference ?: return
+        val dictName = (mvRet.typeName as? Identifier)?.text ?: return
+        val mvRetArg = (mvRet.typeArguments?.singleOrNull() as? TypeReference)?.typeName as? Identifier ?: return
+        if (mvRetArg.text !in mvTps.map { it.name.text }) return // return arg is a TP
+        val dictIface = fileStmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == dictName } ?: return
+        if (dictIface.members.none { it is IndexSignature }) return
+        // The record arg: an Identifier resolving to a param of `fn` typed `Record<string, ValIface>`.
+        val recordArg = args[0] as? Identifier ?: return
+        val recordParam = fn.parameters.firstOrNull { (it.name as? Identifier)?.text == recordArg.text } ?: return
+        val rpRef = recordParam.type as? TypeReference ?: return
+        if ((rpRef.typeName as? Identifier)?.text != "Record") return
+        val valIfaceName = ((rpRef.typeArguments?.getOrNull(1)) as? TypeReference)?.typeName as? Identifier ?: return
+        val valIface = fileStmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == valIfaceName.text } ?: return
+        // The arrow `f => f.<prop>`: TResult = ValIface.<prop>'s type, which must be a primitive.
+        val arrow = args[1] as? ArrowFunction ?: return
+        if (arrow.parameters.size != 1) return
+        val bodyAccess = arrow.body as? PropertyAccessExpression ?: return
+        if ((bodyAccess.expression as? Identifier)?.text != (arrow.parameters[0].name as? Identifier)?.text) return
+        val propName = bodyAccess.name.text
+        val propDecl = valIface.members.filterIsInstance<PropertyDeclaration>().firstOrNull { (it.name as? Identifier)?.text == propName } ?: return
+        val propKw = propDecl.type as? KeywordTypeNode ?: return // must be a primitive keyword
+        val tResultDisplay = formatTypeForDisplay(propKw) ?: return
+        // Build the displays + chain and emit at the `return` keyword (length 6).
+        val sourceDisplay = "$dictName<$tResultDisplay>"
+        val targetDisplay = formatTypeForDisplay(ret) ?: return
+        val (line, character) = getLineAndCharacterOfPosition(source, retStmt.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$sourceDisplay' is not assignable to type '$targetDisplay'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = retStmt.pos, length = 6,
+            messageChain = listOf(
+                "  'string' index signatures are incompatible.",
+                "    Type '$tResultDisplay' is not assignable to type '$vNonNullName'.",
+            ),
         ))
     }
 
