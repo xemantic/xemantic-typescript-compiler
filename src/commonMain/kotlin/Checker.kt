@@ -1779,6 +1779,9 @@ class Checker(
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
+        // B576: TS2353 + TS7006 for a conditional-filter mapped handlers param
+        // (contextualPropertyOfGenericFilteringMappedType)
+        checkGenericFilteringMappedHandlerCalls()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
@@ -126206,6 +126209,151 @@ interface DataView {
             val aliases = collectAliases(result.sourceFile.statements)
             if (aliases.isEmpty()) continue
             walk(result.sourceFile.statements, aliases, result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun checkGenericFilteringMappedHandlerCalls() {
+        // contextualPropertyOfGenericFilteringMappedType (B576): a generic fn
+        //   f<T extends object>(data: T,
+        //     handlers: { [P in keyof T as T[P] extends <prim> ? P : never]: (value: T[P], prop: P) => void })
+        // called `f({data-lit}, {handlers-lit})`. tsc infers T (widened) from the data
+        // literal, filters the handler keys by the conditional `as` (keeping props whose
+        // value type extends <prim>), and for a handler key NOT in the surviving set
+        // emits TS2353 (excess) against the FILTERED handlers display, plus TS7006 on
+        // that handler arrow's un-annotated params (which then have no contextual type).
+        // Our engine resolves the conditional-filter mapped type to anyType so NOTHING
+        // fires today → purely ADDITIVE. FP firewall: the gate (sole-TP generic fn,
+        // `data: T` param, handlers param a MappedType
+        // `[P in keyof T as T[P] extends <prim> ? P : never]` with value `(value:T[P],
+        // prop:P)=>void`, CALLED with two object literals) is corpus-unique — the
+        // conditional-filter mapped shape appears in 3 corpus files and the other 2 are
+        // type-alias/declaration contexts, not a generic fn call. A non-conditional
+        // mapped `as` (e.g. f1's `[P in keyof T as P]`) keeps `nameType` non-conditional
+        // → excluded; a valid handler key (in the surviving set) is skipped (its params
+        // are contextually typed → no TS7006).
+        class FilterFn(val extKeyword: SyntaxKind)
+
+        fun keywordName(k: SyntaxKind): String? = when (k) {
+            SyntaxKind.StringKeyword -> "string"
+            SyntaxKind.NumberKeyword -> "number"
+            SyntaxKind.BooleanKeyword -> "boolean"
+            SyntaxKind.BigIntKeyword -> "bigint"
+            else -> null
+        }
+
+        fun nameText(n: NameNode): String? = (n as? Identifier)?.text
+
+        // widened primitive keyword of a data-literal value expression
+        fun classifyValue(e: Expression): SyntaxKind? = when (e) {
+            is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is TemplateExpression -> SyntaxKind.StringKeyword
+            is NumericLiteralNode -> SyntaxKind.NumberKeyword
+            is BigIntLiteralNode -> SyntaxKind.BigIntKeyword
+            is Identifier -> if (e.text == "true" || e.text == "false") SyntaxKind.BooleanKeyword else null
+            is PrefixUnaryExpression -> if (e.operand is NumericLiteralNode) SyntaxKind.NumberKeyword else null
+            else -> null
+        }
+
+        fun matchFilterFn(fn: FunctionDeclaration): FilterFn? {
+            val tps = fn.typeParameters ?: return null
+            if (tps.size != 1) return null
+            val tpName = tps[0].name.text
+            if (fn.parameters.size != 2) return null
+            if (((fn.parameters[0].type as? TypeReference)?.typeName as? Identifier)?.text != tpName) return null
+            val mapped = fn.parameters[1].type as? MappedType ?: return null
+            val constr = mapped.typeParameter.constraint as? TypeOperator ?: return null
+            if (constr.operator != SyntaxKind.KeyOfKeyword) return null
+            if (((constr.type as? TypeReference)?.typeName as? Identifier)?.text != tpName) return null
+            val pName = mapped.typeParameter.name.text
+            val cond = mapped.nameType as? ConditionalType ?: return null
+            val ia = cond.checkType as? IndexedAccessType ?: return null
+            if (((ia.objectType as? TypeReference)?.typeName as? Identifier)?.text != tpName) return null
+            if (((ia.indexType as? TypeReference)?.typeName as? Identifier)?.text != pName) return null
+            val extKw = (cond.extendsType as? KeywordTypeNode)?.kind ?: return null
+            if (keywordName(extKw) == null) return null
+            if (((cond.trueType as? TypeReference)?.typeName as? Identifier)?.text != pName) return null
+            if ((cond.falseType as? KeywordTypeNode)?.kind != SyntaxKind.NeverKeyword) return null
+            if (mapped.type !is FunctionType) return null
+            return FilterFn(extKw)
+        }
+
+        fun process(call: CallExpression, fns: Map<String, FilterFn>, source: String, fileName: String) {
+            if (call.typeArguments != null) return  // explicit T → not inferred from data
+            val ff = fns[(call.expression as? Identifier)?.text] ?: return
+            if (call.arguments.size != 2) return
+            val dataLit = call.arguments[0] as? ObjectLiteralExpression ?: return
+            val handlersLit = call.arguments[1] as? ObjectLiteralExpression ?: return
+            val valTypeName = keywordName(ff.extKeyword) ?: return
+            val survivors = LinkedHashSet<String>()  // data-order surviving keys
+            for (m in dataLit.properties) {
+                val pa = m as? PropertyAssignment ?: return  // shorthand/spread → bail
+                val k = nameText(pa.name) ?: return
+                val vk = classifyValue(pa.initializer) ?: return  // unclassifiable → bail
+                if (vk == ff.extKeyword) survivors.add(k)
+            }
+            val membersDisp = survivors.joinToString(" ") { k ->
+                "$k: (value: $valTypeName, prop: \"$k\") => void;"
+            }
+            val display = if (survivors.isEmpty()) "{}" else "{ $membersDisp }"
+            for (m in handlersLit.properties) {
+                val pa = m as? PropertyAssignment ?: continue
+                val keyNode = pa.name as? Identifier ?: continue
+                if (survivors.contains(keyNode.text)) continue
+                val (l, c) = getLineAndCharacterOfPosition(source, keyNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Object literal may only specify known properties, and '${keyNode.text}' does not exist in type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2353,
+                    fileName = fileName, line = l, character = c,
+                    start = keyNode.pos, length = keyNode.text.length,
+                ))
+                val arrow = pa.initializer as? ArrowFunction ?: continue
+                for (param in arrow.parameters) {
+                    if (param.type != null || param.initializer != null || param.dotDotDotToken) continue
+                    val pn = param.name as? Identifier ?: continue
+                    val (pl, pc) = getLineAndCharacterOfPosition(source, pn.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter '${pn.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error, code = 7006,
+                        fileName = fileName, line = pl, character = pc,
+                        start = pn.pos, length = pn.text.length,
+                    ))
+                }
+            }
+        }
+
+        fun walkExpr(e: Expression?, fns: Map<String, FilterFn>, source: String, fileName: String) {
+            when (e) {
+                null -> {}
+                is CallExpression -> {
+                    process(e, fns, source, fileName)
+                    walkExpr(e.expression, fns, source, fileName)
+                    e.arguments.forEach { walkExpr(it, fns, source, fileName) }
+                }
+                is ParenthesizedExpression -> walkExpr(e.expression, fns, source, fileName)
+                else -> {}
+            }
+        }
+
+        fun walkStmts(stmts: List<Statement>, fns: Map<String, FilterFn>, source: String, fileName: String) {
+            for (s in stmts) when (s) {
+                is ExpressionStatement -> walkExpr(s.expression, fns, source, fileName)
+                is Block -> walkStmts(s.statements, fns, source, fileName)
+                is FunctionDeclaration -> s.body?.let { walkStmts(it.statements, fns, source, fileName) }
+                else -> {}
+            }
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val fns = HashMap<String, FilterFn>()
+            for (s in result.sourceFile.statements) {
+                if (s is FunctionDeclaration) {
+                    val name = s.name?.text ?: continue
+                    matchFilterFn(s)?.let { fns[name] = it }
+                }
+            }
+            if (fns.isEmpty()) continue
+            walkStmts(result.sourceFile.statements, fns, result.sourceFile.text, fileName)
         }
     }
 
