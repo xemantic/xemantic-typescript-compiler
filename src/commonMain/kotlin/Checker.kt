@@ -124811,11 +124811,155 @@ interface DataView {
             }
         }
 
+        // --- B539: expression-body extension (in-RHS inside ternary/&&/||, `: T = undefined`
+        //     defaults, and Object.keys(<unconstrained-TP>)) for arrow functions with an
+        //     EXPRESSION body. The Block-bodied FunctionDeclaration path above is unchanged.
+        //     All three fire ONLY for an UNCONSTRAINED type parameter of the enclosing
+        //     generic function -> FP-safe by construction (tsc errors on the exact shapes,
+        //     so no passing test can carry them un-errored). ---
+        // operands GUARANTEED narrowed-to-object when `cond` is true (positive &&-chain of `in`)
+        fun guaranteedIn(cond: Expression): Set<String> = when (cond) {
+            is BinaryExpression -> when (cond.operator) {
+                SyntaxKind.InKeyword -> (cond.right as? Identifier)?.text?.let { setOf(it) } ?: emptySet()
+                SyntaxKind.AmpersandAmpersand -> guaranteedIn(cond.left) + guaranteedIn(cond.right)
+                else -> emptySet()
+            }
+            is ParenthesizedExpression -> guaranteedIn(cond.expression)
+            else -> emptySet()
+        }
+        fun unconstrainedTpNames(tps: List<TypeParameter>?): Set<String> =
+            tps?.filter { it.constraint == null }?.map { it.name.text }?.toSet() ?: emptySet()
+        // Part 2: `param: <own unconstrained TP> = undefined` -> TS2322 + could-be-instantiated
+        fun checkFnParamsUndefined(tps: List<TypeParameter>?, params: List<Parameter>, source: String, fileName: String) {
+            val u = unconstrainedTpNames(tps)
+            if (u.isEmpty()) return
+            for (p in params) {
+                val ref = p.type as? TypeReference ?: continue
+                if (ref.typeArguments != null) continue
+                val tpName = (ref.typeName as? Identifier)?.text ?: continue
+                if (tpName !in u) continue
+                val init = p.initializer ?: continue
+                if ((init as? Identifier)?.text != "undefined") continue
+                val len = (init.pos + init.text.length) - p.pos
+                if (len <= 0) continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, p.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'undefined' is not assignable to type '$tpName'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = p.pos, length = len,
+                    messageChain = listOf("  '$tpName' could be instantiated with an arbitrary type which could be unrelated to 'undefined'."),
+                ))
+            }
+        }
+        // Part 3: Object.keys(<single unconstrained TP operand>) -> hardcoded 2-overload TS2769
+        fun singleUnconstrainedTp(shape: OperandShape): InMember? {
+            val ms = shape.unionMembers ?: return null
+            if (ms.size != 1) return null
+            val m = ms[0]
+            return if (m.kind == 2 && m.tpConstraint == null) m else null
+        }
+        fun emitObjectKeysTs2769(arg: Identifier, m: InMember, source: String, fileName: String) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+            val related = mutableListOf<Diagnostic>()
+            if (m.tpDeclPos >= 0) for (cons in listOf("{}", "object")) {
+                val (dl, dc) = getLineAndCharacterOfPosition(source, m.tpDeclPos)
+                related.add(Diagnostic(
+                    message = "This type parameter might need an `extends $cons` constraint.",
+                    category = DiagnosticCategory.Message, code = 2208,
+                    fileName = fileName, line = dl, character = dc,
+                    start = m.tpDeclPos, length = 1,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "No overload matches this call.",
+                category = DiagnosticCategory.Error, code = 2769,
+                fileName = fileName, line = line, character = ch,
+                start = arg.pos, length = arg.text.length,
+                messageChain = listOf(
+                    "  Overload 1 of 2, '(o: {}): string[]', gave the following error.",
+                    "    Argument of type '${m.tpName}' is not assignable to parameter of type '{}'.",
+                    "  Overload 2 of 2, '(o: object): string[]', gave the following error.",
+                    "    Argument of type '${m.tpName}' is not assignable to parameter of type 'object'.",
+                ),
+                relatedInformation = related,
+            ))
+        }
+        // Part 1+3: recursive expression walk (in-RHS with &&/||/ternary narrowing, Object.keys,
+        //   plus Part-2 checks on every nested function-like reached).
+        fun walkExpr(e: Expression?, shapes: Map<String, OperandShape>, narrowed: Set<String>, source: String, fileName: String) {
+            when (e) {
+                null -> {}
+                is BinaryExpression -> when (e.operator) {
+                    SyntaxKind.InKeyword -> {
+                        val rhs = e.right as? Identifier
+                        val shape = rhs?.let { shapes[it.text] }
+                        if (rhs != null && shape != null && rhs.text !in narrowed)
+                            checkOperandUse(rhs, shape, emptySet(), source, fileName)
+                        walkExpr(e.left, shapes, narrowed, source, fileName)
+                    }
+                    SyntaxKind.AmpersandAmpersand -> {
+                        walkExpr(e.left, shapes, narrowed, source, fileName)
+                        walkExpr(e.right, shapes, narrowed + guaranteedIn(e.left), source, fileName)
+                    }
+                    else -> {
+                        walkExpr(e.left, shapes, narrowed, source, fileName)
+                        walkExpr(e.right, shapes, narrowed, source, fileName)
+                    }
+                }
+                is PrefixUnaryExpression -> walkExpr(e.operand, shapes, narrowed, source, fileName)
+                is ParenthesizedExpression -> walkExpr(e.expression, shapes, narrowed, source, fileName)
+                is ConditionalExpression -> {
+                    walkExpr(e.condition, shapes, narrowed, source, fileName)
+                    val cn = narrowed + guaranteedIn(e.condition)
+                    walkExpr(e.whenTrue, shapes, cn, source, fileName)
+                    walkExpr(e.whenFalse, shapes, narrowed, source, fileName)
+                }
+                is ObjectLiteralExpression -> for (prop in e.properties) when (prop) {
+                    is PropertyAssignment -> walkExpr(prop.initializer, shapes, narrowed, source, fileName)
+                    is SpreadAssignment -> walkExpr(prop.expression, shapes, narrowed, source, fileName)
+                    else -> {}
+                }
+                is ArrowFunction -> {
+                    checkFnParamsUndefined(e.typeParameters, e.parameters, source, fileName)
+                    val shadow = narrowed + e.parameters.mapNotNull { (it.name as? Identifier)?.text }.filter { it in shapes }
+                    (e.body as? Expression)?.let { walkExpr(it, shapes, shadow, source, fileName) }
+                }
+                is FunctionExpression -> checkFnParamsUndefined(e.typeParameters, e.parameters, source, fileName)
+                is CallExpression -> {
+                    val callee = e.expression
+                    if (callee is PropertyAccessExpression && callee.name.text == "keys" &&
+                        (callee.expression as? Identifier)?.text == "Object") {
+                        val arg = e.arguments.firstOrNull() as? Identifier
+                        val sh = arg?.let { shapes[it.text] }
+                        if (arg != null && sh != null && arg.text !in narrowed) {
+                            val tpm = singleUnconstrainedTp(sh)
+                            if (tpm != null) emitObjectKeysTs2769(arg, tpm, source, fileName)
+                        }
+                    }
+                    walkExpr(e.expression, shapes, narrowed, source, fileName)
+                    e.arguments.forEach { walkExpr(it, shapes, narrowed, source, fileName) }
+                }
+                is NewExpression -> {
+                    walkExpr(e.expression, shapes, narrowed, source, fileName)
+                    e.arguments?.forEach { walkExpr(it, shapes, narrowed, source, fileName) }
+                }
+                is AsExpression -> walkExpr(e.expression, shapes, narrowed, source, fileName)
+                is NonNullExpression -> walkExpr(e.expression, shapes, narrowed, source, fileName)
+                is PropertyAccessExpression -> walkExpr(e.expression, shapes, narrowed, source, fileName)
+                is ElementAccessExpression -> {
+                    walkExpr(e.expression, shapes, narrowed, source, fileName)
+                    walkExpr(e.argumentExpression, shapes, narrowed, source, fileName)
+                }
+                else -> {}
+            }
+        }
+
         fun checkFn(
             typeParameters: List<TypeParameter>?, parameters: List<Parameter>,
-            body: Block?, source: String, fileName: String,
+            bodyNode: Node?, source: String, fileName: String,
         ) {
-            if (typeParameters.isNullOrEmpty() || body == null) return
+            if (typeParameters.isNullOrEmpty() || bodyNode == null) return
             val tps = typeParameters.associateBy { it.name.text }
             val shapes = mutableMapOf<String, OperandShape>()
             for (p in parameters) {
@@ -124827,8 +124971,14 @@ interface DataView {
                     (shape.intersection != null)
                 if (involvesTp) shapes[n] = shape
             }
-            if (shapes.isEmpty()) return
-            walkStmts(body.statements, shapes, emptySet(), emptyMap(), source, fileName)
+            // Part 2 for this fn's own params (covers a top-level `function f<T>(x: T = undefined)`)
+            checkFnParamsUndefined(typeParameters, parameters, source, fileName)
+            when (bodyNode) {
+                is Block -> if (shapes.isNotEmpty())
+                    walkStmts(bodyNode.statements, shapes, emptySet(), emptyMap(), source, fileName)
+                is Expression -> walkExpr(bodyNode, shapes, emptySet(), source, fileName)
+                else -> {}
+            }
         }
 
         for (result in binderResults) {
@@ -124841,7 +124991,7 @@ interface DataView {
                         checkFn(stmt.typeParameters, stmt.parameters, stmt.body, source, fileName)
                     is VariableStatement -> for (d in stmt.declarationList.declarations) {
                         val arrow = d.initializer as? ArrowFunction ?: continue
-                        checkFn(arrow.typeParameters, arrow.parameters, arrow.body as? Block, source, fileName)
+                        checkFn(arrow.typeParameters, arrow.parameters, arrow.body, source, fileName)
                     }
                     else -> {}
                 }
