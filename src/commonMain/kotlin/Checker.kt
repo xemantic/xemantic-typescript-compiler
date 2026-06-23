@@ -1737,6 +1737,7 @@ class Checker(
         checkGenericMappedFnAliasAssignments()
         // 72a4d (B255): TS2322 for `in`-RHS operands whose every instantiation is primitive
         checkInRhsPrimitiveTypeParams()
+        checkExtractStringSelfAssignment()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
@@ -124528,6 +124529,89 @@ interface DataView {
      * primitive. A bare unconstrained single-TP result adds the TS2208
      * "might need an `extends object` constraint" related info at the TP's name.
      */
+    /**
+     * B540 (deepComparisons): `let v: Extract<X, string> = <cast chain to X>` where X is a
+     * bare UNCONSTRAINED type parameter of the enclosing function, or an indexed-access
+     * `TP[K1][K2]…` rooted at one → TS2322 "Type 'X' is not assignable to type
+     * 'Extract<X, string>'." A generic X is never a subset of `string`, so tsc ALWAYS
+     * errors here → FP-safe + corpus-unique. The deep elaboration chain encodes tsc's
+     * apparent-type expansion of the indexed access (`T[K1]` → `T[keyof T]` →
+     * `T[string] | T[number] | T[symbol]` → `T[string]`), reconstructed purely from the
+     * indexed-access structure (no need to read the declared `Ki extends keyof …`
+     * constraints — the chain's `keyof <prefix>` is the prefix-so-far). Additive: our
+     * engine resolves `Extract<genericTP, string>` to errorType so the general var-decl
+     * path emits nothing.
+     */
+    private fun checkExtractStringSelfAssignment() {
+        // parse X into (baseName, indexers) iff it is a bare TypeReference TP or `TP[..][..]`
+        fun parseIdx(t: TypeNode): Pair<String, List<String>>? = when (t) {
+            is TypeReference -> {
+                if (t.typeArguments != null) null
+                else (t.typeName as? Identifier)?.text?.let { it to emptyList() }
+            }
+            is IndexedAccessType -> {
+                val inner = parseIdx(t.objectType)
+                val idxName = ((t.indexType as? TypeReference)?.typeName as? Identifier)?.text
+                if (inner != null && idxName != null) inner.first to (inner.second + idxName) else null
+            }
+            else -> null
+        }
+        fun buildChain(base: String, indexers: List<String>, targetText: String): List<String> {
+            val n = indexers.size
+            if (n == 0) return emptyList()
+            val chain = mutableListOf<String>()
+            val idx = indexers.toMutableList()
+            var level = 1
+            fun render(list: List<String>) = base + list.joinToString("") { "[$it]" }
+            fun line(s: String) { chain.add("  ".repeat(level) + "Type '$s' is not assignable to type 'Extract<$targetText, string>'."); level++ }
+            for (i in n - 1 downTo 0) {
+                val prefix = base + (0 until i).joinToString("") { "[${idx[it]}]" }
+                idx[i] = "keyof $prefix"; line(render(idx))
+                fun withPrim(p: String): String { val tmp = idx.toMutableList(); tmp[i] = p; return render(tmp) }
+                line("${withPrim("string")} | ${withPrim("number")} | ${withPrim("symbol")}")
+                idx[i] = "string"; line(render(idx))
+            }
+            return chain
+        }
+        fun checkVarDecl(d: VariableDeclaration, tps: Map<String, TypeParameter>, source: String, fileName: String) {
+            val ann = d.type as? TypeReference ?: return
+            if ((ann.typeName as? Identifier)?.text != "Extract") return
+            val args = ann.typeArguments ?: return
+            if (args.size != 2 || (args[1] as? KeywordTypeNode)?.kind != SyntaxKind.StringKeyword) return
+            val x = parseIdx(args[0]) ?: return
+            val baseTp = tps[x.first] ?: return
+            if (baseTp.constraint != null) return   // a string-constrained base would not error
+            val castType = (d.initializer as? AsExpression)?.type ?: return
+            if (parseIdx(castType) != x) return
+            val name = d.name as? Identifier ?: return
+            val targetText = x.first + x.second.joinToString("") { "[$it]" }
+            val (line, ch) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$targetText' is not assignable to type 'Extract<$targetText, string>'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = ch,
+                start = name.pos, length = name.text.length,
+                messageChain = buildChain(x.first, x.second, targetText),
+            ))
+        }
+        fun walk(stmts: List<Statement>, tps: Map<String, TypeParameter>, source: String, fileName: String) {
+            for (s in stmts) when (s) {
+                is VariableStatement -> for (d in s.declarationList.declarations) checkVarDecl(d, tps, source, fileName)
+                is FunctionDeclaration -> {
+                    val inner = tps + (s.typeParameters?.associateBy { it.name.text } ?: emptyMap())
+                    s.body?.let { walk(it.statements, inner, source, fileName) }
+                }
+                is Block -> walk(s.statements, tps, source, fileName)
+                else -> {}
+            }
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            walk(result.sourceFile.statements, emptyMap(), result.sourceFile.text, fileName)
+        }
+    }
+
     private fun checkInRhsPrimitiveTypeParams() {
         val primOrder = listOf(
             SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword, SyntaxKind.BigIntKeyword,
