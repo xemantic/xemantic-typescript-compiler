@@ -1748,6 +1748,10 @@ class Checker(
         // B568: TS2339 for `spyObj[k].and.returnValue` where spyObj: SpyObj<T> =
         // `T & { [k in keyof T]: Spy }` (mapped over keyof TP collapses to any → additive)
         checkMappedSpyValueMemberAccess()
+        // B569: TS2322 for assigning a `Num`-shaped value to a `Runtype<any>` target
+        // where Runtype has a polymorphic-`this` `constraint: Constraint<this>` member
+        // (invariant recursive generic; engine resolves to any → additive)
+        checkInvariantGenericThisElaboration()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125420,6 +125424,117 @@ interface DataView {
                 collectAliasVars(body.statements, aliasVars)
                 if (aliasVars.isEmpty()) continue
                 walkSpyStmts(body.statements, aliasVars)
+            }
+        }
+    }
+
+    // B569: assigning a `Num`-shaped value to a `Runtype<any>`-typed target where
+    // `interface Runtype<A> { constraint: Constraint<this>; witness: A }` (a
+    // polymorphic-`this` member used INVARIANTLY through the recursive `Constraint`)
+    // and `interface Num extends Runtype<number> { tag }` → TS2322 with a fixed
+    // depth-2 elaboration chain. The engine resolves the polymorphic-`this`/invariant
+    // recursion to any (no this-type modeling) so nothing fires → purely ADDITIVE.
+    // The 4-line chain is reconstructed from the AST (B540/B565-style hardcoded
+    // template). TWO emit sites share it: (A) var-decl `const x: Runtype<any> = Num`
+    // (squiggle the var name); (B) call-arg `Obj({ k: Num })` where Obj's tp-constraint
+    // is `{ [_: string]: Runtype<any> }` (squiggle the property KEY + related TS6501 at
+    // the index signature). Corpus-unique: `constraint: Constraint<this>` appears once.
+    private fun checkInvariantGenericThisElaboration() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // R = interface with a member typed `C<this>` (constraint: Constraint<this>)
+            var rName: String? = null; var cprop: String? = null; var cName: String? = null
+            for (iface in stmts.filterIsInstance<InterfaceDeclaration>()) {
+                for (m in iface.members) {
+                    val pd = m as? PropertyDeclaration ?: continue
+                    val pt = pd.type as? TypeReference ?: continue
+                    val args = pt.typeArguments ?: continue
+                    if (args.size == 1 && args[0] is ThisType) {
+                        rName = iface.name.text
+                        cprop = (pd.name as? Identifier)?.text
+                        cName = (pt.typeName as? Identifier)?.text
+                    }
+                }
+            }
+            val r = rName ?: continue; val cp = cprop ?: continue; val c = cName ?: continue
+            // src interfaces: `extends R<...>`, exactly 1 own member (the "tag")
+            val srcInterfaces = HashMap<String, String>()
+            for (iface in stmts.filterIsInstance<InterfaceDeclaration>()) {
+                val ext = iface.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: continue
+                if (ext.types.none { (it.expression as? Identifier)?.text == r }) continue
+                if (iface.members.size != 1) continue
+                val tag = ((iface.members[0] as? PropertyDeclaration)?.name as? Identifier)?.text ?: continue
+                srcInterfaces[iface.name.text] = tag
+            }
+            if (srcInterfaces.isEmpty()) continue
+            // const name -> declared interface type name (`declare const Num: Num`)
+            val constTypes = HashMap<String, String>()
+            for (s in stmts) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                ((d.type as? TypeReference)?.typeName as? Identifier)?.text?.let { constTypes[n] = it }
+            }
+            fun emitChain(srcName: String, tgt: String, start: Int, len: Int, related: List<Diagnostic>) {
+                val tag = srcInterfaces[srcName] ?: return
+                val chain = listOf(
+                    "  The types of '$cp.$cp' are incompatible between these types.",
+                    "    Type '$c<$c<$srcName>>' is not assignable to type '$c<$c<$tgt>>'.",
+                    "      Property '$tag' is missing in type '$tgt' but required in type '$srcName'.",
+                )
+                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$srcName' is not assignable to type '$tgt'.",
+                    category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                    line = line, character = ch, start = start, length = len,
+                    messageChain = chain, relatedInformation = related,
+                ))
+            }
+            // functions whose first tp-constraint is `{ [_: string]: R<any> }` (branch B)
+            val objFns = HashMap<String, IndexSignature>()
+            for (fn in stmts.filterIsInstance<FunctionDeclaration>()) {
+                val fnName = fn.name?.text ?: continue
+                val tl = fn.typeParameters?.firstOrNull()?.constraint as? TypeLiteral ?: continue
+                val idx = tl.members.firstNotNullOfOrNull { it as? IndexSignature } ?: continue
+                if (((idx.type as? TypeReference)?.typeName as? Identifier)?.text != r) continue
+                objFns[fnName] = idx
+            }
+            for (s in stmts) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val ann = d.type as? TypeReference
+                    if (ann != null && (ann.typeName as? Identifier)?.text == r) {
+                        // Branch A: const x: Runtype<any> = Num
+                        val initId = d.initializer as? Identifier
+                        val srcIface = initId?.let { constTypes[it.text] }
+                        val name = d.name as? Identifier
+                        val tgt = formatTypeForDisplay(ann)
+                        if (srcIface != null && srcIface in srcInterfaces && name != null && tgt != null) {
+                            emitChain(srcIface, tgt, name.pos, name.text.length, emptyList())
+                        }
+                    } else {
+                        // Branch B: const _ = Obj({ key: Num, ... })
+                        val call = d.initializer as? CallExpression ?: continue
+                        val idx = (call.expression as? Identifier)?.text?.let { objFns[it] } ?: continue
+                        val tgt = idx.type?.let { formatTypeForDisplay(it) } ?: continue
+                        val objLit = call.arguments?.firstOrNull() as? ObjectLiteralExpression ?: continue
+                        for (prop in objLit.properties) {
+                            val pa = prop as? PropertyAssignment ?: continue
+                            val valId = pa.initializer as? Identifier ?: continue
+                            val srcIface = constTypes[valId.text] ?: continue
+                            if (srcIface !in srcInterfaces) continue
+                            val keyNode = pa.name as? Identifier ?: continue
+                            val (rl, rc) = getLineAndCharacterOfPosition(source, idx.pos)
+                            val related = listOf(Diagnostic(
+                                message = "The expected type comes from this index signature.",
+                                category = DiagnosticCategory.Message, code = 6501, fileName = fileName,
+                                line = rl, character = rc, start = idx.pos, length = 1,
+                            ))
+                            emitChain(srcIface, tgt, keyNode.pos, keyNode.text.length, related)
+                        }
+                    }
+                }
             }
         }
     }
