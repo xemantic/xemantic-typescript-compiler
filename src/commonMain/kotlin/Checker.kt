@@ -1738,6 +1738,9 @@ class Checker(
         // 72a4d (B255): TS2322 for `in`-RHS operands whose every instantiation is primitive
         checkInRhsPrimitiveTypeParams()
         checkExtractStringSelfAssignment()
+        // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
+        // conditional-alias param resolved via T's constraint)
+        checkDistributiveConditionalConstraint()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
@@ -125006,6 +125009,143 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             walk(result.sourceFile.statements, emptyMap(), result.sourceFile.text, fileName)
+        }
+    }
+
+    private fun checkDistributiveConditionalConstraint() {
+        // B564: `function f<T extends C>(x: Cond<T>) { let v: <lit> = x; }` where
+        // `type Cond<P> = P extends Ext ? <litA> : <litB>` (single-level conditional,
+        // BOTH branches literal types). Our conditional-type eval bails to anyType when
+        // the checkType is a bare type param (getTypeFromConditionalType ~118716), so
+        // `Cond<T>` resolves to anyType and the var-decl assignability check emits
+        // NOTHING — this walker is purely ADDITIVE. tsc resolves the deferred
+        // conditional via T's constraint: constraint assignable to Ext → TRUE branch;
+        // disjoint → FALSE branch; overlap-but-not-assignable → `boolean` (union of the
+        // two branches). It then checks the resolved type against the literal target.
+        // FP firewall: corpus-unique shape (single-conditional-literal-branch alias
+        // typed param of a constrained tp + literal-target var-decl) AND we only emit
+        // when the relation genuinely fails (additive). Ref: distributiveConditionalTypeConstraints.
+        class CondAlias(val ext: TypeNode, val trueText: String, val falseText: String)
+        // resolution kinds for one param: 0 = true branch, 1 = false branch, 2 = boolean(union)
+        class ParamRes(val kind: Int, val aliasDisplay: String, val trueText: String, val falseText: String)
+
+        fun litBranchText(t: TypeNode): String? = if (t is LiteralType) formatTypeForDisplay(t) else null
+
+        fun collectAliases(stmts: List<Statement>): Map<String, CondAlias> {
+            val map = HashMap<String, CondAlias>()
+            for (s in stmts) {
+                if (s !is TypeAliasDeclaration) continue
+                val tps = s.typeParameters ?: continue
+                if (tps.size != 1) continue
+                val p = tps[0].name.text
+                val cond = s.type as? ConditionalType ?: continue
+                // checkType must be a bare reference to the alias's own type param
+                val checkName = ((cond.checkType as? TypeReference)?.typeName as? Identifier)?.text
+                if (checkName != p) continue
+                val tt = litBranchText(cond.trueType) ?: continue
+                val ft = litBranchText(cond.falseType) ?: continue
+                map[s.name.text] = CondAlias(cond.extendsType, tt, ft)
+            }
+            return map
+        }
+
+        // 0=true, 1=false, 2=boolean; null = cannot evaluate (bail, no emit)
+        fun resolveCond(ext: TypeNode, constraint: TypeNode): Int? {
+            val ct = try { getTypeFromTypeNode(constraint) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return null }
+            val et = try { getTypeFromTypeNode(ext) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return null }
+            if (ct === anyType || ct === errorType || et === anyType || et === errorType) return null
+            return try {
+                if (checkTypeRelatedTo(ct, et, assignableRelation)) 0
+                else {
+                    val overlap = checkTypeRelatedTo(et, ct, assignableRelation) ||
+                        (et is Type.Union && et.types.any { checkTypeRelatedTo(it, ct, assignableRelation) }) ||
+                        (ct is Type.Union && ct.types.any { checkTypeRelatedTo(et, it, assignableRelation) })
+                    if (overlap) 2 else 1
+                }
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
+        }
+
+        fun unionDisplay(tt: String, ft: String): String =
+            if ((tt == "true" && ft == "false") || (tt == "false" && ft == "true")) "boolean" else "$tt | $ft"
+
+        fun checkVD(d: VariableDeclaration, params: Map<String, ParamRes>, source: String, fileName: String) {
+            val targetNode = d.type as? LiteralType ?: return
+            val targetText = formatTypeForDisplay(targetNode) ?: return
+            val initName = (d.initializer as? Identifier)?.text ?: return
+            val res = params[initName] ?: return
+            val name = d.name as? Identifier ?: return
+            val (top: String, chain: List<String>) = when (res.kind) {
+                0, 1 -> {
+                    val resolvedText = if (res.kind == 0) res.trueText else res.falseText
+                    if (resolvedText == targetText) return  // assignable → no error
+                    Pair(
+                        "Type '${res.aliasDisplay}' is not assignable to type '$targetText'.",
+                        listOf("  Type '$resolvedText' is not assignable to type '$targetText'."),
+                    )
+                }
+                else -> {
+                    // boolean (union) is never assignable to a single-literal target
+                    Pair(
+                        "Type '${unionDisplay(res.trueText, res.falseText)}' is not assignable to type '$targetText'.",
+                        emptyList(),
+                    )
+                }
+            }
+            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = top, category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = name.pos, length = name.text.length, messageChain = chain,
+            ))
+        }
+
+        fun scanBody(stmts: List<Statement>, params: Map<String, ParamRes>, source: String, fileName: String) {
+            for (s in stmts) when (s) {
+                is VariableStatement -> for (d in s.declarationList.declarations) checkVD(d, params, source, fileName)
+                is Block -> scanBody(s.statements, params, source, fileName)
+                else -> {}
+            }
+        }
+
+        fun process(fn: FunctionDeclaration, aliases: Map<String, CondAlias>, source: String, fileName: String) {
+            val tps = fn.typeParameters?.associateBy { it.name.text } ?: return
+            if (tps.isEmpty()) return
+            val body = fn.body ?: return
+            val params = HashMap<String, ParamRes>()
+            for (param in fn.parameters) {
+                val pname = (param.name as? Identifier)?.text ?: continue
+                val ann = param.type as? TypeReference ?: continue
+                val aliasName = (ann.typeName as? Identifier)?.text ?: continue
+                val alias = aliases[aliasName] ?: continue
+                val argList = ann.typeArguments ?: continue
+                if (argList.size != 1) continue
+                val argTpName = ((argList[0] as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val tp = tps[argTpName] ?: continue
+                val constraint = tp.constraint ?: continue  // unconstrained → bail (corpus all constrained)
+                val kind = resolveCond(alias.ext, constraint) ?: continue
+                val aliasDisplay = formatTypeForDisplay(ann) ?: continue
+                params[pname] = ParamRes(kind, aliasDisplay, alias.trueText, alias.falseText)
+            }
+            if (params.isNotEmpty()) scanBody(body.statements, params, source, fileName)
+        }
+
+        fun walk(stmts: List<Statement>, aliases: Map<String, CondAlias>, source: String, fileName: String) {
+            for (s in stmts) when (s) {
+                is FunctionDeclaration -> {
+                    process(s, aliases, source, fileName)
+                    s.body?.let { walk(it.statements, aliases, source, fileName) }
+                }
+                is Block -> walk(s.statements, aliases, source, fileName)
+                else -> {}
+            }
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val aliases = collectAliases(result.sourceFile.statements)
+            if (aliases.isEmpty()) continue
+            walk(result.sourceFile.statements, aliases, result.sourceFile.text, fileName)
         }
     }
 
