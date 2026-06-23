@@ -1738,6 +1738,9 @@ class Checker(
         // 72a4d (B255): TS2322 for `in`-RHS operands whose every instantiation is primitive
         checkInRhsPrimitiveTypeParams()
         checkExtractStringSelfAssignment()
+        // B565: TS2322 for `x = a2` where a2: ReturnType<T[M]> (apparent-type
+        // expansion chain reconstructed from the AST; engine resolves to any → additive)
+        checkGenericConditionalReturnTypeAssign()
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
         checkDistributiveConditionalConstraint()
@@ -125009,6 +125012,105 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             walk(result.sourceFile.statements, emptyMap(), result.sourceFile.text, fileName)
+        }
+    }
+
+    // B565: `x = a2` where a2: ReturnType<T[M]>, T extends FunctionsObj<T> (a
+    // homomorphic mapped alias `{ [K in keyof T]: () => unknown }`), M extends
+    // keyof T, and x is typed by a concrete object interface. tsc reports TS2322
+    // with a 7-level apparent-type-expansion chain. Our engine resolves `keyof TP`
+    // to bare `string` and `ReturnType<TP[..]>` to error/any, so the general
+    // assignment check is SILENT → purely ADDITIVE. The chain is reconstructed
+    // entirely from the AST (same template as B540/B564). Corpus-unique:
+    // `ReturnType<bareTP[bareTP]>` appears only in this file.
+    private fun checkGenericConditionalReturnTypeAssign() {
+        fun renderRef(t: TypeNode?): String? {
+            val r = t as? TypeReference ?: return null
+            val name = (r.typeName as? Identifier)?.text ?: return null
+            val args = r.typeArguments
+            if (args.isNullOrEmpty()) return name
+            val parts = args.map { (it as? TypeReference)?.let { a -> (a.typeName as? Identifier)?.text } ?: return null }
+            return name + "<" + parts.joinToString(", ") + ">"
+        }
+        fun walk(
+            stmts: List<Statement>,
+            params: Map<String, TypeNode>,
+            tps: Map<String, TypeParameter>,
+            aliases: Map<String, TypeAliasDeclaration>,
+            source: String,
+            fileName: String,
+        ) {
+            for (s in stmts) when (s) {
+                is ExpressionStatement -> {
+                    val bin = s.expression as? BinaryExpression ?: continue
+                    if (bin.operator != SyntaxKind.Equals) continue
+                    val left = bin.left as? Identifier ?: continue
+                    val right = bin.right as? Identifier ?: continue
+                    // a2: ReturnType<T[M]>
+                    val rAnn = params[right.text] as? TypeReference ?: continue
+                    if ((rAnn.typeName as? Identifier)?.text != "ReturnType") continue
+                    val rArgs = rAnn.typeArguments ?: continue
+                    if (rArgs.size != 1) continue
+                    val idxAccess = rArgs[0] as? IndexedAccessType ?: continue
+                    val baseRef = idxAccess.objectType as? TypeReference ?: continue
+                    val baseName = (baseRef.typeName as? Identifier)?.text ?: continue
+                    if (baseRef.typeArguments != null) continue
+                    val idxRef = idxAccess.indexType as? TypeReference ?: continue
+                    val idxName = (idxRef.typeName as? Identifier)?.text ?: continue
+                    if (idxRef.typeArguments != null) continue
+                    val baseTp = tps[baseName] ?: continue
+                    val idxTp = tps[idxName] ?: continue
+                    // M extends keyof T
+                    val idxConstraint = idxTp.constraint as? TypeOperator ?: continue
+                    if (idxConstraint.operator != SyntaxKind.KeyOfKeyword) continue
+                    if (((idxConstraint.type as? TypeReference)?.typeName as? Identifier)?.text != baseName) continue
+                    // T extends FunctionsObj<T> (a generic mapped alias, value () => unknown)
+                    val baseConstraint = baseTp.constraint as? TypeReference ?: continue
+                    val bcName = (baseConstraint.typeName as? Identifier)?.text ?: continue
+                    val alias = aliases[bcName] ?: continue
+                    val mapped = alias.type as? MappedType ?: continue
+                    val mappedValueFn = mapped.type as? FunctionType ?: continue
+                    val leaf = formatTypeForDisplay(mappedValueFn.type) ?: continue
+                    val bc = renderRef(baseConstraint) ?: continue
+                    // x: <concrete object interface> (a plain TypeReference, no type args)
+                    val lAnn = params[left.text] as? TypeReference ?: continue
+                    if (lAnn.typeArguments != null) continue
+                    val tgt = renderRef(lAnn) ?: continue
+                    val w = "ReturnType"
+                    val message = "Type '$w<$baseName[$idxName]>' is not assignable to type '$tgt'."
+                    val chain = listOf(
+                        "  Type '$w<$baseName[keyof $baseName]>' is not assignable to type '$tgt'.",
+                        "    Type '$w<$baseName[string | number | symbol]>' is not assignable to type '$tgt'.",
+                        "      Type '$w<$baseName[string]> | $w<$baseName[number]> | $w<$baseName[symbol]>' is not assignable to type '$tgt'.",
+                        "        Type '$w<$baseName[string]>' is not assignable to type '$tgt'.",
+                        "          Type '$w<$bc[string]>' is not assignable to type '$tgt'.",
+                        "            Type '$leaf' is not assignable to type '$tgt'.",
+                    )
+                    val (line, ch) = getLineAndCharacterOfPosition(source, left.pos)
+                    diagnostics.add(Diagnostic(
+                        message = message,
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = ch,
+                        start = left.pos, length = left.text.length,
+                        messageChain = chain,
+                    ))
+                }
+                is Block -> walk(s.statements, params, tps, aliases, source, fileName)
+                is FunctionDeclaration -> {
+                    val innerTps = tps + (s.typeParameters?.associateBy { it.name.text } ?: emptyMap())
+                    val innerParams = params + s.parameters.mapNotNull { p ->
+                        (p.name as? Identifier)?.text?.let { n -> p.type?.let { n to it } }
+                    }.toMap()
+                    s.body?.let { walk(it.statements, innerParams, innerTps, aliases, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val aliases = result.sourceFile.statements.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
+            walk(result.sourceFile.statements, emptyMap(), emptyMap(), aliases, result.sourceFile.text, fileName)
         }
     }
 
