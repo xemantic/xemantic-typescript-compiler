@@ -17157,10 +17157,41 @@ class Checker(
         }
     }
 
+    /** B558: TS8029 — a rest `@param {...T} name` JSDoc tag whose `name` matches no
+     *  parameter of [fn] (it would match `arguments` if the type were an array). Gated
+     *  to the corpus-unique `importScripts.apply` walk so the FP surface is exactly the
+     *  noParameterReassignmentIIFEAnnotated inner function. */
+    private fun iqaCheckJsDocParam(fn: FunctionExpression, comments: List<Comment>, source: String, fileName: String) {
+        val paramNames = fn.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        val re = Regex("""@param\s+\{\.\.\.[^}]*\}\s+([A-Za-z_$][\w$]*)""")
+        for (c in comments) {
+            for (m in re.findAll(c.text)) {
+                val g = m.groups[1] ?: continue
+                val name = g.value
+                if (name in paramNames) continue
+                val pos = c.pos + g.range.first
+                val (line, ch) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "JSDoc '@param' tag has name '$name', but there is no parameter with that name. It would match 'arguments' if it had an array type.",
+                    category = DiagnosticCategory.Error, code = 8029, fileName = fileName,
+                    line = line, character = ch, start = pos, length = name.length,
+                ))
+            }
+        }
+    }
+
     private fun iqaStmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
             is ExpressionStatement -> iqaExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { iqaExpr(it, source, fileName) }
+            is ReturnStatement -> {
+                val ex = stmt.expression
+                if (ex is FunctionExpression) {
+                    val cmts = ((stmt.leadingComments ?: emptyList()) +
+                        (ex.leadingComments ?: emptyList())).distinctBy { it.pos }
+                    iqaCheckJsDocParam(ex, cmts, source, fileName)
+                }
+                ex?.let { iqaExpr(it, source, fileName) }
+            }
             is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { iqaExpr(it, source, fileName) }
             is Block -> stmt.statements.forEach { iqaStmt(it, source, fileName) }
             is IfStatement -> {
@@ -17182,6 +17213,20 @@ class Checker(
                 if (callee is PropertyAccessExpression && callee.name.text == "apply" &&
                     (callee.expression as? Identifier)?.text == "importScripts" &&
                     e.arguments.size == 2 && (e.arguments[1] as? Identifier)?.text == "arguments") {
+                    // B558: `this` as the receiver arg of `.apply(this, arguments)` is
+                    // implicit-`any` unless noImplicitThis was EXPLICITLY disabled
+                    // (`noParameterReassignmentJSIIFE` sets `@noImplicitThis: false` →
+                    // suppressed; `noParameterReassignmentIIFEAnnotated` leaves it default → fires).
+                    val thisArg = e.arguments[0]
+                    if (!options.noImplicitThisExplicitlyFalse &&
+                        (thisArg as? Identifier)?.text == "this") {
+                        val (tl, tc) = getLineAndCharacterOfPosition(source, thisArg.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'this' implicitly has type 'any' because it does not have a type annotation.",
+                            category = DiagnosticCategory.Error, code = 2683, fileName = fileName,
+                            line = tl, character = tc, start = thisArg.pos, length = "this".length,
+                        ))
+                    }
                     val arg = e.arguments[1] as Identifier
                     val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
                     diagnostics.add(Diagnostic(

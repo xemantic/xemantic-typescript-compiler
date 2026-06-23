@@ -106,6 +106,8 @@ data class CompilerOptions(
     val noImplicitAnyExplicitlyFalse: Boolean = false,
     val noImplicitReturns: Boolean = false,
     val noImplicitThis: Boolean = false,
+    /** True when `// @noImplicitThis: false` was explicitly set. */
+    val noImplicitThisExplicitlyFalse: Boolean = false,
     val strictNullChecks: Boolean = false,
     /** True when `// @strictNullChecks: false` was explicitly set. */
     val strictNullChecksExplicitlyFalse: Boolean = false,
@@ -506,7 +508,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "sourcemap" -> options.copy(sourceMap = boolValue)
         "noimplicitany" -> options.copy(noImplicitAny = boolValue, noImplicitAnyExplicitlyFalse = !boolValue)
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
-        "noimplicitthis" -> options.copy(noImplicitThis = boolValue)
+        "noimplicitthis" -> options.copy(noImplicitThis = boolValue, noImplicitThisExplicitlyFalse = !boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
         "useunknownincatchvariables" -> options.copy(
             useUnknownInCatchVariables = boolValue,
