@@ -1701,6 +1701,8 @@ class Checker(
         if (!options.strictExplicitlyFalse || options.noImplicitAny) {
             checkBodylessFunctionReturnTypesMissing()
         }
+        // 61b. `Awaited<X>` recursive bad-thenable (TS2589) + return-less then-method (TS7010)
+        checkAwaitedRecursiveThenable()
         // 62. Check block-scoped declarations outside blocks (TS1156)
         checkBlockScopedDeclarationsInSingleBody()
         // 62a2. Check block-NESTED let/const redeclarations (TS2451) — binder doesn't bind these
@@ -90744,6 +90746,110 @@ interface DataView {
             i++
         }
         return null
+    }
+
+    /**
+     * awaitedTypeStrictNull / awaitedType: `type Tn = Awaited<X>` where the lib `Awaited<T>`
+     * conditional recurses on a thenable's `then`-callback value type. We don't model `Awaited`
+     * (not in the embedded lib) so these resolve silently → this walker is purely ADDITIVE.
+     * Two AST-only rules, gated to a top-level `type Tn = Awaited<X>` body (corpus-rare → FP-safe):
+     *   (a) X is a TypeReference to a RECURSIVE bad-thenable interface — a `then(cb: (value: Y)
+     *       => …)` whose value-type chain cycles back to X (self `BadPromise` or mutual
+     *       `BadPromise1`/`BadPromise2`) → TS2589 on the `Awaited<X>` reference. A normal
+     *       `then(cb: (value: T) => …)` whose value is a type param / primitive does NOT cycle.
+     *   (b) X is a TypeLiteral with a bodyless METHOD lacking a return-type annotation (e.g.
+     *       `{ then(cb: …) }`) → TS7010 on that method (noImplicitAny-default gated). A method
+     *       WITH a return annotation (`{ then(): void }`) is skipped.
+     * Whole-walker gate: `Awaited` must NOT be user-declared in the file (the lib/unresolved
+     * `Awaited` only — a user `type Awaited`/`interface Awaited` has its own semantics).
+     */
+    private fun checkAwaitedRecursiveThenable() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            val top = result.sourceFile.statements
+            if (top.any { (it is TypeAliasDeclaration && it.name.text == "Awaited") ||
+                          (it is InterfaceDeclaration && it.name.text == "Awaited") }) continue
+            val interfaces = HashMap<String, InterfaceDeclaration>()
+            for (s in top) if (s is InterfaceDeclaration) interfaces[s.name.text] = s
+            for (s in top) {
+                val alias = s as? TypeAliasDeclaration ?: continue
+                val ref = alias.type as? TypeReference ?: continue
+                if ((ref.typeName as? Identifier)?.text != "Awaited") continue
+                val targs = ref.typeArguments ?: continue
+                if (targs.size != 1) continue
+                when (val x = targs[0]) {
+                    is TypeReference -> {
+                        val xName = (x.typeName as? Identifier)?.text ?: continue
+                        if (!isRecursiveBadThenable(xName, interfaces)) continue
+                        var start = ref.pos
+                        while (start < source.length && source[start].isWhitespace()) start++
+                        val width = typeRefSourceWidth(ref, source) ?: continue
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Type instantiation is excessively deep and possibly infinite.",
+                            category = DiagnosticCategory.Error,
+                            code = 2589,
+                            fileName = fileName,
+                            line = line, character = character,
+                            start = start, length = width,
+                        ))
+                    }
+                    is TypeLiteral -> {
+                        if (options.strictExplicitlyFalse && !options.noImplicitAny) continue
+                        for (m in x.members) {
+                            if (m !is MethodDeclaration || m.type != null || m.body != null) continue
+                            val mName = (m.name as? Identifier)?.text ?: continue
+                            var start = m.pos
+                            while (start < source.length && source[start].isWhitespace()) start++
+                            // span = method name through the param-list close paren
+                            var i = start
+                            while (i < source.length && source[i] != '(') i++
+                            if (i >= source.length) continue
+                            var depth = 0
+                            var endParen = -1
+                            while (i < source.length) {
+                                when (source[i]) {
+                                    '(' -> depth++
+                                    ')' -> { depth--; if (depth == 0) { endParen = i; break } }
+                                }
+                                i++
+                            }
+                            if (endParen < 0) continue
+                            val length = (endParen + 1 - start).coerceAtLeast(1)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "'$mName', which lacks return-type annotation, implicitly has an 'any' return type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7010,
+                                fileName = fileName,
+                                line = line, character = character,
+                                start = start, length = length,
+                            ))
+                        }
+                    }
+                    else -> continue
+                }
+            }
+        }
+    }
+
+    /** True iff [startName] is (or reaches, via the `then`-callback value-type chain) a cyclic
+     *  thenable interface — the shape that makes `Awaited<startName>` non-terminating (TS2589). */
+    private fun isRecursiveBadThenable(startName: String, interfaces: Map<String, InterfaceDeclaration>): Boolean {
+        val visited = HashSet<String>()
+        var cur = startName
+        while (true) {
+            if (!visited.add(cur)) return true
+            val iface = interfaces[cur] ?: return false
+            val thenM = iface.members.firstOrNull {
+                it is MethodDeclaration && (it.name as? Identifier)?.text == "then"
+            } as? MethodDeclaration ?: return false
+            val cbFn = thenM.parameters.firstOrNull()?.type as? FunctionType ?: return false
+            val valueRef = cbFn.parameters.firstOrNull()?.type as? TypeReference ?: return false
+            cur = (valueRef.typeName as? Identifier)?.text ?: return false
+        }
     }
 
     private fun checkIndexedAccessRelationSetState() {
