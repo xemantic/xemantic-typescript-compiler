@@ -1450,6 +1450,8 @@ class Checker(
         checkProtectedWriteViaThisParam()
         // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
         checkProtectedMemberReadAccess()
+        // 21b''''b. Protected-member MISMATCH in class-var assignment (TS2322)
+        checkProtectedAssignmentMismatch()
         // 21b5. B447: noUncheckedIndexedAccess compound-assign target (TS18048/TS2532)
         checkNoUncheckedIndexedCompoundAssign()
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
@@ -47345,11 +47347,37 @@ interface DataView {
      * shapes with no protected decl, and writes (owned by B377) are excluded. Reads of a
      * genuinely-protected member from outside the hierarchy are ALWAYS errors.
      */
+    // True while walking a CLASS METHOD body (not a free function / nested function expr):
+    // gates the protected-WRITE check (`obj.m = …`) so it fires for class-method writes
+    // (TS2446 etc.) without overlapping B377, which owns free-function writes.
+    private var pmrInClassMethod = false
+    // The LEXICAL class enclosing the current walk (null at top level / free functions /
+    // nested function exprs). tsc's protected-access rule (checkPropertyAccessibility) tries
+    // the lexical enclosing class FIRST, then falls back to the `this:`-parameter class — so
+    // a method `foo(this: A)` declared in class B can still access B's protected members.
+    private var pmrLexicalClass: ClassDeclaration? = null
+
     private fun checkProtectedMemberReadAccess() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            for (s in result.sourceFile.statements) pmrScanContainer(s, null, result.sourceFile.text, fileName, result.locals)
+            val statements = result.sourceFile.statements
+            // Top-level reads of a protected member from OUTSIDE any class (`c1.x;`,
+            // `C1.sx;`) — pmrScanContainer doesn't walk top-level ExpressionStatements.
+            // Resolve top-level class-typed vars (`declare var c1: C1`) so `c1.x` finds C1.
+            val topVars = HashMap<String, ClassDeclaration>()
+            for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                pmrResolveClass(d.type, null, result.locals)?.let { topVars[nm] = it }
+            }
+            for (s in statements) {
+                pmrScanContainer(s, null, result.sourceFile.text, fileName, result.locals)
+                if (s is ExpressionStatement) {
+                    pmrInClassMethod = false
+                    pmrLexicalClass = null
+                    pmrWalkExpr(s.expression, null, null, topVars, result.sourceFile.text, fileName, result.locals)
+                }
+            }
         }
     }
 
@@ -47362,10 +47390,10 @@ interface DataView {
             }
             is ClassDeclaration -> for (m in s.members) {
                 when (m) {
-                    is MethodDeclaration -> pmrProcessFunctionLike(m.parameters, m.typeParameters, m.body?.statements, s, source, fileName, locals)
-                    is GetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
-                    is SetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
-                    is Constructor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals)
+                    is MethodDeclaration -> pmrProcessFunctionLike(m.parameters, m.typeParameters, m.body?.statements, s, source, fileName, locals, lexical = true)
+                    is GetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
+                    is SetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
+                    is Constructor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
                     else -> {}
                 }
             }
@@ -47418,9 +47446,41 @@ interface DataView {
         return null
     }
 
+    /** The class declaring a PROTECTED STATIC member named `member` reachable from `cls`
+     *  (the class itself then its superclasses), or null when the member is not found, is
+     *  public (a public static override stops the search), or is an instance member. */
+    private fun pmrFindProtectedStaticDeclaringClass(cls: ClassDeclaration, member: String, locals: SymbolTable?, depth: Int = 0): ClassDeclaration? {
+        if (depth > 12) return null
+        var found = false
+        var protectedFound = false
+        for (m in cls.members) {
+            val mods = when (m) {
+                is PropertyDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is MethodDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is GetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is SetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                else -> null
+            } ?: continue
+            if (ModifierFlag.Static !in mods) continue
+            found = true
+            if (ModifierFlag.Protected in mods) protectedFound = true
+        }
+        if (found) return if (protectedFound) cls else null
+        for (h in cls.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pmrResolveClass(TypeReference(typeName = baseName), null, locals) ?: continue
+                pmrFindProtectedStaticDeclaringClass(base, member, locals, depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
+
     private fun pmrProcessFunctionLike(
         params: List<Parameter>, fnTps: List<TypeParameter>?, body: List<Statement>?,
         lexicalClass: ClassDeclaration?, source: String, fileName: String, locals: SymbolTable?,
+        lexical: Boolean = false,
     ) {
         if (body == null) return
         // The class governing `this` for protected access: a `this:` param overrides the
@@ -47433,7 +47493,16 @@ interface DataView {
             if (pn == "this") continue
             pmrResolveClass(p.type, fnTps, locals)?.let { varClasses[pn] = it }
         }
-        for (st in body) pmrWalkStmt(st, thisClass, thisClass, varClasses, source, fileName, locals)
+        val saved = pmrInClassMethod
+        val savedLex = pmrLexicalClass
+        pmrInClassMethod = lexical
+        pmrLexicalClass = lexicalClass
+        try {
+            for (st in body) pmrWalkStmt(st, thisClass, thisClass, varClasses, source, fileName, locals)
+        } finally {
+            pmrInClassMethod = saved
+            pmrLexicalClass = savedLex
+        }
     }
 
     /** thisClass = what `this` resolves to; enclosing = same (the protected-access governor). */
@@ -47469,7 +47538,18 @@ interface DataView {
             if (pn == "this") continue
             pmrResolveClass(p.type, fnTps, locals)?.let { vars[pn] = it }
         }
-        for (st in body) pmrWalkStmt(st, thisClass, thisClass, vars, source, fileName, locals)
+        // A nested function expression rebinds `this` and is not a lexical class method —
+        // suppress the protected-write check inside it (conservative; avoids B377 overlap).
+        val saved = pmrInClassMethod
+        val savedLex = pmrLexicalClass
+        pmrInClassMethod = false
+        pmrLexicalClass = null
+        try {
+            for (st in body) pmrWalkStmt(st, thisClass, thisClass, vars, source, fileName, locals)
+        } finally {
+            pmrInClassMethod = saved
+            pmrLexicalClass = savedLex
+        }
     }
 
     private fun pmrLocalClass(init: Expression?, thisClass: ClassDeclaration?, vars: Map<String, ClassDeclaration>, locals: SymbolTable?): ClassDeclaration? {
@@ -47496,8 +47576,13 @@ interface DataView {
             }
             is CallExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); for (a in e.arguments) pmrWalkExpr(a, thisClass, enclosing, vars, source, fileName, locals) }
             is BinaryExpression -> {
-                // Don't descend into a write LHS property access (avoid double-emit with B377).
-                if (!(e.operator == SyntaxKind.Equals && e.left is PropertyAccessExpression)) pmrWalkExpr(e.left, thisClass, enclosing, vars, source, fileName, locals)
+                if (e.operator == SyntaxKind.Equals && e.left is PropertyAccessExpression) {
+                    // Write LHS `obj.m = …`: inside a CLASS METHOD, check protected accessibility
+                    // here (B377 owns free-function writes, the standard read path skips writes).
+                    if (pmrInClassMethod) pmrCheckAccess(e.left as PropertyAccessExpression, thisClass, enclosing, vars, source, fileName, locals)
+                } else {
+                    pmrWalkExpr(e.left, thisClass, enclosing, vars, source, fileName, locals)
+                }
                 pmrWalkExpr(e.right, thisClass, enclosing, vars, source, fileName, locals)
             }
             is ElementAccessExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.argumentExpression, thisClass, enclosing, vars, source, fileName, locals) }
@@ -47518,30 +47603,171 @@ interface DataView {
 
     private fun pmrCheckAccess(pa: PropertyAccessExpression, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
         val obj = pa.expression
-        val recvClass = when {
-            obj is Identifier && obj.text == "this" -> thisClass
-            obj is Identifier -> vars[obj.text]
-            else -> null
-        } ?: return
         val member = pa.name.text
-        val declaring = pmrFindProtectedDeclaringClass(recvClass, member, locals) ?: return
-        val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
-        val enc = enclosing
-        if (enc == null || !pwClassDerivesFrom(enc, declaring, locals)) {
+        fun emit2445(declaring: ClassDeclaration) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
             diagnostics.add(Diagnostic(
                 message = "Property '$member' is protected and only accessible within class '${declaring.name?.text}' and its subclasses.",
                 category = DiagnosticCategory.Error, code = 2445,
                 fileName = fileName, line = line, character = ch,
                 start = pa.name.pos, length = member.length,
             ))
-        } else if (!pwClassDerivesFrom(recvClass, enc, locals)) {
+        }
+        // STATIC access `ClassName.member` — obj is a class identifier (not `this`/`super`,
+        // not a tracked instance var). Only the LEXICAL enclosing class grants access to a
+        // protected static (tsc disallows the `this:`-param fallback for statics); the
+        // instance-receiver rule (TS2446) does not apply to statics.
+        if (obj is Identifier && obj.text != "this" && obj.text != "super" && vars[obj.text] == null) {
+            val cls = (locals?.get(obj.text) ?: globals[obj.text])
+                ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
+            if (cls != null) {
+                val declaring = pmrFindProtectedStaticDeclaringClass(cls, member, locals) ?: return
+                val lex = pmrLexicalClass
+                if (lex == null || !pwClassDerivesFrom(lex, declaring, locals)) emit2445(declaring)
+                return
+            }
+            return
+        }
+        val recvClass = when {
+            obj is Identifier && obj.text == "this" -> thisClass
+            obj is Identifier -> vars[obj.text]
+            else -> null
+        } ?: return
+        val declaring = pmrFindProtectedDeclaringClass(recvClass, member, locals) ?: return
+        // tsc tries the LEXICAL enclosing class first, then the `this:`-parameter class.
+        val candidates = listOfNotNull(pmrLexicalClass, enclosing).distinct()
+        val accessE = candidates.firstOrNull { pwClassDerivesFrom(it, declaring, locals) }
+        if (accessE == null) {
+            emit2445(declaring)
+        } else if (!pwClassDerivesFrom(recvClass, accessE, locals)) {
+            val (line, ch) = getLineAndCharacterOfPosition(source, pa.name.pos)
             diagnostics.add(Diagnostic(
-                message = "Property '$member' is protected and only accessible through an instance of class '${enc.name?.text}'. This is an instance of class '${recvClass.name?.text}'.",
+                message = "Property '$member' is protected and only accessible through an instance of class '${accessE.name?.text}'. This is an instance of class '${recvClass.name?.text}'.",
                 category = DiagnosticCategory.Error, code = 2446,
                 fileName = fileName, line = line, character = ch,
                 start = pa.name.pos, length = member.length,
             ))
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Protected-member MISMATCH in an ASSIGNMENT between two class-typed vars
+    // (TS2322): `a1 = b1` where one class has a protected member the other has as
+    // public, or declared in an unrelated class. tsc's structural relation checks
+    // protected compatibility; ours does not, so this is a dedicated additive walker
+    // over top-level `ident = ident` assignments whose operands resolve to class-typed
+    // top-level vars. FP-safe: corpus-rare shape + fires only on a genuine mismatch.
+    // ------------------------------------------------------------------------
+    private data class PmVis(val declaring: ClassDeclaration, val isProtected: Boolean)
+
+    /** First (most-derived) declaration of instance member `member` reachable from `cls`. */
+    private fun pmFindMemberVis(cls: ClassDeclaration, member: String, locals: SymbolTable?, depth: Int = 0): PmVis? {
+        if (depth > 12) return null
+        for (m in cls.members) {
+            val mods = when (m) {
+                is PropertyDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is MethodDeclaration -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is GetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                is SetAccessor -> if ((m.name as? Identifier)?.text == member) m.modifiers else null
+                else -> null
+            } ?: continue
+            if (ModifierFlag.Static in mods) continue
+            return PmVis(cls, ModifierFlag.Protected in mods)
+        }
+        for (h in cls.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pmrResolveClass(TypeReference(typeName = baseName), null, locals) ?: continue
+                pmFindMemberVis(base, member, locals, depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Instance member names of a class (own + inherited). */
+    private fun pmCollectMemberNames(cls: ClassDeclaration, locals: SymbolTable?, out: MutableSet<String>, depth: Int = 0) {
+        if (depth > 12) return
+        for (m in cls.members) {
+            val nm = when (m) {
+                is PropertyDeclaration -> if (ModifierFlag.Static in m.modifiers) null else (m.name as? Identifier)?.text
+                is MethodDeclaration -> if (ModifierFlag.Static in m.modifiers) null else (m.name as? Identifier)?.text
+                is GetAccessor -> if (ModifierFlag.Static in m.modifiers) null else (m.name as? Identifier)?.text
+                is SetAccessor -> if (ModifierFlag.Static in m.modifiers) null else (m.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            out.add(nm)
+        }
+        for (h in cls.heritageClauses ?: emptyList()) {
+            if (h.token != SyntaxKind.ExtendsKeyword) continue
+            for (ht in h.types) {
+                val baseName = ht.expression as? Identifier ?: continue
+                val base = pmrResolveClass(TypeReference(typeName = baseName), null, locals) ?: continue
+                pmCollectMemberNames(base, locals, out, depth + 1)
+            }
+        }
+    }
+
+    private fun checkProtectedAssignmentMismatch() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val src = result.sourceFile.text
+            val classVars = HashMap<String, ClassDeclaration>()
+            for (s in result.sourceFile.statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                pmrResolveClass(d.type, null, result.locals)?.let { classVars[nm] = it }
+            }
+            for (s in result.sourceFile.statements) {
+                val e = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (e.operator != SyntaxKind.Equals) continue
+                val lhs = e.left as? Identifier ?: continue
+                val rhs = e.right as? Identifier ?: continue
+                val tgt = classVars[lhs.text] ?: continue
+                val srcCls = classVars[rhs.text] ?: continue
+                if (tgt === srcCls) continue
+                pmEmitAssignMismatch(tgt, srcCls, lhs, src, fileName, result.locals)
+            }
+        }
+    }
+
+    private fun pmEmitAssignMismatch(tgt: ClassDeclaration, srcCls: ClassDeclaration, lhs: Identifier, source: String, fileName: String, locals: SymbolTable?) {
+        val tgtName = tgt.name?.text ?: return
+        val srcName = srcCls.name?.text ?: return
+        val names = LinkedHashSet<String>()
+        pmCollectMemberNames(tgt, locals, names)
+        pmCollectMemberNames(srcCls, locals, names)
+        for (m in names) {
+            val tvis = pmFindMemberVis(tgt, m, locals)
+            val svis = pmFindMemberVis(srcCls, m, locals)
+            // Rule A: target member is protected — the source must derive from its declaring
+            // class (so its member IS the same protected member); otherwise incompatible.
+            if (tvis != null && tvis.isProtected && svis != null &&
+                !pwClassDerivesFrom(srcCls, tvis.declaring, locals)) {
+                pmEmitTs2322(lhs, srcName, tgtName,
+                    "  Property '$m' is protected but type '$srcName' is not a class derived from '${tvis.declaring.name?.text}'.",
+                    source, fileName)
+                return
+            }
+            // Rule B: source member protected but the target's is public.
+            if (svis != null && svis.isProtected && tvis != null && !tvis.isProtected) {
+                pmEmitTs2322(lhs, srcName, tgtName,
+                    "  Property '$m' is protected in type '${svis.declaring.name?.text}' but public in type '$tgtName'.",
+                    source, fileName)
+                return
+            }
+        }
+    }
+
+    private fun pmEmitTs2322(lhs: Identifier, srcName: String, tgtName: String, chainLine: String, source: String, fileName: String) {
+        val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcName' is not assignable to type '$tgtName'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = ch,
+            start = lhs.pos, length = lhs.text.length,
+            messageChain = listOf(chainLine),
+        ))
     }
 
     /**
@@ -99658,36 +99884,36 @@ interface DataView {
         val classNameNode = classDecl.name ?: return false
 
         // Collect derived class members including constructor parameter properties
-        data class DerivedMember(val name: String, val isPrivate: Boolean, val node: ClassElement)
+        data class DerivedMember(val name: String, val isPrivate: Boolean, val isProtected: Boolean, val node: ClassElement)
         val derivedMembers = mutableListOf<DerivedMember>()
         for (member in classDecl.members) {
             when (member) {
                 is PropertyDeclaration -> {
                     if (ModifierFlag.Static in member.modifiers) continue
                     val name = (member.name as? Identifier)?.text ?: continue
-                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, ModifierFlag.Protected in member.modifiers, member))
                 }
                 is MethodDeclaration -> {
                     if (ModifierFlag.Static in member.modifiers) continue
                     val name = (member.name as? Identifier)?.text ?: continue
-                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, ModifierFlag.Protected in member.modifiers, member))
                 }
                 is GetAccessor -> {
                     if (ModifierFlag.Static in member.modifiers) continue
                     val name = (member.name as? Identifier)?.text ?: continue
-                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, ModifierFlag.Protected in member.modifiers, member))
                 }
                 is SetAccessor -> {
                     if (ModifierFlag.Static in member.modifiers) continue
                     val name = (member.name as? Identifier)?.text ?: continue
-                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, member))
+                    derivedMembers.add(DerivedMember(name, ModifierFlag.Private in member.modifiers, ModifierFlag.Protected in member.modifiers, member))
                 }
                 is Constructor -> {
                     // Constructor parameter properties (public/private/protected p: T)
                     for (param in member.parameters) {
                         if (param.modifiers.isEmpty()) continue
                         val name = (param.name as? Identifier)?.text ?: continue
-                        derivedMembers.add(DerivedMember(name, ModifierFlag.Private in param.modifiers, member))
+                        derivedMembers.add(DerivedMember(name, ModifierFlag.Private in param.modifiers, ModifierFlag.Protected in param.modifiers, member))
                     }
                 }
                 else -> continue
@@ -99739,6 +99965,30 @@ interface DataView {
                     ))
                     return true
                 }
+            }
+
+            // TS2415 protected-visibility mismatch: a derived class narrows a base PUBLIC
+            // member to PROTECTED (`class B3 extends A3 { protected x }` over `class A3 { x }`)
+            // — instances of the derived are not assignable to the base. tsc reports the
+            // class-level extends failure (NOT a per-member TS2416). Widening the other way
+            // (base protected → derived public) is legal, so only this direction fires.
+            // FP-safe: additive (the type-mismatch path above never reaches a same-typed
+            // visibility-only mismatch) and gated to the exact derived-protected/base-public shape.
+            if (!derivedIsPrivate && !baseIsPrivate && dm.isProtected && !isMemberProtected(baseDecl)) {
+                val (line, character) = getLineAndCharacterOfPosition(source, classNameNode.pos)
+                val baseDeclaringClass = findDeclaringClassName(baseType, memberName) ?: baseName
+                diagnostics.add(Diagnostic(
+                    message = "Class '$rawClassName' incorrectly extends base class '$baseName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2415,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = classNameNode.pos,
+                    length = rawClassName.length,
+                    messageChain = listOf("  Property '$memberName' is protected in type '$rawClassName' but public in type '$baseDeclaringClass'."),
+                ))
+                return true
             }
 
             if (!derivedIsPrivate && !baseIsPrivate) continue
@@ -100088,6 +100338,15 @@ interface DataView {
         is GetAccessor -> ModifierFlag.Private in node.modifiers
         is SetAccessor -> ModifierFlag.Private in node.modifiers
         is Parameter -> ModifierFlag.Private in node.modifiers
+        else -> false
+    }
+
+    private fun isMemberProtected(node: Node): Boolean = when (node) {
+        is PropertyDeclaration -> ModifierFlag.Protected in node.modifiers
+        is MethodDeclaration -> ModifierFlag.Protected in node.modifiers
+        is GetAccessor -> ModifierFlag.Protected in node.modifiers
+        is SetAccessor -> ModifierFlag.Protected in node.modifiers
+        is Parameter -> ModifierFlag.Protected in node.modifiers
         else -> false
     }
 
