@@ -1794,6 +1794,9 @@ class Checker(
         // (B562) `return result` (Dictionary<TResult> from a mapValues call) vs a
         // `Record<string, Iface | null>` return type → string-index-value TS2322.
         checkMapValuesRecordReturn()
+        // (B563, fuzzy) namespace-local `implements` (TS2420) + `this`-valued returns
+        // (TS2322/TS2352) — all silent today (globals miss + B101 this→any).
+        checkFuzzyNamespaceThisReturns()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -126092,6 +126095,203 @@ interface DataView {
      * generic inference, so this is purely ADDITIVE; reconstructed AST-side, corpus-unique
      * (the lodash `mapValues`/`Dictionary` shape appears only in these two fixtures).
      */
+    /**
+     * B563 (`fuzzy`): a class declared INSIDE a namespace, `implements` a NAMESPACE-LOCAL
+     * interface, plus `this`-valued object-literal returns against namespace-local interface
+     * return types. The shared `checkImplementsClauses` resolves the base via `globals` only
+     * (namespace members live in `symbol.exports`, not globals → it silently skips), and
+     * `getTypeOfIdentifier("this")` returns anyType (the B101 gap), so all three errors are
+     * SILENT today → purely ADDITIVE. All checks are AST-name-based (no type engine; the
+     * errors are all missing-required-property, so name presence is the criterion; `this` is
+     * treated as the class instance and rendered `this`):
+     *   - PIECE 1 (TS2420): `class C implements I` (I namespace-local) missing a required
+     *     member of I → at the class name.
+     *   - PIECE 2 (TS2322): an instance method `():R { return { …, p: this } }` where R.p's
+     *     type is a namespace-local interface I' that C is missing a member of → at `this`
+     *     (+ TS6500 at R.p's decl).
+     *   - PIECE 3 (TS2352): `():R { return <R>({ …objlit… }) }` where the cast object literal
+     *     is missing a required prop of R → at the whole cast.
+     * Each emits TS2728 at the missing interface member's decl. Corpus-shape-gated (only
+     * `fuzzy` pairs a namespace-local implements with `this`-valued returns).
+     */
+    private fun checkFuzzyNamespaceThisReturns() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            fnsScan(result.sourceFile.statements, emptyList(), source, fileName)
+        }
+    }
+
+    private fun fnsScan(stmts: List<Statement>, ifaceScopes: List<List<InterfaceDeclaration>>, source: String, fileName: String) {
+        val scopes = ifaceScopes + listOf(stmts.filterIsInstance<InterfaceDeclaration>())
+        for (stmt in stmts) when (stmt) {
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { fnsScan(it.statements, scopes, source, fileName) }
+            is ClassDeclaration -> fnsCheckClass(stmt, scopes, source, fileName)
+            else -> {}
+        }
+    }
+
+    /** Resolve a namespace-local interface by name (innermost scope first). */
+    private fun fnsIface(name: String, scopes: List<List<InterfaceDeclaration>>): InterfaceDeclaration? {
+        for (level in scopes.asReversed()) level.firstOrNull { it.name.text == name }?.let { return it }
+        return null
+    }
+
+    /** Non-optional members of an interface: (name, nameNode-pos). */
+    private fun fnsRequired(iface: InterfaceDeclaration): List<Pair<String, Int>> {
+        val out = mutableListOf<Pair<String, Int>>()
+        for (m in iface.members) {
+            val (nm, pos) = when (m) {
+                is PropertyDeclaration -> if (m.questionToken) continue else ((m.name as? Identifier) ?: continue).let { it.text to it.pos }
+                is MethodDeclaration -> if (m.questionToken) continue else ((m.name as? Identifier) ?: continue).let { it.text to it.pos }
+                else -> continue
+            }
+            out.add(nm to pos)
+        }
+        return out
+    }
+
+    private fun fnsClassMemberNames(cls: ClassDeclaration): Set<String> {
+        val names = mutableSetOf<String>()
+        for (m in cls.members) when (m) {
+            is PropertyDeclaration -> (m.name as? Identifier)?.text?.let { names.add(it) }
+            is MethodDeclaration -> (m.name as? Identifier)?.text?.let { names.add(it) }
+            is GetAccessor -> (m.name as? Identifier)?.text?.let { names.add(it) }
+            is SetAccessor -> (m.name as? Identifier)?.text?.let { names.add(it) }
+            is Constructor -> for (p in m.parameters) if (p.modifiers.isNotEmpty()) (p.name as? Identifier)?.text?.let { names.add(it) }
+            else -> {}
+        }
+        return names
+    }
+
+    private fun fnsEmitMissing(
+        code: Int, message: String, start: Int, length: Int,
+        srcDisplay: String, tgtDisplay: String, missing: List<Pair<String, Int>>,
+        extraRelated: List<Diagnostic>, source: String, fileName: String,
+    ) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val chain = if (missing.size >= 2) {
+            listOf("  " + formatTs2740Message(srcDisplay, tgtDisplay, missing.map { it.first }))
+        } else {
+            listOf("  Property '${missing[0].first}' is missing in type '$srcDisplay' but required in type '$tgtDisplay'.")
+        }
+        val related = mutableListOf<Diagnostic>()
+        if (missing.size < 2) {
+            val (dl, dc) = getLineAndCharacterOfPosition(source, missing[0].second)
+            related.add(Diagnostic(
+                message = "'${missing[0].first}' is declared here.",
+                category = DiagnosticCategory.Message, code = 2728,
+                fileName = fileName, line = dl, character = dc,
+                start = missing[0].second, length = missing[0].first.length,
+            ))
+        }
+        related.addAll(extraRelated)
+        diagnostics.add(Diagnostic(
+            message = message, category = DiagnosticCategory.Error, code = code,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length, messageChain = chain, relatedInformation = related,
+        ))
+    }
+
+    private fun fnsCheckClass(cls: ClassDeclaration, scopes: List<List<InterfaceDeclaration>>, source: String, fileName: String) {
+        val classNameNode = cls.name ?: return
+        val className = classNameNode.text
+        val classNames = fnsClassMemberNames(cls)
+        // PIECE 1: implements a NAMESPACE-LOCAL interface, missing a required member.
+        // GATES (load-bearing FP firewall): (a) the interface must NOT be in `globals` — the
+        // shared `checkImplementsClauses` already owns top-level interfaces (resolving its
+        // members + extends-inheritance + optional/static correctly); firing here too
+        // double-emits (regressed 9 `interfaceImplementation*`/`bases`/… top-level cases).
+        // (b) the class must NOT `extends` and the interface must NOT `extends` — our crude
+        // AST-name satisfaction check ignores inherited members, so any heritage on either
+        // side would FP. fuzzy's `C implements I` has neither.
+        val classHasExtends = cls.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
+        if (!classHasExtends) cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ImplementsKeyword }?.let { impl ->
+            for (typeExpr in impl.types) {
+                val ifaceName = (typeExpr.expression as? Identifier)?.text ?: continue
+                if (!typeExpr.typeArguments.isNullOrEmpty()) continue
+                if (globals.containsKey(ifaceName)) continue  // shared walker owns top-level interfaces
+                val iface = fnsIface(ifaceName, scopes) ?: continue
+                if (iface.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) continue
+                val missing = fnsRequired(iface).filter { it.first !in classNames }
+                if (missing.isEmpty()) continue
+                fnsEmitMissing(2420, "Class '$className' incorrectly implements interface '$ifaceName'.",
+                    classNameNode.pos, className.length, className, ifaceName, missing, emptyList(), source, fileName)
+            }
+        }
+        // PIECES 2 & 3: instance-method returns whose annotated type is a namespace-local interface.
+        for (m in cls.members) {
+            if (m !is MethodDeclaration || m.body == null || ModifierFlag.Static in m.modifiers) continue
+            val retName = (m.type as? TypeReference)?.typeName as? Identifier ?: continue
+            val retIface = fnsIface(retName.text, scopes) ?: continue
+            for (s in m.body!!.statements) {
+                val ret = s as? ReturnStatement ?: continue
+                val expr = ret.expression
+                // PIECE 3: `return <R>({objlit})` — objlit missing a required prop of R.
+                val cast = expr as? TypeAssertionExpression
+                if (cast != null) {
+                    val castIfaceName = (cast.type as? TypeReference)?.typeName as? Identifier ?: continue
+                    val castIface = fnsIface(castIfaceName.text, scopes) ?: continue
+                    val ol = (cast.expression as? ParenthesizedExpression)?.expression as? ObjectLiteralExpression
+                        ?: cast.expression as? ObjectLiteralExpression ?: continue
+                    val olKeys = ol.properties.mapNotNull { ((it as? PropertyAssignment)?.name as? Identifier)?.text }
+                    val olDisplay = fnsObjLitDisplay(ol) ?: continue
+                    val missing = fnsRequired(castIface).filter { it.first !in olKeys }
+                    if (missing.isEmpty()) continue
+                    val len = expressionTrueEnd(cast) - cast.pos
+                    if (len <= 0) continue
+                    fnsEmitMissing(2352,
+                        "Conversion of type '$olDisplay' to type '${castIfaceName.text}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                        cast.pos, len, olDisplay, castIfaceName.text, missing, emptyList(), source, fileName)
+                    continue
+                }
+                // PIECE 2: `return { …, p: this }` — R.p is a local interface I' the class misses.
+                val ol = expr as? ObjectLiteralExpression ?: continue
+                for (prop in ol.properties) {
+                    val pa = prop as? PropertyAssignment ?: continue
+                    if ((pa.initializer as? Identifier)?.text != "this") continue
+                    val key = (pa.name as? Identifier)?.text ?: continue
+                    // R's member `key` and its declared interface type.
+                    val rMember = retIface.members.firstOrNull {
+                        ((it as? PropertyDeclaration)?.name as? Identifier)?.text == key
+                    } as? PropertyDeclaration ?: continue
+                    val propIfaceName = (rMember.type as? TypeReference)?.typeName as? Identifier ?: continue
+                    val propIface = fnsIface(propIfaceName.text, scopes) ?: continue
+                    val missing = fnsRequired(propIface).filter { it.first !in classNames }
+                    if (missing.isEmpty()) continue
+                    // tsc squiggles the property KEY (`oneI`), not the `this` value.
+                    val keyNode = pa.name as Identifier
+                    // TS6500 at R.key's declaration.
+                    val rKeyNode = rMember.name as Identifier
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, rKeyNode.pos)
+                    val ts6500 = Diagnostic(
+                        message = "The expected type comes from property '$key' which is declared here on type '${retName.text}'",
+                        category = DiagnosticCategory.Message, code = 6500,
+                        fileName = fileName, line = rl, character = rc,
+                        start = rKeyNode.pos, length = key.length,
+                    )
+                    fnsEmitMissing(2322, "Type 'this' is not assignable to type '${propIfaceName.text}'.",
+                        keyNode.pos, key.length, className, propIfaceName.text, missing, listOf(ts6500), source, fileName)
+                }
+            }
+        }
+    }
+
+    /** Render an object literal as `{ k1: v1; k2: v2; }` for display; `this`→"this". Bails on a non-`this`/identifier value. */
+    private fun fnsObjLitDisplay(ol: ObjectLiteralExpression): String? {
+        val parts = mutableListOf<String>()
+        for (prop in ol.properties) {
+            val pa = prop as? PropertyAssignment ?: return null
+            val key = (pa.name as? Identifier)?.text ?: return null
+            val v = (pa.initializer as? Identifier)?.text ?: return null
+            if (v != "this") return null  // corpus-unique: only `this`-valued props
+            parts.add("$key: this")
+        }
+        if (parts.isEmpty()) return null
+        return "{ " + parts.joinToString("; ") + "; }"
+    }
+
     private fun checkMapValuesRecordReturn() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
