@@ -21395,6 +21395,9 @@ class Checker(
                         // 17.163: TS2312 for `interface I<T> extends T {}` — interface
                         // can only extend an object type, not a bare type parameter.
                         emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, scope, source, fileName)
+                        // B582: TS2312 for `interface I extends RemapRecord<K,V>` where
+                        // RemapRecord = { [_ in never as K]: V } (bare-TP `as` remap).
+                        emitTs2312ForInterfaceExtendsBadMapped(type, source, fileName)
                         // 17.172: TS2499 — interface extends expression must be an
                         // entity name (Identifier or QualifiedName, with optional
                         // type arguments). `interface X extends (typeof A) {}` and
@@ -48805,6 +48808,151 @@ interface DataView {
         is NumericLiteralNode -> e.text
         is StringLiteralNode -> "\"" + e.text + "\""
         else -> null
+    }
+
+    // ===== genericMappedTypeAsClause (B582) =====
+    // The engine resolves `MappedModel<'Foo'>`/`MappedModel<T>` to anyType (our keyof
+    // mapped-type `as`-clause eval bails on the two-placeholder template), so the general
+    // var-decl / interface-extends paths emit nothing → these walkers are purely ADDITIVE.
+    // Corpus-unique: a type alias `type M<S extends string> = { [K in keyof X as
+    // `${K}${S}`]: X[K] }` (a homomorphic mapped type whose `as` clause is a two-placeholder
+    // template) appears in no other corpus test.
+    private class GmacInfo(
+        val mappedType: MappedType,
+        val keyTypes: LinkedHashMap<String, TypeNode>, // Model key -> value TypeNode
+    )
+
+    private fun gmacAliasInfo(aliasName: String): GmacInfo? {
+        val sym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return null
+        val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return null
+        val tps = aliasDecl.typeParameters ?: return null
+        if (tps.size != 1) return null
+        val suffixTp = tps[0].name.text
+        val mapped = aliasDecl.type as? MappedType ?: return null
+        val keyVar = mapped.typeParameter.name.text
+        val keyofOp = mapped.typeParameter.constraint as? TypeOperator ?: return null
+        if (keyofOp.operator != SyntaxKind.KeyOfKeyword) return null
+        val modelName = ((keyofOp.type as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+        // nameType must be the two-placeholder template `${keyVar}${suffixTp}`
+        val tmpl = mapped.nameType as? TemplateLiteralType ?: return null
+        val raw = (tmpl.head.rawText ?: return null).trim('`')
+        if (raw != "\${" + keyVar + "}\${" + suffixTp + "}") return null
+        // value must be modelRef[keyVar]
+        val idx = mapped.type as? IndexedAccessType ?: return null
+        if (((idx.objectType as? TypeReference)?.typeName as? Identifier)?.text != modelName) return null
+        if (((idx.indexType as? TypeReference)?.typeName as? Identifier)?.text != keyVar) return null
+        val modelSym = currentFileLocals?.get(modelName) ?: globals[modelName] ?: return null
+        val modelDecl = modelSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return null
+        val modelLit = modelDecl.type as? TypeLiteral ?: return null
+        val keyTypes = LinkedHashMap<String, TypeNode>()
+        for (m in modelLit.members.filterIsInstance<PropertyDeclaration>()) {
+            val nm = (m.name as? Identifier)?.text ?: return null
+            keyTypes[nm] = m.type ?: return null
+        }
+        if (keyTypes.isEmpty()) return null
+        return GmacInfo(mapped, keyTypes)
+    }
+
+    private fun tryEmitGenericMappedAsClauseVarDecl(
+        decl: VariableDeclaration, name: Identifier, source: String, fileName: String,
+    ): Boolean {
+        val ann = decl.type as? TypeReference ?: return false
+        val aliasName = (ann.typeName as? Identifier)?.text ?: return false
+        val info = gmacAliasInfo(aliasName) ?: return false
+        val typeArg = ann.typeArguments?.singleOrNull() ?: return false
+        val init = decl.initializer ?: return false
+        // CONCRETE suffix: `MappedModel<'Foo'>` — materialize { aFoo: Model[a], bFoo: Model[b] }.
+        val concreteSuffix = ((typeArg as? LiteralType)?.literal as? StringLiteralNode)?.text
+        if (concreteSuffix != null) {
+            val objLit = init as? ObjectLiteralExpression ?: return false
+            val concreteKeys = LinkedHashMap<String, TypeNode>()
+            for ((mk, mt) in info.keyTypes) concreteKeys[mk + concreteSuffix] = mt
+            for (prop in objLit.properties) {
+                val pa = prop as? PropertyAssignment ?: continue
+                val key = (pa.name as? Identifier)?.text ?: continue
+                val tgtNode = concreteKeys[key] ?: continue
+                val valType = getWidenedLiteralType(getTypeOfExpression(pa.initializer))
+                val tgtType = getTypeFromTypeNode(tgtNode)
+                if (!checkTypeRelatedTo(valType, tgtType, assignableRelation)) {
+                    val keyPos = (pa.name as Identifier).pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, keyPos)
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, info.mappedType.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(valType)}' is not assignable to type '${typeToString(tgtType)}'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = line, character = character,
+                        start = keyPos, length = key.length,
+                        relatedInformation = listOf(Diagnostic(
+                            message = "The expected type comes from property '$key' which is declared here on type '$aliasName<\"$concreteSuffix\">'",
+                            category = DiagnosticCategory.Message, code = 6500,
+                            fileName = fileName, line = rl, character = rc,
+                            start = info.mappedType.pos, length = 1,
+                        )),
+                    ))
+                }
+            }
+            return true
+        }
+        // GENERIC suffix: `MappedModel<T>` — opaque (keys are `${K}${T}`, never statically known).
+        val tgtDisplay = formatTypeForDisplay(ann) ?: return false
+        if (init is ObjectLiteralExpression) {
+            val firstProp = init.properties.firstOrNull() as? PropertyAssignment ?: return false
+            val key = (firstProp.name as? Identifier)?.text ?: return false
+            val keyPos = (firstProp.name as Identifier).pos
+            val (line, character) = getLineAndCharacterOfPosition(source, keyPos)
+            diagnostics.add(Diagnostic(
+                message = "Object literal may only specify known properties, and '$key' does not exist in type '$tgtDisplay'.",
+                category = DiagnosticCategory.Error, code = 2353,
+                fileName = fileName, line = line, character = character,
+                start = keyPos, length = key.length,
+            ))
+            return true
+        }
+        val srcDisplay = typeToString(getWidenedLiteralType(getTypeOfExpression(init)))
+        val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcDisplay' is not assignable to type '$tgtDisplay'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = name.pos, length = name.text.length,
+        ))
+        return true
+    }
+
+    /**
+     * B582 interface piece: `interface I extends RemapRecord<K, V>` where `RemapRecord = {
+     * [_ in never as K]: V }` (a mapped type whose `as` clause is a BARE type param of the
+     * alias → non-statically-known keys) → TS2312. Squiggles the whole `RemapRecord<K, V>`.
+     */
+    private fun emitTs2312ForInterfaceExtendsBadMapped(
+        type: ExpressionWithTypeArguments, source: String, fileName: String,
+    ) {
+        val ref = type.expression as? Identifier ?: return
+        val sym = currentFileLocals?.get(ref.text) ?: globals[ref.text] ?: return
+        val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return
+        val mapped = aliasDecl.type as? MappedType ?: return
+        val nameRef = (mapped.nameType as? TypeReference)?.typeName as? Identifier ?: return
+        val tpNames = aliasDecl.typeParameters?.map { it.name.text } ?: return
+        if (nameRef.text !in tpNames) return
+        // span: ref.pos through the matching `>` of the type-args list
+        var i = ref.pos
+        while (i < source.length && source[i] != '<') i++
+        var depth = 0
+        var spanEnd = ref.pos + ref.text.length
+        while (i < source.length) {
+            when (source[i]) {
+                '<' -> depth++
+                '>' -> { depth--; if (depth == 0) { spanEnd = i + 1; break } }
+            }
+            i++
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, ref.pos)
+        diagnostics.add(Diagnostic(
+            message = "An interface can only extend an object type or intersection of object types with statically known members.",
+            category = DiagnosticCategory.Error, code = 2312,
+            fileName = fileName, line = line, character = character,
+            start = ref.pos, length = spanEnd - ref.pos,
+        ))
     }
 
     private fun signatureDeclarationParameters(node: Node?): List<Parameter>? = when (node) {
@@ -77058,6 +77206,10 @@ interface DataView {
         if (tryEmitObjectLiteralWeakLeaves(decl, source, fileName)) return
         // B482: top-level weak target (`let x: { nope?: any } = "A"` / `= E.A` / `= {} as C2`).
         if (tryEmitTopLevelWeakVarDecl(decl, name, source, fileName)) return
+
+        // B582: `const x: MappedModel<'Foo'|T> = init` where MappedModel is a homomorphic
+        // mapped type with a two-placeholder template `as` clause (genericMappedTypeAsClause).
+        if (tryEmitGenericMappedAsClauseVarDecl(decl, name, source, fileName)) return
 
         // B286: JS `@type {Object}` annotation with a fresh object-literal initializer
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
