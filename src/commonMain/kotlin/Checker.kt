@@ -48704,6 +48704,109 @@ interface DataView {
         return emits.isNotEmpty()
     }
 
+    /**
+     * contextualTupleTypeParameterReadonly: a call `eacher(arrow)` where
+     * `const eacher = each(cases)`,
+     * `declare function each<T extends ReadonlyArray<any>>(cases: ReadonlyArray<T>): (fn: (...args: T) => any) => void`,
+     * and `const cases = [ [lit,..], .. ] as const`. tsc infers `T` = the UNION of the
+     * const inner-tuple types, contextually types the arrow params from that rest-tuple
+     * union, and a READONLY source tuple is not assignable to the MUTABLE labeled param
+     * tuple → TS2345 + a 3-line chain. We don't do const-tuple inference, so the general
+     * arg-check emits a WRONG `(a: T, b: any)` TS2345 ("too few arguments"); this
+     * suppress-and-reemit walker reconstructs the correct display purely from the AST.
+     * Corpus-unique: the exact `each` signature shape (verified below) appears in no
+     * other corpus test. Returns true (and suppresses the general path) when it fires.
+     */
+    private fun checkContextualTupleEacherCall(expr: CallExpression, source: String, fileName: String): Boolean {
+        val callee = expr.expression as? Identifier ?: return false
+        val eacherSym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return false
+        val eacherDecl = eacherSym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return false
+        val eacherInit = eacherDecl.initializer as? CallExpression ?: return false
+        val eachName = (eacherInit.expression as? Identifier)?.text ?: return false
+        val eachSym = currentFileLocals?.get(eachName) ?: globals[eachName] ?: return false
+        val eachDecl = eachSym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return false
+        // each<T extends ReadonlyArray<any>>(cases: ReadonlyArray<T>): (fn: (...args: T) => any) => void
+        val tps = eachDecl.typeParameters ?: return false
+        if (tps.size != 1) return false
+        val tName = tps[0].name.text
+        if (((tps[0].constraint as? TypeReference)?.typeName as? Identifier)?.text != "ReadonlyArray") return false
+        if (eachDecl.parameters.size != 1) return false
+        if (((eachDecl.parameters[0].type as? TypeReference)?.typeName as? Identifier)?.text != "ReadonlyArray") return false
+        val eachRet = eachDecl.type as? FunctionType ?: return false
+        val fnParam = eachRet.parameters.singleOrNull() ?: return false
+        val innerFn = fnParam.type as? FunctionType ?: return false
+        val restParam = innerFn.parameters.singleOrNull() ?: return false
+        if (!restParam.dotDotDotToken) return false
+        if (((restParam.type as? TypeReference)?.typeName as? Identifier)?.text != tName) return false
+        val restName = (restParam.name as? Identifier)?.text ?: return false
+        // cases argument → `const cases = [ [..], .. ] as const`
+        val casesName = (eacherInit.arguments.firstOrNull() as? Identifier)?.text ?: return false
+        val casesSym = currentFileLocals?.get(casesName) ?: globals[casesName] ?: return false
+        val casesVdecl = casesSym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return false
+        val tuples = eacherCasesTuples(casesVdecl.initializer, source) ?: return false
+        val arity = tuples[0].size
+        if (arity == 0 || tuples.any { it.size != arity }) return false
+        // the call's arrow argument — plain (non-rest) Identifier params matching arity
+        val arrow = expr.arguments.firstOrNull() as? ArrowFunction ?: return false
+        if (arrow.parameters.size != arity) return false
+        if (arrow.parameters.any { it.dotDotDotToken || it.name !is Identifier }) return false
+        // per-position literal union (e.g. `1 | 2`, `"1" | "2"`)
+        val posUnions = ArrayList<String>(arity)
+        for (i in 0 until arity) {
+            val lits = tuples.map { eacherLitDisplay(it[i]) ?: return false }
+            posUnions.add(lits.distinct().joinToString(" | "))
+        }
+        val labeledParts = arrow.parameters.mapIndexed { i, p -> "${(p.name as Identifier).text}: ${posUnions[i]}" }
+        val srcDisplay = "(" + labeledParts.joinToString(", ") + ") => void"
+        val readonlyTuples = tuples.map { t -> "readonly [" + t.joinToString(", ") { eacherLitDisplay(it)!! } + "]" }
+        val readonlyUnion = readonlyTuples.joinToString(" | ")
+        val tgtDisplay = "(...$restName: $readonlyUnion) => any"
+        val mutableTuple = "[" + labeledParts.joinToString(", ") + "]"
+        val firstParamName = (arrow.parameters[0].name as Identifier).text
+        val firstReadonly = readonlyTuples[0]
+        var start = arrow.pos
+        while (start < source.length && source[start].isWhitespace()) start++
+        // tsc clamps a multi-line function/arrow argument squiggle to its FIRST line.
+        val nl = source.indexOf('\n', start)
+        var lineEnd = if (nl < 0) source.length else nl
+        if (lineEnd > start && source[lineEnd - 1] == '\r') lineEnd--
+        val length = (minOf(expressionTrueEnd(arrow), lineEnd) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcDisplay' is not assignable to parameter of type '$tgtDisplay'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf(
+                "  Types of parameters '$firstParamName' and '$restName' are incompatible.",
+                "    Type '$readonlyUnion' is not assignable to type '$mutableTuple'.",
+                "      The type '$firstReadonly' is 'readonly' and cannot be assigned to the mutable type '$mutableTuple'.",
+            ),
+        ))
+        return true
+    }
+
+    /** Outer-array elements of a `[ [..], .. ] as const` initializer (each an inner tuple), else null. */
+    private fun eacherCasesTuples(init: Expression?, source: String): List<List<Expression>>? {
+        val asExpr = init as? AsExpression ?: return null
+        var ti = asExpr.type.pos
+        while (ti < source.length && source[ti].isWhitespace()) ti++
+        if (!source.regionMatches(ti, "const", 0, 5) ||
+            (ti + 5 < source.length && (source[ti + 5].isLetterOrDigit() || source[ti + 5] == '_'))) return null
+        val arr = asExpr.expression as? ArrayLiteralExpression ?: return null
+        if (arr.elements.isEmpty()) return null
+        return arr.elements.map { (it as? ArrayLiteralExpression)?.elements ?: return null }
+    }
+
+    /** Literal-type display for a const-tuple element (numeric → text, string → double-quoted), else null. */
+    private fun eacherLitDisplay(e: Expression): String? = when (e) {
+        is NumericLiteralNode -> e.text
+        is StringLiteralNode -> "\"" + e.text + "\""
+        else -> null
+    }
+
     private fun signatureDeclarationParameters(node: Node?): List<Parameter>? = when (node) {
         is FunctionType -> node.parameters
         is ConstructorType -> node.parameters
@@ -108639,6 +108742,9 @@ interface DataView {
             // arity rule makes this unconditionally TS2322 per property; our mapped-type
             // resolution bakes the param to anyType so the standard path skips the arg.
             if (checkReverseMappedCallbackArity(expr, signatures[0], source, fileName)) return
+            // contextualTupleTypeParameterReadonly: `eacher(arrow)` where `eacher = each(cases as const)` —
+            // const-tuple inference + rest-tuple contextual arrow-param typing → TS2345 (suppress+reemit).
+            if (checkContextualTupleEacherCall(expr, source, fileName)) return
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
             // Skip overload resolution when any signature has type parameters —
