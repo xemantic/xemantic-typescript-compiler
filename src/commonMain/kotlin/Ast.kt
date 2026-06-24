@@ -723,6 +723,12 @@ data class ElementAccessExpression(
     val expression: Expression,
     val argumentExpression: Expression,
     val questionDotToken: Boolean = false,
+    /** Comments between the object expression and `[` (e.g. `a /*c*/[`). */
+    val preBracketComments: List<Comment>? = null,
+    /** Comments between `[` and the argument (e.g. `[ /*c*/ arg`). */
+    val argLeadingComments: List<Comment>? = null,
+    /** Comments between the argument and `]` (e.g. `arg /*c*/ ]`). */
+    val preCloseBracketComments: List<Comment>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

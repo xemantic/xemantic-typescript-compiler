@@ -553,6 +553,20 @@ class Parser(
     private fun leadingComments(): List<Comment>? = scanner.getLeadingComments()
     private fun trailingComments(): List<Comment>? = scanner.getTrailingComments()
 
+    /** Combine the scanner's same-line trailing + new-line leading comment buffers (in that
+     *  order), as `parseArgumentList` does for call-inner comments. Returns null when both are
+     *  empty. Used to capture comments INTERNAL to an element access (`a /*1*/[ /*2*/ x /*3*/ ]`)
+     *  at the points between the object/`[`/argument/`]`. */
+    private fun combineCommentBuffers(): List<Comment>? {
+        val trailing = scanner.getTrailingComments()
+        val leading = scanner.getLeadingComments()
+        return when {
+            trailing.isNullOrEmpty() -> leading?.ifEmpty { null }
+            leading.isNullOrEmpty() -> trailing
+            else -> trailing + leading
+        }
+    }
+
     /** Returns a copy of [node] with [comments] merged into its trailingComments. */
     private fun withTrailingComments(node: Node, comments: List<Comment>): Node {
         val merged = (node.trailingComments.orEmpty() + comments).ifEmpty { null }
@@ -5529,7 +5543,12 @@ class Parser(
                 }
 
                 OpenBracket -> {
+                    // Capture comments INTERNAL to the element access (between object/`[`/arg/`]`)
+                    // before each clearing nextToken/parseExpected wipes the scanner buffers — these
+                    // are otherwise lost (elementAccessExpressionInternalComments).
+                    val preBracket = combineCommentBuffers()
                     nextToken()
+                    val argLeading = combineCommentBuffers()
                     val arg = if (token == SyntaxKind.CloseBracket) {
                         // TS1011: empty element access a[] is invalid
                         // Report at position right after `[` (prevTokenEnd), length 0
@@ -5538,10 +5557,14 @@ class Parser(
                     } else {
                         parseExpression()
                     }
+                    val preClose = combineCommentBuffers()
                     parseExpected(SyntaxKind.CloseBracket)
                     ElementAccessExpression(
                         expression = result,
                         argumentExpression = arg,
+                        preBracketComments = preBracket,
+                        argLeadingComments = argLeading,
+                        preCloseBracketComments = preClose,
                         pos = result.pos,
                         end = getEnd()
                     )

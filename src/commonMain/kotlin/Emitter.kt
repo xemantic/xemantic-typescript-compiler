@@ -2698,13 +2698,34 @@ class Emitter(
         !text.startsWith("0b") &&
         !text.startsWith("0o")
 
+    /** Emit comments INTERNAL to an element access (between object/`[`/arg/`]`), reproducing
+     *  tsc's comment-writer spacing: a NEW-LINE-preceded block comment writes `\n<text> ` (trailing
+     *  space before the next token), an INLINE block comment writes ` <text>` (leading space, none
+     *  after), a single-line comment writes `\n<text>` (the next item supplies its own newline). */
+    private fun emitElementAccessInternalComments(comments: List<Comment>?) {
+        if (options.removeComments || comments.isNullOrEmpty()) return
+        for (c in comments) {
+            if (c.hasPrecedingNewLine) {
+                writeNewLine()
+                write(c.text)
+                if (c.kind != SyntaxKind.SingleLineComment) write(" ")
+            } else {
+                write(" ")
+                write(c.text)
+            }
+        }
+    }
+
     private fun emitElementAccess(node: ElementAccessExpression) {
         emitExpression(node.expression)
         if (node.questionDotToken) {
             write("?.")
         }
+        emitElementAccessInternalComments(node.preBracketComments)
         write("[")
+        emitElementAccessInternalComments(node.argLeadingComments)
         emitExpression(node.argumentExpression)
+        emitElementAccessInternalComments(node.preCloseBracketComments)
         write("]")
     }
 
