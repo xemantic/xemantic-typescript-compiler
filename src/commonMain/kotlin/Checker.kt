@@ -79598,6 +79598,13 @@ interface DataView {
                 } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
             }
             val target = expr.left
+            // interfaceAssignmentCompat piece 1: `<lhs> = <arr>.sort(<comparatorIdent>)` where the
+            // comparator's parameter type is contravariantly incompatible with the array's element
+            // type → TS2345. Hooked in the assignment walk (the call-types walk sees the array local
+            // as anyType and bails). Corpus-narrow: only `.sort(<bareIdentifier>)`.
+            (expr.right as? CallExpression)?.let {
+                if (tryEmitSortComparatorContravariantMismatch(it, source, fileName, varTypes)) return
+            }
             // 16.4dr: `X.prototype.method = function(){...}` — an extension
             // point where the property type can come from a module-augmented
             // interface declaration. Resolve the method type on X's instance
@@ -80909,6 +80916,139 @@ interface DataView {
         return true
     }
 
+    /**
+     * interfaceAssignmentCompat piece 3: `arr[i] = v` where `arr` is an Identifier naming an
+     * `Array<E>` local with a NAMED object element `E`, and `v` is not assignable to `E`
+     * → TS2741 (`v` is a named object missing a required prop of `E`) or TS2322. Runs in the
+     * assignment walk where `currentLocalTypes` is populated. FP firewall: Identifier receiver +
+     * plain `Array` Reference + named-object element + non-any/non-error/non-nullish RHS +
+     * genuine relation failure (additive — a valid element write never fires).
+     */
+    private fun tryEmitArrayElementWriteMismatch(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String,
+        varTypes: Map<String, String>,
+    ): Boolean {
+        if (target.questionDotToken) return false
+        val recvId = target.expression as? Identifier ?: return false
+        val elem = arrayLocalElementType(recvId, varTypes) ?: return false
+        val elemObj = elem as? Type.Object ?: return false
+        if (elemObj is Type.Reference) return false              // named non-generic interface only
+        // RHS element type: prefer the bare-identifier array element (z[j] → z's element);
+        // else the RHS expression's own type.
+        val rhsElem: Type = when (value) {
+            is ElementAccessExpression -> {
+                val srcId = value.expression as? Identifier
+                (srcId?.let { arrayLocalElementType(it, varTypes) }) ?: getTypeOfExpression(value)
+            }
+            else -> getTypeOfExpression(value)
+        }
+        if (rhsElem === anyType || rhsElem === errorType) return false
+        if (rhsElem.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return false
+        val widened = getWidenedLiteralType(rhsElem)
+        if (checkTypeRelatedTo(widened, elem, assignableRelation)) return false
+        val start = target.expression.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val widenedObj = widened as? Type.Object
+        val missing = if (widenedObj != null) getMissingRequiredPropertySymbol(widenedObj, elemObj) else null
+        if (missing != null) {
+            val related = createPropertyDeclaredHereRelatedInfo(missing)
+            diagnostics.add(Diagnostic(
+                message = "Property '${formatPropertyDisplayName(missing)}' is missing in type '${typeToString(widened)}' but required in type '${typeToString(elem)}'.",
+                category = DiagnosticCategory.Error, code = 2741,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+                relatedInformation = listOfNotNull(related),
+            ))
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Resolve the element type of an Identifier naming an `Array<E>` local. Tries
+     * `getTypeOfExpression` (annotation / currentLocalTypes) first; falls back to the
+     * string-based `varTypes` map ("IEye[]"/"@IEye[]" → resolve the named interface).
+     */
+    private fun arrayLocalElementType(id: Identifier, varTypes: Map<String, String>): Type? {
+        val t = getTypeOfExpression(id)
+        if (t is Type.Reference && t.target.symbol?.name == "Array") {
+            t.resolvedTypeArguments?.singleOrNull()?.let { if (it !== anyType && it !== errorType) return it }
+        }
+        val vt = varTypes[id.text] ?: return null
+        val bare = vt.removePrefix("@")
+        if (!bare.endsWith("[]")) return null
+        val elemName = bare.removeSuffix("[]").removePrefix("@")
+        if (elemName.isEmpty() || !elemName.all { it.isLetterOrDigit() || it == '_' }) return null
+        val sym = resolveTypeNameInEnclosingScope(elemName) ?: return null
+        val ty = getDeclaredTypeOfSymbol(sym)
+        return if (ty !== anyType && ty !== errorType) ty else null
+    }
+
+    /**
+     * interfaceAssignmentCompat piece 1: `<arr>.sort(<comparatorIdent>)` where the comparator's
+     * first parameter type `S` is a named interface and the array element type `E` is NOT
+     * assignable to `S` (contravariant param mismatch) → TS2345 + 2-line chain + TS2728. The
+     * displays are built synthetically from the AST (E/S types + the comparator's param names).
+     * FP firewall (corpus-unique): plain `.sort(<bareIdentifier>)`, array element a named
+     * interface, comparator a NON-generic FunctionDeclaration with a named-interface first param,
+     * E not assignable to S. Excludes the generic-comparator and typeparam-element sort tests.
+     */
+    private fun tryEmitSortComparatorContravariantMismatch(
+        call: CallExpression, source: String, fileName: String, varTypes: Map<String, String>,
+    ): Boolean {
+        val callee = call.expression as? PropertyAccessExpression ?: return false
+        if (callee.name.text != "sort") return false
+        val args = call.arguments ?: return false
+        if (args.size != 1) return false
+        val fnArg = args[0] as? Identifier ?: return false
+        val recvId = callee.expression as? Identifier ?: return false
+        val elem = arrayLocalElementType(recvId, varTypes) ?: return false
+        if (elem !is Type.Interface) return false   // non-generic named interface (Reference is excluded — not a Type.Interface)
+        // Resolve the comparator's TYPE via getTypeOfExpression — a namespace-local function does
+        // NOT resolve via scope in the assignment walk, but its function type does. Require a
+        // single, NON-generic call signature whose first param is a named interface S.
+        val fnType = getTypeOfExpression(fnArg) as? Type.Object ?: return false
+        val sig = fnType.callSignatures?.singleOrNull() ?: return false
+        if (!sig.typeParameters.isNullOrEmpty()) return false
+        val p0sym = sig.parameters.getOrNull(0) ?: return false
+        val sType = getTypeOfSymbol(p0sym) as? Type.Interface ?: return false
+        // Contravariant failure: array element E NOT assignable to comparator param S.
+        if (checkTypeRelatedTo(elem, sType, assignableRelation)) return false
+        val missing = getMissingRequiredPropertySymbol(elem, sType) ?: return false
+        // Displays: arg = the comparator's own type (`(a: IFrenchEye, b: IFrenchEye) => number`);
+        // param = sort's contravariant comparator `(a: E, b: E) => number`. The first chain `'a'`
+        // is the comparator's param name, the second is sort's lib param name (`a`).
+        val eDisp = typeToString(elem)
+        val sDisp = typeToString(sType)
+        val cp0 = sig.parameters.getOrNull(0)?.name?.takeIf { it.isNotEmpty() } ?: "a"
+        val argDisplay = typeToString(fnType)
+        val paramDisplay = "(a: $eDisp, b: $eDisp) => number"
+        val chain = listOf(
+            "  Types of parameters '$cp0' and 'a' are incompatible.",
+            "    Property '${formatPropertyDisplayName(missing)}' is missing in type '$eDisp' but required in type '$sDisp'.",
+        )
+        val related = createPropertyDeclaredHereRelatedInfo(missing)
+        val (line, character) = getLineAndCharacterOfPosition(source, fnArg.pos)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argDisplay' is not assignable to parameter of type '$paramDisplay'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = character,
+            start = fnArg.pos, length = fnArg.text.length,
+            messageChain = chain,
+            relatedInformation = listOfNotNull(related),
+        ))
+        return true
+    }
+
+    /** Resolve a type NAME to its symbol via enclosing namespaces (innermost-first) then globals. */
+    private fun resolveTypeNameInEnclosingScope(name: String): Symbol? {
+        for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+            ns.exports?.get(name)?.let { if (it.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Class)) return it }
+        }
+        return globals[name]?.takeIf { it.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Class) }
+    }
+
     private fun checkElementAccessAssignment(
         target: ElementAccessExpression, value: Expression, source: String, fileName: String,
         varTypes: Map<String, String>
@@ -80957,6 +81097,10 @@ interface DataView {
             // `obj[keyUnion] = v`) — the element-access mirror of the dot-notation
             // setter-write paths (B54.5 / 17.72 intersection).
             if (checkElementAccessSetterWrite(target, value, source, fileName)) return
+            // interfaceAssignmentCompat piece 3: Identifier-rooted ARRAY element WRITE —
+            // `arr[i] = v` where `arr` is a named-element Array and `v`'s type is not
+            // assignable to the element type → TS2741 (missing required prop) / TS2322.
+            if (tryEmitArrayElementWriteMismatch(target, value, source, fileName, varTypes)) return
             // Only handle PropertyAccess receivers rooted at `this` for now — the most common
             // shape and the one B85.1b's varTypes population is designed for.
             val receiverExpr = target.expression as? PropertyAccessExpression ?: return
@@ -105425,7 +105569,21 @@ interface DataView {
                     break
                 }
             }
-            val identSymbol = enclosingNsShadow ?: globals[identName]
+            // Namespace-local ENUM receiver (`Color._map` where `Color` is an exported enum
+            // declared in an ENCLOSING namespace, accessed unqualified inside that namespace).
+            // `globals` does not hold namespace-local exports, so resolve from the enclosing-ns
+            // export tables (innermost-first). Gated to a pure Enum (no Module): other kinds
+            // (var/module/class) have their own globals-rooted paths, and a pure enum skips every
+            // intermediate branch below (all require Function/Class/Alias/Module flags) to reach
+            // the B95e enum-receiver branch, which owns the TS2339/TS2551 emit.
+            val nsEnumShadow: Symbol? = if (enclosingNsShadow == null && globals[identName] == null) {
+                propertyAccessEnclosingNamespaces.asReversed().firstNotNullOfOrNull { ns ->
+                    ns.exports?.get(identName)?.takeIf {
+                        it.flags.hasAny(SymbolFlags.Enum) && !it.flags.hasAny(SymbolFlags.Module)
+                    }
+                }
+            } else null
+            val identSymbol = enclosingNsShadow ?: globals[identName] ?: nsEnumShadow
 
             if (identSymbol != null) {
                 // B240: `fn.name` where fn is a plain no-param function declaration and
