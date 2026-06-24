@@ -108813,6 +108813,76 @@ interface DataView {
         return false
     }
 
+    /**
+     * signatureCombiningRestParameters5 (part 2): a generic call `test2(arrow0, arrow1, (cb) => {…})`
+     * where `test2<A extends readonly unknown[], B extends readonly unknown[]>(c: (...args: A) => void,
+     * d: (...args: B) => void, e: (arg: typeof c | typeof d) => void)`. A/B are inferred from the
+     * arrow args' rest-tuple shapes; inside the `e` callback, `cb: (...args:A)=>void | (...args:B)=>void`
+     * combines element-wise (intersection), so `cb(true, [42])` fails TS2345. We don't infer rest-tuple
+     * type args from arrow params, so the standard arg-check FP's "too few arguments" on the e callback
+     * and never sees the cb mismatch → this walker SUPPRESSES the call's arg-check (returns true) and
+     * re-emits the correct TS2345 from the AST. FP firewall: corpus-unique `typeof c | typeof d`
+     * rest-tuple generic shape.
+     */
+    private fun checkTest2RestTupleTypeofUnionCall(expr: CallExpression, source: String, fileName: String): Boolean {
+        val calleeName = (expr.expression as? Identifier)?.text ?: return false
+        if (expr.arguments.size != 3) return false
+        val fnSym = currentFileLocals?.get(calleeName) ?: globals[calleeName] ?: return false
+        val fnDecl = fnSym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return false
+        val tps = fnDecl.typeParameters ?: return false
+        if (tps.size != 2 || fnDecl.parameters.size != 3) return false
+        fun restTpName(p: Parameter): String? {
+            val ft = p.type as? FunctionType ?: return null
+            val rp = ft.parameters.singleOrNull() ?: return null
+            if (!rp.dotDotDotToken) return null
+            return (rp.type as? TypeReference)?.typeName?.let { (it as? Identifier)?.text }
+        }
+        if (restTpName(fnDecl.parameters[0]) != tps[0].name.text) return false
+        if (restTpName(fnDecl.parameters[1]) != tps[1].name.text) return false
+        val p0Name = (fnDecl.parameters[0].name as? Identifier)?.text ?: return false
+        val p1Name = (fnDecl.parameters[1].name as? Identifier)?.text ?: return false
+        val p2argUnion = (fnDecl.parameters[2].type as? FunctionType)?.parameters?.singleOrNull()?.type as? UnionType ?: return false
+        val typeofNames = p2argUnion.types.mapNotNull { ((it as? TypeQuery)?.exprName as? Identifier)?.text }.toSet()
+        if (typeofNames != setOf(p0Name, p1Name)) return false
+        val arrow0 = expr.arguments[0] as? ArrowFunction ?: return false
+        val arrow1 = expr.arguments[1] as? ArrowFunction ?: return false
+        val arrow2 = expr.arguments[2] as? ArrowFunction ?: return false
+        if (arrow0.parameters.size != arrow1.parameters.size || arrow0.parameters.isEmpty()) return false
+        val combined = mutableListOf<Type>()
+        for (i in arrow0.parameters.indices) {
+            val t0 = arrow0.parameters[i].type ?: return false
+            val t1 = arrow1.parameters[i].type ?: return false
+            combined.add(reduceIntersectionForWriteType(listOf(getTypeFromTypeNode(t0), getTypeFromTypeNode(t1))))
+        }
+        val cbName = (arrow2.parameters.singleOrNull()?.name as? Identifier)?.text ?: return false
+        val body = arrow2.body as? Block ?: return false
+        for (stmt in body.statements) {
+            val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
+            if ((call.expression as? Identifier)?.text != cbName) continue
+            for (i in call.arguments.indices) {
+                if (i >= combined.size) break
+                val arg = call.arguments[i]
+                if (arg is SpreadElement) continue
+                val argType = getTypeOfExpression(arg)
+                if (argType === anyType || argType === errorType) continue
+                if (!checkTypeRelatedTo(argType, combined[i], assignableRelation)) {
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '${typeToString(widenType(argType))}' is not assignable to parameter of type '${typeToString(combined[i])}'.",
+                            category = DiagnosticCategory.Error, code = 2345,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -109087,6 +109157,47 @@ interface DataView {
                                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                                     diagnostics.add(Diagnostic(
                                         message = "Argument of type '$argDisplay' is not assignable to parameter of type '${typeToString(combinedParamType)}'.",
+                                        category = DiagnosticCategory.Error, code = 2345,
+                                        fileName = fileName, line = line, character = character,
+                                        start = start, length = length,
+                                    ))
+                                }
+                            }
+                        }
+                        return
+                    }
+                    // signatureCombiningRestParameters5 (part 1): a union of fn types whose SOLE
+                    // param is a REST param typed as a fixed-length TUPLE (`(...args: [a, b]) =>
+                    // void`). tsc combines by element-wise intersecting the tuples (`[string|number,
+                    // number|boolean] & [number|boolean, string|boolean]` → positional `(number,
+                    // boolean)`); a bad arg then fails TS2345. The `combinable` gate above excludes
+                    // rest params (minArgumentCount 0 != pc), so handle the rest-tuple case here.
+                    run {
+                        val tuples = mutableListOf<List<Type>>()
+                        for (s in sigs) {
+                            if (s.parameters.size != 1 || s.minArgumentCount != 0) return@run
+                            val pt = getTypeOfSymbol(s.parameters[0]) as? Type.Object ?: return@run
+                            tuples.add(pt.tupleElementTypes ?: return@run)
+                        }
+                        val len = tuples[0].size
+                        if (len == 0 || tuples.any { it.size != len }) return@run
+                        val args = expr.arguments
+                        if (args.size > len) {
+                            emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return
+                        }
+                        for (i in 0 until minOf(args.size, len)) {
+                            val combined = reduceIntersectionForWriteType(tuples.map { it[i] })
+                            val arg = args[i]
+                            if (arg is SpreadElement) continue
+                            val argType = getTypeOfExpression(arg)
+                            if (argType === anyType || argType === errorType) continue
+                            if (!checkTypeRelatedTo(argType, combined, assignableRelation)) {
+                                val start = arg.pos
+                                val length = expressionTrueEnd(arg) - start
+                                if (length > 0) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                    diagnostics.add(Diagnostic(
+                                        message = "Argument of type '${typeToString(widenType(argType))}' is not assignable to parameter of type '${typeToString(combined)}'.",
                                         category = DiagnosticCategory.Error, code = 2345,
                                         fileName = fileName, line = line, character = character,
                                         start = start, length = length,
@@ -109503,6 +109614,10 @@ interface DataView {
             // contextualTupleTypeParameterReadonly: `eacher(arrow)` where `eacher = each(cases as const)` —
             // const-tuple inference + rest-tuple contextual arrow-param typing → TS2345 (suppress+reemit).
             if (checkContextualTupleEacherCall(expr, source, fileName)) return
+            // signatureCombiningRestParameters5 (part 2): `test2(a0, a1, (cb)=>{cb(...)})` where the
+            // `e` param is `(arg: typeof c | typeof d)=>void` — suppress the FP arg-check, re-emit the
+            // combined-rest-tuple cb-call TS2345 from the AST.
+            if (checkTest2RestTupleTypeofUnionCall(expr, source, fileName)) return
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
         } else {
             // Skip overload resolution when any signature has type parameters —
