@@ -1544,7 +1544,7 @@ class TypeScriptCompiler {
                 else -> importDeps
             }
             val transformOrder = if (options.outFile != null && !options.noResolve) {
-                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals)
+                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
             } else tsFileNames
             val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
                 parsedSourceFiles[name]?.let { name to it }
@@ -1669,7 +1669,7 @@ class TypeScriptCompiler {
                 hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
                 else -> importDeps
             }
-            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals)
+            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
             val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file.
@@ -2388,6 +2388,7 @@ private fun topologicalSort(
     deps: Map<String, List<String>>,
     depsNoRefPath: Map<String, List<String>>? = null,
     filesWithImportEquals: Set<String> = emptySet(),
+    fullDeps: Map<String, List<String>>? = null,
 ): List<String> {
     if (fileNames.size <= 1) return fileNames
 
@@ -2401,6 +2402,20 @@ private fun topologicalSort(
         // Visit dependencies first (post-order DFS)
         for (dep in (deps[file] ?: emptyList())) {
             if (dep in fileSet) visit(dep)
+        }
+        result.add(file)
+    }
+
+    // Post-order DFS over the FULL (ref-path-inclusive) edge set, seeded from one file.
+    // Used only for the zero-root (cycle) case below, where `deps` has had its ref-path
+    // edges stripped (the hasCycle→depsNoRefPath fallback) and is therefore empty for a
+    // pure-`///<reference>` cycle. Termination is guaranteed by the shared `visited` set
+    // (register-before-recurse), mirroring tsc's `filesByName` cycle guard.
+    fun visitFull(file: String) {
+        if (file in visited) return
+        visited.add(file)
+        for (dep in (fullDeps?.get(file) ?: emptyList())) {
+            if (dep in fileSet) visitFull(dep)
         }
         result.add(file)
     }
@@ -2435,6 +2450,36 @@ private fun topologicalSort(
         val rootHasImportEquals = root in filesWithImportEquals
         if (rootHasRefPaths || rootHasImportEquals) {
             visit(root)
+        }
+    } else if (roots.size != 1 && fullDeps != null) {
+        // Cyclic reference graph (mutual `///<reference path>` or `import = require`
+        // cycles — e.g. emitMemberAccessExpression, visibilityOfCrossModuleTypeUsage,
+        // doNotemitTripleSlashComments). tsc's compiler-test harness makes the LAST
+        // @Filename unit the sole program root when that unit's content has a
+        // `///<reference>` or `require(` directive, then builds the program by a
+        // post-order DFS over its reference edges (program.ts findSourceFileWorker:
+        // register-path → recurse refs in source order → push file last; re-entry to a
+        // registered path is the cycle guard). Reproduce that over the FULL edge set —
+        // `deps` here has had its ref-path edges stripped by the hasCycle→depsNoRefPath
+        // fallback (so it is EMPTY for a pure-`///<reference>` cycle, which is why the
+        // cycle must be detected on `fullDeps`, not `deps`). Fires only when the full
+        // graph is a genuine cycle (no full-roots) AND the last file itself carries
+        // ref-path / import-equals edges (the harness single-root trigger).
+        val fullReferencedByOthers = mutableSetOf<String>()
+        for ((src, depList) in fullDeps) {
+            for (d in depList) {
+                if (d in fileSet && d != src) fullReferencedByOthers.add(d)
+            }
+        }
+        val fullRoots = fileNames.filter { it !in fullReferencedByOthers }
+        if (fullRoots.isEmpty()) {
+            val last = fileNames.last()
+            val lastHasRefPaths = depsNoRefPath != null &&
+                (fullDeps[last] ?: emptyList<String>()) != (depsNoRefPath[last] ?: emptyList<String>())
+            val lastHasImportEquals = last in filesWithImportEquals
+            if (lastHasRefPaths || lastHasImportEquals) {
+                visitFull(last)
+            }
         }
     }
 
