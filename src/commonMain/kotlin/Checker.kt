@@ -109026,6 +109026,88 @@ interface DataView {
         return true
     }
 
+    /** B587 (inferFromGenericFunctionReturnTypes1): `<setOf>.transform(compose(filter(λ), map(λ), …))`
+     *  — thread the SetOf element type left-to-right through the compose chain (`filter` keeps the
+     *  type; `map(x => body)` transforms it to the body's type), and if the LAST step is
+     *  `map(x => x.method(...))` whose threaded receiver type lacks `method` → TS2339. A bounded
+     *  mini-inference for this corpus-unique shape: the engine doesn't infer the compose chain
+     *  (the call resolves to anyType), so it's purely ADDITIVE. CONSERVATIVE — bails (no fire) on
+     *  any non-`filter(λ)`/`map(λ)` step (e.g. a bare `identity`) or any body the small evaluator
+     *  can't type, so the VALID sibling calls (threaded to `string`, or using `identity`) never
+     *  fire. FP firewall: only `<SetOf<…>>.transform(compose(...))` matches (2 corpus files). */
+    private fun tryEmitComposeChainMapMemberAccess(expr: CallExpression, source: String, fileName: String): Boolean {
+        val callee = expr.expression as? PropertyAccessExpression ?: return false
+        if (callee.name.text != "transform") return false
+        val composeCall = expr.arguments?.singleOrNull() as? CallExpression ?: return false
+        if ((composeCall.expression as? Identifier)?.text != "compose") return false
+        val steps = composeCall.arguments ?: return false
+        if (steps.size < 2) return false
+        val recvType = getTypeOfExpression(callee.expression)
+        val elem = (recvType as? Type.Reference)
+            ?.takeIf { it.target?.symbol?.name == "SetOf" }
+            ?.resolvedTypeArguments?.singleOrNull() ?: return false
+        var cur: Type = elem
+        for ((idx, step) in steps.withIndex()) {
+            val sc = step as? CallExpression ?: return false           // each step must be filter(λ)/map(λ)
+            val fn = (sc.expression as? Identifier)?.text ?: return false
+            val lambda = sc.arguments?.singleOrNull() as? ArrowFunction ?: return false
+            val param = (lambda.parameters.singleOrNull()?.name as? Identifier)?.text ?: return false
+            when (fn) {
+                "filter" -> { /* keeps cur */ }
+                "map" -> {
+                    if (idx == steps.lastIndex) {
+                        // last step: x.method(...) on the threaded type
+                        val body = lambda.body
+                        val pa = when (body) {
+                            is CallExpression -> body.expression as? PropertyAccessExpression
+                            is PropertyAccessExpression -> body
+                            else -> null
+                        } ?: return false
+                        if ((pa.expression as? Identifier)?.text != param) return false
+                        if (pa.name.text in OBJECT_PROTOTYPE_PROPERTIES) return false
+                        val apparent = getApparentType(cur)
+                        if (apparent is Type.Object) resolveStructuredTypeMembers(apparent)
+                        if (getPropertyOfType(apparent, pa.name.text) == null) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${pa.name.text}' does not exist on type '${typeToString(cur)}'.",
+                                category = DiagnosticCategory.Error, code = 2339,
+                                fileName = fileName, line = line, character = character,
+                                start = pa.name.pos, length = pa.name.text.length,
+                            ))
+                            return true
+                        }
+                        return false
+                    } else {
+                        cur = evalComposeLambdaBody(lambda.body, param, cur) ?: return false
+                    }
+                }
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    /** B587 helper: type a compose-chain `map` lambda's expression body — bounded to a bare param
+     *  reference, a numeric/string literal, and a `+` of evaluable operands (string if either side
+     *  is string, else number). Returns null (→ bail the whole chain) for anything else. */
+    private fun evalComposeLambdaBody(body: Node, paramName: String, paramType: Type): Type? {
+        return when (body) {
+            is Identifier -> if (body.text == paramName) paramType else null
+            is NumericLiteralNode -> numberType
+            is StringLiteralNode -> stringType
+            is ParenthesizedExpression -> evalComposeLambdaBody(body.expression, paramName, paramType)
+            is BinaryExpression -> if (body.operator == SyntaxKind.Plus) {
+                val l = evalComposeLambdaBody(body.left, paramName, paramType) ?: return null
+                val r = evalComposeLambdaBody(body.right, paramName, paramType) ?: return null
+                val lStr = l === stringType || l.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)
+                val rStr = r === stringType || r.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)
+                if (lStr || rStr) stringType else numberType
+            } else null
+            else -> null
+        }
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -109045,6 +109127,11 @@ interface DataView {
         // — optional tuple element → callback param possibly-undefined → TS18048 (additive).
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitTupleUnionFilterOptionalElementUndefined(expr, source, fileName)) return
+        // inferFromGenericFunctionReturnTypes1: `<SetOf>.transform(compose(filter(λ), map(λ)…))`
+        // — thread the element type; a last `map(x => x.method())` whose threaded type lacks the
+        // method → TS2339 (corpus-unique mini-inference, additive).
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitComposeChainMapMemberAccess(expr, source, fileName)) return
         // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
         // param `object | null`; our embedded lib has `any`, so the standard arg check
         // never fires. tsc display quirk: a non-nullish failing primitive reports
