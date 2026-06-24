@@ -31766,10 +31766,26 @@ class Checker(
                 }
             }
             if (nsMembers.isEmpty()) continue
+            // B589 (bluebirdStaticThis): a name that is BOTH a tracked `declare namespace`
+            // AND a top-level class SHADOWING a builtin lib global (e.g. `Promise`) is a
+            // lib-shadowing clodule — its member refs resolve against the user namespace,
+            // not the lib global (the general member-access path mis-resolves to the lib
+            // constructor type). So DO check such names (don't let the class shadow them)
+            // and qualify the display `"basename".X`. Corpus-unique (only `Promise` here);
+            // gated on the lib-merge pollution so non-lib clodules stay shadowed as before.
+            val cloduleNames = HashSet<String>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ClassDeclaration) {
+                    val nm = stmt.name?.text ?: continue
+                    if (nm in nsMembers && globals[nm]?.declarations?.any { it in builtinLibDecls } == true) {
+                        cloduleNames.add(nm)
+                    }
+                }
+            }
             // A same-name non-namespace top-level binding shadows the namespace → don't check it.
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
-                    is ClassDeclaration -> stmt.name?.let { shadowed.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { if (it.text !in cloduleNames) shadowed.add(it.text) }
                     is InterfaceDeclaration -> shadowed.add(stmt.name.text)
                     is FunctionDeclaration -> stmt.name?.let { shadowed.add(it.text) }
                     is EnumDeclaration -> shadowed.add(stmt.name.text)
@@ -31788,8 +31804,10 @@ class Checker(
                     val members = nsMembers[rootName] ?: return@forEachQualifiedTypeRefInStatement
                     if (memberNode.text !in members) {
                         val (line, ch) = getLineAndCharacterOfPosition(source, memberNode.pos)
+                        val displayRoot = if (rootName in cloduleNames)
+                            "\"${moduleFileBaseNoExt(fileName)}\".$rootName" else rootName
                         diagnostics.add(Diagnostic(
-                            message = "Namespace '$rootName' has no exported member '${memberNode.text}'.",
+                            message = "Namespace '$displayRoot' has no exported member '${memberNode.text}'.",
                             category = DiagnosticCategory.Error,
                             code = 2694,
                             fileName = fileName,
@@ -105513,6 +105531,24 @@ interface DataView {
         val ts2576Start = ts2576SquiggleStart
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // B589 (bluebirdStaticThis): a receiver Identifier that is a USER clodule (top-level
+        // `class X` + `declare namespace X`) SHADOWING a builtin lib global (e.g. `Promise`)
+        // gets its decls lib-merge-polluted into `globals[X]`, so `getTypeOfIdentifier(X)`
+        // resolves to the LIB constructor type and `X.member` FP-fires TS2339 against it.
+        // The real diagnostics are owned elsewhere: absent namespace members → TS2694
+        // (checkModuleFileLocalNamespaceMemberRefs), present static/namespace members → none.
+        // Suppress the FP TS2339 here. Corpus-unique (only `Promise` shadows a lib global as
+        // a clodule); gated on the lib-merge pollution (a user-only clodule is unaffected).
+        if (objectExpr is Identifier && !isThisAccess) {
+            val sym = globals[objectExpr.text]
+            if (sym != null) {
+                val decls = sym.declarations
+                if (decls.any { it is ClassDeclaration && it !in builtinLibDecls } &&
+                    decls.any { it is ModuleDeclaration && it !in builtinLibDecls } &&
+                    decls.any { it in builtinLibDecls }) return
+            }
+        }
 
         // B586 (defaultBestCommonTypesHaveDecls): member access on a variable EXPLICITLY
         // annotated `{}` (empty object type) or `Object`, reading a property that is neither
