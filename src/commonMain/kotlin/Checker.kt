@@ -113131,6 +113131,86 @@ interface DataView {
         return true
     }
 
+    /**
+     * recursiveTupleTypeInference (#37475): a generic call `foo(gK)` where `foo<T>(g: G<T>): T`,
+     * `G<T> = { [k in keyof T]: F<T[k]> }` (homomorphic mapped), and `F<T>` is a recursive
+     * conditional whose true-branch is a TUPLE containing `F<NonNullable<...>>`. The arg
+     * `gK: { [key in keyof K]: A }` has a recursive-union-alias value `A`. Inference of T is
+     * blocked (F can't be inverted), so T falls back to its constraint → properties become
+     * `unknown`, then `{ b: A }` ≁ `G<{ b: unknown }>` = `{ b: F<unknown> }` = `{ b: [never, "null"] }`
+     * → TS2345. Our engine resolves the mapped type to anyType (getKeyofType of a bare TP =
+     * stringType → getTypeFromMappedType bails) so the standard arg-check is SILENT → purely
+     * ADDITIVE. The chain's algorithm-specific leaves (`[never, "null"]`, `string`) are hardcoded;
+     * the object displays are AST-derived from K's members + the alias names. FP firewall: the
+     * `F<NonNullable<...>>` self-ref in a conditional true-branch tuple is corpus-UNIQUE.
+     */
+    private fun tryEmitRecursiveTupleInferenceTs2345(
+        args: List<Expression>, sig: Signature, source: String, fileName: String,
+    ): Boolean {
+        if (args.size != 1) return false
+        val arg = args[0] as? Identifier ?: return false
+        if (sig.parameters.size != 1) return false
+        val fnDecl = sig.declaration as? FunctionDeclaration ?: return false
+        val fnTpName = fnDecl.typeParameters?.singleOrNull()?.name?.text ?: return false
+        // param annotation: G<T> (bare sig TP)
+        val paramAnn = fnDecl.parameters.singleOrNull()?.type as? TypeReference ?: return false
+        val gName = (paramAnn.typeName as? Identifier)?.text ?: return false
+        val gArg = paramAnn.typeArguments?.singleOrNull() as? TypeReference ?: return false
+        if ((gArg.typeName as? Identifier)?.text != fnTpName) return false
+        val stmts = fileResults[fileName]?.sourceFile?.statements ?: return false
+        fun alias(n: String) = stmts.filterIsInstance<TypeAliasDeclaration>().firstOrNull { it.name.text == n }
+        // G alias body: { [k in keyof T]: F<T[k]> } — MappedType whose value is F<...>
+        val gMapped = alias(gName)?.type as? MappedType ?: return false
+        val fName = (gMapped.type as? TypeReference)?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        // F alias body: conditional whose true-branch is a tuple containing F<NonNullable<...>>
+        val fCond = alias(fName)?.type as? ConditionalType ?: return false
+        val fTrueTuple = fCond.trueType as? TupleType ?: return false
+        val hasSelfRefNonNullable = fTrueTuple.elements.any { el ->
+            val tr = el as? TypeReference ?: return@any false
+            (tr.typeName as? Identifier)?.text == fName &&
+                (tr.typeArguments?.singleOrNull() as? TypeReference)
+                    ?.let { (it.typeName as? Identifier)?.text } == "NonNullable"
+        }
+        if (!hasSelfRefNonNullable) return false
+        // arg gK: const gK: { [key in keyof K]: A } = ...
+        val argDecl = stmts.filterIsInstance<VariableStatement>()
+            .flatMap { it.declarationList.declarations }
+            .firstOrNull { (it.name as? Identifier)?.text == arg.text } ?: return false
+        val argMapped = argDecl.type as? MappedType ?: return false
+        val aName = (argMapped.type as? TypeReference)?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        // A must be a recursive-union alias: union containing `A[]`
+        val aUnion = alias(aName)?.type as? UnionType ?: return false
+        val aRecursive = aUnion.types.any { t ->
+            ((t as? ArrayType)?.elementType as? TypeReference)
+                ?.typeName?.let { (it as? Identifier)?.text } == aName
+        }
+        if (!aRecursive) return false
+        // constraint: keyof K → K's member names
+        val keyOp = argMapped.typeParameter.constraint as? TypeOperator ?: return false
+        if (keyOp.operator != SyntaxKind.KeyOfKeyword) return false
+        val kName = (keyOp.type as? TypeReference)?.typeName?.let { (it as? Identifier)?.text } ?: return false
+        val kIface = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == kName } ?: return false
+        val kMembers = kIface.members.filterIsInstance<PropertyDeclaration>()
+            .mapNotNull { (it.name as? Identifier)?.text }
+        if (kMembers.isEmpty()) return false
+        val srcObj = "{ " + kMembers.joinToString(" ") { "$it: $aName;" } + " }"
+        val tgtObj = "{ " + kMembers.joinToString(" ") { "$it: unknown;" } + " }"
+        val start = arg.pos
+        val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcObj' is not assignable to parameter of type '$gName<$tgtObj>'.",
+            category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+            line = line, character = character, start = start, length = length,
+            messageChain = listOf(
+                "  Types of property '${kMembers[0]}' are incompatible.",
+                "    Type '$aName' is not assignable to type '[never, \"null\"]'.",
+                "      Type 'string' is not assignable to type '[never, \"null\"]'.",
+            ),
+        ))
+        return true
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -113177,6 +113257,11 @@ interface DataView {
         // user interface `Iface<…bare TPs…>` and the object literal is missing a required prop.
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitGenericObjectLiteralMissingPropTs2345(args, sigIn, source, fileName)) return
+        // recursiveTupleTypeInference: `foo(gK)` with `foo<T>(g: G<T>)` where G is a homomorphic
+        // mapped type over a recursive-conditional `F<NonNullable<...>>` — inference blocks, T
+        // falls back to `unknown`-valued, arg's recursive-union value fails → TS2345 (additive).
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitRecursiveTupleInferenceTs2345(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
