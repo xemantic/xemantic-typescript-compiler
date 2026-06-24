@@ -1374,17 +1374,23 @@ class Emitter(
     private fun emitImportDeclaration(node: ImportDeclaration) {
         if (node.importClause?.isTypeOnly == true) return
         writeIndent()
+        beginIeSlots(node.internalComments)
         write("import")
+        emitIeSlot() // after `import`, before the clause
         if (node.importClause != null) {
             write(" ")
             emitImportClause(node.importClause)
-            write(" from ")
+            emitIeSlot() // after the clause, before `from`
+            write(" from")
+            emitIeSlot() // after `from`, before the module specifier
+            write(" ")
         } else {
             write(" ")
         }
         emitExpression(node.moduleSpecifier)
         write(";")
         writeNewLine()
+        beginIeSlots(null)
     }
 
     private fun emitImportClause(node: ImportClause) {
@@ -1399,25 +1405,45 @@ class Emitter(
         if (hasName) {
             write(node.name.emitText)
             if (hasBindings) {
-                write(", ")
+                emitIeSlot() // after the default-import name, before `,`
+                write(",")
+                emitIeSlot() // after `,`, before the bindings
+                write(" ")
             }
         }
         if (hasBindings) {
             when (val bindings = node.namedBindings) {
                 is NamespaceImport -> {
-                    write("* as ")
+                    write("*")
+                    emitIeSlot() // after `*`, before `as`
+                    write(" as")
+                    emitIeSlot() // after `as`, before the namespace name
+                    write(" ")
                     write(bindings.name.emitText)
                 }
 
                 is NamedImports -> {
-                    write("{ ")
+                    write("{")
+                    emitIeSlot() // after `{`, before the first specifier
+                    write(" ")
+                    val last = nonTypeSpecifiers.size - 1
                     for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
-                        if (index > 0) write(", ")
                         if (specifier.propertyName != null) {
                             write(specifier.propertyName.emitText)
-                            write(" as ")
+                            emitIeSlot() // after propertyName, before `as`
+                            write(" as")
+                            emitIeSlot() // after `as`, before the binding name
+                            write(" ")
+                            write(specifier.name.emitText)
+                        } else {
+                            write(specifier.name.emitText)
                         }
-                        write(specifier.name.emitText)
+                        emitIeSlot() // after the binding name, before `,`/`}`
+                        if (index < last) {
+                            write(",")
+                            emitIeSlot() // after `,`, before the next specifier
+                            write(" ")
+                        }
                     }
                     write(" }")
                 }
@@ -1477,12 +1503,17 @@ class Emitter(
     private fun emitExportDeclaration(node: ExportDeclaration) {
         if (node.isTypeOnly) return
         writeIndent()
+        beginIeSlots(node.internalComments)
         write("export")
+        emitIeSlot() // after `export`, before `*`/`{`/specifier
         when (val exportClause = node.exportClause) {
             null -> {
                 write(" *")
+                emitIeSlot() // after `*`, before `from`
                 if (node.moduleSpecifier != null) {
-                    write(" from ")
+                    write(" from")
+                    emitIeSlot() // after `from`, before the module specifier
+                    write(" ")
                     emitExpression(node.moduleSpecifier)
                 }
             }
@@ -1493,28 +1524,51 @@ class Emitter(
                     // All specifiers are type-only and there's no re-export source — emit `export {}`
                     write(" {}")
                 } else {
-                    write(" { ")
+                    write(" {")
+                    emitIeSlot() // after `{`, before the first specifier
+                    write(" ")
+                    val last = nonTypeSpecifiers.size - 1
                     for ((index, specifier) in nonTypeSpecifiers.withIndex()) {
-                        if (index > 0) write(", ")
                         if (specifier.propertyName != null) {
                             write(specifier.propertyName.emitText)
-                            write(" as ")
+                            emitIeSlot() // after propertyName, before `as`
+                            write(" as")
+                            emitIeSlot() // after `as`, before the binding name
+                            write(" ")
+                            write(specifier.name.emitText)
+                        } else {
+                            write(specifier.name.emitText)
                         }
-                        write(specifier.name.emitText)
+                        emitIeSlot() // after the binding name, before `,`/`}`
+                        if (index < last) {
+                            write(",")
+                            emitIeSlot() // after `,`, before the next specifier
+                            write(" ")
+                        }
                     }
                     write(" }")
                     if (node.moduleSpecifier != null) {
-                        write(" from ")
+                        emitIeSlot() // after `}`, before `from`
+                        write(" from")
+                        emitIeSlot() // after `from`, before the module specifier
+                        write(" ")
                         emitExpression(node.moduleSpecifier)
                     }
                 }
             }
 
             is NamespaceExport -> {
-                write(" * as ")
+                write(" *")
+                emitIeSlot() // after `*`, before `as`
+                write(" as")
+                emitIeSlot() // after `as`, before the namespace name
+                write(" ")
                 write(exportClause.name.emitText)
                 if (node.moduleSpecifier != null) {
-                    write(" from ")
+                    emitIeSlot() // after the namespace name, before `from`
+                    write(" from")
+                    emitIeSlot() // after `from`, before the module specifier
+                    write(" ")
                     emitExpression(node.moduleSpecifier)
                 }
             }
@@ -1528,6 +1582,7 @@ class Emitter(
         }
         write(";")
         writeNewLine()
+        beginIeSlots(null)
     }
 
     private fun emitExportAssignment(node: ExportAssignment) {
@@ -1559,7 +1614,18 @@ class Emitter(
             write("export = ")
         } else {
             writeIndent()
-            write("export default ")
+            beginIeSlots(node.internalComments)
+            write("export")
+            emitIeSlot() // after `export`, before `default`
+            write(" default")
+            emitIeSlot() // after `default`, before the exported value
+            write(" ")
+            emitExpression(node.expression)
+            emitIeSlot() // after the exported value, before `;`
+            write(";")
+            writeNewLine()
+            beginIeSlots(null)
+            return
         }
         emitExpression(node.expression)
         write(";")
@@ -2713,6 +2779,27 @@ class Emitter(
                 write(" ")
                 write(c.text)
             }
+        }
+    }
+
+    // Replay of an import/export statement's INTERNAL comment slots (importExportInternalComments).
+    // The parser captures one slot per inter-token boundary in source/emit order; the emitter walks
+    // the same structure and pops slots sequentially via emitIeSlot(). See the parser's ieSlots.
+    private var ieSlotList: List<List<Comment>?>? = null
+    private var ieSlotIdx = 0
+
+    private fun beginIeSlots(slots: List<List<Comment>?>?) {
+        ieSlotList = slots
+        ieSlotIdx = 0
+    }
+
+    /** Emit the next internal-comment slot (each inline block comment renders ` /*…*/`, no trailing
+     *  space — the following token supplies its own separator). No-op once slots are exhausted. */
+    private fun emitIeSlot() {
+        val slots = ieSlotList ?: return
+        if (ieSlotIdx < slots.size) {
+            emitElementAccessInternalComments(slots[ieSlotIdx])
+            ieSlotIdx++
         }
     }
 

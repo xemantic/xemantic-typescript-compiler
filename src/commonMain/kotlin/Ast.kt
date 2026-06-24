@@ -483,6 +483,10 @@ data class ImportDeclaration(
     val assertClause: String? = null,
     /** Source position of the `assert`/`with` keyword starting the attributes clause, or -1 if absent. */
     val assertClausePos: Int = -1,
+    /** Comments INTERNAL to the import (between `import`/clause/`from`/specifier tokens), one entry
+     *  per inter-token boundary in source/emit order; null entries for empty boundaries. Captured by
+     *  the parser, replayed by the emitter (importExportInternalComments). Null when no internal comments. */
+    val internalComments: List<List<Comment>?>? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportDeclaration
 }
@@ -513,6 +517,9 @@ data class ExportDeclaration(
     val assertClause: String? = null,
     /** Source position of the `assert`/`with` keyword starting the attributes clause, or -1 if absent. */
     val assertClausePos: Int = -1,
+    /** Comments INTERNAL to the export (between `export`/clause/`from`/specifier tokens), one entry per
+     *  inter-token boundary in source/emit order; see [ImportDeclaration.internalComments]. */
+    val internalComments: List<List<Comment>?>? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportDeclaration
 }
@@ -530,6 +537,9 @@ data class ExportAssignment(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** Comments INTERNAL to `export default <expr>` (after `export`, after `default`, before `;`),
+     *  one entry per inter-token boundary; see [ImportDeclaration.internalComments]. */
+    val internalComments: List<List<Comment>?>? = null,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportAssignment
 }

@@ -567,6 +567,20 @@ class Parser(
         }
     }
 
+    /** Accumulator for comments INTERNAL to an import/export statement (between its tokens),
+     *  set fresh at the top of parseImportDeclaration/parseExportDeclaration and appended to at
+     *  each inter-token boundary (in source order) by [captureIeSlot]. The nested clause/specifier
+     *  parse functions append to it too (they are only reached from import/export parsing).
+     *  importExportInternalComments. */
+    private var ieSlots: MutableList<List<Comment>?>? = null
+
+    /** Append the current inter-token comment buffer as the next import/export internal-comment slot.
+     *  Call immediately AFTER the parseExpected/nextToken/parse that consumed the preceding token so
+     *  the scanner buffer holds the comments between it and the next token. No-op outside import/export. */
+    private fun captureIeSlot() {
+        ieSlots?.add(combineCommentBuffers())
+    }
+
     /** Returns a copy of [node] with [comments] merged into its trailingComments. */
     private fun withTrailingComments(node: Node, comments: List<Comment>): Node {
         val merged = (node.trailingComments.orEmpty() + comments).ifEmpty { null }
@@ -3708,6 +3722,7 @@ class Parser(
     ): Statement {
         val pos = getPos()
         val comments = outerComments ?: leadingComments()
+        ieSlots = mutableListOf()
         parseExpected(SyntaxKind.ImportKeyword)
 
         // import type ...
@@ -3716,6 +3731,7 @@ class Parser(
             isIdentifier() || scanner.getToken() == SyntaxKind.OpenBrace || scanner.getToken() == SyntaxKind.Asterisk
         }
         if (isTypeOnly) nextToken()
+        captureIeSlot() // after `import` (and `type`), before the clause/specifier
 
         // tsc parseImportDeclaration: a fully-RESERVED keyword after `import` matches NO
         // clause shape (tsc's `identifier = isIdentifier() ? parseIdentifier() : undefined`
@@ -3812,7 +3828,9 @@ class Parser(
 
         // import clause from "module"
         val clause = parseImportClause(isTypeOnly)
+        captureIeSlot() // after the clause, before `from`
         val fromOk = parseExpected(SyntaxKind.FromKeyword)
+        captureIeSlot() // after `from`, before the module specifier
         if (!fromOk && token != SyntaxKind.StringLiteral) {
             // tsc: with `from` missing and no string follow, the specifier-expression
             // parse fails without consuming (all follow-ups same-start-deduped) — the
@@ -3832,6 +3850,8 @@ class Parser(
         val assertClausePos = lastImportAttributesPos
         parseSemicolon()
         val trailing = trailingComments()
+        val internal = ieSlots?.takeIf { list -> list.any { it != null } }
+        ieSlots = null
         return ImportDeclaration(
             importClause = clause,
             moduleSpecifier = moduleSpec,
@@ -3842,6 +3862,7 @@ class Parser(
             assertClause = assertClause,
             assertClausePos = assertClausePos,
             trailingComments = trailing,
+            internalComments = internal,
         )
     }
 
@@ -3852,7 +3873,12 @@ class Parser(
 
         if (isIdentifier()) {
             name = parseIdentifier()
+            // Capture the after-name comment only when a comma follows (i.e. there are bindings);
+            // for `import D from "x"` the comment before `from` is captured as the caller's
+            // beforeFrom slot instead, avoiding a double-capture of the same buffer.
+            if (token == SyntaxKind.Comma) captureIeSlot() // after the default-import name, before `,`
             if (parseOptional(SyntaxKind.Comma)) {
+                captureIeSlot() // after `,`, before the named/namespace bindings
                 namedBindings = parseNamedImportsOrNamespaceImport()
             }
         } else {
@@ -3872,7 +3898,9 @@ class Parser(
         return if (token == SyntaxKind.Asterisk) {
             val pos = getPos()
             nextToken()
+            captureIeSlot() // after `*`, before `as`
             parseExpected(SyntaxKind.AsKeyword)
+            captureIeSlot() // after `as`, before the namespace name
             // `import * as while from "foo"` — TS1359 + a zero-width missing name; the
             // `from`-expected / specifier / ';' follow-ups are all same-start-deduped
             // and `while from "foo"` re-parses as a while-statement (reservedWords2).
@@ -3886,10 +3914,13 @@ class Parser(
     private fun parseNamedImports(): NamedImports {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
+        captureIeSlot() // after `{`, before the first specifier
         val elements = mutableListOf<ImportSpecifier>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             elements.add(parseImportSpecifier())
+            captureIeSlot() // after the specifier's binding name, before `,`/`}`
             if (!parseOptional(SyntaxKind.Comma)) break
+            captureIeSlot() // after `,`, before the next specifier
         }
         parseExpected(SyntaxKind.CloseBrace)
         return NamedImports(elements = elements, pos = pos, end = getEnd())
@@ -3916,7 +3947,9 @@ class Parser(
         var bindIsKwNotIdent = isKeyword() && !isIdentifier()
 
         val first = parseIdentifierName()
+        if (token == SyntaxKind.AsKeyword) captureIeSlot() // after propertyName, before `as`
         return if (parseOptional(SyntaxKind.AsKeyword)) {
+            captureIeSlot() // after `as`, before the binding name
             bindKwStart = scanner.getTokenPos()
             bindKwLen = scanner.getTokenText().length
             bindIsKwNotIdent = isKeyword() && !isIdentifier()
@@ -3934,10 +3967,13 @@ class Parser(
     private fun parseExportDeclaration(): Statement {
         val pos = getPos()
         val comments = leadingComments()
+        ieSlots = mutableListOf()
         parseExpected(SyntaxKind.ExportKeyword)
+        captureIeSlot() // after `export`, before default/`*`/`{`/specifier
 
         // export default
         if (parseOptional(SyntaxKind.DefaultKeyword)) {
+            captureIeSlot() // after `default`, before the exported value
             val modifiers = setOf(ModifierFlag.Export, ModifierFlag.Default)
             return when (token) {
                 FunctionKeyword -> parseFunctionDeclarationOrExpression(modifiers, comments)
@@ -3973,8 +4009,11 @@ class Parser(
 
                 else -> {
                     val expr = parseAssignmentExpression()
+                    captureIeSlot() // after the exported value, before `;`
                     parseSemicolon()
                     val trailing = trailingComments()
+                    val internal = ieSlots?.takeIf { list -> list.any { it != null } }
+                    ieSlots = null
                     // B148: a JS-file `/** @type {T} */ export default <expr>` supplies T as the
                     // export's expected type (excess-prop for an object literal; missing-prop for
                     // a variable/other expr). parsePropertyTypeFromJSDoc returns null when there is
@@ -3989,6 +4028,7 @@ class Parser(
                         end = getEnd(),
                         leadingComments = comments,
                         trailingComments = trailing,
+                        internalComments = internal,
                     )
                 }
             }
@@ -4019,10 +4059,15 @@ class Parser(
         // export * from "module"
         if (token == SyntaxKind.Asterisk) {
             nextToken()
+            captureIeSlot() // after `*`, before `as`/`from`
             val nsExport = if (parseOptional(SyntaxKind.AsKeyword)) {
-                NamespaceExport(name = parseIdentifier(), pos = pos, end = getEnd())
+                captureIeSlot() // after `as`, before the namespace name
+                val nsName = parseIdentifier()
+                captureIeSlot() // after the namespace name, before `from`
+                NamespaceExport(name = nsName, pos = pos, end = getEnd())
             } else null
             parseExpected(SyntaxKind.FromKeyword)
+            captureIeSlot() // after `from`, before the module specifier
             if (token != SyntaxKind.StringLiteral) {
                 reportError("String literal expected.", code = 1141)
             }
@@ -4030,6 +4075,8 @@ class Parser(
             val assertClauseNs = parseImportAttributes()
             val assertClauseNsPos = lastImportAttributesPos
             parseSemicolon()
+            val internal = ieSlots?.takeIf { list -> list.any { it != null } }
+            ieSlots = null
             return ExportDeclaration(
                 exportClause = nsExport,
                 moduleSpecifier = spec,
@@ -4039,13 +4086,16 @@ class Parser(
                 leadingComments = comments,
                 assertClause = assertClauseNs,
                 assertClausePos = assertClauseNsPos,
+                internalComments = internal,
             )
         }
 
         // export { ... } from? "module"
         if (token == SyntaxKind.OpenBrace) {
             val namedExports = parseNamedExports()
+            captureIeSlot() // after `}`, before `from`
             val moduleSpec = if (parseOptional(SyntaxKind.FromKeyword)) {
+                captureIeSlot() // after `from`, before the module specifier
                 if (token != SyntaxKind.StringLiteral) {
                     reportError("String literal expected.", code = 1141)
                 }
@@ -4054,6 +4104,8 @@ class Parser(
             val assertClauseNamed = if (moduleSpec != null) parseImportAttributes() else null
             val assertClauseNamedPos = if (moduleSpec != null) lastImportAttributesPos else -1
             parseSemicolon()
+            val internal = ieSlots?.takeIf { list -> list.any { it != null } }
+            ieSlots = null
             return ExportDeclaration(
                 exportClause = namedExports,
                 moduleSpecifier = moduleSpec,
@@ -4064,6 +4116,7 @@ class Parser(
                 assertClause = assertClauseNamed,
                 assertClausePos = assertClauseNamedPos,
                 trailingComments = trailingComments(),
+                internalComments = internal,
             )
         }
 
@@ -4159,12 +4212,14 @@ class Parser(
     private fun parseNamedExports(): NamedExports {
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBrace)
+        captureIeSlot() // after `{`, before the first specifier
         val elements = mutableListOf<ExportSpecifier>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
             // If we encounter `from` keyword here (before any specifier), it means the `}` was missing.
             // Stop — parseExpected(CloseBrace) will report '}' expected at `from`.
             if (token == SyntaxKind.FromKeyword) break
             elements.add(parseExportSpecifier())
+            captureIeSlot() // after the specifier's binding name, before `,`/`}`
             if (token == SyntaxKind.CloseBrace || token == SyntaxKind.EndOfFile) break
             // If we see `from` keyword after a specifier (no comma before it),
             // report ',' expected at the `from` position (matching TypeScript behavior).
@@ -4173,6 +4228,7 @@ class Parser(
                 break
             }
             if (!parseOptional(SyntaxKind.Comma)) break
+            captureIeSlot() // after `,`, before the next specifier
         }
         parseExpected(SyntaxKind.CloseBrace)
         return NamedExports(elements = elements, pos = pos, end = getEnd())
@@ -4186,7 +4242,9 @@ class Parser(
         }
         if (isTypeOnly) nextToken()
         val first = parseIdentifierName()
+        if (token == SyntaxKind.AsKeyword) captureIeSlot() // after propertyName, before `as`
         return if (parseOptional(SyntaxKind.AsKeyword)) {
+            captureIeSlot() // after `as`, before the binding name
             ExportSpecifier(
                 propertyName = first,
                 name = parseIdentifierName(),
