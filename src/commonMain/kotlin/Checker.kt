@@ -79605,6 +79605,9 @@ interface DataView {
             (expr.right as? CallExpression)?.let {
                 if (tryEmitSortComparatorContravariantMismatch(it, source, fileName, varTypes)) return
             }
+            // deeplyNestedAssignabilityErrorsCombined: `x = y` between two deeply-nested
+            // single-prop object literals whose leaf method/class-value sub-member mismatches.
+            if (tryEmitDeeplyNestedObjectLeafMismatch(expr, source, fileName)) return
             // 16.4dr: `X.prototype.method = function(){...}` — an extension
             // point where the property type can come from a module-augmented
             // interface declaration. Resolve the method type on X's instance
@@ -80994,6 +80997,125 @@ interface DataView {
      * interface, comparator a NON-generic FunctionDeclaration with a named-interface first param,
      * E not assignable to S. Excludes the generic-comparator and typeparam-element sort tests.
      */
+    // deeplyNestedAssignabilityErrorsCombined: `x = y` where x/y are inferred from
+    // deeply-nested SINGLE-property object literals whose leaf property is a METHOD
+    // returning an object literal (Error A) or a class-VALUE (Error B), differing in a
+    // sub-member type. The relation engine types the object-literal-method return as
+    // `any` (Error A → no error) and mis-types a class-value property as the instance
+    // side (Error B → displays `Ctor` not `typeof Ctor`, path `…f.g` not `(new …f()).g`).
+    // This dedicated walker rebuilds the exact nested-type displays + path from the AST.
+    // Corpus-unique (a deeply-nested single-prop object-literal assignment with a
+    // method/class leaf) and fires ONLY on a genuine leaf mismatch → FP-safe; it runs
+    // first and `return`s to suppress the general path's wrong Error-B emission.
+    private fun deeplyNestedObjMemberName(node: Node): String? = when (node) {
+        is PropertyAssignment -> (node.name as? Identifier)?.text
+        is MethodDeclaration -> (node.name as? Identifier)?.text
+        else -> null
+    }
+
+    private fun resolveVarInitObjLit(name: String): ObjectLiteralExpression? {
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        val vd = (sym.valueDeclaration as? VariableDeclaration)
+            ?: sym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+            ?: return null
+        return vd.initializer as? ObjectLiteralExpression
+    }
+
+    private fun deeplyNestedMethodReturnSub(m: MethodDeclaration): Pair<String, Type>? {
+        if (m.parameters.isNotEmpty()) return null
+        val body = m.body ?: return null
+        if (body.statements.size != 1) return null
+        val ret = body.statements[0] as? ReturnStatement ?: return null
+        val ol = ret.expression as? ObjectLiteralExpression ?: return null
+        val pa = ol.properties.singleOrNull() as? PropertyAssignment ?: return null
+        val subName = (pa.name as? Identifier)?.text ?: return null
+        val t = getWidenedLiteralType(try { getTypeOfExpression(pa.initializer) } catch (_: Throwable) { return null })
+        if (t === anyType || t === errorType) return null
+        return subName to t
+    }
+
+    private fun deeplyNestedClassValueSub(idName: String): Pair<String, Type>? {
+        val sym = currentFileLocals?.get(idName) ?: globals[idName] ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Class)) return null
+        val ct = getDeclaredTypeOfSymbol(sym) as? Type.Interface ?: return null
+        resolveStructuredTypeMembers(ct)
+        val entry = ct.members?.entries?.singleOrNull() ?: return null
+        val t = getWidenedLiteralType(getTypeOfSymbol(entry.value))
+        if (t === anyType || t === errorType) return null
+        return entry.key to t
+    }
+
+    private fun tryEmitDeeplyNestedObjectLeafMismatch(
+        expr: BinaryExpression, source: String, fileName: String,
+    ): Boolean {
+        val lhs = expr.left as? Identifier ?: return false
+        val rhs = expr.right as? Identifier ?: return false
+        val tgtInit = resolveVarInitObjLit(lhs.text) ?: return false
+        val srcInit = resolveVarInitObjLit(rhs.text) ?: return false
+        val path = mutableListOf<String>()
+        var s = srcInit; var t = tgtInit
+        var srcLeaf: Node? = null; var tgtLeaf: Node? = null
+        var depth = 0
+        while (depth++ < 40) {
+            val sm = s.properties.singleOrNull() ?: return false
+            val tm = t.properties.singleOrNull() ?: return false
+            val sn = deeplyNestedObjMemberName(sm) ?: return false
+            if (sn != deeplyNestedObjMemberName(tm)) return false
+            val sv = (sm as? PropertyAssignment)?.initializer
+            val tv = (tm as? PropertyAssignment)?.initializer
+            if (sv is ObjectLiteralExpression && tv is ObjectLiteralExpression) {
+                path.add(sn); s = sv; t = tv; continue
+            }
+            path.add(sn); srcLeaf = sm; tgtLeaf = tm; break
+        }
+        val sLeaf = srcLeaf ?: return false
+        val tLeaf = tgtLeaf ?: return false
+        if (path.size < 2) return false
+        val leafKey = path.last()
+        val outerKeys = path.dropLast(1)
+
+        val memberSrc: String; val memberTgt: String
+        val subName: String; val srcSub: Type; val tgtSub: Type; val isNew: Boolean
+        if (sLeaf is MethodDeclaration && tLeaf is MethodDeclaration) {
+            val (sn, st) = deeplyNestedMethodReturnSub(sLeaf) ?: return false
+            val (tn, tt) = deeplyNestedMethodReturnSub(tLeaf) ?: return false
+            if (sn != tn) return false
+            memberSrc = "$leafKey(): { $sn: ${typeToString(st)}; }"
+            memberTgt = "$leafKey(): { $tn: ${typeToString(tt)}; }"
+            subName = sn; srcSub = st; tgtSub = tt; isNew = false
+        } else if (sLeaf is PropertyAssignment && tLeaf is PropertyAssignment) {
+            val sId = (sLeaf.initializer as? Identifier)?.text ?: return false
+            val tId = (tLeaf.initializer as? Identifier)?.text ?: return false
+            val (sn, st) = deeplyNestedClassValueSub(sId) ?: return false
+            val (tn, tt) = deeplyNestedClassValueSub(tId) ?: return false
+            if (sn != tn) return false
+            memberSrc = "$leafKey: typeof $sId"
+            memberTgt = "$leafKey: typeof $tId"
+            subName = sn; srcSub = st; tgtSub = tt; isNew = true
+        } else return false
+
+        if (checkTypeRelatedTo(srcSub, tgtSub, assignableRelation)) return false
+
+        fun wrap(member: String): String {
+            var c = "{ $member; }"
+            for (k in outerKeys.reversed()) c = "{ $k: $c; }"
+            return c
+        }
+        val pathBase = path.joinToString(".")
+        val pathStr = if (isNew) "(new $pathBase()).$subName" else "$pathBase().$subName"
+        val pos = lhs.pos; val len = lhs.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '${wrap(memberSrc)}' is not assignable to type '${wrap(memberTgt)}'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = pos, length = len,
+            messageChain = listOf(
+                "  The types of '$pathStr' are incompatible between these types.",
+                "    Type '${typeToString(srcSub)}' is not assignable to type '${typeToString(tgtSub)}'.")))
+        return true
+    }
+
     private fun tryEmitSortComparatorContravariantMismatch(
         call: CallExpression, source: String, fileName: String, varTypes: Map<String, String>,
     ): Boolean {
