@@ -112648,6 +112648,52 @@ interface DataView {
         return true
     }
 
+    // visibilityOfCrossModuleTypeUsage: an OPTIONAL-member PropertyAccess argument
+    // (`configuration.server`, where `server?: IServer`) passed to a required NAMED
+    // parameter (`server: IServer`). `computeRawTypeOfPropertyAccess` does NOT model the
+    // `| undefined` of an optional member in the general type path, so argType is the bare
+    // `IServer` and the relation passes → we emit nothing. tsc reports TS2345 because the
+    // member's type is `IServer | undefined`. We synthesize the union LOCALLY (keeping the
+    // general type path unchanged, per the CLAUDE.md "compute undefined display LATE at the
+    // emission site" rule) and fire ONLY when undefined is the SOLE assignability failure
+    // (base type passes, union fails) → FP-safe by construction.
+    private fun tryEmitOptionalMemberArgVsRequiredNamedTs2345(
+        arg: PropertyAccessExpression, paramType: Type, paramSym: Symbol,
+        source: String, fileName: String,
+    ): Boolean {
+        if (!strictNullChecks) return false
+        // Param must be a NAMED object type (interface/reference) and non-optional.
+        if (paramType !is Type.Interface && paramType !is Type.Reference) return false
+        if ((paramType as Type.Object).symbol == null) return false
+        val pd = paramSym.valueDeclaration as? Parameter
+        if (pd?.questionToken == true || pd?.initializer != null || pd?.dotDotDotToken == true) return false
+        // Resolve the optional member behind the property-access argument.
+        val recvType = try { getApparentType(getTypeOfExpression(arg.expression)) } catch (_: Throwable) { return false }
+        if (recvType === anyType || recvType === errorType) return false
+        val prop = getPropertyOfType(recvType, arg.name.text) ?: return false
+        if (!isOptionalProperty(prop)) return false
+        val propType = getTypeOfSymbol(prop)
+        if (propType === anyType || propType === errorType) return false
+        if (typeIncludesExplicitUndefined(propType)) return false  // already `… | undefined` — not this shape
+        // undefined must be the SOLE failure: base assignable, union not.
+        if (!checkTypeRelatedTo(propType, paramType, assignableRelation)) return false
+        val srcUnion = getUnionType(listOf(propType, undefinedType))
+        if (checkTypeRelatedTo(srcUnion, paramType, assignableRelation)) return false
+        val tgtDisp = typeToString(paramType)
+        val srcDisp = "${typeToString(propType)} | undefined"
+        val start = arg.pos
+        val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcDisp' is not assignable to parameter of type '$tgtDisp'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf("  Type 'undefined' is not assignable to type '$tgtDisp'."),
+        ))
+        return true
+    }
+
     private fun tryEmitBlockingMappedIndexedAccessArg(
         args: List<Expression>, sigIn: Signature, source: String, fileName: String,
     ): Boolean {
@@ -113974,6 +114020,10 @@ interface DataView {
                         val chain = getPropertyElaborationChain(argType, paramType)
                         chain != null && chain.isNotEmpty()
                     }
+                // visibilityOfCrossModuleTypeUsage: optional-member PropertyAccess arg vs
+                // required named param — undefined is the sole failure (see helper).
+                if (arg is PropertyAccessExpression &&
+                    tryEmitOptionalMemberArgVsRequiredNamedTs2345(arg, paramType, params[i], source, fileName)) continue
                 if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
                 // Round 79l (orchestrated — Agent A plan): for a contextually-typed
                 // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
