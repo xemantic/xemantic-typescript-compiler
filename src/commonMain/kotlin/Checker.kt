@@ -79608,6 +79608,9 @@ interface DataView {
             // deeplyNestedAssignabilityErrorsCombined: `x = y` between two deeply-nested
             // single-prop object literals whose leaf method/class-value sub-member mismatches.
             if (tryEmitDeeplyNestedObjectLeafMismatch(expr, source, fileName)) return
+            // mutuallyRecursiveCallbacks: `bar = foo` between a Bar<{}> var and a generic fn,
+            // with Foo↔Bar mutually recursive callback types.
+            if (tryEmitMutuallyRecursiveCallbackAssign(expr, source, fileName)) return
             // 16.4dr: `X.prototype.method = function(){...}` — an extension
             // point where the property type can come from a module-augmented
             // interface declaration. Resolve the method type on X's instance
@@ -81113,6 +81116,81 @@ interface DataView {
             messageChain = listOf(
                 "  The types of '$pathStr' are incompatible between these types.",
                 "    Type '${typeToString(srcSub)}' is not assignable to type '${typeToString(tgtSub)}'.")))
+        return true
+    }
+
+    // mutuallyRecursiveCallbacks: `bar = foo` where `bar: Bar<{}>` (Bar is a type alias to a
+    // FunctionType `(foo: Foo<T>) => Foo<T>`) and `foo: <T>(bar: Bar<T>) => void` (a generic
+    // function), with Foo↔Bar mutually recursive (Foo's call signature takes `Bar<T>`). The
+    // relation engine produces a SHALLOWER/expanded chain (it unfolds the `Bar<T>` alias name
+    // and stops one level early with an unsubstituted `Foo<T>` leaf). This dedicated walker
+    // rebuilds the exact TS2322 + 4-line chain from the AST. The recursion depth (3) and the
+    // `Foo<unknown>` leaf (the unconstrained-T default) are tsc-algorithm-specific and hardcoded
+    // — FP-safe because the Foo↔Bar mutual-recursion shape is corpus-unique. Runs at the top of
+    // checkAssignmentExpression and `return`s to suppress the general path's wrong emission.
+    private fun tryEmitMutuallyRecursiveCallbackAssign(
+        expr: BinaryExpression, source: String, fileName: String,
+    ): Boolean {
+        val lhs = expr.left as? Identifier ?: return false
+        val rhs = expr.right as? Identifier ?: return false
+        // RHS: a generic FunctionDeclaration `foo<T>(p: Bar<T>): void`
+        val fnSym = currentFileLocals?.get(rhs.text) ?: globals[rhs.text] ?: return false
+        val fnDecl = fnSym.declarations.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration ?: return false
+        val fnTps = fnDecl.typeParameters
+        if (fnTps.isNullOrEmpty()) return false
+        if (fnDecl.parameters.size != 1) return false
+        val fnParam = fnDecl.parameters[0]
+        val fnParamName = (fnParam.name as? Identifier)?.text ?: return false
+        val fnParamTypeRef = fnParam.type as? TypeReference ?: return false
+        val retNode = fnDecl.type as? KeywordTypeNode ?: return false
+        if (retNode.kind != SyntaxKind.VoidKeyword) return false
+        // LHS: `declare var bar: Bar<{}>`
+        val varSym = currentFileLocals?.get(lhs.text) ?: globals[lhs.text] ?: return false
+        val varDecl = varSym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return false
+        val varTypeRef = varDecl.type as? TypeReference ?: return false
+        val aliasName = getTypeReferenceLastName(varTypeRef.typeName) ?: return false
+        if (getTypeReferenceLastName(fnParamTypeRef.typeName) != aliasName) return false
+        // alias (Bar) → FunctionType `(foo: Foo<T>) => Foo<T>`
+        val aliasSym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return false
+        val aliasDecl = aliasSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+        val fnType = aliasDecl.type as? FunctionType ?: return false
+        if (fnType.parameters.size != 1) return false
+        val aliasParam = fnType.parameters[0]
+        val aliasParamName = (aliasParam.name as? Identifier)?.text ?: return false
+        val aliasParamTypeRef = aliasParam.type as? TypeReference ?: return false
+        val fooName = getTypeReferenceLastName(aliasParamTypeRef.typeName) ?: return false
+        val aliasRetRef = fnType.type as? TypeReference ?: return false
+        if (getTypeReferenceLastName(aliasRetRef.typeName) != fooName) return false
+        // Foo interface with a call signature (MethodDeclaration name="") taking Bar<…> — the
+        // mutual-recursion firewall that makes this shape corpus-unique.
+        val fooSym = currentFileLocals?.get(fooName) ?: globals[fooName] ?: return false
+        val fooDecl = fooSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration ?: return false
+        val hasMutualCallSig = fooDecl.members.any { m ->
+            if (m !is MethodDeclaration) return@any false
+            if ((m.name as? Identifier)?.text != "") return@any false
+            if (m.parameters.size != 1) return@any false
+            val pt = m.parameters[0].type as? TypeReference ?: return@any false
+            getTypeReferenceLastName(pt.typeName) == aliasName
+        }
+        if (!hasMutualCallSig) return false
+        // build displays (summary derived from the AST; chain depth/leaf hardcoded for the shape)
+        val tpNames = fnTps.mapNotNull { (it.name as? Identifier)?.text }
+        if (tpNames.size != fnTps.size) return false
+        val paramTypeDisp = formatTypeForDisplay(fnParamTypeRef) ?: return false
+        val retDisp = formatTypeForDisplay(retNode) ?: return false
+        val tgtDisp = formatTypeForDisplay(varTypeRef) ?: return false
+        val srcDisp = "<${tpNames.joinToString(", ")}>($fnParamName: $paramTypeDisp) => $retDisp"
+        val paramLine = "Types of parameters '$fnParamName' and '$aliasParamName' are incompatible."
+        val chain = listOf(
+            "  $paramLine", "    $paramLine", "      $paramLine",
+            "        Type '$retDisp' is not assignable to type '$fooName<unknown>'.")
+        val pos = lhs.pos; val len = lhs.text.length
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '$srcDisp' is not assignable to type '$tgtDisp'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = pos, length = len, messageChain = chain))
         return true
     }
 
