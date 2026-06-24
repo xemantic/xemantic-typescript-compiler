@@ -1391,7 +1391,11 @@ class TypeScriptCompiler {
                 // when an outDir is set. Example: `/relative.js` + `/relative.d.ts` referenced
                 // via `import { relative } from "./relative.js"` — TypeScript emits no
                 // `relative.js` under outDir, only the imports in the importing file.
-                if (isPureJsFile) {
+                // GATED on `!allowJs`: under `allowJs` the `.js` is a first-class PROGRAM file
+                // and IS emitted (the companion `.d.ts` only supplies types) — e.g. elidedJSImport2's
+                // `other.js` + `other.d.ts` emits `other.js`. moduleResolutionWithExtensions_withPaths
+                // (no allowJs) keeps the skip (its `.js` is external).
+                if (isPureJsFile && !options.allowJs) {
                     val base = when {
                         file.fileName.endsWith(".js") -> file.fileName.removeSuffix(".js")
                         file.fileName.endsWith(".cjs") -> file.fileName.removeSuffix(".cjs")
@@ -1664,11 +1668,33 @@ class TypeScriptCompiler {
             // to the deps map without ref-path edges. This matches TypeScript's behavior
             // of using input order when triple-slash refs form mutual cycles
             // (e.g. `doNotemitTripleSlashComments_ts`).
-            val depsForSort = when {
+            val depsForSortRaw = when {
                 options.noResolve -> emptyMap()
                 hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
                 else -> importDeps
             }
+            // A `.js` whose companion `.d.ts` exists is referenced via its `.d.ts` in tsc's
+            // program graph (the `.d.ts` supplies types), so under allowJs (where the `.js`
+            // IS still emitted) it carries NO ordering dependency edge — tsc emits such files
+            // in INPUT order, not dependency order. Drop those targets from the sort deps so
+            // e.g. elidedJSImport2 emits `index.js` (the importer) before `other.js`. Corpus-
+            // unique to the allowJs + companion-`.d.ts` shape; for non-allowJs the `.js` is
+            // skipped from emit entirely so the filter is inert there.
+            val companionDtsJsFiles: Set<String> = if (options.allowJs) {
+                val fileNameSet = parsed.files.mapTo(mutableSetOf()) { it.fileName }
+                parsed.files.mapNotNull { f ->
+                    val base = when {
+                        f.fileName.endsWith(".js") -> f.fileName.removeSuffix(".js")
+                        f.fileName.endsWith(".jsx") -> f.fileName.removeSuffix(".jsx")
+                        f.fileName.endsWith(".mjs") -> f.fileName.removeSuffix(".mjs")
+                        f.fileName.endsWith(".cjs") -> f.fileName.removeSuffix(".cjs")
+                        else -> null
+                    }
+                    if (base != null && "$base.d.ts" in fileNameSet) f.fileName else null
+                }.toSet()
+            } else emptySet()
+            val depsForSort = if (companionDtsJsFiles.isEmpty()) depsForSortRaw
+                else depsForSortRaw.mapValues { (_, v) -> v.filter { it !in companionDtsJsFiles } }
             val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
             // require-only orphan drop: a `.ts` input reached ONLY by a bare untyped
             // `require('./x')` CallExpression — not a static `import`/`export … from` /
