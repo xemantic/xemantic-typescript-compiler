@@ -247,6 +247,20 @@ class Checker(
      *  path). */
     private var currentClassForThis: ClassDeclaration? = null
 
+    /** B585 (allowJscheckJsTypeParameterNoCrash): the contextual TYPE NODE of the
+     *  object literal currently being walked by walkFunctionBodiesInExpr (derived from
+     *  the enclosing call's resolved param type). Threaded so a nested object-literal
+     *  method's `this.X = v` write can DISPLAY the contextual string-index alias
+     *  (`WatchHandler<any>`) instead of the unfolded structural method type
+     *  (`(val: any) => void`). Null outside the checkJs object-literal-arg path. */
+    private var objLitArgCtxTypeNode: TypeNode? = null
+
+    /** B585: the alias-display string to use as the TS2322 target when emitting a
+     *  `this.X = v` mismatch inside an object-literal method whose object literal is
+     *  contextually typed by `Record<string, Alias>` / a `{ [k:string]: Alias }`
+     *  index signature. Set only during walkObjectLiteralMemberBody for that shape. */
+    private var objLitMethodThisIndexAliasDisplay: String? = null
+
     /** B-readonlyMembers: true when the const-assignment walker is positioned DIRECTLY in the
      *  constructor body (or a direct property initializer) of [currentClassForThis] — NOT nested
      *  inside any function/arrow. tsc allows writing an OWN readonly DATA property only here
@@ -76100,6 +76114,65 @@ interface DataView {
         return ctors[0].parameters
     }
 
+    /** B585: resolve a call's callee to its declared function-parameter TYPE NODE at
+     *  [argIndex], following an import alias and a `var f = realFn` (Identifier-initializer)
+     *  indirection — so `vextend = extend` reaches extend's param type node. Returns null
+     *  unless the callee resolves to a single non-generic FunctionDeclaration. */
+    private fun objLitArgCalleeParamTypeNode(call: CallExpression, argIndex: Int): TypeNode? {
+        val callee = call.expression as? Identifier ?: return null
+        if (currentLocalTypes.containsKey(callee.text)) return null
+        var sym = resolveAlias(currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null)
+        var hops = 0
+        while (hops++ < 4) {
+            val fnDecl = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull()
+            if (fnDecl != null) {
+                if (!fnDecl.typeParameters.isNullOrEmpty()) return null
+                return fnDecl.parameters.getOrNull(argIndex)?.type
+            }
+            val varInit = sym.declarations.filterIsInstance<VariableDeclaration>()
+                .firstOrNull()?.initializer as? Identifier ?: return null
+            sym = resolveAlias(currentFileLocals?.get(varInit.text) ?: globals[varInit.text] ?: return null)
+        }
+        return null
+    }
+
+    /** B585: the TYPE NODE of member [propName] within a contextual type node [ctxNode]
+     *  (a TypeLiteral, or a TypeReference to an interface / `type X = {…}` alias resolvable
+     *  via scope). Generic substitution is NOT applied (corpus-unique gate: the member
+     *  type must not reference the type's own type parameters). */
+    private fun objLitCtxMemberTypeNode(ctxNode: TypeNode?, propName: String): TypeNode? {
+        val members: List<ClassElement> = when (ctxNode) {
+            is TypeLiteral -> ctxNode.members
+            is TypeReference -> {
+                val name = getTypeReferenceLastName(ctxNode.typeName) ?: return null
+                val resolved = resolveAlias(currentFileLocals?.get(name) ?: globals[name] ?: return null)
+                resolved.declarations.filterIsInstance<InterfaceDeclaration>().firstOrNull()?.members
+                    ?: (resolved.declarations.filterIsInstance<TypeAliasDeclaration>()
+                        .firstOrNull()?.type as? TypeLiteral)?.members
+                    ?: return null
+            }
+            else -> return null
+        }
+        return members.filterIsInstance<PropertyDeclaration>()
+            .firstOrNull { (it.name as? Identifier)?.text == propName }?.type
+    }
+
+    /** B585: when [ctxNode] is `Record<string, V>` or `{ [k: string]: V }` with V a NAMED
+     *  alias/interface reference, return V's display (e.g. `WatchHandler<any>`). Null
+     *  otherwise — the default structural display is already correct for a non-named V. */
+    private fun objLitCtxIndexSigAliasDisplay(ctxNode: TypeNode?): String? {
+        val valueNode: TypeNode? = when (ctxNode) {
+            is TypeReference -> {
+                if (getTypeReferenceLastName(ctxNode.typeName) != "Record") return null
+                ctxNode.typeArguments?.takeIf { it.size == 2 }?.get(1)
+            }
+            is TypeLiteral -> ctxNode.members.filterIsInstance<IndexSignature>().firstOrNull()?.type
+            else -> return null
+        }
+        if (valueNode !is TypeReference) return null
+        return formatTypeForDisplay(valueNode)
+    }
+
     private fun walkFunctionBodiesInExpr(
         expr: Expression, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -76141,19 +76214,38 @@ interface DataView {
                         getTypeOfObjectLiteral(expr)
                     return objLitThisType!!
                 }
+                // B585: the contextual type node threaded from the enclosing call; if this
+                // object literal is contextually `Record<string, Alias>` / `{ [k:string]: Alias }`,
+                // its methods' `this.X = v` mismatch DISPLAYS the alias (e.g. `WatchHandler<any>`).
+                val ctxNode = objLitArgCtxTypeNode
+                val ctxAliasDisplay = if (jsLike) objLitCtxIndexSigAliasDisplay(ctxNode) else null
+                fun walkMember(body: Block?, ret: TypeNode?, params: List<Parameter>, tps: List<TypeParameter>?, async: Boolean) {
+                    val savedAlias = objLitMethodThisIndexAliasDisplay
+                    objLitMethodThisIndexAliasDisplay = ctxAliasDisplay
+                    try {
+                        walkObjectLiteralMemberBody(body, ret, params, tps, objLitThis(),
+                            source, fileName, varTypes, typeParams, async)
+                    } finally {
+                        objLitMethodThisIndexAliasDisplay = savedAlias
+                    }
+                }
                 expr.properties.forEach { prop ->
                     when (prop) {
-                        is PropertyAssignment -> walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams)
+                        is PropertyAssignment -> {
+                            // B585: thread the property's contextual member type node into the
+                            // value walk when the value is itself an object literal.
+                            val memberCtx = if (prop.initializer is ObjectLiteralExpression && ctxNode != null)
+                                objLitCtxMemberTypeNode(ctxNode, (prop.name as? Identifier)?.text ?: "") else null
+                            val saved = objLitArgCtxTypeNode
+                            objLitArgCtxTypeNode = memberCtx
+                            try { walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams) }
+                            finally { objLitArgCtxTypeNode = saved }
+                        }
                         is SpreadAssignment -> walkFunctionBodiesInExpr(prop.expression, source, fileName, varTypes, typeParams)
-                        is MethodDeclaration -> if (jsLike) walkObjectLiteralMemberBody(
-                            prop.body, prop.type, prop.parameters, prop.typeParameters, objLitThis(),
-                            source, fileName, varTypes, typeParams, ModifierFlag.Async in prop.modifiers)
-                        is GetAccessor -> if (jsLike) walkObjectLiteralMemberBody(
-                            prop.body, prop.type, prop.parameters, null, objLitThis(),
-                            source, fileName, varTypes, typeParams, false)
-                        is SetAccessor -> if (jsLike) walkObjectLiteralMemberBody(
-                            prop.body, prop.type, prop.parameters, null, objLitThis(),
-                            source, fileName, varTypes, typeParams, false)
+                        is MethodDeclaration -> if (jsLike) walkMember(
+                            prop.body, prop.type, prop.parameters, prop.typeParameters, ModifierFlag.Async in prop.modifiers)
+                        is GetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
+                        is SetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
                         else -> {}
                     }
                 }
@@ -76178,7 +76270,18 @@ interface DataView {
                 val ctxParams = calleeDeclaredCtxParams(expr)
                 expr.arguments.forEachIndexed { i, arg ->
                     val ctxFn = ctxParams?.getOrNull(i)?.type?.let { contextualizeFnExprFromAnnotation(it, arg) }
-                    walkFunctionBodiesInExpr(ctxFn ?: arg, source, fileName, varTypes, typeParams)
+                    // B585: thread the callee's resolved param type node as an object-literal
+                    // arg's contextual type, so a nested object-literal method's `this.X = v`
+                    // mismatch DISPLAYS the contextual string-index alias.
+                    val argCtx = if (arg is ObjectLiteralExpression && isJsLikeFileName(fileName))
+                        objLitArgCalleeParamTypeNode(expr, i) else null
+                    val savedArgCtx = objLitArgCtxTypeNode
+                    objLitArgCtxTypeNode = argCtx
+                    try {
+                        walkFunctionBodiesInExpr(ctxFn ?: arg, source, fileName, varTypes, typeParams)
+                    } finally {
+                        objLitArgCtxTypeNode = savedArgCtx
+                    }
                 }
             }
             is NewExpression -> {
@@ -82099,7 +82202,13 @@ interface DataView {
                 if (checkExcessProperties(value, valueType, pt, displayTarget, source, fileName)) return
             }
             val displaySource = typeToString(valueType)
-            val displayTarget = typeToString(pt)
+            // B585: inside an object-literal method whose object literal is contextually
+            // typed by `Record<string, Alias>`, a `this.X = v` mismatch displays the
+            // contextual alias (`WatchHandler<any>`), not the unfolded structural method
+            // type (`(val: any) => void`). Only for the `this.X` write shape.
+            val displayTarget = (objLitMethodThisIndexAliasDisplay?.takeIf {
+                (target.expression as? Identifier)?.text == "this"
+            }) ?: typeToString(pt)
             // Property-level elaboration chain (16.1) — adds "Types of property 'X' are
             // incompatible." + nested type chain when source/target are both objects.
             val chain = mutableListOf<String>()
