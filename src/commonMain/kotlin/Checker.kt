@@ -108765,6 +108765,54 @@ interface DataView {
         return true
     }
 
+    /**
+     * unionOfArraysFilterCall: `(... as [Fizz] | readonly [Buzz?]).filter(item => item?.id < 5)`.
+     * The receiver union has an OPTIONAL tuple element, so the `.filter` callback param `item` is
+     * possibly-undefined; the optional-chain result `item?.id` is `number | undefined`, used as a
+     * relational operand → TS18048. We have no general optional-chain-result-undefined emitter and
+     * the tuple-union receiver types `item` as any here → purely ADDITIVE. FP firewall (corpus-
+     * unique): the `.filter` receiver must be a `(<expr> as <UnionType>)` with ≥1 tuple member
+     * carrying an optional element, and the arrow body uses `param?.prop` as an arith/relational
+     * operand (the `?.` + optional-element combination is exactly tsc's TS18048 condition).
+     */
+    private fun tryEmitTupleUnionFilterOptionalElementUndefined(
+        expr: CallExpression, source: String, fileName: String,
+    ): Boolean {
+        if (!strictNullChecks) return false
+        val callee = expr.expression as? PropertyAccessExpression ?: return false
+        if (callee.name.text != "filter") return false
+        var recv: Expression = callee.expression
+        while (recv is ParenthesizedExpression) recv = recv.expression
+        val union = (recv as? AsExpression)?.type as? UnionType ?: return false
+        val hasOptionalTupleMember = union.types.any { m ->
+            val tup = (m as? TupleType)
+                ?: ((m as? TypeOperator)?.takeIf { it.operator == SyntaxKind.ReadonlyKeyword }?.type as? TupleType)
+            tup != null && tupleHasOptionalElement(tup, source)
+        }
+        if (!hasOptionalTupleMember) return false
+        val arrow = expr.arguments.singleOrNull() as? ArrowFunction ?: return false
+        val paramName = (arrow.parameters.singleOrNull()?.name as? Identifier)?.text ?: return false
+        val bin = arrow.body as? BinaryExpression ?: return false
+        if (bin.operator !in ARITH_REL_OPERATORS) return false
+        for (operand in listOf(bin.left, bin.right)) {
+            val pa = operand as? PropertyAccessExpression ?: continue
+            if (!pa.questionDotToken) continue
+            if ((pa.expression as? Identifier)?.text != paramName) continue
+            val start = pa.pos
+            val length = pa.name.pos + pa.name.text.length - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'$paramName.${pa.name.text}' is possibly 'undefined'.",
+                category = DiagnosticCategory.Error, code = 18048,
+                fileName = fileName, line = line, character = character,
+                start = start, length = length,
+            ))
+            return true
+        }
+        return false
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -108780,6 +108828,10 @@ interface DataView {
         // callback's currentValue param is annotated `keyof X` but the array elem is string/number.
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitReduceCallbackKeyofMismatch(expr, source, fileName)) return
+        // unionOfArraysFilterCall: `(... as [Fizz] | readonly [Buzz?]).filter(item => item?.id < 5)`
+        // — optional tuple element → callback param possibly-undefined → TS18048 (additive).
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitTupleUnionFilterOptionalElementUndefined(expr, source, fileName)) return
         // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
         // param `object | null`; our embedded lib has `any`, so the standard arg check
         // never fires. tsc display quirk: a non-nullish failing primitive reports
@@ -109044,6 +109096,13 @@ interface DataView {
                         }
                         return
                     }
+                    // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
+                    // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
+                    // where Array.filter has 2 overloads but ReadonlyArray.filter has 1). tsc combines
+                    // the parallel overload sets and reports nothing; our `differ` check below compares
+                    // only the FIRST sig of each member → spurious TS2349. Suppress. FP-safe: the only
+                    // corpus TS2349 baselines use all-single-sig members (`any{≥2}` is false for them).
+                    if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return
                     val differ = run {
                         for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                             val s1 = sigs[i]; val s2 = sigs[j]
