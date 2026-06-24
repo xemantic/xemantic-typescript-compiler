@@ -1214,6 +1214,9 @@ class Checker(
         // member types (TS2322). NOT implicit-any gated — only on a jsx mode being set.
         if (options.jsx != null) {
             checkJsxIntrinsicAttributeTypes()
+            // tsxTypeArgumentPartialDefinitionStillErrors: uppercase JSX tag → generic fn
+            // returning a primitive (TS2786) + attr value vs Record<string,T> value type (TS2322).
+            checkJsxValueComponentReturnsPrimitive()
         }
         // 10. Check for duplicate identifiers (TS2300)
         checkDuplicateIdentifiers()
@@ -25886,6 +25889,191 @@ class Checker(
             } finally {
                 currentLocalTypes = savedLocals
             }
+        }
+    }
+
+    /**
+     * tsxTypeArgumentPartialDefinitionStillErrors: an UPPERCASE JSX tag `<SFC<string> prop={1}>`
+     * resolving to a top-level generic `function SFC<T>(props: Record<string, T>)` whose return
+     * type is a PRIMITIVE → TS2786 ("'SFC' cannot be used as a JSX component. Its return type
+     * 'string' is not a valid JSX element."), and the attribute `prop={1}` (number) vs the
+     * `Record<string,T>` value type T (bound to `string` by the explicit `<string>` type arg the
+     * parser DISCARDS — recovered from source) → TS2322. Purely ADDITIVE: we model neither JSX
+     * value-component validity nor `Record<>` here, so nothing fires today.
+     *
+     * FP firewall (corpus-unique): tag must resolve to a top-level FunctionDeclaration WITH a body
+     * (or annotation) whose return is in {string,number,boolean,bigint} (excludes bodyless `declare`
+     * components and null/JSX-Element returns); the TS2322 branch additionally requires a
+     * `Record<string,<bareTP>>` param + a recoverable explicit primitive type arg.
+     */
+    private fun checkJsxValueComponentReturnsPrimitive() {
+        val jsxSym = globals["JSX"] ?: return
+        if (!jsxSym.flags.hasAny(SymbolFlags.Module)) return
+        if (jsxSym.exports?.get("Element") == null) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!fileName.endsWith(".tsx") && !fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            val fnByName = result.sourceFile.statements.filterIsInstance<FunctionDeclaration>()
+                .filter { !it.typeParameters.isNullOrEmpty() && it.name != null }
+                .associateBy { it.name!!.text }
+            if (fnByName.isEmpty()) continue
+
+            fun handleElement(tagName: Expression, attributes: List<Node>) {
+                val tagId = tagName as? Identifier ?: return
+                val tag = tagId.text
+                if (tag.firstOrNull()?.isUpperCase() != true) return
+                val fn = fnByName[tag] ?: return
+                if (fn.parameters.size != 1) return
+                val rawRet = fn.type?.let { getTypeFromTypeNode(it) }
+                    ?: fn.body?.let { inferReturnTypeFromBody(it) } ?: return
+                val retType = getWidenedLiteralType(rawRet)
+                val isPrimitive = retType === stringType || retType === numberType ||
+                    retType === booleanType || retType === bigintType
+                if (!isPrimitive) return
+                val (line, ch) = getLineAndCharacterOfPosition(source, tagId.pos)
+                diagnostics.add(Diagnostic(
+                    message = "'$tag' cannot be used as a JSX component.",
+                    category = DiagnosticCategory.Error, code = 2786, fileName = fileName,
+                    line = line, character = ch, start = tagId.pos, length = tag.length,
+                    messageChain = listOf(
+                        "  Its return type '${typeToString(retType)}' is not a valid JSX element."),
+                ))
+                // TS2322: attr value vs the Record<string, TP> value type bound by the recovered arg.
+                val paramRef = fn.parameters[0].type as? TypeReference ?: return
+                if ((paramRef.typeName as? Identifier)?.text != "Record") return
+                val recArgs = paramRef.typeArguments ?: return
+                if (recArgs.size != 2) return
+                val valTpName = (recArgs[1] as? TypeReference)?.typeName
+                    ?.let { (it as? Identifier)?.text } ?: return
+                val tpIndex = fn.typeParameters?.indexOfFirst { it.name.text == valTpName } ?: -1
+                if (tpIndex < 0) return
+                val boundType = recoverJsxExplicitTypeArgPrimitive(source, tagId.pos + tag.length, tpIndex)
+                    ?: return
+                for (a in attributes) {
+                    val attr = a as? JsxAttribute ?: continue
+                    val attrType: Type = when (val v = attr.value) {
+                        null -> booleanType
+                        is StringLiteralNode -> stringType
+                        is JsxExpressionContainer -> {
+                            val e = v.expression ?: continue
+                            getWidenedLiteralType(getTypeOfExpression(e))
+                        }
+                        else -> continue
+                    }
+                    if (attrType === anyType || attrType === errorType) continue
+                    if (!checkTypeRelatedTo(attrType, boundType, assignableRelation)) {
+                        val (al, ac) = getLineAndCharacterOfPosition(source, attr.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(attrType)}' is not assignable to type '${typeToString(boundType)}'.",
+                            category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                            line = al, character = ac, start = attr.pos, length = attr.name.length,
+                        ))
+                    }
+                }
+            }
+
+            val walker = object {
+                fun walkExpr(e: Expression?) {
+                    when (e) {
+                        null -> {}
+                        is JsxElement -> {
+                            handleElement(e.openingElement.tagName, e.openingElement.attributes)
+                            for (a in e.openingElement.attributes)
+                                ((a as? JsxAttribute)?.value as? JsxExpressionContainer)?.expression?.let { walkExpr(it) }
+                            for (c in e.children) when (c) {
+                                is Expression -> walkExpr(c)
+                                is JsxExpressionContainer -> c.expression?.let { walkExpr(it) }
+                                else -> {}
+                            }
+                        }
+                        is JsxSelfClosingElement -> {
+                            handleElement(e.tagName, e.attributes)
+                            for (a in e.attributes)
+                                ((a as? JsxAttribute)?.value as? JsxExpressionContainer)?.expression?.let { walkExpr(it) }
+                        }
+                        is JsxFragment -> for (c in e.children) when (c) {
+                            is Expression -> walkExpr(c)
+                            is JsxExpressionContainer -> c.expression?.let { walkExpr(it) }
+                            else -> {}
+                        }
+                        is ParenthesizedExpression -> walkExpr(e.expression)
+                        is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
+                        is BinaryExpression -> {
+                            var cur: Expression = e
+                            while (cur is BinaryExpression) { walkExpr(cur.right); cur = cur.left }
+                            walkExpr(cur)
+                        }
+                        is CallExpression -> { walkExpr(e.expression); for (arg in e.arguments) walkExpr(arg) }
+                        is ArrowFunction -> when (val b = e.body) {
+                            is Block -> for (s in b.statements) walkStmt(s)
+                            is Expression -> walkExpr(b)
+                            else -> {}
+                        }
+                        is FunctionExpression -> e.body?.let { for (s in it.statements) walkStmt(s) }
+                        is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
+                        is ObjectLiteralExpression -> for (p in e.properties) when (p) {
+                            is PropertyAssignment -> walkExpr(p.initializer)
+                            is SpreadAssignment -> walkExpr(p.expression)
+                            else -> {}
+                        }
+                        is PropertyAccessExpression -> walkExpr(e.expression)
+                        is SpreadElement -> walkExpr(e.expression)
+                        else -> {}
+                    }
+                }
+                fun walkStmt(s: Statement) {
+                    when (s) {
+                        is ExpressionStatement -> walkExpr(s.expression)
+                        is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { walkExpr(it) }
+                        is ReturnStatement -> s.expression?.let { walkExpr(it) }
+                        is FunctionDeclaration -> s.body?.let { for (st in it.statements) walkStmt(st) }
+                        is Block -> for (st in s.statements) walkStmt(st)
+                        is IfStatement -> { walkExpr(s.expression); walkStmt(s.thenStatement); s.elseStatement?.let { walkStmt(it) } }
+                        is ForStatement -> { s.condition?.let { walkExpr(it) }; walkStmt(s.statement) }
+                        is ForInStatement -> walkStmt(s.statement)
+                        is ForOfStatement -> walkStmt(s.statement)
+                        is WhileStatement -> { walkExpr(s.expression); walkStmt(s.statement) }
+                        is DoStatement -> { walkStmt(s.statement); walkExpr(s.expression) }
+                        is LabeledStatement -> walkStmt(s.statement)
+                        is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { for (st in it.statements) walkStmt(st) }
+                        is ExportAssignment -> walkExpr(s.expression)
+                        else -> {}
+                    }
+                }
+            }
+            for (s in result.sourceFile.statements) walker.walkStmt(s)
+        }
+    }
+
+    /** Recover a discarded JSX explicit type argument (`<SFC<string>>`) from source: scan from
+     *  [start] (just past the tag identifier) for `<...>`, return the [tpIndex]-th top-level arg
+     *  as a primitive Type, or null if absent/non-primitive. */
+    private fun recoverJsxExplicitTypeArgPrimitive(source: String, start: Int, tpIndex: Int): Type? {
+        var i = start
+        while (i < source.length && source[i].isWhitespace()) i++
+        if (i >= source.length || source[i] != '<') return null
+        i++
+        val sb = StringBuilder()
+        val parts = mutableListOf<String>()
+        var depth = 1
+        while (i < source.length && depth > 0) {
+            when (val ch = source[i]) {
+                '<' -> { depth++; sb.append(ch) }
+                '>' -> { depth--; if (depth > 0) sb.append(ch) }
+                ',' -> if (depth == 1) { parts.add(sb.toString().trim()); sb.clear() } else sb.append(ch)
+                else -> sb.append(ch)
+            }
+            i++
+        }
+        if (depth != 0) return null
+        parts.add(sb.toString().trim())
+        return when (parts.getOrNull(tpIndex)) {
+            "string" -> stringType
+            "number" -> numberType
+            "boolean" -> booleanType
+            "bigint" -> bigintType
+            else -> null
         }
     }
 
