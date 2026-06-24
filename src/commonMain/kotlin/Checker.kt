@@ -56930,8 +56930,118 @@ interface DataView {
     }
 
     private class EvState {
+        // HARD bail: re-declaration, destructure-source, or any unmodeled shape →
+        // emit nothing (FP-safe default).
         var suppressed = false
+        // Same-scope plain reads of the evolving array (positions).
         val reads = ArrayList<Int>()
+        // Round 316 (controlFlowArrayErrors Part 1): positional model. The first
+        // ELEMENT-INTRODUCING op (push/unshift/…-mutator, x[i]=, x=[nonEmpty],
+        // f(x), self-spread) determines the array type AT and AFTER that point;
+        // a same-scope read STRICTLY BEFORE it sees the still-evolving `any[]`
+        // (TS7005). A bare `x=[]` (empty) does NOT concretize (stays evolving).
+        var firstConcretizerPos = Int.MAX_VALUE
+        // Reads inside a NESTED function body (closure): tsc does no CFA across
+        // function boundaries for an evolving array, so EVERY captured read fires
+        // TS7005 regardless of the outer concretizer (f3/f8).
+        val capturedReads = ArrayList<Int>()
+        // True while collecting uses inside a nested function-like body.
+        var inCaptured = false
+        // The candidate's declaration name node (for the in-scope re-declaration check).
+        var declNode: Identifier? = null
+    }
+
+    /** Record a plain read of the evolving array — routed to same-scope or captured. */
+    private fun evRecordRead(st: EvState, pos: Int) {
+        if (st.inCaptured) st.capturedReads.add(pos) else st.reads.add(pos)
+    }
+
+    /** Record an ELEMENT-INTRODUCING concretizer (push/x[i]=/x=[nonEmpty]/f(x)/…).
+     *  A concretizer inside a nested closure is too hard to model precisely → hard bail. */
+    private fun evRecordConcretizer(st: EvState, pos: Int) {
+        if (st.inCaptured) { st.suppressed = true; return }
+        if (pos < st.firstConcretizerPos) st.firstConcretizerPos = pos
+    }
+
+    /** The source position of the root identifier of an assignment target
+     *  (`x.p.q`/`x[i]`/`(x)!` → the `x`). */
+    private fun evRootPos(target: Expression): Int {
+        var cur = target
+        while (true) {
+            cur = when (cur) {
+                is PropertyAccessExpression -> cur.expression
+                is ElementAccessExpression -> cur.expression
+                is ParenthesizedExpression -> cur.expression
+                is NonNullExpression -> cur.expression
+                else -> return cur.pos
+            }
+        }
+    }
+
+    /** Part 2 (f4/f5): a local established by a SINGLE top-level non-empty array literal
+     *  (`let x = [5,"hello"]`, or `let x;` + a top-level `x = [5,"hello"]`) — a later
+     *  top-level `x.push(v)` checks v against the element type → TS2345. Scans top-level
+     *  statements ONLY, so a branch-merged var (f6, whose assignments live in if/else
+     *  arms) is naturally excluded (owned by Part 3). FP-safe: emits only on a genuine
+     *  assignability failure (a valid push never fires). */
+    private fun evCheckSingleArrayPush(stmts: List<Statement>, source: String, fileName: String) {
+        for ((idx, s) in stmts.withIndex()) {
+            val pair: Pair<String, ArrayLiteralExpression>? = run {
+                // (1) `let/var/const x = [nonEmpty]`
+                if (s is VariableStatement) {
+                    val d = s.declarationList.declarations.singleOrNull() ?: return@run null
+                    if (d.type != null) return@run null
+                    val nm = (d.name as? Identifier)?.text ?: return@run null
+                    val lit = d.initializer as? ArrayLiteralExpression ?: return@run null
+                    if (lit.elements.isEmpty() || lit.elements.any { it is SpreadElement }) return@run null
+                    return@run nm to lit
+                }
+                // (2) top-level `x = [nonEmpty]` where x was declared `let/var x;` (no type/init).
+                val be = (s as? ExpressionStatement)?.expression as? BinaryExpression
+                if (be != null && be.operator == SyntaxKind.Equals && be.left is Identifier) {
+                    val nm = (be.left as Identifier).text
+                    val lit = be.right as? ArrayLiteralExpression ?: return@run null
+                    if (lit.elements.isEmpty() || lit.elements.any { it is SpreadElement }) return@run null
+                    if (!evDeclaredUnannotatedNoInit(stmts, nm, idx)) return@run null
+                    return@run nm to lit
+                }
+                null
+            }
+            val (name, arrayLit) = pair ?: continue
+            val elemType = try {
+                (getTypeOfArrayLiteral(arrayLit) as? Type.Reference)?.resolvedTypeArguments?.firstOrNull()
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null } ?: continue
+            if (elemType === anyType || elemType === errorType) continue
+            for (s2 in stmts.drop(idx + 1)) {
+                // Stop at a top-level reassignment of x (element type may change).
+                val be2 = (s2 as? ExpressionStatement)?.expression as? BinaryExpression
+                if (be2 != null && be2.operator == SyntaxKind.Equals && (be2.left as? Identifier)?.text == name) break
+                val call = (s2 as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = call.expression as? PropertyAccessExpression ?: continue
+                if ((callee.expression as? Identifier)?.text != name) continue
+                if (callee.name.text != "push" && callee.name.text != "unshift") continue
+                for (arg in call.arguments) {
+                    if (arg is SpreadElement) continue
+                    val at = try { getTypeOfExpression(arg) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); anyType }
+                    if (at === anyType || at === errorType) continue
+                    if (!checkTypeRelatedTo(at, elemType, assignableRelation)) {
+                        evEmit2345(arg, typeToString(getWidenedLiteralType(at)), typeToString(elemType), source, fileName)
+                    }
+                }
+            }
+        }
+    }
+
+    /** True if [name] is declared `let/var name;` (no type, no init) at top level of
+     *  [stmts] before [beforeIdx] (the f4 `let x;` + `x = […]` establishment shape). */
+    private fun evDeclaredUnannotatedNoInit(stmts: List<Statement>, name: String, beforeIdx: Int): Boolean {
+        for (i in 0 until beforeIdx) {
+            val vs = stmts[i] as? VariableStatement ?: continue
+            for (d in vs.declarationList.declarations) {
+                if ((d.name as? Identifier)?.text == name) return d.type == null && d.initializer == null
+            }
+        }
+        return false
     }
 
     private var evSource: String = ""
@@ -57844,24 +57954,48 @@ interface DataView {
         for (stmt in stmts) {
             if (stmt is VariableStatement) {
                 val kind = stmt.declarationList.flags
-                if (kind != SyntaxKind.LetKeyword && kind != SyntaxKind.VarKeyword) continue
+                if (kind != SyntaxKind.LetKeyword && kind != SyntaxKind.VarKeyword &&
+                    kind != SyntaxKind.ConstKeyword) continue
                 if (ModifierFlag.Declare in stmt.modifiers) continue
                 for (d in stmt.declarationList.declarations) {
                     val nameNode = d.name as? Identifier ?: continue
                     if (d.type != null) continue                                  // annotated → not implicit any
-                    val init = d.initializer as? ArrayLiteralExpression ?: continue
-                    if (init.elements.isNotEmpty()) continue                       // not an EMPTY array
                     val name = nameNode.text
+                    // Round 316 — two triggers:
+                    //  (A) `let/var/const x = []` (empty-array initializer): establishment
+                    //      is the declaration; reportable reads include CAPTURED reads.
+                    //  (B) `let/var x;` (no init) whose first establishment in the scope is
+                    //      an empty-array assignment `x = []`: reportable reads are
+                    //      SAME-SCOPE only (captured reads of an uninitialized `let x` are
+                    //      owned by `checkUninitializedLetCapturedReads` — avoids double-emit).
+                    val initIsEmptyArray = (d.initializer as? ArrayLiteralExpression)?.elements?.isEmpty() == true
+                    val establishmentPos: Int
+                    val includeCaptured: Boolean
+                    when {
+                        initIsEmptyArray -> { establishmentPos = nameNode.pos; includeCaptured = true }
+                        d.initializer == null && kind != SyntaxKind.ConstKeyword -> {
+                            val p = evFindEmptyArrayAssignmentPos(stmts, name) ?: continue
+                            establishmentPos = p; includeCaptured = false
+                        }
+                        else -> continue
+                    }
                     val st = EvState()
+                    st.declNode = nameNode
                     for (s in stmts) evUseStmt(s, name, nameNode, st)
-                    if (st.suppressed || st.reads.isEmpty()) continue
+                    if (st.suppressed) continue
+                    // Reportable: same-scope reads strictly AFTER establishment and strictly
+                    // BEFORE the first concretizer, plus (trigger A only) all captured reads.
+                    val reportable = (st.reads.filter {
+                        it > establishmentPos && it < st.firstConcretizerPos
+                    } + (if (includeCaptured) st.capturedReads else emptyList())).distinct().sorted()
+                    if (reportable.isEmpty()) continue
                     val (dl, dc) = getLineAndCharacterOfPosition(source, nameNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "Variable '$name' implicitly has type 'any[]' in some locations where its type cannot be determined.",
                         category = DiagnosticCategory.Error, code = 7034,
                         fileName = fileName, line = dl, character = dc, start = nameNode.pos, length = name.length,
                     ))
-                    for (pos in st.reads.distinct().sorted()) {
+                    for (pos in reportable) {
                         val (rl, rc) = getLineAndCharacterOfPosition(source, pos)
                         diagnostics.add(Diagnostic(
                             message = "Variable '$name' implicitly has an 'any[]' type.",
@@ -57872,8 +58006,174 @@ interface DataView {
                 }
             }
         }
+        // Round 316 Parts 2/3/4: single-array (f4/f5), branch-merge (f6 → never), and
+        // snapshot (f7) push-arg checks.
+        evCheckSingleArrayPush(stmts, source, fileName)
+        evCheckBranchMergePush(stmts, source, fileName)
+        evCheckSnapshotPush(stmts, source, fileName)
         // Recurse into nested function-like bodies as their own scopes.
         for (stmt in stmts) evRecurseScopes(stmt, source, fileName)
+    }
+
+    /** Widened element type-name of a literal element / push-arg, or null (bail on any
+     *  non-literal — keeps Parts 3/4 corpus-unique & FP-safe). `true`/`false` parse as
+     *  Identifiers in this AST; a negative numeric is a PrefixUnaryExpression. */
+    private fun evLiteralTypeName(expr: Expression): String? = when (expr) {
+        is NumericLiteralNode -> "number"
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is TemplateExpression -> "string"
+        is Identifier -> if (expr.text == "true" || expr.text == "false") "boolean" else null
+        is PrefixUnaryExpression -> if (expr.operand is NumericLiteralNode) "number" else null
+        else -> null
+    }
+
+    /** Simulate the array element type-name SET that `name` accumulates over [stmts]
+     *  in source order (`name = []` resets; `name = [lit,…]` sets; `name.push/unshift(lit,…)`
+     *  adds). Returns null on ANY unmodeled use of `name` (FP-safe bail). */
+    private fun evSimulateElements(stmts: List<Statement>, name: String): LinkedHashSet<String>? {
+        val set = LinkedHashSet<String>()
+        for (s in stmts) {
+            val es = (s as? ExpressionStatement)?.expression
+            when {
+                es is BinaryExpression && es.operator == SyntaxKind.Equals &&
+                    (es.left as? Identifier)?.text == name -> {
+                    val rhs = es.right as? ArrayLiteralExpression ?: return null  // `x = non-array` → bail
+                    set.clear()
+                    for (el in rhs.elements) set.add(evLiteralTypeName(el) ?: return null)
+                }
+                es is CallExpression && es.expression is PropertyAccessExpression &&
+                    ((es.expression as PropertyAccessExpression).expression as? Identifier)?.text == name -> {
+                    val m = (es.expression as PropertyAccessExpression).name.text
+                    if (m != "push" && m != "unshift") return null
+                    for (a in es.arguments) set.add(evLiteralTypeName(a) ?: return null)
+                }
+                es is Identifier && es.text == name -> { /* bare read — ignore */ }
+                else -> if (stmtMentionsName(s, name)) return null  // unmodeled use → bail
+            }
+        }
+        return set
+    }
+
+    /** Part 3 (f6): `let x;` whose two if/else arms evolve x to DIFFERENT element sets,
+     *  then a trailing `x.push(v)` checks v against the INTERSECTION of the arm element
+     *  types (`(string|number) & boolean → never`). Corpus-unique shape → FP-safe. */
+    private fun evCheckBranchMergePush(stmts: List<Statement>, source: String, fileName: String) {
+        for ((i, stmt) in stmts.withIndex()) {
+            val vs = stmt as? VariableStatement ?: continue
+            val flags = vs.declarationList.flags
+            if (flags != SyntaxKind.LetKeyword && flags != SyntaxKind.VarKeyword) continue
+            val d = vs.declarationList.declarations.singleOrNull() ?: continue
+            if (d.type != null || d.initializer != null) continue
+            val name = (d.name as? Identifier)?.text ?: continue
+            val after = stmts.drop(i + 1)
+            val ifStmt = after.filterIsInstance<IfStatement>().firstOrNull() ?: continue
+            val thenBlock = ifStmt.thenStatement as? Block ?: continue
+            val elseBlock = ifStmt.elseStatement as? Block ?: continue
+            val set1 = evSimulateElements(thenBlock.statements, name) ?: continue
+            val set2 = evSimulateElements(elseBlock.statements, name) ?: continue
+            if (set1.isEmpty() || set2.isEmpty()) continue
+            val inter = LinkedHashSet(set1).apply { retainAll(set2) }
+            val ifIdx = stmts.indexOf(ifStmt)
+            val pushArg = evFindFirstPushArg(stmts.drop(ifIdx + 1), name) ?: continue
+            val argName = evLiteralTypeName(pushArg) ?: continue
+            if (inter.isNotEmpty() && argName in inter) continue  // assignable → no error
+            val target = if (inter.isEmpty()) "never" else inter.joinToString(" | ")
+            val argDisp = if (inter.isEmpty()) ((pushArg as? NumericLiteralNode)?.text ?: argName) else argName
+            evEmit2345(pushArg, argDisp, target, source, fileName)
+        }
+    }
+
+    /** Part 4 (f7): `let x = []` evolving; a `let y = x` SNAPSHOTS y at x's current
+     *  (single) element type; a later `y.push(v)` checks v against that frozen type. */
+    private fun evCheckSnapshotPush(stmts: List<Statement>, source: String, fileName: String) {
+        for ((i, stmt) in stmts.withIndex()) {
+            val vs = stmt as? VariableStatement ?: continue
+            val d = vs.declarationList.declarations.singleOrNull() ?: continue
+            if (d.type != null) continue
+            val xname = (d.name as? Identifier)?.text ?: continue
+            if ((d.initializer as? ArrayLiteralExpression)?.elements?.isEmpty() != true) continue
+            val rest = stmts.drop(i + 1)
+            val cur = LinkedHashSet<String>()
+            var snapName: String? = null
+            var snapType: String? = null
+            var snapIdx = -1
+            for ((j, s) in rest.withIndex()) {
+                val es = (s as? ExpressionStatement)?.expression
+                // `let y = x` snapshot
+                val vd = (s as? VariableStatement)?.declarationList?.declarations?.singleOrNull()
+                if (vd != null && vd.type == null && (vd.initializer as? Identifier)?.text == xname) {
+                    if (cur.size == 1) { snapName = (vd.name as? Identifier)?.text; snapType = cur.first(); snapIdx = j }
+                    break
+                }
+                // x.push(lit) → add
+                if (es is CallExpression && es.expression is PropertyAccessExpression &&
+                    ((es.expression as PropertyAccessExpression).expression as? Identifier)?.text == xname) {
+                    val m = (es.expression as PropertyAccessExpression).name.text
+                    if (m != "push" && m != "unshift") break
+                    for (a in es.arguments) cur.add(evLiteralTypeName(a) ?: return)
+                    continue
+                }
+                // x = [..]/[] reset/set
+                if (es is BinaryExpression && es.operator == SyntaxKind.Equals && (es.left as? Identifier)?.text == xname) {
+                    val rhs = es.right as? ArrayLiteralExpression ?: break
+                    cur.clear(); for (el in rhs.elements) cur.add(evLiteralTypeName(el) ?: return)
+                    continue
+                }
+                if (es is Identifier && es.text == xname) continue  // bare read
+                if (stmtMentionsName(s, xname)) break  // unmodeled → stop scanning
+            }
+            val sn = snapName ?: continue
+            val st = snapType ?: continue
+            for (s in rest.drop(snapIdx + 1)) {
+                val call = (s as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val callee = call.expression as? PropertyAccessExpression ?: continue
+                if ((callee.expression as? Identifier)?.text != sn) continue
+                if (callee.name.text != "push" && callee.name.text != "unshift") continue
+                if (call.arguments.size != 1) continue
+                val arg = call.arguments[0]
+                val argName = evLiteralTypeName(arg) ?: continue
+                if (argName != st) evEmit2345(arg, argName, st, source, fileName)
+            }
+        }
+    }
+
+    /** The single-arg of the FIRST top-level `name.push/unshift(v)` call in [stmts]. */
+    private fun evFindFirstPushArg(stmts: List<Statement>, name: String): Expression? {
+        for (s in stmts) {
+            val call = (s as? ExpressionStatement)?.expression as? CallExpression ?: continue
+            val callee = call.expression as? PropertyAccessExpression ?: continue
+            if ((callee.expression as? Identifier)?.text == name &&
+                (callee.name.text == "push" || callee.name.text == "unshift") && call.arguments.size == 1) {
+                return call.arguments[0]
+            }
+        }
+        return null
+    }
+
+    /** Emit a Parts 3/4 TS2345 at the push-argument [arg]. */
+    private fun evEmit2345(arg: Expression, argDisp: String, targetDisp: String, source: String, fileName: String) {
+        val (l, c) = getLineAndCharacterOfPosition(source, arg.pos)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argDisp' is not assignable to parameter of type '$targetDisp'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = l, character = c,
+            start = arg.pos, length = expressionTrueEnd(arg) - arg.pos,
+        ))
+    }
+
+    /** Trigger (B) helper: the source position of the FIRST top-level (same-scope)
+     *  `name = []` (empty-array literal) assignment expression-statement in [stmts],
+     *  or null if none. Only a direct `name = []` counts — anything else means the
+     *  variable isn't established as an evolving empty array here. */
+    private fun evFindEmptyArrayAssignmentPos(stmts: List<Statement>, name: String): Int? {
+        for (s in stmts) {
+            val be = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (be.operator != SyntaxKind.Equals) continue
+            val lhs = be.left as? Identifier ?: continue
+            if (lhs.text != name) continue
+            val rhs = be.right as? ArrayLiteralExpression ?: continue
+            if (rhs.elements.isEmpty()) return be.left.pos
+        }
+        return null
     }
 
     private fun evRecurseScopes(stmt: Statement, source: String, fileName: String) {
@@ -57946,23 +58246,34 @@ interface DataView {
                 stmt.finallyBlock?.let { for (s in it.statements) evUseStmt(s, name, declNode, st) }
             }
             is LabeledStatement -> evUseStmt(stmt.statement, name, declNode, st)
-            // Nested function-like / class / module — a closure could capture + mutate x.
-            // Conservatively suppress (we don't model captures). Only matters if `name`
-            // could be in scope there; suppressing unconditionally is FP-safe.
-            is FunctionDeclaration, is ClassDeclaration, is ModuleDeclaration -> st.suppressed = true
+            // Round 316: recurse into a nested FUNCTION body collecting CAPTURED reads
+            // (tsc does no CFA across the boundary → any captured read of an evolving
+            // array is TS7005 — f3/f8 `function g(){ x; }`). A param shadowing `name`
+            // means our x isn't referenced; a captured MUTATION hard-bails (evRecord*).
+            is FunctionDeclaration -> {
+                if (stmt.parameters.none { (it.name as? Identifier)?.text == name }) {
+                    val saved = st.inCaptured
+                    st.inCaptured = true
+                    stmt.body?.statements?.forEach { evUseStmt(it, name, declNode, st) }
+                    st.inCaptured = saved
+                }
+            }
+            // Class / module bodies — closures could capture + mutate x; conservatively
+            // suppress (we don't model these). FP-safe.
+            is ClassDeclaration, is ModuleDeclaration -> st.suppressed = true
             else -> { /* declarations with no name-uses (interface/type/enum/import/export) */ }
         }
     }
 
     /** A bare `name` here is a plain read; otherwise recurse into the expression. */
     private fun evUseReadOrExpr(expr: Expression, name: String, st: EvState) {
-        if (expr is Identifier && expr.text == name) st.reads.add(expr.pos) else evUseExpr(expr, name, st)
+        if (expr is Identifier && expr.text == name) evRecordRead(st, expr.pos) else evUseExpr(expr, name, st)
     }
 
     private fun evUseExpr(expr: Expression, name: String, st: EvState) {
         if (st.suppressed) return
         when (expr) {
-            is Identifier -> if (expr.text == name) st.reads.add(expr.pos)
+            is Identifier -> if (expr.text == name) evRecordRead(st, expr.pos)
             is BinaryExpression -> {
                 val op = expr.operator
                 val isAssign = op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals ||
@@ -57973,24 +58284,42 @@ interface DataView {
                     op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals || op == SyntaxKind.QuestionQuestionEquals
                 if (isAssign) {
                     val left = expr.left
-                    // `x = …`, `x.p = …`, `x[i] = …` (or any optional/paren-wrapped of these
-                    // rooted at x) concretizes x.
                     if (evTargetRootsAtName(left, name)) {
+                        val right = expr.right
                         // EXCEPTION: a self-referential spread reassign `x = [...x, e]`
                         // keeps x undetermined (`any[]`) — tsc still fires here. Record
-                        // the `...x` self-read instead of suppressing; recurse the rest.
-                        val right = expr.right
+                        // the `...x` self-read (NOT a concretizer); recurse the rest.
                         if (op == SyntaxKind.Equals && left is Identifier && left.text == name &&
                             right is ArrayLiteralExpression &&
                             right.elements.any { it is SpreadElement && (it.expression as? Identifier)?.text == name }) {
                             for (e in right.elements) {
                                 if (e is SpreadElement && (e.expression as? Identifier)?.text == name) {
-                                    st.reads.add((e.expression as Identifier).pos)
+                                    evRecordRead(st, (e.expression as Identifier).pos)
                                 } else evUseExpr(e, name, st)
                             }
                             return
                         }
-                        st.suppressed = true; return
+                        // Round 316 — positional concretizer model:
+                        if (left is Identifier && left.text == name && op == SyntaxKind.Equals) {
+                            // Whole-var assign `x = rhs`.
+                            if (right is ArrayLiteralExpression && right.elements.isEmpty()) {
+                                return  // `x = []` — empty-array RESET, neither read nor concretizer.
+                            }
+                            if (right is ArrayLiteralExpression) {
+                                // `x = [nonEmpty]` — element-introducing concretizer.
+                                evRecordConcretizer(st, left.pos)
+                                evUseExpr(right, name, st)  // nested reads in the elements
+                                return
+                            }
+                            // `x = <non-array>` — x becomes a non-array value → hard bail.
+                            st.suppressed = true; return
+                        }
+                        // `x.p = …`, `x[i] = …`, or a compound `x op= …` rooted at x —
+                        // element/property write → concretizer. Recurse the index + rhs.
+                        evRecordConcretizer(st, evRootPos(left))
+                        if (left is ElementAccessExpression) evUseExpr(left.argumentExpression, name, st)
+                        evUseExpr(right, name, st)
+                        return
                     }
                     evUseExpr(left, name, st)
                     evUseExpr(expr.right, name, st)
@@ -58004,31 +58333,35 @@ interface DataView {
                 // `x.MUTATOR(...)` concretizes; `x.nonMutator(...)` reads x.
                 if (callee is PropertyAccessExpression && callee.expression is Identifier &&
                     (callee.expression as Identifier).text == name) {
-                    if (callee.name.text in ARRAY_MUTATOR_METHODS) { st.suppressed = true; return }
-                    if (!callee.questionDotToken) st.reads.add((callee.expression as Identifier).pos)  // x read as receiver (guarded if optional)
+                    if (callee.name.text in ARRAY_MUTATOR_METHODS) {
+                        evRecordConcretizer(st, (callee.expression as Identifier).pos)
+                        for (a in expr.arguments) evUseExpr(a, name, st)  // nested x reads in args
+                        return
+                    }
+                    if (!callee.questionDotToken) evRecordRead(st, (callee.expression as Identifier).pos)  // x read as receiver (guarded if optional)
                 } else {
                     evUseExpr(callee, name, st)
                 }
-                // `f(x)` — callee might mutate x → concretize.
+                // `f(x)` — passing x as a value arg → callee might mutate → concretize.
                 for (a in expr.arguments) {
-                    if (a is Identifier && a.text == name) { st.suppressed = true; return }
+                    if (a is Identifier && a.text == name) { evRecordConcretizer(st, a.pos); continue }
                     evUseExpr(a, name, st)
                 }
             }
             is NewExpression -> {
                 evUseExpr(expr.expression, name, st)
-                expr.arguments?.forEach { if (it is Identifier && it.text == name) { st.suppressed = true } else evUseExpr(it, name, st) }
+                expr.arguments?.forEach { if (it is Identifier && it.text == name) evRecordConcretizer(st, it.pos) else evUseExpr(it, name, st) }
             }
             is PropertyAccessExpression -> {
                 // `x.prop` (read): x is a plain read UNLESS via optional chain `x?.prop`.
                 if (expr.expression is Identifier && (expr.expression as Identifier).text == name) {
-                    if (!expr.questionDotToken) st.reads.add((expr.expression as Identifier).pos)
+                    if (!expr.questionDotToken) evRecordRead(st, (expr.expression as Identifier).pos)
                     // optional chain → neither read nor concretize (guarded)
                 } else evUseExpr(expr.expression, name, st)
             }
             is ElementAccessExpression -> {
                 if (expr.expression is Identifier && (expr.expression as Identifier).text == name) {
-                    if (!expr.questionDotToken) st.reads.add((expr.expression as Identifier).pos)
+                    if (!expr.questionDotToken) evRecordRead(st, (expr.expression as Identifier).pos)
                 } else evUseExpr(expr.expression, name, st)
                 evUseExpr(expr.argumentExpression, name, st)
             }
@@ -58047,14 +58380,34 @@ interface DataView {
             is TypeAssertionExpression -> evUseExpr(expr.expression, name, st)
             is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
                 is PropertyAssignment -> p.initializer?.let { evUseExpr(it, name, st) }
-                is ShorthandPropertyAssignment -> if (p.name.text == name) st.reads.add(p.name.pos)
+                is ShorthandPropertyAssignment -> if (p.name.text == name) evRecordRead(st, p.name.pos)
                 is SpreadAssignment -> { if (p.expression is Identifier && (p.expression as Identifier).text == name) st.suppressed = true else evUseExpr(p.expression, name, st) }
                 else -> {}
             }
-            // Function-like expressions: a closure could capture + mutate x → suppress.
-            is ArrowFunction, is FunctionExpression, is ClassExpression -> {
-                if (evExprReferencesName(expr, name)) st.suppressed = true
+            // Round 316: recurse into a closure (arrow / fn-expr) body collecting CAPTURED
+            // reads (tsc fires TS7005 for any captured read of an evolving array). A param
+            // shadowing `name` → not our x. A captured mutation hard-bails (evRecord*).
+            is ArrowFunction -> {
+                if (expr.parameters.none { (it.name as? Identifier)?.text == name }) {
+                    val saved = st.inCaptured; st.inCaptured = true
+                    val dn = st.declNode
+                    when (val body = expr.body) {
+                        is Block -> if (dn != null) for (s in body.statements) evUseStmt(s, name, dn, st)
+                        is Expression -> evUseExpr(body, name, st)
+                        else -> {}
+                    }
+                    st.inCaptured = saved
+                }
             }
+            is FunctionExpression -> {
+                if (expr.parameters.none { (it.name as? Identifier)?.text == name }) {
+                    val saved = st.inCaptured; st.inCaptured = true
+                    val dn = st.declNode
+                    if (dn != null) for (s in expr.body.statements) evUseStmt(s, name, dn, st)
+                    st.inCaptured = saved
+                }
+            }
+            is ClassExpression -> if (evExprReferencesName(expr, name)) st.suppressed = true
             // Anything else that could reference x in an unmodeled context → suppress.
             else -> if (evExprReferencesName(expr, name)) st.suppressed = true
         }
