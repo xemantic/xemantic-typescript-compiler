@@ -105342,6 +105342,40 @@ interface DataView {
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
+        // B586 (defaultBestCommonTypesHaveDecls): member access on a variable EXPLICITLY
+        // annotated `{}` (empty object type) or `Object`, reading a property that is neither
+        // an Object-prototype member nor a runtime pseudo-property → TS2339. tsc ALWAYS errors
+        // here (`{}`/`Object` expose only the prototype members); checkMemberAccessMissing
+        // otherwise bails for anonymous object types. AST-gated to the literal `{}`/`Object`
+        // annotation + verified absent via getPropertyOfType (so a user-augmented `Object` with
+        // the member, or an inferred-empty type we resolve imprecisely, does NOT fire).
+        if (objectExpr is Identifier && !isThisAccess &&
+            propName !in OBJECT_PROTOTYPE_PROPERTIES) {
+            val recvSym = currentFileLocals?.get(objectExpr.text) ?: globals[objectExpr.text]
+            val ann = recvSym?.declarations?.filterIsInstance<VariableDeclaration>()?.firstOrNull()?.type
+            val emptyObjOrObjectDisplay: String? = when {
+                ann is TypeLiteral && ann.members.isEmpty() -> "{}"
+                ann is TypeReference && getTypeReferenceLastName(ann.typeName) == "Object" -> "Object"
+                else -> null
+            }
+            if (emptyObjOrObjectDisplay != null) {
+                val recvT = getTypeOfExpression(objectExpr)
+                if (recvT is Type.Object) {
+                    resolveStructuredTypeMembers(recvT)
+                    if (getPropertyOfType(recvT, propName) == null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '$emptyObjOrObjectDisplay'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return
+                    }
+                }
+            }
+        }
+
         // enumPropertyAccess: `x.prop` where `x` is statically an enum (member) —
         // a var initialized to `E.M`, or a param typed as a type-param `extends E`.
         if (objectExpr is Identifier && !isThisAccess &&
@@ -113682,6 +113716,74 @@ interface DataView {
         return true
     }
 
+    /** B586 (defaultBestCommonTypesHaveDecls): a generic call `f<T>(x: T, y: T)` with NO
+     *  explicit type args where two BARE-T arguments are both literals with CONFLICTING
+     *  widened types (`concat(1, "")`) → tsc fixes T to the FIRST literal and reports the
+     *  conflicting arg's literal vs the fixed literal (`'""'` ≁ `'1'`). The standard arg-check
+     *  widens both (`'string'` ≁ `'number'`), which is wrong for this fixed-type-parameter
+     *  rule. FP-safe: tsc ALWAYS errors on two incompatible args to the same bare TP, and its
+     *  fixed-type-parameter display preserves the literal (cf. computeFixedConflictLiteralMapper,
+     *  which is gated to nested-fn-type TPs and so misses this plain bare-T shape). */
+    private fun tryEmitBareTypeParamConflictLiteralTs2345(
+        args: List<Expression>, sig: Signature, source: String, fileName: String
+    ): Boolean {
+        val tps = sig.typeParameters ?: return false
+        if (tps.isEmpty() || args.isEmpty()) return false
+        // tsc infers an OUTPUT-position TP WITHOUT widening — so a conflict displays the
+        // unwidened literals (`'""'` ≁ `'1'`). An INPUT-ONLY TP widens its candidates, so a
+        // conflict displays the widened bases (`'string'` ≁ `'number'`, e.g. `bar<T>(x:T,y:T)`
+        // / `makeArrayGOpt`). Require an EXPLICIT return annotation that mentions the TP (the
+        // `f<T>(x:T,y:T): T` shape) — otherwise fall to the standard widened path.
+        val retDecl = sig.declaration
+        val hasReturnAnnotation = when (retDecl) {
+            is FunctionDeclaration -> retDecl.type != null
+            is MethodDeclaration -> retDecl.type != null
+            is FunctionExpression -> retDecl.type != null
+            is ArrowFunction -> retDecl.type != null
+            else -> false
+        }
+        if (!hasReturnAnnotation) return false
+        val sigReturn = sig.resolvedReturnType ?: return false
+        for (tp in tps) {
+            if (tp.constraint != null) continue           // constrained TPs use the constraint, not the first literal
+            if (!typeMentionsTypeParam(sigReturn, tp)) continue
+            var anchorWidened: Type? = null
+            var anchorLitDisplay: String? = null
+            for (i in sig.parameters.indices) {
+                if (i >= args.size) break
+                if (getTypeOfSymbol(sig.parameters[i]) !== tp) continue  // bare-T anchor positions only
+                val arg = args[i]
+                if (arg is SpreadElement) return false
+                val lit = literalTypeOfExpression(arg) ?: return false   // every bare-T arg must be a literal
+                val raw = getTypeOfExpression(arg)
+                if (raw === anyType || raw === errorType) return false
+                val widened = widenType(raw)
+                if (anchorWidened == null) {
+                    anchorWidened = widened
+                    anchorLitDisplay = typeToString(lit)
+                } else {
+                    val compatible = try {
+                        checkTypeRelatedTo(widened, anchorWidened, assignableRelation) ||
+                            checkTypeRelatedTo(anchorWidened, widened, assignableRelation)
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); true }
+                    if (!compatible) {
+                        val start = arg.pos
+                        val length = expressionTrueEnd(arg) - start
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '${typeToString(lit)}' is not assignable to parameter of type '$anchorLitDisplay'.",
+                            category = DiagnosticCategory.Error, code = 2345,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -113733,6 +113835,12 @@ interface DataView {
         // falls back to `unknown`-valued, arg's recursive-union value fails → TS2345 (additive).
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitRecursiveTupleInferenceTs2345(args, sigIn, source, fileName)) return
+        // B586 (defaultBestCommonTypesHaveDecls): `f<T>(x: T, y: T)` with conflicting
+        // LITERAL bare-T args (`concat(1, "")`) — tsc fixes T to the FIRST literal and
+        // reports the conflicting arg's literal vs the fixed literal (`'""'` ≁ `'1'`),
+        // not the widened `'string'`/`'number'` the standard path shows.
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitBareTypeParamConflictLiteralTs2345(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
