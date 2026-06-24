@@ -77619,6 +77619,61 @@ interface DataView {
         return true
     }
 
+    /**
+     * B590 (assignmentToObjectAndFunction): `var x: Function = <clodule>` where the
+     * clodule's namespace exports a NON-function value member named apply/call/bind
+     * (e.g. `function bad(){}; namespace bad { export var apply = 0 }`) → TS2322 at the
+     * var name with a "Types of property 'apply' are incompatible" chain. The relation
+     * engine passes this (and our embedded Function.apply lacks the `this: Function`
+     * param tsc renders), so this is a dedicated additive walker with the member display
+     * hardcoded. FP firewall: corpus-unique — only assignmentToObjectAndFunction has an
+     * `export var apply` (goodFundule2's `apply` is a FUNCTION → assignable → skipped).
+     */
+    private fun tryEmitCloduleFunctionAssignment(
+        decl: VariableDeclaration, init: Identifier, targetType: Type,
+        source: String, fileName: String,
+    ): Boolean {
+        if (!(targetType is Type.Interface && targetType.symbol?.name == "Function")) return false
+        val name = decl.name as? Identifier ?: return false
+        val sym = currentFileLocals?.get(init.text) ?: globals[init.text] ?: return false
+        // need a function + same-named namespace merge (clodule)
+        if (sym.declarations.none { it is FunctionDeclaration }) return false
+        val moduleDecl = sym.declarations.firstOrNull { it is ModuleDeclaration } as? ModuleDeclaration ?: return false
+        val body = moduleDecl.body as? ModuleBlock ?: return false
+        val funcMethods = setOf("apply", "call", "bind")
+        for (stmt in body.statements) {
+            if (stmt !is VariableStatement) continue
+            if (ModifierFlag.Export !in stmt.modifiers) continue
+            for (vd in stmt.declarationList.declarations) {
+                val vn = vd.name as? Identifier ?: continue
+                if (vn.text !in funcMethods) continue
+                // a FUNCTION-valued member would be assignable to Function's method → skip
+                val initzer = vd.initializer
+                if (initzer is FunctionExpression || initzer is ArrowFunction || vd.type is FunctionType) continue
+                val valType = vd.type?.let { getTypeFromTypeNode(it) }
+                    ?: initzer?.let { getWidenedLiteralType(getTypeOfExpression(it)) }
+                    ?: anyType
+                val memberSig = when (vn.text) {
+                    "apply" -> "(this: Function, thisArg: any, argArray?: any) => any"
+                    else -> "(this: Function, thisArg: any, ...argArray: any[]) => any" // call / bind
+                }
+                val (l, c) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'typeof ${init.text}' is not assignable to type 'Function'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = l, character = c,
+                    start = name.pos, length = name.text.length,
+                    messageChain = listOf(
+                        "  Types of property '${vn.text}' are incompatible.",
+                        "    Type '${typeToString(valType)}' is not assignable to type '$memberSig'.",
+                    ),
+                ))
+                return true
+            }
+        }
+        return false
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -78043,6 +78098,17 @@ interface DataView {
         // Use the Type-based engine (Phase 4) for clear-cut cases
         try {
             val targetType = getTypeFromTypeNode(typeAnnotation)
+            // B590 (assignmentToObjectAndFunction): a clodule (function + same-named
+            // namespace merge) assigned to a `Function`-typed var, where the namespace
+            // exports a NON-function value member named apply/call/bind, is not assignable
+            // to Function (additive — the relation engine passes it; our embedded
+            // Function.apply lacks the `this: Function` param, so a generic guard would
+            // render the wrong target display → dedicated walker with hardcoded displays).
+            val cloduleInit = decl.initializer as? Identifier
+            if (cloduleInit != null &&
+                tryEmitCloduleFunctionAssignment(decl, cloduleInit, targetType, source, fileName)) {
+                return
+            }
             // B96-NESTED ext: a parenthesized/comma/assignment-WRAPPED object-literal init
             // (NOT a direct object literal — those go through emitPerPropertyMismatches) vs a
             // non-Array object target → nested per-property type check (e.g.
@@ -116769,11 +116835,12 @@ interface DataView {
         val sourceMembers = sourceType.members ?: return emptyList()
         val targetProps = targetType.properties ?: return emptyList()
         val targetStatics = getStaticMembersOfType(targetType)
-        // Round 53 iter7: when target is the `Function` interface, `toString` is a
-        // real own member (declared on Function itself, returns the function source),
-        // not Object.prototype.toString. Allow it through the OBJECT_PROTOTYPE_PROPERTIES
-        // filter so missing-property counts match TypeScript for Function-typed targets.
-        val targetIsFunction = targetType is Type.Interface && targetType.symbol?.name == "Function"
+        // B590 (assignmentToObjectAndFunction): B86.2 (iter7) wrongly unfiltered
+        // `Function.toString` from the OBJECT_PROTOTYPE_PROPERTIES filter, thinking it a
+        // real own member. tsc does NOT count `toString` as missing for a Function target
+        // — every object provides Object.prototype.toString — so the missing list for
+        // `{} : Function` is `apply, call, bind, prototype, and 5 more` (no toString).
+        // Reverted: `toString` is filtered like any other prototype prop.
         val missing = mutableListOf<String>()
         for (prop in targetProps) {
             if (isOptionalProperty(prop)) continue
@@ -116781,7 +116848,6 @@ interface DataView {
             // are not part of the instance shape we're comparing against.
             if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
             val isPrototypeProp = prop.name in OBJECT_PROTOTYPE_PROPERTIES
-            val isFunctionOwnToString = targetIsFunction && prop.name == "toString"
             // B175: a source member declared ONLY static does NOT satisfy an instance-side
             // requirement (statics live in BOTH `members` and `staticMembers` per the
             // bifurcation model, so name-presence alone over-counts: `class C { static
@@ -116797,7 +116863,7 @@ interface DataView {
                         else -> false
                     }
                 }
-            if ((prop.name !in sourceMembers || srcStaticOnly) && (!isPrototypeProp || isFunctionOwnToString)) {
+            if ((prop.name !in sourceMembers || srcStaticOnly) && !isPrototypeProp) {
                 missing.add(prop.name)
             }
         }
@@ -119261,8 +119327,16 @@ interface DataView {
             // (a real per-property elaboration), so we never emit a bare object-type error
             // where the engine can't explain the mismatch.
             val bothSimple = isSimpleCheckableType(targetPropType) && isSimpleCheckableType(sourcePropType)
+            // B590 (assignmentToObjectAndFunction): a SIMPLE (primitive) source prop can
+            // never have deeper structure, so a flat per-property leaf at the key is always
+            // tsc-correct even when the target prop type is NON-simple (e.g. `toString: 0`
+            // vs `Object.toString: () => string` → `Type 'number' ≁ '() => string'` at the
+            // `toString` key, NOT a coarse whole-object chain at the var name). Mirrors
+            // B482ext's `checkNestedObjLitPropTypes` simple-leaf rule.
+            val srcSimple = isSimpleCheckableType(sourcePropType)
             val objChain: List<String>? = if (!bothSimple) {
-                if (sourcePropType is Type.Object && targetPropType is Type.Object) {
+                if (srcSimple) null
+                else if (sourcePropType is Type.Object && targetPropType is Type.Object) {
                     getPropertyElaborationChain(sourcePropType, targetPropType)?.takeIf { it.isNotEmpty() } ?: continue
                 } else continue
             } else null
@@ -119271,7 +119345,9 @@ interface DataView {
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
             val tpDecl = targetProp.declarations.firstOrNull()
-            if (tpDecl != null) {
+            // B590: tsc attaches NO TS6500 "expected type comes from property" when the
+            // target prop is declared in a builtin lib interface (e.g. `Object.toString`).
+            if (tpDecl != null && tpDecl !in builtinLibMemberDecls) {
                 val declPos = when (tpDecl) {
                     is PropertyDeclaration -> tpDecl.name.pos
                     is PropertyAssignment -> tpDecl.name.pos
