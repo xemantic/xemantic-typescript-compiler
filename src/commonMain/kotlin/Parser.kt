@@ -3756,7 +3756,17 @@ class Parser(
         // import = require() or import = X.Y
         // (identifier-capable names only — strict-mode reserved words like `public` are
         // identifier-capable and TypeScript parses them as ImportEqualsDeclaration).
-        if (isIdentifier() && scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Equals }) {
+        // tsc rule (tokenAfterImportedIdentifierDefinitelyProducesImportDeclaration):
+        // after `import <identifier>`, route to import-equals UNLESS the next token is `,`
+        // or `from` — so a malformed `import Foo From './Foo'` recovers as `import Foo = From`
+        // (TS1005 '=' expected at `From`), matching tsc (declarationEmitUnknownImport2).
+        // The extra `!= StringLiteral` keeps the malformed `import Foo "x"` on its prior path.
+        if (isIdentifier() && scanner.lookAhead {
+                scanner.scan()
+                val t = scanner.getToken()
+                t == SyntaxKind.Equals ||
+                    (t != SyntaxKind.Comma && t != SyntaxKind.FromKeyword && t != SyntaxKind.StringLiteral)
+            }) {
             val name = parseIdentifier()
             // 17.207: TS2438 — `import string = ...` (reserved primitive type
             // name as import alias). Squiggle on the name (length = name text).
@@ -3803,6 +3813,14 @@ class Parser(
                         else -> parseQualifiedName()
                     }
                 }
+            // A same-line string after the module reference (`import Foo = From './Foo'`) is a
+            // leftover — `parseSemicolon` is silent on a StringLiteral, so emit TS1005 here so the
+            // trailing `'./Foo'` re-parses as its own statement (declarationEmitUnknownImport2). A
+            // well-formed `import X = require("s")` consumes the string inside ExternalModuleReference.
+            if (token == SyntaxKind.StringLiteral && !scanner.hasPrecedingLineBreak()) {
+                reportError("';' expected.", code = 1005,
+                    overrideStart = scanner.getTokenPos(), overrideLength = scanner.getTokenText().length)
+            }
             parseSemicolon()
             val trailing = trailingComments()
             return ImportEqualsDeclaration(

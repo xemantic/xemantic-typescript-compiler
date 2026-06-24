@@ -21784,6 +21784,10 @@ class Checker(
                     }
                 }
             }
+            // `export default Foo` re-exports the import alias `Foo` just like `export { Foo }`
+            // (declarationEmitUnknownImport2 — `import Foo From './Foo'; export default Foo`).
+            if (stmt is ExportAssignment && !stmt.isExportEquals &&
+                (stmt.expression as? Identifier)?.text == aliasName) return true
         }
         return false
     }
