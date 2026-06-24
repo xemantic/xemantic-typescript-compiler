@@ -112517,6 +112517,137 @@ interface DataView {
      * additive (the engine is silent here), FP-safe (fires only on a genuine assignability
      * failure, so a VALID arg of the same shape never errors).
      */
+    /**
+     * inferenceFromIncompleteSource: `Component({items:[{name}], itemKey:'name'})` where
+     * `Component: <T, K extends keyof T>(x: ListProps<T, K>) => void` and the object literal is
+     * MISSING a required prop (`prop`) of the instantiated interface. The standard arg-check's
+     * missing-prop branch is blocked by `canUseTypeEngine`'s unresolved-TP guard (param stays
+     * `ListProps<T,K>` with unbound TPs) → purely ADDITIVE. This walker infers each sig TP from
+     * the interface member whose annotation references it (bare-TP member ← value keeping its
+     * literal; `TP[]` member ← widened array element), instantiates the param, contextually types
+     * the object literal against it (so a bare-TP property keeps its literal), and reports the
+     * missing required prop → TS2345 + chain + TS2728. FP firewall: a generic-const callee with a
+     * single TypeReference param to a user interface (no index sigs) whose type args are all bare
+     * sig TPs, EVERY TP inferrable, and the missing set non-empty after instantiation.
+     */
+    private fun tryEmitGenericObjectLiteralMissingPropTs2345(
+        args: List<Expression>, sigIn: Signature, source: String, fileName: String,
+    ): Boolean {
+        val tps = sigIn.typeParameters ?: return false
+        if (tps.isEmpty()) return false
+        val tpNames = tps.mapNotNull { it.symbol?.name }
+        if (tpNames.size != tps.size || tpNames.toSet().size != tpNames.size) return false
+        val tpNameSet = tpNames.toSet()
+        if (args.size != 1) return false
+        val objLit = args[0] as? ObjectLiteralExpression ?: return false
+        if (sigIn.parameters.size != 1) return false
+        val paramNode = (sigIn.parameters[0].declarations.firstOrNull() as? Parameter)?.type as? TypeReference ?: return false
+        val ifaceName = (paramNode.typeName as? Identifier)?.text ?: return false
+        val ifaceArgs = paramNode.typeArguments ?: return false
+        if (ifaceArgs.isEmpty()) return false
+        // every type arg must be a bare sig-TP reference
+        val argTpNames = ifaceArgs.map { ((it as? TypeReference)?.typeName as? Identifier)?.text }
+        if (argTpNames.any { it == null || it !in tpNameSet }) return false
+        val ifaceSym = resolveTypeNameInEnclosingScope(ifaceName) ?: globals[ifaceName] ?: currentFileLocals?.get(ifaceName) ?: return false
+        val ifaceDecl = ifaceSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration ?: return false
+        if (ifaceDecl.members.any { it is IndexSignature }) return false   // FP firewall
+        val ifaceTpNames = ifaceDecl.typeParameters?.mapNotNull { (it.name as? Identifier)?.text } ?: emptyList()
+        if (ifaceTpNames.size != ifaceArgs.size) return false
+        // interface TP name -> sig TP name (positional)
+        val ifaceTpToSigTp = ifaceTpNames.zip(argTpNames.map { it!! }).toMap()
+        // object-literal property name -> value expression
+        val objProps = HashMap<String, Expression>()
+        for (p in objLit.properties) {
+            if (p is PropertyAssignment) {
+                val nm = (p.name as? Identifier)?.text ?: (p.name as? StringLiteralNode)?.text ?: continue
+                objProps[nm] = p.initializer
+            }
+        }
+        // Infer each sig TP from the interface member whose annotation references it.
+        val bindings = HashMap<String, Type>()
+        for (m in ifaceDecl.members) {
+            val pd = m as? PropertyDeclaration ?: continue
+            val mName = (pd.name as? Identifier)?.text ?: continue
+            val ann = pd.type ?: continue
+            val valueExpr = objProps[mName] ?: continue
+            when (ann) {
+                is TypeReference -> {
+                    val refName = (ann.typeName as? Identifier)?.text ?: continue
+                    val sigTp = ifaceTpToSigTp[refName] ?: continue
+                    val t = (literalTypeOfExpression(valueExpr) ?: try { getTypeOfExpression(valueExpr) } catch (_: Throwable) { continue })
+                    if (t === anyType || t === errorType) continue
+                    bindings[sigTp] = t
+                }
+                is ArrayType -> {
+                    val elemRef = ann.elementType as? TypeReference ?: continue
+                    val refName = (elemRef.typeName as? Identifier)?.text ?: continue
+                    val sigTp = ifaceTpToSigTp[refName] ?: continue
+                    val arr = valueExpr as? ArrayLiteralExpression ?: continue
+                    val el = arr.elements.firstOrNull { it !is OmittedExpression && it !is SpreadElement } ?: continue
+                    val et = getWidenedLiteralType(try { getTypeOfExpression(el) } catch (_: Throwable) { continue })
+                    if (et === anyType || et === errorType) continue
+                    bindings[sigTp] = et
+                }
+                else -> continue
+            }
+        }
+        if (bindings.size != tpNames.size) return false   // EVERY sig TP must be inferred
+        // Instantiate the param with the inferred TPs (currentTypeAliasArgs bypasses the cache).
+        val savedArgs = currentTypeAliasArgs
+        val instantiated = try { currentTypeAliasArgs = bindings; getTypeFromTypeNode(paramNode) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); currentTypeAliasArgs = savedArgs; return false }
+            finally { currentTypeAliasArgs = savedArgs }
+        val instObj = instantiated as? Type.Object ?: return false
+        // Contextually type the object literal against the instantiated param (keeps bare-TP literals).
+        val savedCtx = contextualType
+        val argType = try { contextualType = instantiated; getTypeOfObjectLiteral(objLit) }
+            catch (e: StackOverflowError) { reportCheckerStackOverflow(e); contextualType = savedCtx; return false }
+            finally { contextualType = savedCtx }
+        val argObj = argType as? Type.Object ?: return false
+        val missingSym = getMissingRequiredPropertySymbol(argObj, instObj) ?: return false
+        // Build the SOURCE display manually: `getTypeOfObjectLiteral` widens a bare-TP-contextual
+        // property's literal (`itemKey: 'name'` → `string`), but tsc keeps the literal (`"name"`)
+        // because itemKey:K is a bare TP. Render each object-literal property's VALUE type,
+        // preserving the literal where the instantiated member type is itself a literal. Bail if
+        // any property has no matching interface member (an extra property is a different shape).
+        val ifaceProps = ifaceDecl.members.filterIsInstance<PropertyDeclaration>()
+        val srcParts = mutableListOf<String>()
+        for (p in objLit.properties) {
+            val pa = p as? PropertyAssignment ?: return false
+            val nm = (pa.name as? Identifier)?.text ?: (pa.name as? StringLiteralNode)?.text ?: return false
+            val memberDecl = ifaceProps.firstOrNull { (it.name as? Identifier)?.text == nm } ?: return false
+            val instMemberType = memberDecl.type?.let {
+                val sa = currentTypeAliasArgs
+                try { currentTypeAliasArgs = bindings; getTypeFromTypeNode(it) }
+                catch (e: StackOverflowError) { reportCheckerStackOverflow(e); null }
+                finally { currentTypeAliasArgs = sa }
+            }
+            val ctxIsLiteral = instMemberType is Type.StringLiteral || instMemberType is Type.NumberLiteral ||
+                instMemberType is Type.BigIntLiteral || instMemberType === trueType || instMemberType === falseType
+            val valType = if (ctxIsLiteral) {
+                literalTypeOfExpression(pa.initializer) ?: getWidenedLiteralType(getTypeOfExpression(pa.initializer))
+            } else {
+                getWidenedLiteralType(getTypeOfExpression(pa.initializer))
+            }
+            if (valType === anyType || valType === errorType) return false
+            srcParts.add("$nm: ${typeToString(valType)};")
+        }
+        val srcDisp = "{ " + srcParts.joinToString(" ") + " }"
+        val tgtDisp = typeToString(instantiated)
+        val start = objLit.pos
+        val length = (expressionTrueEnd(objLit) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$srcDisp' is not assignable to parameter of type '$tgtDisp'.",
+            category = DiagnosticCategory.Error, code = 2345,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf("  Property '${formatPropertyDisplayName(missingSym)}' is missing in type '$srcDisp' but required in type '$tgtDisp'."),
+            relatedInformation = listOfNotNull(createPropertyDeclaredHereRelatedInfo(missingSym)),
+        ))
+        return true
+    }
+
     private fun tryEmitBlockingMappedIndexedAccessArg(
         args: List<Expression>, sigIn: Signature, source: String, fileName: String,
     ): Boolean {
@@ -112796,6 +112927,10 @@ interface DataView {
         // param simplifies to T → check the arg against T's constraint (corpus-unique shape).
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitBlockingMappedIndexedAccessArg(args, sigIn, source, fileName)) return
+        // inferenceFromIncompleteSource: generic-const callee `f({…})` whose single param is a
+        // user interface `Iface<…bare TPs…>` and the object literal is missing a required prop.
+        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+            tryEmitGenericObjectLiteralMissingPropTs2345(args, sigIn, source, fileName)) return
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
