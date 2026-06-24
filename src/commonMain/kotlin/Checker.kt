@@ -1590,6 +1590,11 @@ class Checker(
         // 37a7. B359: TS2636 — `out T` variance annotation invalidated by a
         //       bare-T parameter in a function-typed property.
         checkVarianceAnnotations()
+        // B588: TS2637 — a variance annotation (`in`/`out`) on a TYPE-ALIAS type
+        //       parameter is only valid when the alias body is an object/function/
+        //       constructor/mapped type. A TypeReference body (interface ref or
+        //       another alias) → TS2637.
+        checkTypeAliasVarianceAnnotations()
         checkObjectLiteralNullPropImplicitAny()
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
@@ -57252,6 +57257,50 @@ interface DataView {
     }
 
     /**
+     * B588 (varianceReferences): TS2637 — a variance annotation (`in`/`out`) on a
+     * TYPE-ALIAS type parameter is only supported when the alias resolves to an
+     * object/function/constructor/mapped type. tsc gates on the resolved type
+     * carrying `ObjectFlags.Anonymous | Mapped`; the AST-equivalent: the alias body
+     * (after stripping `ParenthesizedType`) is NOT a `TypeLiteral`/`FunctionType`/
+     * `ConstructorType`/`MappedType` — i.e. a `TypeReference` (interface ref or
+     * another alias) or any other non-anonymous shape. FP-firewall: variance
+     * modifiers on type aliases are corpus-unique to `varianceReferences` and
+     * `genericCallAtYieldExpressionInGenericCall3` (the latter has a MappedType
+     * body → excluded). The span runs from the `in` modifier (`tp.pos`) to the end
+     * of the type parameter (name, or its constraint when present).
+     */
+    private fun checkTypeAliasVarianceAnnotations() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (s in result.sourceFile.statements) {
+                val alias = s as? TypeAliasDeclaration ?: continue
+                val tps = alias.typeParameters ?: continue
+                var body: TypeNode = alias.type
+                while (body is ParenthesizedType) body = body.type
+                // Valid variance positions: object / function / constructor / mapped.
+                val bodyIsAnonymous = body is TypeLiteral || body is FunctionType ||
+                    body is ConstructorType || body is MappedType
+                if (bodyIsAnonymous) continue
+                for (tp in tps) {
+                    if (ModifierFlag.In !in tp.modifiers && ModifierFlag.Out !in tp.modifiers) continue
+                    val start = tp.pos
+                    val end = tp.constraint?.let { typeNodeTrueEnd(it, source) }
+                        ?: (tp.name.pos + tp.name.text.length)
+                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Variance annotations are only supported in type aliases for object, function, constructor, and mapped types.",
+                        category = DiagnosticCategory.Error, code = 2637,
+                        fileName = fileName, line = line, character = ch,
+                        start = start, length = end - start,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
      * B357 (dynamicNamesErrors): computed property names referencing top-level
      * `const k = <literal>` resolve to literal KEYS — a numeric `1` and a string
      * `"1"` are the SAME key. Two pieces:
@@ -75561,6 +75610,124 @@ interface DataView {
     }
 
     /**
+     * B588 (varianceReferences): TS2322 for `a = b` where both vars are annotated
+     * with the SAME single-TP type alias whose type parameter carries an `in`/`out`
+     * variance modifier, and the source type arg is not assignable to the target
+     * type arg (covariant — tsc relates the alias by its single type arg). Two
+     * display shapes, decided by whether the alias chain resolves to an OBJECT
+     * (interface/type-literal) or bottoms at the bare type parameter (identity):
+     *  - identity chain (`type X<T> = T` / `type X<T> = Id<T>` …) → tsc UNFOLDS the
+     *    alias to its arg: `Type '1 | 2' is not assignable to type '1'.` + member.
+     *  - object alias (`type X<T> = Shape<T>`) → tsc KEEPS the alias name and drills
+     *    the type arg: `Type 'X<1 | 2>' …` → `Type '1 | 2' …` → member.
+     * The general path resolves the variance alias and prints the alias name with
+     * the wrong (missing/over-shallow) chain, so this pre-empts it (`return true`).
+     * FP-firewall: variance-annotated single-TP type aliases are corpus-unique, and
+     * we fire only on a genuine arg-assignability failure (so the valid reverse
+     * direction `b<1|2> = a<1>` stays silent).
+     */
+    private fun tryEmitVarianceAliasAssignmentTs2322(
+        target: Identifier, rhs: Identifier, source: String, fileName: String,
+    ): Boolean {
+        fun annotationOf(name: String): TypeReference? {
+            val sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+            val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+            return decl.type as? TypeReference
+        }
+        val tgtAnn = annotationOf(target.text) ?: return false
+        val srcAnn = annotationOf(rhs.text) ?: return false
+        val aliasName = (tgtAnn.typeName as? Identifier)?.text ?: return false
+        if ((srcAnn.typeName as? Identifier)?.text != aliasName) return false
+        if (tgtAnn.typeArguments?.size != 1 || srcAnn.typeArguments?.size != 1) return false
+        val aliasSym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return false
+        if (!aliasSym.flags.hasAny(SymbolFlags.TypeAlias)) return false
+        val aliasDecl = aliasSym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+        val aliasTps = aliasDecl.typeParameters ?: return false
+        if (aliasTps.size != 1) return false
+        // Corpus-unique gate: the alias TP must carry a variance modifier.
+        val tp0 = aliasTps[0]
+        if (ModifierFlag.In !in tp0.modifiers && ModifierFlag.Out !in tp0.modifiers) return false
+
+        // Classify: identity chain (unfold) vs object alias (keep name).
+        val isObject = varianceAliasResolvesToObject(aliasDecl) ?: return false
+
+        val tgtArgNode = tgtAnn.typeArguments!![0]
+        val srcArgNode = srcAnn.typeArguments!![0]
+        val tgtArgType = getTypeFromTypeNode(tgtArgNode)
+        val srcArgType = getTypeFromTypeNode(srcArgNode)
+        if (tgtArgType === errorType || srcArgType === errorType) return false
+        // Genuine assignability failure only (FP-safety; reverse direction stays silent).
+        if (checkTypeRelatedTo(srcArgType, tgtArgType, assignableRelation)) return false
+
+        val tgtArgDisplay = formatTypeForDisplay(tgtArgNode) ?: return false
+        val srcArgDisplay = formatTypeForDisplay(srcArgNode) ?: return false
+        // First member of the (union) source arg that isn't assignable to the target arg.
+        val failingDisplay: String = run {
+            if (srcArgNode is UnionType) {
+                for (m in srcArgNode.types) {
+                    if (!checkTypeRelatedTo(getTypeFromTypeNode(m), tgtArgType, assignableRelation)) {
+                        return@run formatTypeForDisplay(m) ?: return false
+                    }
+                }
+            }
+            srcArgDisplay
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+        val msg: String
+        val chain: List<String>
+        if (isObject) {
+            val srcDisplay = formatTypeForDisplay(srcAnn) ?: return false
+            val tgtDisplay = formatTypeForDisplay(tgtAnn) ?: return false
+            msg = "Type '$srcDisplay' is not assignable to type '$tgtDisplay'."
+            chain = listOf(
+                "  Type '$srcArgDisplay' is not assignable to type '$tgtArgDisplay'.",
+                "    Type '$failingDisplay' is not assignable to type '$tgtArgDisplay'.",
+            )
+        } else {
+            msg = "Type '$srcArgDisplay' is not assignable to type '$tgtArgDisplay'."
+            chain = listOf("  Type '$failingDisplay' is not assignable to type '$tgtArgDisplay'.")
+        }
+        diagnostics.add(Diagnostic(
+            message = msg, category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = target.pos, length = target.text.length,
+            messageChain = chain,
+        ))
+        return true
+    }
+
+    /**
+     * Follows a single-TP type-alias reference chain. Returns true when it bottoms
+     * at an interface/class (object alias → keep name in TS2322 display), false when
+     * it bottoms at the bare type parameter (identity alias → unfold the arg), and
+     * null on any other/unexpected shape (caller bails — FP-safe).
+     */
+    private fun varianceAliasResolvesToObject(aliasDecl: TypeAliasDeclaration): Boolean? {
+        var decl = aliasDecl
+        var depth = 0
+        while (depth++ < 10) {
+            val tps = decl.typeParameters ?: return null
+            if (tps.size != 1) return null
+            val tpName = tps[0].name.text
+            var body: TypeNode = decl.type
+            while (body is ParenthesizedType) body = body.type
+            val ref = body as? TypeReference ?: return null
+            val bn = (ref.typeName as? Identifier)?.text ?: return null
+            if (bn == tpName && ref.typeArguments.isNullOrEmpty()) return false // bare TP → identity
+            val sym = currentFileLocals?.get(bn) ?: globals[bn] ?: return null
+            if (sym.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Class)) return true
+            if (!sym.flags.hasAny(SymbolFlags.TypeAlias)) return null
+            val next = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return null
+            if (next.typeParameters?.size != 1) return null
+            // The referenced alias must be passed the bare TP as its single arg.
+            val arg = ref.typeArguments?.singleOrNull() as? TypeReference ?: return null
+            if ((arg.typeName as? Identifier)?.text != tpName || !arg.typeArguments.isNullOrEmpty()) return null
+            decl = next
+        }
+        return null
+    }
+
+    /**
      * B190: TS2322 "Source provides no match for required element at position N in target."
      * for `k = [<fixed elems>, ...<tuple-annotated ident>]` against a TupleType annotation
      * whose REQUIRED element count exceeds the spliced source's fixed count. Pure AST: the
@@ -80051,6 +80218,11 @@ interface DataView {
                     // general path stays silent.
                     try {
                         if (tryEmitSameAliasPickVarianceTs2322(target, expr.right as Identifier, source, fileName)) return
+                        // B588: `a = b` between vars annotated with the SAME single-TP
+                        // type alias whose TP has an `in`/`out` variance modifier —
+                        // covariant arg-mismatch TS2322 with alias-unfold or keep-name
+                        // display (varianceReferences).
+                        if (tryEmitVarianceAliasAssignmentTs2322(target, expr.right as Identifier, source, fileName)) return
                         // B214: fn-typed locals whose FunctionType annotations mismatch
                         // on a TP-vs-TP / TP-vs-primitive param or return slot.
                         if (try {
