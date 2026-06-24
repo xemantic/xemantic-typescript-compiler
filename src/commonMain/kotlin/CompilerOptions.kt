@@ -214,7 +214,17 @@ data class CompilerOptions(
 ) {
 
     val effectiveTarget: ScriptTarget
-        get() = if (target <= ScriptTarget.ES5) ScriptTarget.ES2015 else target
+        // tsc getEmitScriptTarget: an UNSET target (or ES3) maps to LatestStandard (ES2025).
+        // We use ES2024 (our top standard target) for an unset target — so emit keeps native
+        // class fields / async / spread (useDefineForClassFields ≥ ES2022 → true). An EXPLICIT
+        // ES3/ES5 still maps to ES2015 (legacy downlevel). NOTE: the checker reads RAW
+        // `options.target` (stays ES3) for lib-availability / `target < ES2015` gates, so only
+        // the emit dimension changes for no-@target tests (classPropertyInferenceFromBroaderTypeConst).
+        get() = when {
+            !targetExplicitlySet -> ScriptTarget.ES2024
+            target <= ScriptTarget.ES5 -> ScriptTarget.ES2015
+            else -> target
+        }
 
     val effectiveModule: ModuleKind
         get() = module ?: when {
