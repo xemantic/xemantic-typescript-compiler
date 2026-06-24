@@ -1670,7 +1670,112 @@ class TypeScriptCompiler {
                 else -> importDeps
             }
             val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
-            val jsOutputs = sortedTsFiles.mapNotNull { jsOutputMap[it] }
+            // require-only orphan drop: a `.ts` input reached ONLY by a bare untyped
+            // `require('./x')` CallExpression — not a static `import`/`export … from` /
+            // `import = require` (those land in importDeps), not `import('…')` /
+            // `typeof import('…')`, not `/// <reference>` — is NOT a program file in tsc,
+            // so it is never resolved, type-checked, or emitted (moduleResolutionWithRequire).
+            // FP firewall: corpus-unique to the `declare const require` + bare `require('./X')`
+            // shape; the sibling moduleResolutionWithRequireAndImport keeps emitting X because
+            // its `typeof import('./X')` IS a static reference (→ staticallyReferenced).
+            val requireOnlyOrphans: Set<String> =
+                if (parsed.hasExplicitFilenames && tsFileNames.size > 1) {
+                    val tsFileSet = tsFileNames.toSet()
+                    fun resolveToInput(fromFile: String, spec: String): String? {
+                        if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+                        val lastSlash = fromFile.lastIndexOf('/')
+                        val dir = when {
+                            lastSlash > 0 -> fromFile.substring(0, lastSlash)
+                            lastSlash == 0 -> "/"
+                            else -> ""
+                        }
+                        val resolved = resolveRelativePath(dir, spec)
+                        if (resolved in tsFileSet) return resolved
+                        for (ext in listOf(".ts", ".tsx", ".d.ts")) {
+                            if ("$resolved$ext" in tsFileSet) return "$resolved$ext"
+                        }
+                        return null
+                    }
+                    // Resolve a (bare OR relative) namespace-internal import=require specifier to a
+                    // sibling input file. A bare basename `"importInsideModule_file1"` resolves to
+                    // the sibling `importInsideModule_file1.ts` (classic resolution).
+                    fun resolveNsImportSpec(fromFile: String, spec: String): String? {
+                        resolveToInput(fromFile, spec)?.let { return it }
+                        if (spec.startsWith("./") || spec.startsWith("../")) return null
+                        val lastSlash = fromFile.lastIndexOf('/')
+                        val dir = if (lastSlash > 0) fromFile.substring(0, lastSlash) else ""
+                        for (ext in listOf("", ".ts", ".tsx", ".d.ts")) {
+                            if ("$spec$ext" in tsFileSet) return "$spec$ext"
+                            if (dir.isNotEmpty() && "$dir/$spec$ext" in tsFileSet) return "$dir/$spec$ext"
+                        }
+                        return null
+                    }
+                    // Collect targets of `import X = require("spec")` whose IMMEDIATE enclosing
+                    // declaration is an Identifier-named `namespace`/`module` (NOT a string-literal
+                    // ambient `declare module "X"`). tsc's collectModuleReferences only descends into
+                    // ambient (string-named) modules, so a namespace-internal import=require is NOT a
+                    // program-level module reference → its target is never resolved/emitted
+                    // (importInsideModule). The Identifier-vs-string-name gate IS tsc's isAmbientModule
+                    // distinction and the FP firewall (corpus-unique to this shape).
+                    fun collectNsInternalImportTargets(stmts: List<Statement>, fromFile: String, immediateParentIsIdentNs: Boolean, out: MutableSet<String>) {
+                        for (s in stmts) {
+                            when (s) {
+                                is ModuleDeclaration -> {
+                                    val nm = s.name
+                                    val identNamed = nm is Identifier && nm.text != "global"
+                                    val inner = when (val b = s.body) {
+                                        is ModuleBlock -> b.statements
+                                        is ModuleDeclaration -> listOf(b)
+                                        else -> emptyList()
+                                    }
+                                    collectNsInternalImportTargets(inner, fromFile, identNamed, out)
+                                }
+                                is ImportEqualsDeclaration -> {
+                                    val ref = s.moduleReference
+                                    if (immediateParentIsIdentNs && ref is ExternalModuleReference) {
+                                        val spec = (ref.expression as? StringLiteralNode)?.text
+                                        if (spec != null) resolveNsImportSpec(fromFile, spec)?.let { out.add(it) }
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                    val staticallyReferenced = mutableSetOf<String>()
+                    for ((_, depList) in importDeps) staticallyReferenced.addAll(depList)
+                    val importTypeRegex = Regex("""import\s*\(\s*["']([^"']+)["']""")
+                    val requireCallRegex = Regex("""\brequire\s*\(\s*["']([^"']+)["']""")
+                    // Only a USER-declared `require` value (`declare const/var/function require`)
+                    // makes `require('./x')` a plain runtime call that tsc does NOT resolve as a
+                    // module reference. In an ambient/CommonJS file (no such declaration) tsc DOES
+                    // resolve a bare `require('./x')` → x is a program file and emits, so we must
+                    // NOT treat such a target as an orphan. This gate makes the drop corpus-unique
+                    // to the moduleResolutionWithRequire* shape.
+                    val declareRequireRegex = Regex("""\bdeclare\s+(?:const|var|let|function)\s+require\b""")
+                    val requireReached = mutableSetOf<String>()
+                    val nsInternalImportTargets = mutableSetOf<String>()
+                    for (fileName in tsFileNames) {
+                        val sf = parsedSourceFiles[fileName] ?: continue
+                        val text = sf.text
+                        for (m in importTypeRegex.findAll(text)) {
+                            resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
+                        }
+                        if (declareRequireRegex.containsMatchIn(text)) {
+                            for (m in requireCallRegex.findAll(text)) {
+                                resolveToInput(fileName, m.groupValues[1])?.let { requireReached.add(it) }
+                            }
+                        }
+                        collectNsInternalImportTargets(sf.statements, fileName, false, nsInternalImportTargets)
+                    }
+                    val lastFile = tsFileNames.last()
+                    // Never drop the last @Filename unit (the harness sole-root) — only earlier,
+                    // genuinely-unreachable inputs.
+                    tsFileNames.filter {
+                        it != lastFile && it !in staticallyReferenced &&
+                            (it in requireReached || it in nsInternalImportTargets)
+                    }.toSet()
+                } else emptySet()
+            val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
 
             // When outFile is set, concatenate all JS outputs into a single file.
             // Exception: isolatedModules is incompatible with outFile — TypeScript ignores outFile
