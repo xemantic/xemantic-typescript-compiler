@@ -2394,7 +2394,20 @@ class Emitter(
             val isSyntheticObject = node.pos < 0
             for ((index, prop) in properties.withIndex()) {
                 if (index > 0) write(", ")
-                val needsExtraIndent = isSyntheticObject && (prop is MethodDeclaration || prop is GetAccessor || prop is SetAccessor)
+                // tsc applies ListFormat.Indented UNCONDITIONALLY to object-literal property
+                // lists, so a property VALUE that wraps to a new line (e.g. a binding-pattern
+                // default `{ skills: {…} = \n  {…} }` in a for-of destructuring target) lands one
+                // level deeper than the bare binary continuation (8 spaces, not 4). Our single-line
+                // object branch otherwise carries no level, so mirror tsc only when the value wraps
+                // on a binary operator — corpus-unique to that shape (the binary emitter itself adds
+                // its own continuation level; this adds the missing object-literal level).
+                val valueWraps = prop is PropertyAssignment &&
+                    prop.initializer.let { v ->
+                        v is BinaryExpression && v.left.end > 0 && hasNewLineInSource(v.left.end, v.right.pos)
+                    }
+                val needsExtraIndent =
+                    (isSyntheticObject && (prop is MethodDeclaration || prop is GetAccessor || prop is SetAccessor)) ||
+                        valueWraps
                 if (needsExtraIndent) indentLevel++
                 emitObjectProperty(prop)
                 if (needsExtraIndent) indentLevel--
