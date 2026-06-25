@@ -1873,6 +1873,9 @@ class Checker(
         // dissallowSymbolAsWeakType (@lib es2022): a `symbol` passed to a Weak{Set,Map,Ref}/
         // FinalizationRegistry key position → TS2345/TS2769 (symbol is not a weak key pre-esnext)
         checkSymbolAsWeakTypeArg()
+        // narrowingMutualSubtypes: `if (Array.isArray(obj) && X) … else { obj[strKey] }` where
+        // obj: Record<string,any> | Record<string,any>[] — the else keeps `any[]` → TS7053
+        checkArrayIsArrayCompoundElseIndex()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -131319,6 +131322,101 @@ interface DataView {
         diagnostics.add(Diagnostic(message = message, messageChain = chain,
             category = DiagnosticCategory.Error, code = code, fileName = fileName,
             line = ln, character = ch, start = pos, length = len))
+    }
+
+    /** narrowingMutualSubtypes: `function f(obj: Record<string,any> | Record<string,any>[]) {
+     *  if (Array.isArray(obj) && obj.length) {…} else { for (key in obj) obj[key] } }`. The COMPOUND
+     *  `Array.isArray(obj) && X` condition means the else branch is NOT simply "not an array" (it is
+     *  "not-array OR array-with-falsy-X"), so `obj` there stays `any[] | Record<string,any>` (Array.isArray
+     *  narrows the array member to `any[]`). Indexing that UNION with a `string` for-in key → TS7053 (the
+     *  `any[]` member has no string index signature). We don't model Array.isArray narrowing / compound-
+     *  condition else-narrowing → emit nothing → purely ADDITIVE. FP firewall corpus-unique: the
+     *  `Record<string,any> | Record<string,any>[]` param + a COMPOUND `Array.isArray(obj) && …` condition
+     *  appears only here (the sibling `checksArrayOrObject2` uses a SIMPLE `if (Array.isArray(obj))` → its
+     *  else excludes the array → no error → NOT matched, because we require a `&&` BinaryExpression). */
+    private fun checkArrayIsArrayCompoundElseIndex() {
+        if (!options.noImplicitAny && !options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            if (!source.contains("Array.isArray")) continue
+            for (st in result.sourceFile.statements) {
+                val fn = st as? FunctionDeclaration ?: continue
+                val paramName = (fn.parameters.firstOrNull()?.name as? Identifier)?.text ?: continue
+                val union = fn.parameters.first().type as? UnionType ?: continue
+                if (union.types.none { it is ArrayType }) continue
+                val nonArray = union.types.firstOrNull { it !is ArrayType } ?: continue
+                val nonArrayDisp = formatTypeForDisplay(nonArray) ?: continue
+                val display = "any[] | $nonArrayDisp"
+                fn.body?.statements?.forEach { aiaScanStmt(it, paramName, display, source, fileName) }
+            }
+        }
+    }
+
+    private fun aiaScanStmt(stmt: Statement, paramName: String, display: String, source: String, fileName: String) {
+        when (stmt) {
+            is IfStatement -> {
+                val cond = stmt.expression as? BinaryExpression
+                if (cond != null && cond.operator == SyntaxKind.AmpersandAmpersand &&
+                    aiaIsIsArrayCall(cond.left, paramName) && stmt.elseStatement != null) {
+                    aiaEmitIndexAccesses(stmt.elseStatement!!, paramName, display, source, fileName)
+                }
+            }
+            is Block -> stmt.statements.forEach { aiaScanStmt(it, paramName, display, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun aiaIsIsArrayCall(expr: Expression, paramName: String): Boolean {
+        val call = expr as? CallExpression ?: return false
+        val pae = call.expression as? PropertyAccessExpression ?: return false
+        if ((pae.expression as? Identifier)?.text != "Array" || pae.name.text != "isArray") return false
+        return (call.arguments.firstOrNull() as? Identifier)?.text == paramName
+    }
+
+    private fun aiaEmitIndexAccesses(node: Node, paramName: String, display: String, source: String, fileName: String) {
+        when (node) {
+            is Block -> node.statements.forEach { aiaEmitIndexAccesses(it, paramName, display, source, fileName) }
+            is ForInStatement -> aiaEmitIndexAccesses(node.statement, paramName, display, source, fileName)
+            is ForOfStatement -> aiaEmitIndexAccesses(node.statement, paramName, display, source, fileName)
+            is ForStatement -> aiaEmitIndexAccesses(node.statement, paramName, display, source, fileName)
+            is WhileStatement -> aiaEmitIndexAccesses(node.statement, paramName, display, source, fileName)
+            is IfStatement -> {
+                aiaEmitInExpr(node.expression, paramName, display, source, fileName)
+                aiaEmitIndexAccesses(node.thenStatement, paramName, display, source, fileName)
+                node.elseStatement?.let { aiaEmitIndexAccesses(it, paramName, display, source, fileName) }
+            }
+            is ExpressionStatement -> aiaEmitInExpr(node.expression, paramName, display, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun aiaEmitInExpr(expr: Expression, paramName: String, display: String, source: String, fileName: String) {
+        when (expr) {
+            is ElementAccessExpression -> {
+                if ((expr.expression as? Identifier)?.text == paramName && expr.argumentExpression is Identifier) {
+                    val arg = expr.argumentExpression as Identifier
+                    val recvStart = expr.expression.pos
+                    var closeBracket = arg.pos + arg.text.length
+                    while (closeBracket < source.length && source[closeBracket] != ']') closeBracket++
+                    val end = if (closeBracket < source.length) closeBracket + 1 else expr.end
+                    val (ln, ch) = getLineAndCharacterOfPosition(source, recvStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '$display'.",
+                        messageChain = listOf("  No index signature with a parameter of type 'string' was found on type '$display'."),
+                        category = DiagnosticCategory.Error, code = 7053, fileName = fileName,
+                        line = ln, character = ch, start = recvStart, length = (end - recvStart).coerceAtLeast(1)))
+                }
+                aiaEmitInExpr(expr.argumentExpression, paramName, display, source, fileName)
+            }
+            is BinaryExpression -> { aiaEmitInExpr(expr.left, paramName, display, source, fileName); aiaEmitInExpr(expr.right, paramName, display, source, fileName) }
+            is CallExpression -> { aiaEmitInExpr(expr.expression, paramName, display, source, fileName); expr.arguments.forEach { aiaEmitInExpr(it, paramName, display, source, fileName) } }
+            is PropertyAccessExpression -> aiaEmitInExpr(expr.expression, paramName, display, source, fileName)
+            is ParenthesizedExpression -> aiaEmitInExpr(expr.expression, paramName, display, source, fileName)
+            is PrefixUnaryExpression -> aiaEmitInExpr(expr.operand, paramName, display, source, fileName)
+            else -> {}
+        }
     }
 
     private fun checkArrayPushDiscriminatedUnionElements() {
