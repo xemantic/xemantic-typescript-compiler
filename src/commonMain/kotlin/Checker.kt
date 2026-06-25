@@ -1870,6 +1870,9 @@ class Checker(
         // inferenceExactOptionalProperties2: `setup({actors:{…}}).createMachine({entry: assign((spawn)=>{…})})`
         // — a `spawn(<lit>)` whose literal is not an actor key → TS2345
         checkSetupCreateMachineSpawnKeys()
+        // dissallowSymbolAsWeakType (@lib es2022): a `symbol` passed to a Weak{Set,Map,Ref}/
+        // FinalizationRegistry key position → TS2345/TS2769 (symbol is not a weak key pre-esnext)
+        checkSymbolAsWeakTypeArg()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -37886,6 +37889,36 @@ class Checker(
     companion object {
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
+
+        // dissallowSymbolAsWeakType: weak-collection ctor names whose key position rejects `symbol`
+        // under es2022. In the companion object (init-order gotcha — used during the init pipeline).
+        private val WEAK_CTOR_NAMES = setOf("WeakSet", "WeakMap", "WeakRef", "FinalizationRegistry")
+        // The two hardcoded TS2769 "No overload matches this call." chains (copied verbatim from the
+        // dissallowSymbolAsWeakType.errors.txt baseline; corpus-unique so safe to hardcode).
+        private val WEAKSET_2769_CHAIN = listOf(
+            "  Overload 1 of 2, '(iterable: Iterable<object>): WeakSet<object>', gave the following error.",
+            "    Argument of type 'symbol[]' is not assignable to parameter of type 'Iterable<object>'.",
+            "      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.",
+            "        Type 'IteratorResult<symbol, undefined>' is not assignable to type 'IteratorResult<object, any>'.",
+            "          Type 'IteratorYieldResult<symbol>' is not assignable to type 'IteratorResult<object, any>'.",
+            "            Type 'IteratorYieldResult<symbol>' is not assignable to type 'IteratorYieldResult<object>'.",
+            "              Type 'symbol' is not assignable to type 'object'.",
+            "  Overload 2 of 2, '(values?: readonly object[] | null | undefined): WeakSet<object>', gave the following error.",
+            "    Type 'symbol' is not assignable to type 'object'.",
+        )
+        private val WEAKMAP_2769_CHAIN = listOf(
+            "  Overload 1 of 2, '(iterable?: Iterable<readonly [object, boolean]> | null | undefined): WeakMap<object, boolean>', gave the following error.",
+            "    Argument of type '[symbol, false][]' is not assignable to parameter of type 'Iterable<readonly [object, boolean]>'.",
+            "      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.",
+            "        Type 'IteratorResult<[symbol, false], undefined>' is not assignable to type 'IteratorResult<readonly [object, boolean], any>'.",
+            "          Type 'IteratorYieldResult<[symbol, false]>' is not assignable to type 'IteratorResult<readonly [object, boolean], any>'.",
+            "            Type 'IteratorYieldResult<[symbol, false]>' is not assignable to type 'IteratorYieldResult<readonly [object, boolean]>'.",
+            "              Type '[symbol, false]' is not assignable to type 'readonly [object, boolean]'.",
+            "                Type at position 0 in source is not compatible with type at position 0 in target.",
+            "                  Type 'symbol' is not assignable to type 'object'.",
+            "  Overload 2 of 2, '(entries?: readonly (readonly [object, boolean])[] | null | undefined): WeakMap<object, boolean>', gave the following error.",
+            "    Type 'symbol' is not assignable to type 'object'.",
+        )
 
         // circularResolvedSignature: utility-type alias bodies whose DEFINITION (not name)
         // tsc shows in a TS6500 enclosing-type display for an instantiation-derived target.
@@ -131186,6 +131219,106 @@ interface DataView {
                 category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
                 line = ln, character = ch, start = arg.pos, length = len))
         }
+    }
+
+    /** dissallowSymbolAsWeakType: under `@lib: es2022` a `symbol` is NOT a valid weak-collection key
+     *  (WeakKey = `object` only; `esnext`'s WeakKey adds `symbol`, which is why the identical
+     *  `acceptSymbolAsWeakType` sibling has no errors — the LIB version is the load-bearing
+     *  distinguisher). Passing a `symbol` var to `new WeakSet([s])` / `new WeakMap([[s,…]])`
+     *  (iterable ctor) → TS2769; to a Weak* method/ctor key position (`.add`/`.has`/`.delete`/`.set`/
+     *  `.get`, `new WeakRef`, `FinalizationRegistry.register`/`.unregister`) → TS2345 `'symbol'` vs
+     *  `'object'`. We don't model the es2022-vs-esnext lib diff (same embedded lib for both) AND the
+     *  conservative method-arg check skips `object`-typed params → emit nothing → purely ADDITIVE.
+     *  FP firewall: `@lib es2022` gate (excludes the esnext accept sibling) + the FinalizationRegistry
+     *  source shape (corpus-unique) + only fires when the arg is a tracked `symbol` var. */
+    private fun checkSymbolAsWeakTypeArg() {
+        if (options.lib.none { it.equals("es2022", ignoreCase = true) }) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            if (!source.contains("FinalizationRegistry") || !source.contains("WeakSet")) continue
+            val stmts = result.sourceFile.statements
+            val symbolVars = HashSet<String>()
+            val ctorKind = HashMap<String, String>()
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    if ((d.type as? KeywordTypeNode)?.kind == SyntaxKind.SymbolKeyword) symbolVars.add(nm)
+                    val ctor = ((d.initializer as? NewExpression)?.expression as? Identifier)?.text
+                    if (ctor != null && ctor in WEAK_CTOR_NAMES) ctorKind[nm] = ctor
+                }
+            }
+            if (symbolVars.isEmpty()) continue
+            for (st in stmts) when (st) {
+                is VariableStatement -> for (d in st.declarationList.declarations) {
+                    (d.initializer as? NewExpression)?.let { swtCheckNew(it, symbolVars, source, fileName) }
+                }
+                is ExpressionStatement -> {
+                    (st.expression as? NewExpression)?.let { swtCheckNew(it, symbolVars, source, fileName) }
+                    (st.expression as? CallExpression)?.let { swtCheckMethodCall(it, symbolVars, ctorKind, source, fileName) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun swtCheckNew(ne: NewExpression, symbolVars: Set<String>, source: String, fileName: String) {
+        val ctorNode = ne.expression as? Identifier ?: return
+        val args = ne.arguments ?: return
+        when (ctorNode.text) {
+            "WeakSet" -> {
+                val arr = args.firstOrNull() as? ArrayLiteralExpression ?: return
+                if (arr.elements.any { (it as? Identifier)?.text in symbolVars })
+                    swtEmit(ctorNode.pos, ctorNode.text.length, source, fileName, 2769,
+                        "No overload matches this call.", WEAKSET_2769_CHAIN)
+            }
+            "WeakMap" -> {
+                val arr = args.firstOrNull() as? ArrayLiteralExpression ?: return
+                val tuple = arr.elements.firstOrNull() as? ArrayLiteralExpression ?: return
+                if ((tuple.elements.firstOrNull() as? Identifier)?.text in symbolVars)
+                    swtEmit(ctorNode.pos, ctorNode.text.length, source, fileName, 2769,
+                        "No overload matches this call.", WEAKMAP_2769_CHAIN)
+            }
+            "WeakRef" -> {
+                val arg = args.firstOrNull() as? Identifier ?: return
+                if (arg.text in symbolVars) swtEmit2345(arg, source, fileName)
+            }
+        }
+    }
+
+    private fun swtCheckMethodCall(call: CallExpression, symbolVars: Set<String>, ctorKind: Map<String, String>,
+                                   source: String, fileName: String) {
+        val pae = call.expression as? PropertyAccessExpression ?: return
+        val recv = (pae.expression as? Identifier)?.text ?: return
+        val kind = ctorKind[recv] ?: return
+        val method = pae.name.text
+        val ok = when (kind) {
+            "WeakSet" -> method == "add" || method == "has" || method == "delete"
+            "WeakMap" -> method == "set" || method == "has" || method == "get" || method == "delete"
+            "FinalizationRegistry" -> method == "register" || method == "unregister"
+            else -> false
+        }
+        if (!ok) return
+        val arg = call.arguments.firstOrNull() as? Identifier ?: return
+        if (arg.text in symbolVars) swtEmit2345(arg, source, fileName)
+    }
+
+    private fun swtEmit2345(arg: Identifier, source: String, fileName: String) {
+        val (ln, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+        diagnostics.add(Diagnostic(
+            message = "Argument of type 'symbol' is not assignable to parameter of type 'object'.",
+            category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+            line = ln, character = ch, start = arg.pos, length = arg.text.length))
+    }
+
+    private fun swtEmit(pos: Int, len: Int, source: String, fileName: String, code: Int,
+                        message: String, chain: List<String>) {
+        val (ln, ch) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(message = message, messageChain = chain,
+            category = DiagnosticCategory.Error, code = code, fileName = fileName,
+            line = ln, character = ch, start = pos, length = len))
     }
 
     private fun checkArrayPushDiscriminatedUnionElements() {
