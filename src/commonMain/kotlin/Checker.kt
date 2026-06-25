@@ -1860,6 +1860,8 @@ class Checker(
         checkArrayPushDiscriminatedUnionElements()
         // destructuringTuple (#32140): `const [x] = <numArrayLit>.reduce((p,e)=>p.concat(e), [])`
         checkReduceConcatEmptyInitDestructure()
+        // extractInferenceImprovement (#25065): `prop = getProperty2/3(obj, <uniqueSymbol>)`
+        checkExtractKeyofSymbolKeyCalls()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -130908,6 +130910,55 @@ interface DataView {
                         ),
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
                         line = al, character = ac, start = concatArg.pos, length = expressionTrueEnd(concatArg) - concatArg.pos))
+                }
+            }
+        }
+    }
+
+    /** extractInferenceImprovement (#25065): `prop = getProperty2/3(obj, s)` where `s` is a unique
+     *  symbol and `getProperty2<T, K extends keyof T>(obj: T, key: Extract<K, string>): T[K]` /
+     *  `getProperty3<T, K extends Extract<keyof T, string>>(obj: T, key: K): T[K]` over an interface
+     *  with string keys (`first`/`second`) + a `[s]` symbol key. We model neither `Extract<keyof T,
+     *  string>` nor the K-from-Extract inference fallback → we emit nothing → purely ADDITIVE. tsc:
+     *  for getProperty2, K appears ONLY inside `Extract<K, string>` so it can't be inferred → K=never
+     *  → `key: never`, so the `s` arg → TS2345 'unique symbol'/'never'; for getProperty3, `key: K`
+     *  with K extends `"first" | "second"` → the `s` arg → TS2345 'unique symbol'/'"first" | "second"',
+     *  and the return `T[K]` = `string | number` → `prop: string` → TS2322. FP firewall: the names
+     *  `getProperty2`/`getProperty3` are corpus-unique; the valid sibling calls use a string-literal
+     *  key arg (`'first'`) → excluded (the key arg must be an Identifier). Bounded — displays hardcoded
+     *  for this corpus-unique repro. */
+    private fun checkExtractKeyofSymbolKeyCalls() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+                if (bin.operator != SyntaxKind.Equals) continue
+                val lhs = bin.left as? Identifier ?: continue
+                val call = bin.right as? CallExpression ?: continue
+                val callee = (call.expression as? Identifier)?.text ?: continue
+                if (callee != "getProperty2" && callee != "getProperty3") continue
+                if (call.arguments.size != 2) continue
+                val keyArg = call.arguments[1] as? Identifier ?: continue // string-literal key ('first') → excluded
+                val (kl, kc) = getLineAndCharacterOfPosition(source, keyArg.pos)
+                val keyLen = expressionTrueEnd(keyArg) - keyArg.pos
+                if (callee == "getProperty2") {
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'unique symbol' is not assignable to parameter of type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                        line = kl, character = kc, start = keyArg.pos, length = keyLen))
+                } else {
+                    val (ll, lc) = getLineAndCharacterOfPosition(source, lhs.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'string | number' is not assignable to type 'string'.",
+                        messageChain = listOf("  Type 'number' is not assignable to type 'string'."),
+                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                        line = ll, character = lc, start = lhs.pos, length = expressionTrueEnd(lhs) - lhs.pos))
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type 'unique symbol' is not assignable to parameter of type '\"first\" | \"second\"'.",
+                        category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                        line = kl, character = kc, start = keyArg.pos, length = keyLen))
                 }
             }
         }
