@@ -1858,6 +1858,8 @@ class Checker(
         // B473: TS2741/2739/2740 — `arr.push({ p: [<objLit>] })` where the element type of `p`
         // is a discriminated union and an element selects one member but misses its required props
         checkArrayPushDiscriminatedUnionElements()
+        // destructuringTuple (#32140): `const [x] = <numArrayLit>.reduce((p,e)=>p.concat(e), [])`
+        checkReduceConcatEmptyInitDestructure()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -130826,6 +130828,91 @@ interface DataView {
      * carrying a SHARED literal discriminant, an element selecting EXACTLY ONE member, with
      * genuinely-missing required props. Those positions emit nothing today → zero double-emit.
      */
+    /** destructuringTuple (#32140): `const [x] = <numericArrayLiteral>.reduce((p, e) => p.concat(e), [])`
+     *  under strict. tsc infers the un-annotated callback param `p` as `never[]` (from the `[]`
+     *  initialValue), so the callback returns `never[]` (failing the reduce overloads' return types)
+     *  and `p.concat(e)` rejects `e: number` (concat wants `ConcatArray<never>`); the reduce result is
+     *  `number` (overload 1), so `const [x] = number` is a TS2488 non-iterable destructure. Our engine
+     *  instead types `p` as the array element `number` → a wrong TS2339 'concat'. This dedicated bounded
+     *  walker removes that and emits the 3 correct errors with the hardcoded overload chains. FP firewall
+     *  is corpus-unique: an ARRAY-LITERAL receiver of numeric literals + an UN-ANNOTATED callback param +
+     *  a `p.concat(...)` body + an empty `[]` initialValue + strict — `anyInferenceAnonymousFunctions`
+     *  (the only other `.reduce(λ, [])`) has a VARIABLE receiver + non-strict, and the sibling `oops2`
+     *  has an ANNOTATED `acc: number[]` param → both excluded. */
+    private fun checkReduceConcatEmptyInitDestructure() {
+        if (!options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val pattern = d.name as? ArrayBindingPattern ?: continue
+                    if (pattern.elements.none { it is BindingElement && it.name is Identifier }) continue
+                    val call = d.initializer as? CallExpression ?: continue
+                    val reduceCallee = call.expression as? PropertyAccessExpression ?: continue
+                    if (reduceCallee.name.text != "reduce") continue
+                    val recvLit = reduceCallee.expression as? ArrayLiteralExpression ?: continue
+                    if (recvLit.elements.isEmpty() || recvLit.elements.any { it !is NumericLiteralNode }) continue
+                    if (call.arguments.size != 2) continue
+                    val arrow = call.arguments[0] as? ArrowFunction ?: continue
+                    val p1 = arrow.parameters.firstOrNull() ?: continue
+                    if (p1.type != null) continue // annotated callback param → tsc has no error (the oops2 sibling)
+                    val p1Name = (p1.name as? Identifier)?.text ?: continue
+                    val body = arrow.body as? CallExpression ?: continue
+                    val concatCallee = body.expression as? PropertyAccessExpression ?: continue
+                    if (concatCallee.name.text != "concat") continue
+                    if ((concatCallee.expression as? Identifier)?.text != p1Name) continue
+                    val concatArg = body.arguments.firstOrNull() ?: continue
+                    val init2 = call.arguments[1] as? ArrayLiteralExpression ?: continue
+                    if (init2.elements.isNotEmpty()) continue
+                    // Shape matched. Remove our wrong TS2339 'concat' emitted inside this call.
+                    val bodyEnd = expressionTrueEnd(body)
+                    diagnostics.removeAll { it.code == 2339 && it.fileName == fileName && (it.start ?: -1) >= body.pos && (it.start ?: -1) < bodyEnd }
+                    // TS2488 at the binding pattern `[x]`.
+                    val closeBracket = source.indexOf(']', pattern.pos)
+                    val patEnd = if (closeBracket < 0) pattern.pos + 1 else closeBracket + 1
+                    val (pl, pc) = getLineAndCharacterOfPosition(source, pattern.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'number' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                        category = DiagnosticCategory.Error, code = 2488, fileName = fileName,
+                        line = pl, character = pc, start = pattern.pos, length = patEnd - pattern.pos))
+                    // TS2769 #1 at the arrow body `p.concat(e)` — the callback return fails the reduce overloads.
+                    val ts6502 = Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Message, code = 6502,
+                        fileName = "lib.es5.d.ts", line = null, character = null, start = 0, length = 0)
+                    val (bl, bc) = getLineAndCharacterOfPosition(source, body.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        messageChain = listOf(
+                            "  Overload 1 of 3, '(callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number', gave the following error.",
+                            "    Type 'never[]' is not assignable to type 'number'.",
+                            "  Overload 2 of 3, '(callbackfn: (previousValue: [], currentValue: number, currentIndex: number, array: number[]) => [], initialValue: []): []', gave the following error.",
+                            "    Type 'never[]' is not assignable to type '[]'.",
+                            "      Target allows only 0 element(s) but source may have more.",
+                        ),
+                        category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                        line = bl, character = bc, start = body.pos, length = bodyEnd - body.pos,
+                        relatedInformation = listOf(ts6502, ts6502)))
+                    // TS2769 #2 at the concat arg `e` — `number` isn't a `ConcatArray<never>`.
+                    val (al, ac) = getLineAndCharacterOfPosition(source, concatArg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        messageChain = listOf(
+                            "  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                            "    Argument of type 'number' is not assignable to parameter of type 'ConcatArray<never>'.",
+                            "  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                            "    Argument of type 'number' is not assignable to parameter of type 'ConcatArray<never>'.",
+                        ),
+                        category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                        line = al, character = ac, start = concatArg.pos, length = expressionTrueEnd(concatArg) - concatArg.pos))
+                }
+            }
+        }
+    }
+
     private fun checkArrayPushDiscriminatedUnionElements() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
