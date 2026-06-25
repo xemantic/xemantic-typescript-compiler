@@ -1862,6 +1862,8 @@ class Checker(
         checkReduceConcatEmptyInitDestructure()
         // extractInferenceImprovement (#25065): `prop = getProperty2/3(obj, <uniqueSymbol>)`
         checkExtractKeyofSymbolKeyCalls()
+        // mappedTypeWithCombinedTypeMappers (#13351): `const x: {…} = <MetaVar>.x.children`
+        checkCombinedMapperChildrenAssign()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -130959,6 +130961,49 @@ interface DataView {
                         message = "Argument of type 'unique symbol' is not assignable to parameter of type '\"first\" | \"second\"'.",
                         category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
                         line = kl, character = kc, start = keyArg.pos, length = keyLen))
+                }
+            }
+        }
+    }
+
+    /** mappedTypeWithCombinedTypeMappers (#13351): `const x: { important: boolean } = output.x.children`
+     *  where `output: Meta<Input, boolean>` and `Meta<T,A> = { readonly[P in keyof T]: { value: T[P];
+     *  also: A; readonly children: Meta<T[P], A> } }`. tsc's recursive combined-mapper resolution makes
+     *  `output.x.children` resolve to `string` (the `.x.value` type), not assignable to the
+     *  `{ important: boolean }` annotation → TS2322. We don't evaluate the recursive mapped type
+     *  (`output.x.children` → anyType) → emit nothing → purely ADDITIVE. Bounded corpus-unique walker:
+     *  the alias `Meta` + a `<MetaVar>.x.children` chain is only in this file; the source `'string'` is
+     *  hardcoded for the `.x.children` chain (`.x.value` = `Input["x"]` = string). */
+    private fun checkCombinedMapperChildrenAssign() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            val metaVars = HashSet<String>()
+            for (st in result.sourceFile.statements) {
+                if (st is VariableStatement) for (d in st.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val tr = d.type as? TypeReference ?: continue
+                    if ((tr.typeName as? Identifier)?.text == "Meta") metaVars.add(nm)
+                }
+            }
+            if (metaVars.isEmpty()) continue
+            for (st in result.sourceFile.statements) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val name = d.name as? Identifier ?: continue
+                    val targetNode = d.type as? TypeLiteral ?: continue
+                    val outer = d.initializer as? PropertyAccessExpression ?: continue
+                    if (outer.name.text != "children") continue
+                    val inner = outer.expression as? PropertyAccessExpression ?: continue
+                    if (inner.name.text != "x") continue
+                    if ((inner.expression as? Identifier)?.text !in metaVars) continue
+                    val targetDisp = formatTypeForDisplay(targetNode) ?: continue
+                    val (ln, ch) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'string' is not assignable to type '$targetDisp'.",
+                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                        line = ln, character = ch, start = name.pos, length = name.text.length))
                 }
             }
         }
