@@ -2635,8 +2635,9 @@ class Emitter(
 
     private fun emitPropertyAccess(node: PropertyAccessExpression) {
         emitExpression(node.expression)
-        // Emit trailing comments on the expression (e.g. `func() // comment\n.next()`)
-        // but skip if the expression already handles its own trailing comments (e.g. numeric literals).
+        // Emit trailing comments on the expression (e.g. `func() // comment\n.next()`, and the
+        // same-line `/*2*/` between an Identifier receiver and the dot —
+        // propertyAccessExpressionInnerComments). Skip kinds that self-emit trailing comments.
         if (node.expression is CallExpression || node.expression is Identifier) {
             emitTrailingComments(node.expression)
         }
@@ -2648,30 +2649,10 @@ class Emitter(
                 write(c.text)
             }
         }
+        // preDot newline-preceded comments (the `/*2*/`-on-its-own-line case) + the
+        // multi-line-chain newline+indent before the dot. propertyAccessExpressionInnerComments.
         if (node.newLineBefore) {
-            writeNewLine()
-            indentLevel++
-            writeIndent()
-            indentLevel--
-            // B41.2: For `expr\n  /* comment */ .name` shape, the comment lives in
-            // `node.name.leadingComments` (parseIdentifierName captures both trailing
-            // and leading comments). For newLineBefore=true, emit those leadings
-            // BEFORE the dot to match TypeScript's positioning. Block comments are
-            // followed by a space; line comments by newline+indent (line comments
-            // terminate the line and the dot belongs on the next indented line).
-            if (!options.removeComments) {
-                node.name.leadingComments?.forEach { c ->
-                    write(c.text)
-                    if (c.kind == SyntaxKind.SingleLineComment) {
-                        writeNewLine()
-                        indentLevel++
-                        writeIndent()
-                        indentLevel--
-                    } else {
-                        write(" ")
-                    }
-                }
-            }
+            emitPreDotComments(node.preDotComments, node.flatComments)
         }
         if (node.questionDotToken) {
             write("?.")
@@ -2691,27 +2672,82 @@ class Emitter(
             }
             write(".")
         }
+        // afterDot comments on the property name (inline `/*3*/` + newline `// ...`).
+        val afterBump = if (node.newLineBefore) 2 else 1
+        emitDotSideComments(node.name.leadingComments, indentBump = afterBump, flat = node.flatComments,
+            blockTrailingSpace = false, leadingSpaceForInline = true)
         if (node.newLineAfterDot) {
             writeNewLine()
-            if (node.name.text.isNotEmpty()) {
-                indentLevel++
+            if (node.flatComments) {
+                // column 0 — synthetic `?.` desugar loses indentation
+            } else if (node.name.text.isNotEmpty()) {
+                indentLevel += afterBump
                 writeIndent()
-                indentLevel--
+                indentLevel -= afterBump
             } else {
                 // Missing identifier: newline but keep same indent level as the statement
                 writeIndent()
             }
         }
-        // Emit inline leading comments on the property name (e.g. `point. /*2*/x`)
-        // Skip when newLineBefore was true — those comments were already emitted
-        // BEFORE the dot above (matches TypeScript's `\n  /* comment */ .toString()` form).
-        if (!options.removeComments && !node.newLineBefore) {
-            node.name.leadingComments?.forEach { c ->
+        write(node.name.emitText)
+    }
+
+    /** Emit comments around a property-access `.`/`?.` reproducing tsc's comment-writer spacing.
+     *  Newline-preceded comments go on their own indented line (unless [flat], for the `?.` desugar
+     *  which sits at column 0); a newline-preceded BLOCK comment gets a trailing space iff
+     *  [blockTrailingSpace] (so the following dot follows on the same line). An inline comment gets
+     *  a leading space iff [leadingSpaceForInline]. propertyAccessExpressionInnerComments. */
+    /** Emit the newline+indent before the dot of a multi-line property access, plus any preDot
+     *  comments (`expr\n /*2*/ . name`). Writes one initial newline+indent (the dot's line), then
+     *  each comment followed by a newline+indent (single-line comment, which terminates its line)
+     *  or a trailing space (block comment, so the dot follows on the same line). [flat] suppresses
+     *  indentation for the synthetic `?.` desugar (column 0). propertyAccessExpressionInnerComments. */
+    private fun emitPreDotComments(comments: List<Comment>?, flat: Boolean) {
+        writeNewLine()
+        if (!flat) { indentLevel++; writeIndent(); indentLevel-- }
+        if (options.removeComments) return
+        comments?.forEach { c ->
+            write(c.text)
+            if (c.kind == SyntaxKind.SingleLineComment) {
+                writeNewLine()
+                if (!flat) { indentLevel++; writeIndent(); indentLevel-- }
+            } else {
                 write(" ")
+            }
+        }
+    }
+
+    /** Emit a bare Identifier left-operand's same-line trailing comments. This is the `/*2*/` that
+     *  rides a receiver Identifier which the `?.` desugar reuses across the synthetic
+     *  `x === null || x === void 0 ? void 0 : x.m` (so the comment is duplicated, matching tsc).
+     *  Gated to Identifier: no other binary left-operand carries such a comment (literals self-emit
+     *  their trailing comments, parenthesized operands wrap). propertyAccessExpressionInnerComments. */
+    private fun emitBinaryLeftIdentTrailing(left: Expression) {
+        if (options.removeComments || left !is Identifier) return
+        left.trailingComments?.forEach { c ->
+            if (!c.hasPrecedingNewLine) { write(" "); write(c.text) }
+        }
+    }
+
+    private fun emitDotSideComments(
+        comments: List<Comment>?,
+        indentBump: Int,
+        flat: Boolean,
+        blockTrailingSpace: Boolean,
+        leadingSpaceForInline: Boolean,
+    ) {
+        if (options.removeComments || comments.isNullOrEmpty()) return
+        for (c in comments) {
+            if (c.hasPrecedingNewLine) {
+                writeNewLine()
+                if (!flat) { indentLevel += indentBump; writeIndent(); indentLevel -= indentBump }
+                write(c.text)
+                if (c.kind != SyntaxKind.SingleLineComment && blockTrailingSpace) write(" ")
+            } else {
+                if (leadingSpaceForInline) write(" ")
                 write(c.text)
             }
         }
-        write(node.name.emitText)
     }
 
     /** Format a Double as JavaScript's Number.prototype.toString() would:
@@ -3283,6 +3319,7 @@ class Emitter(
         if (chain.size > 1) {
             // Iterative path: emit leftmost expression, then each (op, right) pair
             emitExpression(cur) // cur is leftmost non-chain expression
+            emitBinaryLeftIdentTrailing(cur)
             for (i in chain.indices.reversed()) {
                 val binNode = chain[i]
                 val op = operatorToString(binNode.operator)
@@ -3390,6 +3427,7 @@ class Emitter(
             write(")")
         } else {
             emitExpression(node.left)
+            emitBinaryLeftIdentTrailing(node.left)
         }
         val op = operatorToString(node.operator)
         // Helper to emit the right operand, adding parens for ConditionalExpression or YieldExpression.

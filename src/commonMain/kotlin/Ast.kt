@@ -721,6 +721,15 @@ data class PropertyAccessExpression(
      *  preceding the dot (e.g. `arr // should error\n  .filter(...)`). These terminate
      *  the expression line before the dot drops to a new line. */
     val expressionTrailingLineComments: List<Comment>? = null,
+    /** Newline-preceded comments between the receiver and the `.`/`?.` (the `/*2*/`-on-its-own-line
+     *  case, e.g. `Array\n /*2*/. toString`). Kept SEPARATE from [name].leadingComments (which holds
+     *  the after-dot `/*3*/`). Same-line `/*2*/` (e.g. `Array /*2*/.`) rides the receiver's
+     *  trailingComments instead, so the `?.` desugar duplicates it for free.
+     *  propertyAccessExpressionInnerComments. */
+    val preDotComments: List<Comment>? = null,
+    /** When true, the emitter writes newline-preceded internal comments / name at COLUMN 0
+     *  (no indentLevel bump). Set only by the `?.` desugar — the synthetic conditional loses indent. */
+    val flatComments: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

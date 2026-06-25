@@ -9601,7 +9601,14 @@ class Transformer(
                         pos = -1, end = -1,
                     )
                     val condition = BinaryExpression(left = isNull, operator = BarBar, right = isUndefined, pos = -1, end = -1)
-                    val access = expr.copy(expression = objRef, questionDotToken = false)
+                    // propertyAccessExpressionInnerComments: tsc's `?.` desugar drops the inline
+                    // after-dot comment (`/*3*/`) but keeps a newline-preceded one (`// ...`), and the
+                    // synthetic conditional sits at column 0 (flatComments). The same-line pre-dot
+                    // `/*2*/` rides objRef's trailingComments → duplicated across the 3 occurrences.
+                    val cleanName = expr.name.copy(
+                        leadingComments = expr.name.leadingComments?.filter { it.hasPrecedingNewLine }?.ifEmpty { null },
+                    )
+                    val access = expr.copy(expression = objRef, name = cleanName, questionDotToken = false, flatComments = true)
                     return ConditionalExpression(
                         condition = condition,
                         whenTrue = VoidExpression(expression = NumericLiteralNode(text = "0", pos = -1, end = -1), pos = -1, end = -1),

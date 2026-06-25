@@ -5565,6 +5565,14 @@ class Parser(
                             ?.filter { !it.hasPrecedingNewLine && it.text.startsWith("//") && it.hasTrailingNewLine }
                             ?.takeIf { it.isNotEmpty() }
                     } else null
+                    // propertyAccessExpressionInnerComments: a same-line comment between the receiver
+                    // and the dot (`Array /*2*/. x`) rides the receiver's trailingComments — so the
+                    // `?.` desugar (which reuses the receiver node 3×) duplicates it, matching tsc.
+                    // Gated to a bare Identifier receiver: a CallExpression uses `callTrailing` for
+                    // this position, and numeric literals self-emit their trailing comments.
+                    val recvInlineTrailing = if (!newLineBefore && result is Identifier && result.trailingComments.isNullOrEmpty()) {
+                        scanner.getTrailingComments()?.takeIf { it.isNotEmpty() }
+                    } else null
                     nextToken()
                     val afterDotPos = scanner.getPrevTokenEnd() // position right after dot (before trivia of next token)
                     val newLineAfterDot = scanner.hasPrecedingLineBreak()
@@ -5608,14 +5616,11 @@ class Parser(
                             Identifier(text = "", pos = afterDotPos, end = afterDotPos)
                         }
                     }
-                    // Merge captured dot-leading comments into the name's leadingComments.
-                    // For newLineBefore=true, the emitter places these comments BEFORE the dot
-                    // (matching TypeScript's `expr\n  /* comment */ .toString()` form).
-                    val finalName = if (dotLeadingCommentsList != null && name is Identifier) {
-                        val mergedLeading = (dotLeadingCommentsList + (name.leadingComments ?: emptyList())).ifEmpty { null }
-                        name.copy(leadingComments = mergedLeading)
-                    } else name
-                    PropertyAccessExpression(expression = result, name = finalName, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, expressionTrailingLineComments = expressionTrailingLineComments, pos = result.pos, end = getEnd())
+                    // propertyAccessExpressionInnerComments: keep the newline-preceded dot-leading
+                    // comments SEPARATE from the name's after-dot leading comments. The emitter emits
+                    // preDotComments before the dot and name.leadingComments after it.
+                    val recv = if (recvInlineTrailing != null) result.withTrailingComments(recvInlineTrailing) else result
+                    PropertyAccessExpression(expression = recv, name = name, newLineBefore = newLineBefore, newLineAfterDot = newLineAfterDot, preDotComments = dotLeadingCommentsList, expressionTrailingLineComments = expressionTrailingLineComments, pos = recv.pos, end = getEnd())
                 }
 
                 OpenBracket -> {
@@ -5769,7 +5774,17 @@ class Parser(
                 }
 
                 QuestionDot -> {
+                    // propertyAccessExpressionInnerComments: capture comments around `?.` BEFORE
+                    // consuming it (same model as the `.` branch). Only the property-access
+                    // sub-branches (else / LessThan-fallback) below consume these; the
+                    // OpenParen/OpenBracket call/index sub-branches ignore them (byte-identical).
+                    val qNewLineBefore = scanner.hasPrecedingLineBreak()
+                    val qDotLeading = if (qNewLineBefore) leadingComments() else null
+                    val qRecvInlineTrailing = if (!qNewLineBefore && result is Identifier && result.trailingComments.isNullOrEmpty()) {
+                        scanner.getTrailingComments()?.takeIf { it.isNotEmpty() }
+                    } else null
                     nextToken()
+                    val qNewLineAfterDot = scanner.hasPrecedingLineBreak()
                     when (token) {
                         OpenBracket -> {
                             nextToken()
@@ -5831,11 +5846,15 @@ class Parser(
                                 // through to property-access recovery.
                                 token = scanner.getToken()
                                 val name = parseIdentifierName()
+                                val recv = if (qRecvInlineTrailing != null) result.withTrailingComments(qRecvInlineTrailing) else result
                                 PropertyAccessExpression(
-                                    expression = result,
+                                    expression = recv,
                                     name = name,
                                     questionDotToken = true,
-                                    pos = result.pos,
+                                    newLineBefore = qNewLineBefore,
+                                    newLineAfterDot = qNewLineAfterDot,
+                                    preDotComments = qDotLeading,
+                                    pos = recv.pos,
                                     end = getEnd()
                                 )
                             }
@@ -5843,11 +5862,15 @@ class Parser(
 
                         else -> {
                             val name = parseIdentifierName()
+                            val recv = if (qRecvInlineTrailing != null) result.withTrailingComments(qRecvInlineTrailing) else result
                             PropertyAccessExpression(
-                                expression = result,
+                                expression = recv,
                                 name = name,
                                 questionDotToken = true,
-                                pos = result.pos,
+                                newLineBefore = qNewLineBefore,
+                                newLineAfterDot = qNewLineAfterDot,
+                                preDotComments = qDotLeading,
+                                pos = recv.pos,
                                 end = getEnd()
                             )
                         }
