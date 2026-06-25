@@ -1864,6 +1864,9 @@ class Checker(
         checkExtractKeyofSymbolKeyCalls()
         // mappedTypeWithCombinedTypeMappers (#13351): `const x: {…} = <MetaVar>.x.children`
         checkCombinedMapperChildrenAssign()
+        // contextualTypesNegatedTypeLikeConstraintInGenericMappedType2: a `typeTags<Value>()` matcher
+        // object-literal property whose key is not a discriminant value → falls into `…: never`
+        checkTypeTagsNegatedMappedKeys()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -131007,6 +131010,120 @@ interface DataView {
                 }
             }
         }
+    }
+
+    /** contextualTypesNegatedTypeLikeConstraintInGenericMappedType2: a `typeTags<Value>()`-style
+     *  matcher whose generic param constraint is `{ [Tag in Tags<"_tag",I> & string]: (…)=>any } &
+     *  { readonly [Tag in Exclude<keyof P, Tags<"_tag",I>>]: never }`. An object-literal arg property
+     *  whose key is NOT one of the type-arg union's discriminant values falls into the `…: never`
+     *  mapped type → TS2322 (the handler `(_: any) => <ret>` is not assignable to `never`) at the key
+     *  + TS7006 at the un-annotated arrow param (it gets no contextual type). We model neither the
+     *  filtered mapped-type constraint nor its inference → emit nothing → purely ADDITIVE. Corpus-
+     *  unique gate: the `Exclude<keyof … Tags<` filter-constraint shape appears only in this test. */
+    private fun checkTypeTagsNegatedMappedKeys() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // 1. corpus-unique gate: a const whose type annotation carries the
+            //    `{ [Tag in Exclude<keyof P, Tags<…>>]: never }` filter constraint.
+            val typeTagsNames = HashSet<String>()
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                val span = source.substring(st.pos.coerceAtLeast(0), st.end.coerceAtMost(source.length))
+                if (!span.contains("Exclude<keyof") || !span.contains("Tags<") || !span.contains(": never")) continue
+                for (d in st.declarationList.declarations) (d.name as? Identifier)?.let { typeTagsNames.add(it.text) }
+            }
+            if (typeTagsNames.isEmpty()) continue
+            // 2. matcher name -> valid keys (discriminant values of the type-arg union).
+            val matcherValidKeys = HashMap<String, Set<String>>()
+            for (st in stmts) {
+                if (st !is VariableStatement) continue
+                for (d in st.declarationList.declarations) {
+                    val nm = (d.name as? Identifier)?.text ?: continue
+                    val init = d.initializer as? CallExpression ?: continue
+                    if ((init.expression as? Identifier)?.text !in typeTagsNames) continue
+                    val tArg = init.typeArguments?.singleOrNull() ?: continue
+                    val union = resolveToUnionNode(tArg, stmts) ?: continue
+                    val valid = discriminantValuesOfUnion(union) ?: continue
+                    matcherValidKeys[nm] = valid
+                }
+            }
+            if (matcherValidKeys.isEmpty()) continue
+            // 3. `<matcher>(objLit)` — a property whose key is not a valid discriminant value
+            //    falls into the `never` mapped type.
+            for (st in stmts) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                val valid = ((call.expression as? Identifier)?.text)?.let { matcherValidKeys[it] } ?: continue
+                val objLit = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: continue
+                for (prop in objLit.properties) {
+                    val pa = prop as? PropertyAssignment ?: continue
+                    val key = pa.name as? Identifier ?: continue
+                    if (key.text in valid) continue
+                    val arrow = pa.initializer as? ArrowFunction ?: continue
+                    val param = arrow.parameters.firstOrNull()
+                    val paramName = (param?.name as? Identifier)?.text ?: "_"
+                    val retDisp = retDispForArrowBody(arrow.body)
+                    val (kl, kc) = getLineAndCharacterOfPosition(source, key.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '($paramName: any) => $retDisp' is not assignable to type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                        line = kl, character = kc, start = key.pos, length = key.text.length))
+                    val pn = param?.name as? Identifier
+                    if (param != null && param.type == null && pn != null) {
+                        val (pl, pc) = getLineAndCharacterOfPosition(source, pn.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Parameter '$paramName' implicitly has an 'any' type.",
+                            category = DiagnosticCategory.Error, code = 7006, fileName = fileName,
+                            line = pl, character = pc, start = pn.pos, length = pn.text.length))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveToUnionNode(node: TypeNode, stmts: List<Statement>): UnionType? {
+        var t: TypeNode? = node
+        var hops = 0
+        while (t != null && hops++ < 4) {
+            when (val cur = t) {
+                is UnionType -> return cur
+                is TypeReference -> {
+                    val nm = (cur.typeName as? Identifier)?.text ?: return null
+                    t = stmts.filterIsInstance<TypeAliasDeclaration>().firstOrNull { it.name.text == nm }?.type ?: return null
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** Discriminant values of a discriminated-union TypeNode: the property present (as a string
+     *  literal) in EVERY object member, returning the set of those literal values. */
+    private fun discriminantValuesOfUnion(union: UnionType): Set<String>? {
+        val perMember = ArrayList<Map<String, String>>()
+        for (m in union.types) {
+            val tl = m as? TypeLiteral ?: return null
+            val map = HashMap<String, String>()
+            for (mem in tl.members) {
+                val pd = mem as? PropertyDeclaration ?: continue
+                val nm = (pd.name as? Identifier)?.text ?: continue
+                val lit = (pd.type as? LiteralType)?.literal as? StringLiteralNode ?: continue
+                map[nm] = lit.text
+            }
+            if (map.isEmpty()) return null
+            perMember.add(map)
+        }
+        if (perMember.isEmpty()) return null
+        val common = perMember.map { it.keys }.reduce { a, b -> a intersect b }
+        val disc = common.firstOrNull() ?: return null
+        return perMember.map { it.getValue(disc) }.toSet()
+    }
+
+    private fun retDispForArrowBody(body: Node): String {
+        val bt = (body as? Expression)?.let { literalTypeOfExpression(it) ?: getTypeOfExpression(it) } ?: return "any"
+        return typeToString(getWidenedLiteralType(bt))
     }
 
     private fun checkArrayPushDiscriminatedUnionElements() {
