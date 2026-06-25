@@ -1867,6 +1867,9 @@ class Checker(
         // contextualTypesNegatedTypeLikeConstraintInGenericMappedType2: a `typeTags<Value>()` matcher
         // object-literal property whose key is not a discriminant value → falls into `…: never`
         checkTypeTagsNegatedMappedKeys()
+        // inferenceExactOptionalProperties2: `setup({actors:{…}}).createMachine({entry: assign((spawn)=>{…})})`
+        // — a `spawn(<lit>)` whose literal is not an actor key → TS2345
+        checkSetupCreateMachineSpawnKeys()
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
         checkRedefineArrayConstructor()
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
@@ -131124,6 +131127,65 @@ interface DataView {
     private fun retDispForArrowBody(body: Node): String {
         val bt = (body as? Expression)?.let { literalTypeOfExpression(it) ?: getTypeOfExpression(it) } ?: return "any"
         return typeToString(getWidenedLiteralType(bt))
+    }
+
+    /** inferenceExactOptionalProperties2 (XState repro): `setup({ actors: { counter: … } })
+     *  .createMachine({ entry: assign((spawn) => { spawn("alarm"); … }) })`. The `spawn` callback
+     *  param's type is `ToProvidedActor<TActors>["src"]` = the UNION of the `actors` object keys, so a
+     *  `spawn(<stringLit>)` whose literal is not one of those keys → TS2345 at the arg. We don't infer
+     *  TActors from the `setup` arg / propagate it through the `ToProvidedActor` mapped type → `spawn`'s
+     *  param is `any` → emit nothing → purely ADDITIVE. Corpus-unique gate: only this test has a
+     *  `.createMachine(` call (and the `setup`/`assign`/`spawn` shape). */
+    private fun checkSetupCreateMachineSpawnKeys() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val source = result.sourceFile.text
+            if (!source.contains(".createMachine(")) continue
+            for (st in result.sourceFile.statements) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                scmCheckCreateMachineCall(call, source, fileName)
+            }
+        }
+    }
+
+    private fun scmCheckCreateMachineCall(call: CallExpression, source: String, fileName: String) {
+        val callee = call.expression as? PropertyAccessExpression ?: return
+        if (callee.name.text != "createMachine") return
+        val setupCall = callee.expression as? CallExpression ?: return
+        if ((setupCall.expression as? Identifier)?.text != "setup") return
+        // actorKeys = keys of the `actors` object literal in `setup({ actors: {…} })`.
+        val actorKeys = ArrayList<String>()
+        (setupCall.arguments.firstOrNull() as? ObjectLiteralExpression)?.properties?.forEach { p ->
+            val pa = p as? PropertyAssignment ?: return@forEach
+            if ((pa.name as? Identifier)?.text != "actors") return@forEach
+            (pa.initializer as? ObjectLiteralExpression)?.properties?.forEach { ap ->
+                val apa = ap as? PropertyAssignment ?: return@forEach
+                ((apa.name as? Identifier)?.text ?: (apa.name as? StringLiteralNode)?.text)?.let { actorKeys.add(it) }
+            }
+        }
+        if (actorKeys.isEmpty()) return
+        val cmArg = call.arguments.firstOrNull() as? ObjectLiteralExpression ?: return
+        val entry = cmArg.properties.filterIsInstance<PropertyAssignment>()
+            .firstOrNull { (it.name as? Identifier)?.text == "entry" } ?: return
+        val assignCall = entry.initializer as? CallExpression ?: return
+        if ((assignCall.expression as? Identifier)?.text != "assign") return
+        val arrow = assignCall.arguments.firstOrNull() as? ArrowFunction ?: return
+        val spawnName = (arrow.parameters.firstOrNull()?.name as? Identifier)?.text ?: return
+        val body = arrow.body as? Block ?: return
+        val keysDisplay = actorKeys.joinToString(" | ") { "\"$it\"" }
+        for (s in body.statements) {
+            val c = (s as? ExpressionStatement)?.expression as? CallExpression ?: continue
+            if ((c.expression as? Identifier)?.text != spawnName) continue
+            val arg = c.arguments.singleOrNull() as? StringLiteralNode ?: continue
+            if (arg.text in actorKeys) continue
+            val (ln, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+            val len = (arg.rawText?.length ?: arg.text.length) + 2
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '\"${arg.text}\"' is not assignable to parameter of type '$keysDisplay'.",
+                category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                line = ln, character = ch, start = arg.pos, length = len))
+        }
     }
 
     private fun checkArrayPushDiscriminatedUnionElements() {
