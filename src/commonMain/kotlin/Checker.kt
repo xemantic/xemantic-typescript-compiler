@@ -84691,7 +84691,21 @@ interface DataView {
         // cache-before-bases gotcha. getTypeOfSymbol re-stores the same instance.
         symbolTypes[symbol.id] = fnType
 
-        val signatures = sigDecls.map { decl ->
+        // B280-for-functions: a NAMESPACE-NESTED function's param/return annotations must
+        // resolve namespace-local type names (`namespace ko { function observable<T>(v: T):
+        // Observable<T> }` — Observable is a namespace-local interface). Without the push,
+        // `Observable<T>` resolves to anyType and the inferred call-return is `any`, so
+        // `o.name.d` never fires TS2339 (knockout). Mirrors the MethodDeclaration branch in
+        // getTypeOfVariableOrProperty. Top-level functions have no Module ancestor → no push.
+        var fnNsAncestor = symbol.parent
+        while (fnNsAncestor != null && !fnNsAncestor.flags.hasAny(SymbolFlags.Module)) {
+            fnNsAncestor = fnNsAncestor.parent
+        }
+        val fnNsPushed = if (fnNsAncestor != null) {
+            inferenceNamespaceStack.addLast(fnNsAncestor); true
+        } else false
+
+        val signatures = try { sigDecls.map { decl ->
             // 16.4: Create type parameters FIRST, then set currentTypeParamScope
             // so that parameter types (e.g. T[]) resolve T to the same Type.TypeParam
             // objects used in the signature. This enables type argument instantiation.
@@ -84760,6 +84774,8 @@ interface DataView {
                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
                 },
             )
+        } } finally {
+            if (fnNsPushed) inferenceNamespaceStack.removeLast()
         }
         fnType.callSignatures = signatures
         return fnType
@@ -106564,6 +106580,35 @@ interface DataView {
                         }
                         return
                     }
+                }
+            }
+            // knockout: a PropertyAccess receiver (`o.name`) typed as a Type.Reference to a
+            // PURE namespace-local INTERFACE (`Observable<string>`). The B527 branch above
+            // owns class-instance receivers; the general interface-bag PropertyAccess path is
+            // the B153 trap (FP-prone for MERGED/cross-file interfaces whose member resolution
+            // is incomplete). This narrowly-gated branch owns the SINGLE-declaration, non-merged,
+            // NO-HERITAGE interface case (so every member is locally declared → getPropertyOfType
+            // is authoritative): member absent → TS2339 with the instantiated display.
+            if (objectExpr is PropertyAccessExpression && recvType is Type.Reference && propName.isNotEmpty() &&
+                propName !in RUNTIME_PROPERTIES &&
+                !propertyAccessChainIsNamespaceQualified(objectExpr)) {
+                val tsym = recvType.target.symbol
+                val ifaceDecls = tsym?.declarations?.filterIsInstance<InterfaceDeclaration>()
+                if (tsym != null && ifaceDecls != null && ifaceDecls.size == 1 &&
+                    tsym.declarations.all { it is InterfaceDeclaration } &&
+                    !tsym.flags.hasAny(SymbolFlags.Class) &&
+                    ifaceDecls[0].heritageClauses.isNullOrEmpty()) {
+                    resolveStructuredTypeMembers(recvType)
+                    if (getPropertyOfType(recvType, propName) == null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${typeToString(recvType)}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                    }
+                    return
                 }
             }
         }
