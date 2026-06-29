@@ -1037,6 +1037,11 @@ class Checker(
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
         checkTernaryUnionReadonlyWrites()
+        // 6a-bis. widenedTypes — an unannotated `var X = [<nums> + <null>]` is `number[]`
+        // (null widened away under non-strict); a wrong-primitive element write `X[i] = ""`
+        // is TS2322. Self-contained AST walker (the relation engine bails on Array element
+        // writes; the inferred array stays `(number|null)[]`). Non-strict-gated, FP-safe.
+        checkWidenedArrayElementWrites()
         // 6a'. classPropertyErrorOnNameOnly — a var/class-prop annotated with a function-type
         // alias `(arg: U) => string` whose initializer is a function-expr/arrow with one
         // unannotated param + a non-exhaustive `switch(param){ case <lit>: return <lit> }`
@@ -41965,6 +41970,13 @@ interface DataView {
                         checkNullUndefinedLiteral(expr.right, source, fileName)
                     }
                 }
+                // TS18050: a `null`/`undefined` literal operand of the `in` operator
+                // ("The value 'null' cannot be used here.") — tsc emits this in all modes
+                // for both operands (widenedTypes `null in {}`, `"" in null`).
+                if (op == SyntaxKind.InKeyword) {
+                    checkNullUndefinedLiteral(expr.left, source, fileName)
+                    checkNullUndefinedLiteral(expr.right, source, fileName)
+                }
                 // Iteratively walk left spine to avoid StackOverflow on deep binary chains
                 var current: Expression = expr
                 while (current is BinaryExpression) {
@@ -53087,6 +53099,128 @@ interface DataView {
                 else -> {}
             }
             is LabeledStatement -> ternaryReadonlyRecurse(stmt.statement, source, fileName, annots)
+            else -> {}
+        }
+    }
+
+    /**
+     * widenedTypes: an UNANNOTATED `var/let X = [<numeric literals> + <nullish>]` infers
+     * (under non-strict, where null/undefined widen away) to a single-primitive array
+     * (e.g. `number[]`); a later element WRITE `X[<numLit>] = <wrong-primitive literal>`
+     * is TS2322 (`t[3] = ""` → `string` ≁ `number`). The relation engine's element-write
+     * path (`checkElementAccessSetterWrite`) bails on a `Type.Reference` (Array) receiver
+     * (B89.1 generic-setter caveat), and the inferred array stays `(number | null)[]` (we
+     * don't widen-away null under non-strict) — so this self-contained AST walker owns it,
+     * computing the element base itself (no dependence on the global array-BCT / element-write
+     * paths). FP-safe by construction: gated to non-strict + an unannotated array literal with
+     * ≥1 nullish element (the "widened" shape, corpus-unique to widenedTypes) whose non-nullish
+     * elements are all the SAME base primitive, and a write of a DIFFERENT base primitive
+     * literal — a guaranteed, unambiguous mismatch (so a valid write never fires).
+     */
+    private fun checkWidenedArrayElementWrites() {
+        if (strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            try {
+                widenedArrayScan(result.sourceFile.statements, source, fileName, emptyMap())
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+    }
+
+    /** The single base-primitive element type of a "widened" array literal (numeric/string/
+     *  boolean/bigint literals + ≥1 nullish element, all non-nullish the same base), or null. */
+    private fun widenedArrayElementBase(arr: ArrayLiteralExpression): Type? {
+        if (arr.elements.isEmpty()) return null
+        var base: Type? = null
+        var sawNullish = false
+        for (el in arr.elements) {
+            if (el is SpreadElement || el is OmittedExpression) return null
+            val t = getTypeOfExpression(el)
+            if (t === nullType || t === undefinedType || t === voidType) { sawNullish = true; continue }
+            val b = getWidenedLiteralType(t)
+            if (b !== numberType && b !== stringType && b !== booleanType && b !== bigintType) return null
+            if (base == null) base = b else if (base !== b) return null
+        }
+        return if (sawNullish && base != null) base else null
+    }
+
+    private fun widenedArrayScan(
+        statements: List<Statement>, source: String, fileName: String, outer: Map<String, Type>,
+    ) {
+        val vars = HashMap(outer)
+        val ownSeen = HashSet<String>()
+        for (stmt in statements) {
+            if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text ?: continue
+                if (!ownSeen.add(n)) { vars.remove(n); continue }
+                if (d.type != null) { vars.remove(n); continue }
+                val base = (d.initializer as? ArrayLiteralExpression)?.let { widenedArrayElementBase(it) }
+                if (base != null) vars[n] = base else vars.remove(n)
+            }
+        }
+        if (vars.isNotEmpty()) for (stmt in statements) widenedArrayScanWrites(stmt, vars, source, fileName)
+        for (stmt in statements) widenedArrayRecurse(stmt, source, fileName, vars)
+    }
+
+    private fun widenedArrayScanWrites(stmt: Statement, vars: Map<String, Type>, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> {
+                val e = stmt.expression
+                if (e is BinaryExpression && e.operator == SyntaxKind.Equals) {
+                    val lhs = unwrapParens(e.left)
+                    val recv = (lhs as? ElementAccessExpression)?.expression
+                    val idx = (lhs as? ElementAccessExpression)?.argumentExpression
+                    if (recv is Identifier && idx is NumericLiteralNode) {
+                        val elemBase = vars[recv.text]
+                        if (elemBase != null) {
+                            val valBase = getWidenedLiteralType(getTypeOfExpression(e.right))
+                            if ((valBase === numberType || valBase === stringType ||
+                                    valBase === booleanType || valBase === bigintType) && valBase !== elemBase) {
+                                val start = (lhs as ElementAccessExpression).pos
+                                val len = (expressionTrueEnd(lhs) - start).coerceAtLeast(1)
+                                val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Type '${typeToString(valBase)}' is not assignable to type '${typeToString(elemBase)}'.",
+                                    category = DiagnosticCategory.Error, code = 2322,
+                                    fileName = fileName, line = line, character = ch, start = start, length = len,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            is Block -> for (s in stmt.statements) widenedArrayScanWrites(s, vars, source, fileName)
+            is IfStatement -> {
+                widenedArrayScanWrites(stmt.thenStatement, vars, source, fileName)
+                stmt.elseStatement?.let { widenedArrayScanWrites(it, vars, source, fileName) }
+            }
+            is ForStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            is ForInStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            is ForOfStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            is WhileStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            is DoStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            is LabeledStatement -> widenedArrayScanWrites(stmt.statement, vars, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun widenedArrayRecurse(stmt: Statement, source: String, fileName: String, outer: Map<String, Type>) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.let { widenedArrayScan(it.statements, source, fileName, emptyMap()) }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { widenedArrayScan(it.statements, source, fileName, outer) }
+            is Block -> widenedArrayScan(stmt.statements, source, fileName, outer)
+            is IfStatement -> {
+                widenedArrayRecurse(stmt.thenStatement, source, fileName, outer)
+                stmt.elseStatement?.let { widenedArrayRecurse(it, source, fileName, outer) }
+            }
+            is ForStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
+            is ForInStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
+            is ForOfStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
+            is WhileStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
+            is DoStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
+            is LabeledStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
             else -> {}
         }
     }
@@ -121573,7 +121707,10 @@ interface DataView {
             is Identifier -> {
                 // Handle special built-in names
                 when (exprName.text) {
-                    "undefined" -> return undefinedType
+                    // tsc widens `typeof undefined` to `any` under non-strict (the type of
+                    // the `undefined` value is the widening Undefined type, which widens to
+                    // `any` when strictNullChecks is off — widenedTypes `var x: typeof undefined`).
+                    "undefined" -> return if (strictNullChecks) undefinedType else anyType
                     "NaN", "Infinity" -> return numberType
                     "true", "false" -> return booleanType
                 }
@@ -133873,9 +134010,13 @@ interface DataView {
 
     private fun isPrimitiveInstanceofLhs(t: Type): Boolean = when (t) {
         is Type.Union -> t.types.isNotEmpty() && t.types.all { isPrimitiveInstanceofLhs(it) }
+        // tsc's `TypeFlags.Primitive` includes Null/Undefined/Void, so `null instanceof X`
+        // is TS2358 (the LHS must be `any`, an object type, or a type parameter) —
+        // widenedTypes `null instanceof (() => {})`.
         else -> t.flags.hasAny(
             TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BigIntLike or
-                TypeFlags.BooleanLike or TypeFlags.ESSymbolLike
+                TypeFlags.BooleanLike or TypeFlags.ESSymbolLike or
+                TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void
         )
     }
 
@@ -134879,7 +135020,10 @@ interface DataView {
             is BigIntLiteralNode -> expr.text
             is StringLiteralNode -> "\"${expr.text}\""
             is Identifier -> when (expr.text) {
-                "true", "false", "null", "undefined" -> expr.text
+                // `null`/`undefined` are NOT flagged: tsc never emits TS2407 for a
+                // `for (x in null)` / `for (x in undefined)` RHS (the loop is a runtime
+                // no-op, allowed in all modes — widenedTypes `for (var a in null) {}`).
+                "true", "false" -> expr.text
                 else -> {
                     // 17.184: Identifier resolving to a primitive-typed variable
                     // (e.g. `declare var expr: number`). Look up the symbol's
