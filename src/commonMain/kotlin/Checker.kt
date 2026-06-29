@@ -93870,6 +93870,11 @@ interface DataView {
             // Compare keyword types
             if (aType is KeywordTypeNode && bType is KeywordTypeNode) {
                 if (aType.kind != bType.kind) return false
+            } else if (aType is LiteralType && bType is LiteralType) {
+                // overloadingOnConstants2: two literal-typed params with DIFFERENT values
+                // (`(x: "hi")` vs `(x: "bye")`) are NOT duplicate overloads — compare the
+                // literal VALUES, not just the node class.
+                if (!literalExpressionEquals(aType.literal, bType.literal)) return false
             } else if (aType::class != bType::class) {
                 return false
             }
@@ -93907,6 +93912,15 @@ interface DataView {
             if (!isTypeNodeCompatible(overloadReturnType, implReturnType)) {
                 return false
             }
+            // overloadingOnConstants2: tsc requires the IMPL return to be assignable to the
+            // OVERLOAD return (covariant — the impl must satisfy each overload). The conservative
+            // SYNTACTIC isTypeNodeCompatible above returns true for two class/interface
+            // TypeReferences (no resolution), so `(x:"hi"):D` vs impl `(x:string):C` (impl return
+            // C NOT assignable to overload return D) is missed. Add a resolution-based check —
+            // ADDITIVE and conservative (true on any unresolvable / non-class / generic shape).
+            if (!classReturnImplSatisfiesOverload(implReturnType, overloadReturnType)) {
+                return false
+            }
         }
 
         // Parameter type check: compare matching parameters by keyword type
@@ -93920,6 +93934,39 @@ interface DataView {
         }
 
         return true
+    }
+
+    /**
+     * overloadingOnConstants2: returns true (compatible) UNLESS both [implReturn] and
+     * [overloadReturn] resolve to non-generic class/interface instance types and the IMPL
+     * return is NOT assignable to the OVERLOAD return (covariant — an overload signature is
+     * compatible with its implementation only if the impl return satisfies the overload return).
+     * Conservatively returns true on any unresolvable / non-class-or-interface / generic /
+     * same-name shape to bound the false-positive surface to clear class-return mismatches
+     * (e.g. impl `C` vs overload `D extends C` → C not assignable to D → incompatible).
+     */
+    private fun classReturnImplSatisfiesOverload(implReturn: TypeNode, overloadReturn: TypeNode): Boolean {
+        if (implReturn !is TypeReference || overloadReturn !is TypeReference) return true
+        if (!implReturn.typeArguments.isNullOrEmpty() || !overloadReturn.typeArguments.isNullOrEmpty()) return true
+        val implName = (implReturn.typeName as? Identifier)?.text ?: return true
+        val ovName = (overloadReturn.typeName as? Identifier)?.text ?: return true
+        if (implName == ovName) return true
+        val implSym = currentFileLocals?.get(implName) ?: globals[implName] ?: return true
+        val ovSym = currentFileLocals?.get(ovName) ?: globals[ovName] ?: return true
+        if (!implSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) return true
+        if (!ovSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) return true
+        val implType = try { getDeclaredTypeOfSymbol(implSym) } catch (_: Throwable) { return true }
+        val ovType = try { getDeclaredTypeOfSymbol(ovSym) } catch (_: Throwable) { return true }
+        if (implType === errorType || ovType === errorType) return true
+        // tsc's overload-impl return check is BIDIRECTIONAL (isImplementationCompatibleWithOverload):
+        // compatible iff the overload return is assignable to the impl return OR vice versa. So
+        // `(x:"hi"):D` vs impl `(x:string):C` is compatible (D extends C → D→C ✓), but
+        // `(x:"bye"):E` vs C is NOT (E and C are unrelated, neither direction holds) → TS2394.
+        val ovToImpl = try { checkTypeRelatedTo(ovType, implType, assignableRelation) }
+            catch (_: Throwable) { return true }
+        if (ovToImpl) return true
+        return try { checkTypeRelatedTo(implType, ovType, assignableRelation) }
+            catch (_: Throwable) { true }
     }
 
     /**
@@ -111785,13 +111832,16 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            val argType = if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object literal args, try to find the specific mismatched property
                 val propError = getObjectLiteralPropertyError(arg, argType, paramType)
                 if (propError != null) return propError
-                val displayArgType = getWidenedLiteralType(argType)
+                // overloadingOnConstants2: keep the literal display against a literal param
+                // (tsc shows `Argument of type '"um"'`, not the widened `'string'`).
+                val displayArgType = if (propTypeContainsLiteral(paramType)) argType else getWidenedLiteralType(argType)
                 return "Argument of type '${typeToString(displayArgType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
             }
         }
@@ -111815,7 +111865,8 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            val argType = if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
@@ -112182,7 +112233,12 @@ interface DataView {
             // pre-17.137a behavior for the TS2793 path (always emit) for generic
             // impls.
             if (paramType is Type.TypeParam) continue
-            val argType = getTypeOfExpression(arg)
+            // overloadingOnConstants2: against a LITERAL(-union) param, keep the literal arg
+            // type — `getTypeOfExpression` widens a string/number literal (`"hi"`→string), which
+            // would FP-reject a valid `foo("hi")` against an overload param `"hi"`. Gated to
+            // literal params so non-literal overloads are byte-identical.
+            val argType = if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             // B176: an explicit `undefined` arg is LEGAL for an OPTIONAL parameter (absent
             // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
