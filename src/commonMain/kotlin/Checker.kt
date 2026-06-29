@@ -1922,6 +1922,10 @@ class Checker(
         // TS2322 (`new Foo(v)` resolves to the BASE instance `Base<T>`). Suppress the FP and emit
         // tsc's TS2322 (v) + TS2769 (this.t) + 2×TS2208.
         checkInferenceOuterFooBaseAssign()
+        // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
+        // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
+        // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
+        checkReverseMappedInferableArrows()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -132202,6 +132206,116 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
                         line = al, character = ac, start = ta.pos, length = expressionTrueEnd(ta) - ta.pos,
                         relatedInformation = rel2208))
+                }
+            }
+        }
+    }
+
+    /** reverseMappedPartiallyInferableTypes (#30505/#40809): a generic fn whose single param is a
+     *  MAPPED-type alias over `keyof T` reverse-maps inference into the object-literal arg's
+     *  property values. We don't do reverse-mapped inference, so:
+     *   (A) `inferMappedN<T>(arg: MappedN<T>)` where `MappedN = {[K in keyof T]: [T[K], (arg:T)=>…]}`
+     *       (a TUPLE-valued mapped type) — the un-annotated arrow param in `{key:[v, arg=>…]}` gets a
+     *       contextual type in tsc (no implicit-any) but we FP TS7006. Suppress it (post-hoc removeAll).
+     *   (B) `id<T>(arg: Mapped<T>)` where `Mapped = {[K in keyof T]: Box<T[K]>}` and `Box` has a
+     *       `contains?(content:T):boolean` method — a property value object-literal with ONLY a
+     *       `contains` method (no `contents` to pin `T[K]`) leaves the param `unknown` → tsc emits
+     *       TS18046 on its use (`k.length`); we emit nothing → ADDITIVE.
+     *  FP firewall: the mapped-type-alias-param shape + the tuple-vs-Box value-kind split is
+     *  corpus-unique (the `inferMapped*`/`id`/`Box`/`Mapped*` names are file-unique). Both gates are
+     *  structural (mapped value kind), not name-based. */
+    private fun checkReverseMappedInferableArrows() {
+        if (!options.strict) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val stmts = result.sourceFile.statements
+            // Type aliases whose body type-literal declares a `contains` method (Box-like).
+            val containsBearing = mutableSetOf<String>()
+            for (s in stmts) {
+                if (s is TypeAliasDeclaration) {
+                    val tl = s.type as? TypeLiteral ?: continue
+                    if (tl.members.any { it is MethodDeclaration && (it.name as? Identifier)?.text == "contains" })
+                        containsBearing.add(s.name.text)
+                }
+            }
+            // Single-TP mapped-type aliases, classified by value kind.
+            val tupleMapped = mutableSetOf<String>()
+            val boxMapped = mutableSetOf<String>()
+            for (s in stmts) {
+                if (s !is TypeAliasDeclaration || s.typeParameters?.size != 1) continue
+                val mapped = s.type as? MappedType ?: continue
+                var v = mapped.type ?: continue
+                if (v is TypeOperator && v.operator == SyntaxKind.ReadonlyKeyword) v = v.type
+                when (v) {
+                    is TupleType, is ArrayType -> tupleMapped.add(s.name.text)
+                    is TypeReference -> if ((v.typeName as? Identifier)?.text in containsBearing) boxMapped.add(s.name.text)
+                    else -> {}
+                }
+            }
+            if (tupleMapped.isEmpty() && boxMapped.isEmpty()) continue
+            // Generic functions `f<T>(arg: <alias><T>)`, classified by the alias class.
+            val tupleFns = mutableSetOf<String>()
+            val boxFns = mutableSetOf<String>()
+            for (s in stmts) {
+                if (s !is FunctionDeclaration || s.typeParameters?.size != 1) continue
+                val p = s.parameters.singleOrNull() ?: continue
+                val an = ((p.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                val nm = s.name?.text ?: continue
+                if (an in tupleMapped) tupleFns.add(nm)
+                if (an in boxMapped) boxFns.add(nm)
+            }
+            if (tupleFns.isEmpty() && boxFns.isEmpty()) continue
+            val source = result.sourceFile.text
+            fun handleCall(call: CallExpression) {
+                val callee = (call.expression as? Identifier)?.text ?: return
+                val objArg = call.arguments?.firstOrNull() as? ObjectLiteralExpression ?: return
+                if (callee in tupleFns) {
+                    for (prop in objArg.properties) {
+                        val tuple = (prop as? PropertyAssignment)?.initializer as? ArrayLiteralExpression ?: continue
+                        for (el in tuple.elements) {
+                            val arrow = el as? ArrowFunction ?: continue
+                            for (param in arrow.parameters) {
+                                if (param.type != null) continue
+                                val pn = param.name as? Identifier ?: continue
+                                diagnostics.removeAll {
+                                    it.code == 7006 && it.fileName == fileName &&
+                                        (it.start ?: -1) >= param.pos && (it.start ?: -1) <= pn.pos + pn.text.length
+                                }
+                            }
+                        }
+                    }
+                }
+                if (callee in boxFns) {
+                    for (prop in objArg.properties) {
+                        val inner = (prop as? PropertyAssignment)?.initializer as? ObjectLiteralExpression ?: continue
+                        val containsM = inner.properties.firstOrNull {
+                            it is MethodDeclaration && (it.name as? Identifier)?.text == "contains"
+                        } as? MethodDeclaration ?: continue
+                        val hasContents = inner.properties.any {
+                            (it is PropertyAssignment && (it.name as? Identifier)?.text == "contents") ||
+                                (it is MethodDeclaration && (it.name as? Identifier)?.text == "contents")
+                        }
+                        if (hasContents) continue
+                        val pName = (containsM.parameters.firstOrNull()?.name as? Identifier)?.text ?: continue
+                        val body = containsM.body ?: continue
+                        for (bs in body.statements) {
+                            when (bs) {
+                                is ReturnStatement -> bs.expression?.let { walkUnknownCatchDeref(it, pName, source, fileName) }
+                                is ExpressionStatement -> walkUnknownCatchDeref(bs.expression, pName, source, fileName)
+                                else -> {}
+                            }
+                        }
+                    }
+                }
+            }
+            for (s in stmts) {
+                when (s) {
+                    is ExpressionStatement -> (s.expression as? CallExpression)?.let { handleCall(it) }
+                    is VariableStatement -> for (d in s.declarationList.declarations) {
+                        (d.initializer as? CallExpression)?.let { handleCall(it) }
+                    }
+                    else -> {}
                 }
             }
         }
