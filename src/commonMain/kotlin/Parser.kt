@@ -7545,6 +7545,36 @@ class Parser(
     fun parseJsDocTypeNodeFromComments(comments: List<Comment>?): TypeNode? =
         parsePropertyTypeFromJSDoc(comments)
 
+    /** Like [parseJsDocTypeNodeFromComments] but for a BRACELESS `@type T` tag (T NOT wrapped in
+     *  `{}`, e.g. a JSDoc comment whose body is `@type () => string`). Returns the parsed TypeNode,
+     *  or null if the tag is absent / braced / unparseable. Positions point into the JSDoc text
+     *  (offset 0) — RESOLVE only; never emit a position-bearing diagnostic on the returned node. */
+    fun parseBracelessJsDocTypeFromComments(comments: List<Comment>?): TypeNode? {
+        if (comments.isNullOrEmpty()) return null
+        for (comment in comments) {
+            if (comment.kind != SyntaxKind.MultiLineComment) continue
+            val ct = comment.text
+            if (!ct.startsWith("/**")) continue
+            val typeText = extractAtTypeBracelessContent(ct) ?: continue
+            return parseTypeFromText(typeText, fileName)
+        }
+        return null
+    }
+
+    /** Content of a BRACELESS `@type T` tag (everything after `@type ` to the comment close,
+     *  single-line). Returns null when the tag is absent or the next non-space char is `{`
+     *  (a braced `@type {T}` — owned by [extractAtTypeBraceContent]). */
+    private fun extractAtTypeBracelessContent(commentText: String): String? {
+        val typeIdx = commentText.indexOf("@type")
+        if (typeIdx < 0) return null
+        var i = typeIdx + 5
+        while (i < commentText.length && (commentText[i] == ' ' || commentText[i] == '\t')) i++
+        if (i >= commentText.length || commentText[i] == '{') return null
+        var end = commentText.indexOf("*/", i)
+        if (end < 0) end = commentText.length
+        return commentText.substring(i, end).trim().ifEmpty { null }
+    }
+
     // 17.62: primitive-only variant of parsePropertyTypeFromJSDoc for use on
     // VariableDeclaration. The full sub-Parser approach (17.61 attempt) regressed
     // jsdocReferenceGlobalTypeInCommonJs_ts because TypeNode positions point into

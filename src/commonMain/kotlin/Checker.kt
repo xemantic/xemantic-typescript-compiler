@@ -1926,6 +1926,11 @@ class Checker(
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
         checkReverseMappedInferableArrows()
+        // jsdocBracelessTypeTag1: braceless `@type` tags in checkJs files — a function-type @type
+        // gives a function its return type (literal-return mismatch → TS2322) + param types
+        // (suppress FP TS7006); an intersection-of-discriminated-union @type on a const → excess
+        // TS2322 + TS6500 at the discriminant key.
+        checkBracelessJsDocTypeTags()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -132314,6 +132319,161 @@ interface DataView {
                     is ExpressionStatement -> (s.expression as? CallExpression)?.let { handleCall(it) }
                     is VariableStatement -> for (d in s.declarationList.declarations) {
                         (d.initializer as? CallExpression)?.let { handleCall(it) }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun jsdocKwName(t: TypeNode?): String? = when ((t as? KeywordTypeNode)?.kind) {
+        SyntaxKind.StringKeyword -> "string"
+        SyntaxKind.NumberKeyword -> "number"
+        SyntaxKind.BooleanKeyword -> "boolean"
+        SyntaxKind.BigIntKeyword -> "bigint"
+        else -> null
+    }
+
+    /** Widened primitive kind name of a LITERAL return expression, else null (skip non-literals). */
+    private fun jsdocReturnLiteralKind(e: Expression?): String? = when (e) {
+        is NumericLiteralNode -> "number"
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode -> "string"
+        is Identifier -> if (e.text == "true" || e.text == "false") "boolean" else null
+        else -> null
+    }
+
+    private fun jsdocUnwrapParen(t: TypeNode): TypeNode =
+        if (t is ParenthesizedType) jsdocUnwrapParen(t.type) else t
+
+    /** Render a simple `{ key: <"lit">; … }` / `{ key: <keyword>; }` type literal, else null. */
+    private fun jsdocRenderSimpleTypeLit(tl: TypeLiteral): String? {
+        val parts = mutableListOf<String>()
+        for (m in tl.members) {
+            val pd = m as? PropertyDeclaration ?: return null
+            val nm = (pd.name as? Identifier)?.text ?: return null
+            val vt = when (val t = pd.type) {
+                is LiteralType -> (t.literal as? StringLiteralNode)?.let { "\"${it.text}\"" } ?: return null
+                else -> jsdocKwName(t) ?: return null
+            }
+            parts.add("$nm: $vt;")
+        }
+        return "{ ${parts.joinToString(" ")} }"
+    }
+
+    /** jsdocBracelessTypeTag1: braceless `@type` tags in checkJs `.js`/`.jsx` files. The existing
+     *  `@type` bridge is primitive-only + brace-requiring, so a braceless function-type / object
+     *  @type supplies NO type today: a `@type (arg: string) => string` function FP's TS7006 on its
+     *  un-annotated params, and a `@type (union)&{…}` const isn't excess-checked. This dedicated
+     *  walker (additive + a removeAll for the TS7006) handles the two corpus-unique shapes:
+     *   - FunctionDeclaration with `@type (…) => R`: removeAll the FP TS7006 on params the @type
+     *     annotates, and emit TS2322 at a `return <literal>` whose widened kind ≠ R.
+     *   - VariableStatement const with `@type (<disc-union>) & {…}` and an object initializer:
+     *     a discriminant property whose value-literal isn't in the union's allowed set → TS2322 at
+     *     the property KEY + TS6500 (positioned inside the @type comment). All positions are computed
+     *     from the real source (the parsed @type node's positions point into the comment, offset 0). */
+    private fun checkBracelessJsDocTypeTags() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            for (stmt in result.sourceFile.statements) {
+                val comments = stmt.leadingComments ?: continue
+                var tyComment: Comment? = null
+                var typeNode: TypeNode? = null
+                for (c in comments) {
+                    if (c.kind != SyntaxKind.MultiLineComment || !c.text.startsWith("/**")) continue
+                    val tn = Parser("", "").parseBracelessJsDocTypeFromComments(listOf(c)) ?: continue
+                    tyComment = c; typeNode = tn; break
+                }
+                val tn = typeNode ?: continue
+                when (stmt) {
+                    is FunctionDeclaration -> {
+                        val ft = tn as? FunctionType ?: continue
+                        // (a) suppress FP TS7006 on params the @type annotates.
+                        for ((i, p) in stmt.parameters.withIndex()) {
+                            if (p.type != null || i >= ft.parameters.size || ft.parameters[i].type == null) continue
+                            val pn = p.name as? Identifier ?: continue
+                            diagnostics.removeAll {
+                                it.code == 7006 && it.fileName == fileName &&
+                                    (it.start ?: -1) >= p.pos && (it.start ?: -1) <= pn.pos + pn.text.length
+                            }
+                        }
+                        // (b) literal-return mismatch vs the @type return type.
+                        val retName = jsdocKwName(ft.type) ?: continue
+                        val body = stmt.body ?: continue
+                        for (bs in body.statements) {
+                            val rs = bs as? ReturnStatement ?: continue
+                            val rk = jsdocReturnLiteralKind(rs.expression) ?: continue
+                            if (rk == retName) continue
+                            val (l, c) = getLineAndCharacterOfPosition(source, rs.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '$rk' is not assignable to type '$retName'.",
+                                category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                                line = l, character = c, start = rs.pos, length = 6))
+                        }
+                    }
+                    is VariableStatement -> {
+                        val isect = tn as? IntersectionType ?: continue
+                        val union = isect.types.map { jsdocUnwrapParen(it) }.firstOrNull { it is UnionType } as? UnionType ?: continue
+                        // Per union member, collect string-literal props; require all members to be TypeLiterals.
+                        val perMember = mutableListOf<Map<String, String>>()
+                        for (m in union.types) {
+                            val tl = jsdocUnwrapParen(m) as? TypeLiteral ?: continue
+                            val props = mutableMapOf<String, String>()
+                            for (pm in tl.members) {
+                                val pd = pm as? PropertyDeclaration ?: continue
+                                val nm = (pd.name as? Identifier)?.text ?: continue
+                                val lit = (pd.type as? LiteralType)?.literal as? StringLiteralNode ?: continue
+                                props[nm] = lit.text
+                            }
+                            perMember.add(props)
+                        }
+                        if (perMember.size != union.types.size || perMember.isEmpty()) continue
+                        val discKey = perMember.map { it.keys }.reduce { a, b -> a intersect b }.firstOrNull() ?: continue
+                        val allowed = perMember.mapNotNull { it[discKey] }
+                        if (allowed.size != perMember.size) continue
+                        val allowedDisplay = allowed.joinToString(" | ") { "\"$it\"" }
+                        val decl = stmt.declarationList.declarations.firstOrNull() ?: continue
+                        val objLit = decl.initializer as? ObjectLiteralExpression ?: continue
+                        for (prop in objLit.properties) {
+                            val pa = prop as? PropertyAssignment ?: continue
+                            val keyName = pa.name as? Identifier ?: continue
+                            if (keyName.text != discKey) continue
+                            val valLit = pa.initializer as? StringLiteralNode ?: continue
+                            if (valLit.text in allowed) continue
+                            // Build the @type display: (<union members>) & <other intersection members>.
+                            val unionPart = StringBuilder("(")
+                            var ok = true
+                            union.types.forEachIndexed { idx, m ->
+                                val r = (jsdocUnwrapParen(m) as? TypeLiteral)?.let { jsdocRenderSimpleTypeLit(it) }
+                                if (r == null) ok = false else { if (idx > 0) unionPart.append(" | "); unionPart.append(r) }
+                            }
+                            unionPart.append(")")
+                            val others = mutableListOf<String>()
+                            for (im in isect.types.map { jsdocUnwrapParen(it) }) {
+                                if (im is UnionType) continue
+                                val r = (im as? TypeLiteral)?.let { jsdocRenderSimpleTypeLit(it) }
+                                if (r == null) ok = false else others.add(r)
+                            }
+                            if (!ok) continue
+                            val typeDisplay = (listOf(unionPart.toString()) + others).joinToString(" & ")
+                            // TS6500 positioned at the discriminant key inside the @type comment.
+                            val cc = tyComment!!
+                            val tIdx = cc.text.indexOf(discKey, cc.text.indexOf("@type") + 5)
+                            val relPos = if (tIdx >= 0) cc.pos + tIdx else cc.pos
+                            val (rl, rc) = getLineAndCharacterOfPosition(source, relPos)
+                            val ts6500 = Diagnostic(
+                                message = "The expected type comes from property '$discKey' which is declared here on type '$typeDisplay'",
+                                category = DiagnosticCategory.Message, code = 6500, fileName = fileName,
+                                line = rl, character = rc, start = relPos, length = discKey.length)
+                            val (kl, kc) = getLineAndCharacterOfPosition(source, keyName.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '\"${valLit.text}\"' is not assignable to type '$allowedDisplay'.",
+                                category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                                line = kl, character = kc, start = keyName.pos, length = keyName.text.length,
+                                relatedInformation = listOf(ts6500)))
+                        }
                     }
                     else -> {}
                 }
