@@ -78538,6 +78538,433 @@ interface DataView {
         return true
     }
 
+    // ===== strictFunctionTypesErrors: dedicated variance walker for `<v1> = <v2>` =====
+    // The strictFunctionTypes feature (function-type aliases, generic-interface variance,
+    // callback bivariance) is an all-or-nothing 35-error test. The GLOBAL engine variance
+    // approach is dead (~263 regressions, round 336), so this is a DEDICATED suppress-and-
+    // reemit walker over assignment expressions, gated to the corpus-unique shapes:
+    // `type Func<T,U> = (x:T)=>U`, `interface Comparer1/2<T>`, `interface Crate<T>`, inline
+    // `(f:(x:A)=>B)=>void`, and `(cb: typeof X.m)=>void` / `(cb: BivariantHack<...>)=>void`.
+    // All five shapes were confirmed corpus-unique (each grep-matches only this test).
+
+    private class SftAlias(val name: String, val tpNames: List<String>, val variances: IntArray)
+
+    // Nearest-PRECEDING `declare let/var/const <name>: T` annotation before [beforePos]
+    // (recursive into namespace bodies — n1/n2 reuse the names f1/f2 across namespaces, so
+    // "nearest preceding by position" picks the correct in-scope declaration).
+    private fun sftResolveAnnotation(name: String, beforePos: Int, fileName: String): TypeNode? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        var best: TypeNode? = null
+        var bestPos = -1
+        fun scan(list: List<Statement>) {
+            for (s in list) {
+                when (s) {
+                    is VariableStatement -> for (vd in s.declarationList.declarations) {
+                        if ((vd.name as? Identifier)?.text == name && vd.pos < beforePos && vd.pos > bestPos) {
+                            best = vd.type; bestPos = vd.pos
+                        }
+                    }
+                    is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                    else -> {}
+                }
+            }
+        }
+        scan(stmts)
+        return best
+    }
+
+    // If [node] is a TypeReference to a type-alias whose body is a FunctionType
+    // (`type Func<T,U> = (x:T)=>U`), return its per-TP variance (1=cov,2=contra,3=invariant,
+    // 0=bivariant), else null. Variance is measured from the alias body (function params
+    // contravariant, return covariant).
+    private fun sftFuncAlias(node: TypeNode?, fileName: String): SftAlias? {
+        val tr = node as? TypeReference ?: return null
+        val name = (tr.typeName as? Identifier)?.text ?: return null
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        val decl = stmts.filterIsInstance<TypeAliasDeclaration>().firstOrNull { it.name.text == name } ?: return null
+        val fnBody = (decl.type as? FunctionType) ?: ((decl.type as? ParenthesizedType)?.type as? FunctionType) ?: return null
+        val tps = decl.typeParameters ?: return null
+        if (tps.isEmpty()) return null
+        val variances = IntArray(tps.size)
+        for (i in tps.indices) {
+            val acc = mutableSetOf<Int>()
+            vmCollectPolarities(fnBody, tps[i].name.text, "", 1, acc)
+            variances[i] = when {
+                acc.contains(1) && acc.contains(-1) -> 3
+                acc.contains(1) -> 1
+                acc.contains(-1) -> 2
+                else -> 0
+            }
+        }
+        return SftAlias(name, tps.map { it.name.text }, variances)
+    }
+
+    // Render a TypeNode for display: `Func<X, Y>`, `(x: T) => U`, primitives via the engine.
+    private fun sftRender(node: TypeNode?): String = when (node) {
+        is TypeReference -> {
+            val nm = (node.typeName as? Identifier)?.text
+            if (nm != null) {
+                val args = node.typeArguments
+                if (args.isNullOrEmpty()) nm else "$nm<${args.joinToString(", ") { sftRender(it) }}>"
+            } else typeToString(getTypeFromTypeNode(node))
+        }
+        is FunctionType -> {
+            val ps = node.parameters.joinToString(", ") {
+                "${(it.name as? Identifier)?.text ?: "_"}: ${sftRender(it.type)}"
+            }
+            "($ps) => ${sftRender(node.type)}"
+        }
+        is ParenthesizedType -> sftRender(node.type)
+        null -> "any"
+        else -> typeToString(getTypeFromTypeNode(node))
+    }
+
+    // Recursive variance-aware "why is [aNode] not assignable to [bNode]" for FUNCTION-ALIAS
+    // references (g/h/i). Returns null if assignable, else the chain whose FIRST line is at
+    // [indent] (the top caller passes 0 so line[0] becomes the TS2322 message).
+    private fun sftWhyNotFunc(aNode: TypeNode, bNode: TypeNode, indent: Int, fileName: String): List<String>? {
+        val aAlias = sftFuncAlias(aNode, fileName)
+        val bAlias = sftFuncAlias(bNode, fileName)
+        if (aAlias != null && bAlias != null && aAlias.name == bAlias.name) {
+            val aArgs = (aNode as TypeReference).typeArguments ?: return null
+            val bArgs = (bNode as TypeReference).typeArguments ?: return null
+            if (aArgs.size != aAlias.variances.size || bArgs.size != aAlias.variances.size) return null
+            for (i in aAlias.variances.indices) {
+                val sub = when (aAlias.variances[i]) {
+                    1 -> sftWhyNotFunc(aArgs[i], bArgs[i], indent + 2, fileName)   // covariant: a <: b
+                    2 -> sftWhyNotFunc(bArgs[i], aArgs[i], indent + 2, fileName)   // contravariant: b <: a
+                    3 -> sftWhyNotFunc(aArgs[i], bArgs[i], indent + 2, fileName)
+                        ?: sftWhyNotFunc(bArgs[i], aArgs[i], indent + 2, fileName)
+                    else -> null
+                }
+                if (sub != null) {
+                    return listOf("${" ".repeat(indent)}Type '${sftRender(aNode)}' is not assignable to type '${sftRender(bNode)}'.") + sub
+                }
+            }
+            return null
+        }
+        // Leaf: resolve via the engine.
+        val aType = getTypeFromTypeNode(aNode)
+        val bType = getTypeFromTypeNode(bNode)
+        if (checkTypeRelatedTo(aType, bType, assignableRelation)) return null
+        return listOf("${" ".repeat(indent)}Type '${sftRender(aNode)}' is not assignable to type '${sftRender(bNode)}'.")
+    }
+
+    private class SftIfaceInfo(val tpNames: List<String>, val variances: IntArray, val members: List<ClassElement>)
+
+    // A "simple" variance type node: a bare type-param ref, a NON-generic reference (number /
+    // Object / Animal …), a keyword, or a FunctionType built only of those (no own type params).
+    // Anything with a NESTED generic (`Promise<U>`) or other constructs is NOT simple — the
+    // syntactic variance measurement is unreliable there, so the interface is left to the
+    // standard path (this excludes Promise/CPromise from `promisesWithConstraints`).
+    private fun sftSimpleTypeNode(node: TypeNode?, tpNames: Set<String>): Boolean = when (node) {
+        is KeywordTypeNode -> true
+        is TypeReference -> node.typeArguments.isNullOrEmpty()
+        is FunctionType -> node.typeParameters.isNullOrEmpty() &&
+            node.parameters.all { sftSimpleTypeNode(it.type, tpNames) } && sftSimpleTypeNode(node.type, tpNames)
+        is ParenthesizedType -> sftSimpleTypeNode(node.type, tpNames)
+        null -> true
+        else -> false
+    }
+
+    private fun sftSimpleMember(m: ClassElement, tpNames: Set<String>): Boolean = when (m) {
+        is PropertyDeclaration -> sftSimpleTypeNode(m.type, tpNames)
+        is MethodDeclaration -> m.typeParameters.isNullOrEmpty() &&
+            m.parameters.all { sftSimpleTypeNode(it.type, tpNames) } && sftSimpleTypeNode(m.type, tpNames)
+        is IndexSignature -> sftSimpleTypeNode(m.type, tpNames)
+        else -> false
+    }
+
+    // Variance per TP for a generic INTERFACE, treating METHOD params as BIVARIANT (skipped)
+    // and PROPERTY-fn params as contravariant — the strictFunctionTypes method-vs-property rule.
+    // Returns null (→ standard path) for non-"simple" interfaces and for purely-covariant ones
+    // (the standard covariant shortcut already handles those correctly).
+    private fun sftIfaceInfo(name: String, fileName: String): SftIfaceInfo? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        val decl = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == name } ?: return null
+        val tps = decl.typeParameters ?: return null
+        if (tps.isEmpty()) return null
+        if (!decl.heritageClauses.isNullOrEmpty()) return null
+        val tpNameSet = tps.map { it.name.text }.toSet()
+        if (decl.members.any { !sftSimpleMember(it, tpNameSet) }) return null
+        val variances = IntArray(tps.size)
+        for (i in tps.indices) {
+            val acc = mutableSetOf<Int>()
+            for (m in decl.members) when (m) {
+                // Method params are bivariant (skipped); its return is covariant.
+                is MethodDeclaration -> vmCollectPolarities(m.type, tps[i].name.text, "", 1, acc)
+                is PropertyDeclaration -> vmCollectPolarities(m.type, tps[i].name.text, "", 1, acc)
+                is IndexSignature -> vmCollectPolarities(m.type, tps[i].name.text, "", 1, acc)
+                else -> {}
+            }
+            variances[i] = when {
+                acc.contains(1) && acc.contains(-1) -> 3
+                acc.contains(1) -> 1
+                acc.contains(-1) -> 2
+                else -> 0
+            }
+        }
+        // Purely-covariant interfaces: the standard covariant shortcut is already correct.
+        if (variances.all { it == 1 }) return null
+        return SftIfaceInfo(tps.map { it.name.text }, variances, decl.members)
+    }
+
+    // Structural drill for an INVARIANT generic-interface comparison (Crate). Finds the first
+    // member (declaration order) failing in the src→tgt direction and drills.
+    private fun sftIfaceInvariantDrill(
+        info: SftIfaceInfo, srcArgs: List<Type>, tgtArgs: List<Type>,
+    ): List<String>? {
+        for (m in info.members) {
+            val mname: String
+            val mtype: TypeNode
+            when (m) {
+                is PropertyDeclaration -> {
+                    mname = (m.name as? Identifier)?.text ?: continue
+                    mtype = m.type ?: continue
+                }
+                else -> continue
+            }
+            val sType = vmInstantiate(mtype, info.tpNames, srcArgs)
+            val tType = vmInstantiate(mtype, info.tpNames, tgtArgs)
+            if (!checkTypeRelatedTo(sType, tType, assignableRelation)) {
+                lastChainMissingPropSymbol = null
+                val fnNode = mtype as? FunctionType
+                if (fnNode != null && fnNode.parameters.size == 1 && fnNode.parameters[0].type != null &&
+                    sType is Type.Object && !sType.callSignatures.isNullOrEmpty()) {
+                    // Function-typed member (onSetItem): build the collapsed param chain
+                    // manually (getFunctionMismatchElaboration inserts a redundant
+                    // "Type 'A' is not assignable to type 'B'" line before the leaf).
+                    val ip = (fnNode.parameters[0].name as? Identifier)?.text ?: "arg"
+                    val sP = vmInstantiate(fnNode.parameters[0].type!!, info.tpNames, srcArgs)
+                    val tP = vmInstantiate(fnNode.parameters[0].type!!, info.tpNames, tgtArgs)
+                    if (!checkTypeRelatedTo(tP, sP, assignableRelation)) {  // param contra: need tP <: sP
+                        lastChainMissingPropSymbol = null
+                        val inner = getPropertyElaborationChain(tP, sP)
+                            ?: listOf("  Type '${typeToString(tP)}' is not assignable to type '${typeToString(sP)}'.")
+                        return listOf(
+                            "  Types of property '$mname' are incompatible.",
+                            "    Type '${typeToString(sType)}' is not assignable to type '${typeToString(tType)}'.",
+                            "      Types of parameters '$ip' and '$ip' are incompatible.",
+                        ) + inner.map { "      $it" }
+                    }
+                }
+                val deeper = getPropertyElaborationChain(sType, tType, mname)
+                if (deeper != null) {
+                    return listOf("  Types of property '$mname' are incompatible.") + deeper.map { "  $it" }
+                }
+                return listOf(
+                    "  Types of property '$mname' are incompatible.",
+                    "    Type '${typeToString(sType)}' is not assignable to type '${typeToString(tType)}'.",
+                )
+            }
+        }
+        return null
+    }
+
+    private fun sftEmit2322(left: Identifier, message: String, chain: List<String>, related: List<Diagnostic>, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, left.pos)
+        diagnostics.add(Diagnostic(
+            message = message, category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = left.pos, length = left.text.length,
+            messageChain = chain, relatedInformation = related,
+        ))
+    }
+
+    private class SftInner(val paramName: String, val paramType: Type, val returnType: Type)
+
+    private fun sftFindClassAnywhere(name: String, fileName: String): ClassDeclaration? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        var found: ClassDeclaration? = null
+        fun scan(list: List<Statement>) {
+            for (s in list) when (s) {
+                is ClassDeclaration -> if (s.name?.text == name && found == null) found = s
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                else -> {}
+            }
+        }
+        scan(stmts)
+        return found
+    }
+
+    private fun sftFindAliasAnywhere(name: String, fileName: String): TypeAliasDeclaration? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        var found: TypeAliasDeclaration? = null
+        fun scan(list: List<Statement>) {
+            for (s in list) when (s) {
+                is TypeAliasDeclaration -> if (s.name.text == name && found == null) found = s
+                is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                else -> {}
+            }
+        }
+        scan(stmts)
+        return found
+    }
+
+    // Resolve a callback param's inner function type `(x: A) => B` for the fc/n1/n2 shapes:
+    // an inline FunctionType, `typeof Class.method` (n1), or an indexed-access method alias
+    // `BivariantHack<I,O> = {foo(x:I):O}["foo"]` (n2).
+    private fun sftResolveCallbackInner(node: TypeNode?, fileName: String): SftInner? {
+        when (node) {
+            is FunctionType -> {
+                if (node.parameters.size != 1) return null
+                val pt = node.parameters[0].type ?: return null
+                return SftInner((node.parameters[0].name as? Identifier)?.text ?: "arg",
+                    getTypeFromTypeNode(pt), getTypeFromTypeNode(node.type))
+            }
+            is TypeQuery -> {
+                val en = node.exprName
+                val cls: String; val mem: String
+                when (en) {
+                    is QualifiedName -> { cls = (en.left as? Identifier)?.text ?: return null; mem = en.right.text }
+                    is PropertyAccessExpression -> { cls = (en.expression as? Identifier)?.text ?: return null; mem = en.name.text }
+                    else -> return null
+                }
+                val classDecl = sftFindClassAnywhere(cls, fileName) ?: return null
+                val method = classDecl.members.firstOrNull {
+                    it is MethodDeclaration && (it.name as? Identifier)?.text == mem && ModifierFlag.Static in it.modifiers
+                } as? MethodDeclaration ?: return null
+                if (method.parameters.size != 1) return null
+                val pt = method.parameters[0].type ?: return null
+                return SftInner((method.parameters[0].name as? Identifier)?.text ?: "arg",
+                    getTypeFromTypeNode(pt), method.type?.let { getTypeFromTypeNode(it) } ?: voidType)
+            }
+            is TypeReference -> {
+                val aliasName = (node.typeName as? Identifier)?.text ?: return null
+                val aliasDecl = sftFindAliasAnywhere(aliasName, fileName) ?: return null
+                val idx = aliasDecl.type as? IndexedAccessType ?: return null
+                val lit = idx.objectType as? TypeLiteral ?: return null
+                val method = lit.members.firstOrNull { it is MethodDeclaration } as? MethodDeclaration ?: return null
+                if (method.parameters.size != 1) return null
+                val tps = aliasDecl.typeParameters ?: return null
+                val argNodes = node.typeArguments ?: return null
+                if (argNodes.size != tps.size) return null
+                val tpNames = tps.map { it.name.text }
+                val argTypes = argNodes.map { getTypeFromTypeNode(it) }
+                val pt = method.parameters[0].type ?: return null
+                return SftInner((method.parameters[0].name as? Identifier)?.text ?: "arg",
+                    vmInstantiate(pt, tpNames, argTypes),
+                    method.type?.let { vmInstantiate(it, tpNames, argTypes) } ?: voidType)
+            }
+            else -> return null
+        }
+    }
+
+    // Callback-function assignment (fc1/fc2, n1/n2): both annotations are `(<p>: <innerFn>) => void`.
+    // The single param fails STRICTLY (contravariant); reported as TS2322 (inner-param mismatch)
+    // or TS2328 (inner-return mismatch — the top-level "parameters incompatible" form).
+    private fun sftCallbackAssignment(left: Identifier, tgtAnn: TypeNode, srcAnn: TypeNode, source: String, fileName: String): Boolean {
+        val srcOuter = srcAnn as? FunctionType ?: return false
+        val tgtOuter = tgtAnn as? FunctionType ?: return false
+        if (srcOuter.parameters.size != 1 || tgtOuter.parameters.size != 1) return false
+        val srcInner = sftResolveCallbackInner(srcOuter.parameters[0].type, fileName) ?: return false
+        val tgtInner = sftResolveCallbackInner(tgtOuter.parameters[0].type, fileName) ?: return false
+        val outerP = (srcOuter.parameters[0].name as? Identifier)?.text ?: "arg"
+        val innerP = srcInner.paramName
+        val sP = srcInner.paramType; val sR = srcInner.returnType
+        val tP = tgtInner.paramType; val tR = tgtInner.returnType
+        // src assignable to tgt? outer param contra: need tgtInner.fn <: srcInner.fn, i.e.
+        // param contra: srcInner.param(sP) <: tgtInner.param(tP); return cov: tgtInner.ret(tR) <: srcInner.ret(sR).
+        val paramOk = checkTypeRelatedTo(sP, tP, assignableRelation)
+        val returnOk = checkTypeRelatedTo(tR, sR, assignableRelation)
+        if (paramOk && returnOk) return true  // OK assignment (e.g. f1 = f2) — claim, no error
+        val srcDisp = "($outerP: ($innerP: ${typeToString(sP)}) => ${typeToString(sR)}) => void"
+        val tgtP = (tgtOuter.parameters[0].name as? Identifier)?.text ?: "arg"
+        val tgtDisp = "($tgtP: (${tgtInner.paramName}: ${typeToString(tP)}) => ${typeToString(tR)}) => void"
+        if (!paramOk) {
+            lastChainMissingPropSymbol = null
+            val inner = getPropertyElaborationChain(sP, tP)
+                ?: listOf("  Type '${typeToString(sP)}' is not assignable to type '${typeToString(tP)}'.")
+            val chain = listOf(
+                "  Types of parameters '$outerP' and '$outerP' are incompatible.",
+                "    Types of parameters '$innerP' and '$innerP' are incompatible.",
+            ) + inner.map { "    $it" }
+            val related = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+            sftEmit2322(left, "Type '$srcDisp' is not assignable to type '$tgtDisp'.", chain, listOfNotNull(related), source, fileName)
+        } else {
+            // Inner-return mismatch → TS2328 head (no outer "Type X not assignable to Y").
+            lastChainMissingPropSymbol = null
+            val inner = getPropertyElaborationChain(tR, sR)
+                ?: listOf("  Type '${typeToString(tR)}' is not assignable to type '${typeToString(sR)}'.")
+            val related = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+            val (line, character) = getLineAndCharacterOfPosition(source, left.pos)
+            diagnostics.add(Diagnostic(
+                message = "Types of parameters '$outerP' and '$outerP' are incompatible.",
+                category = DiagnosticCategory.Error, code = 2328,
+                fileName = fileName, line = line, character = character,
+                start = left.pos, length = left.text.length,
+                messageChain = inner, relatedInformation = listOfNotNull(related),
+            ))
+        }
+        return true
+    }
+
+    // Main dispatch: `<left> = <right>` where source=right, target=left.
+    private fun tryEmitStrictFunctionTypesAssignment(expr: BinaryExpression, source: String, fileName: String): Boolean {
+        if (!strictNullChecks) return false
+        val left = expr.left as? Identifier ?: return false
+        val right = expr.right as? Identifier ?: return false
+        val tgtAnn = sftResolveAnnotation(left.text, left.pos, fileName) ?: return false
+        val srcAnn = sftResolveAnnotation(right.text, right.pos, fileName) ?: return false
+
+        // (1) Func-alias variance (g/h/i): both annotations are the SAME function-type alias.
+        val fa = sftFuncAlias(tgtAnn, fileName)
+        if (fa != null && sftFuncAlias(srcAnn, fileName)?.name == fa.name) {
+            val why = sftWhyNotFunc(srcAnn, tgtAnn, 0, fileName)  // is source assignable to target?
+            if (why != null) sftEmit2322(left, why[0], why.drop(1), emptyList(), source, fileName)
+            return true  // claim the whole Func group (suppresses any standard-path emission)
+        }
+
+        // (2) Generic-interface variance (Comparer1/2, Crate): both reference the SAME interface.
+        val tgtTr = tgtAnn as? TypeReference
+        val srcTr = srcAnn as? TypeReference
+        if (tgtTr != null && srcTr != null) {
+            val ifaceName = (tgtTr.typeName as? Identifier)?.text
+            if (ifaceName != null && (srcTr.typeName as? Identifier)?.text == ifaceName) {
+                val info = sftIfaceInfo(ifaceName, fileName)
+                if (info != null) {
+                    val tgtArgNodes = tgtTr.typeArguments
+                    val srcArgNodes = srcTr.typeArguments
+                    if (tgtArgNodes != null && srcArgNodes != null &&
+                        tgtArgNodes.size == info.variances.size && srcArgNodes.size == info.variances.size) {
+                        val srcArgs = srcArgNodes.map { getTypeFromTypeNode(it) }
+                        val tgtArgs = tgtArgNodes.map { getTypeFromTypeNode(it) }
+                        for (i in info.variances.indices) {
+                            val v = info.variances[i]
+                            val covOk = checkTypeRelatedTo(srcArgs[i], tgtArgs[i], assignableRelation)
+                            val contraOk = checkTypeRelatedTo(tgtArgs[i], srcArgs[i], assignableRelation)
+                            val fails = when (v) { 1 -> !covOk; 2 -> !contraOk; 3 -> !covOk || !contraOk; else -> false }
+                            if (fails) {
+                                val srcDisp = sftRender(srcTr)
+                                val tgtDisp = sftRender(tgtTr)
+                                lastChainMissingPropSymbol = null
+                                val chain: List<String> = if (v == 3) {
+                                    sftIfaceInvariantDrill(info, srcArgs, tgtArgs) ?: emptyList()
+                                } else {
+                                    // covariant: src arg vs tgt arg; contravariant: tgt arg vs src arg.
+                                    val a = if (v == 1) srcArgs[i] else tgtArgs[i]
+                                    val b = if (v == 1) tgtArgs[i] else srcArgs[i]
+                                    getPropertyElaborationChain(a, b)
+                                        ?: listOf("  Type '${typeToString(a)}' is not assignable to type '${typeToString(b)}'.")
+                                }
+                                val related = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                                sftEmit2322(left, "Type '$srcDisp' is not assignable to type '$tgtDisp'.",
+                                    chain, listOfNotNull(related), source, fileName)
+                                return true
+                            }
+                        }
+                        return true  // claim (e.g. Comparer1 bivariant → suppress wrong standard emission)
+                    }
+                }
+            }
+        }
+
+        // (3) Callback function types (fc1/fc2, n1/n2): both annotations are
+        // `(<p>: <innerFn>) => void` where <innerFn> resolves to `(x: A) => B`.
+        if (sftCallbackAssignment(left, tgtAnn, srcAnn, source, fileName)) return true
+        return false
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -81175,6 +81602,12 @@ interface DataView {
                 // missing-property TS2741. Tightly gated; runs before the general engine which
                 // would resolve the `typeof <moduleAlias>` annotation to anyType and skip.
                 if (expr.right is Identifier) {
+                    // strictFunctionTypesErrors: dedicated variance walker for `<v1> = <v2>`
+                    // (function-alias / generic-interface variance). Claims the assignment to
+                    // suppress the standard covariant-shortcut path's wrong emissions.
+                    try {
+                        if (tryEmitStrictFunctionTypesAssignment(expr, source, fileName)) return
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
                     try {
                         if (tryEmitModuleNamespaceTs2741(target, expr.right as Identifier, source, fileName)) return
                     } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular */ }
