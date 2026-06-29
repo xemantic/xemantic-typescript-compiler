@@ -518,6 +518,18 @@ class Checker(
     private var currentTypeAliasArgs: Map<String, Type>? = null
     private var typeAliasResolutionDepth: Int = 0
 
+    /** Symbol ids of generic OBJECT-LITERAL-body type aliases currently being instantiated
+     *  (push/pop around the substitution recursion). When a self-referential object-body
+     *  alias re-enters its own body (`type Foo3<T> = { x: T; y: Foo3<(arg:T)=>void> }`), the
+     *  inner reference cycle-breaks to errorType instead of expanding to the depth-10 bail
+     *  (which emits a spurious TS2589). This makes recursive object-literal type aliases
+     *  behave like recursive interfaces (the recursive position is ignored for variance and
+     *  structural comparison — errorType passes vacuously). Gated to a plain `TypeLiteral`
+     *  body so it never touches indexed-access (`{...}[T]` — limitDeepInstantiations, which
+     *  legitimately expects TS2589), union (`recursivelyExpandingUnion...`), or mapped
+     *  (`View<T[K]>` — excessPropertyChecksWithNestedIntersections) recursive aliases. */
+    private val aliasObjLiteralInstantiationStack: ArrayDeque<Int> = ArrayDeque()
+
     /** B86.1b-1: Additive infrastructure for inference-context mapper threading.
      *  When a call site enters an inference context (e.g. resolving a generic
      *  function's signature against contextual type args), it can push a
@@ -78279,6 +78291,233 @@ interface DataView {
         return false
     }
 
+    // ── varianceMeasurement: variance-aware assignability for self-recursive generics ──
+    // tsc measures the variance of each type parameter of a generic interface/alias and uses
+    // it for assignability: a COVARIANT TP compares source-arg→target-arg, a CONTRAVARIANT TP
+    // target-arg→source-arg, an INVARIANT TP both directions. Our relation engine uses a
+    // blanket covariant same-target shortcut (Checker.kt ~117k) — correct for covariant TPs but
+    // wrong for contravariant/invariant ones (it passes an invariant mismatch and reports a
+    // contravariant failure at the WRONG assignment, e.g. `Fn<"a">` instead of `Fn<unknown>`).
+    // Replacing the shortcut globally regresses ~263 tests, so this is a DEDICATED
+    // suppress-and-reemit walker gated to a DIRECTLY-SELF-RECURSIVE generic (corpus-rare:
+    // `interface Foo<T> { y: Foo<...> }`, `type Foo<T> = { y: Foo<...> }`, `interface Fn<A,B>
+    // { (a:A):B; then(...): Fn<...> }`). It owns `const v: G<tgt> = ident` assignments where
+    // `ident: G<src>` and emits the variance-correct TS2322 (or nothing). Paired with the
+    // object-literal-alias cycle-break above so the alias cases (Foo3/Foo4) resolve structurally.
+    private fun vmNodeReferencesName(node: TypeNode?, name: String): Boolean = when (node) {
+        is TypeReference -> (node.typeName as? Identifier)?.text == name ||
+            (node.typeArguments?.any { vmNodeReferencesName(it, name) } ?: false)
+        is FunctionType -> node.parameters.any { vmNodeReferencesName(it.type, name) } ||
+            vmNodeReferencesName(node.type, name)
+        is TypeLiteral -> node.members.any { vmMemberReferencesName(it, name) }
+        is ArrayType -> vmNodeReferencesName(node.elementType, name)
+        is UnionType -> node.types.any { vmNodeReferencesName(it, name) }
+        is IntersectionType -> node.types.any { vmNodeReferencesName(it, name) }
+        is ParenthesizedType -> vmNodeReferencesName(node.type, name)
+        else -> false
+    }
+
+    private fun vmMemberReferencesName(m: ClassElement, name: String): Boolean = when (m) {
+        is PropertyDeclaration -> vmNodeReferencesName(m.type, name)
+        is MethodDeclaration -> m.parameters.any { vmNodeReferencesName(it.type, name) } ||
+            vmNodeReferencesName(m.type, name)
+        is IndexSignature -> vmNodeReferencesName(m.type, name)
+        else -> false
+    }
+
+    // Collect the set of polarities (+1 covariant, -1 contravariant) at which [tpName] occurs in
+    // [node], ignoring occurrences inside a self-reference to [self] (tsc ignores the recursive
+    // position when measuring variance).
+    private fun vmCollectPolarities(node: TypeNode?, tpName: String, self: String, polarity: Int, acc: MutableSet<Int>) {
+        when (node) {
+            is TypeReference -> {
+                val head = (node.typeName as? Identifier)?.text
+                if (head == tpName && node.typeArguments.isNullOrEmpty()) acc.add(polarity)
+                else if (head == self) { /* self-recursive position — ignored for variance */ }
+                else node.typeArguments?.forEach { vmCollectPolarities(it, tpName, self, polarity, acc) }
+            }
+            is FunctionType -> {
+                node.parameters.forEach { vmCollectPolarities(it.type, tpName, self, -polarity, acc) }
+                vmCollectPolarities(node.type, tpName, self, polarity, acc)
+            }
+            is TypeLiteral -> node.members.forEach { vmCollectMemberPolarities(it, tpName, self, polarity, acc) }
+            is ArrayType -> vmCollectPolarities(node.elementType, tpName, self, polarity, acc)
+            is UnionType -> node.types.forEach { vmCollectPolarities(it, tpName, self, polarity, acc) }
+            is IntersectionType -> node.types.forEach { vmCollectPolarities(it, tpName, self, polarity, acc) }
+            is ParenthesizedType -> vmCollectPolarities(node.type, tpName, self, polarity, acc)
+            else -> {}
+        }
+    }
+
+    private fun vmCollectMemberPolarities(m: ClassElement, tpName: String, self: String, polarity: Int, acc: MutableSet<Int>) {
+        when (m) {
+            is PropertyDeclaration -> vmCollectPolarities(m.type, tpName, self, polarity, acc)
+            is MethodDeclaration -> {
+                m.parameters.forEach { vmCollectPolarities(it.type, tpName, self, -polarity, acc) }
+                vmCollectPolarities(m.type, tpName, self, polarity, acc)
+            }
+            is IndexSignature -> vmCollectPolarities(m.type, tpName, self, polarity, acc)
+            else -> {}
+        }
+    }
+
+    private class VmDeclInfo(val tpNames: List<String>, val variances: IntArray, val members: List<ClassElement>)
+
+    // Variance info + members for a DIRECTLY-self-recursive generic interface / TypeLiteral-alias /
+    // class, else null. variance: 1=covariant, 2=contravariant, 3=invariant, 0=bivariant.
+    private fun vmGenericVarianceInfo(headName: String, fileName: String): VmDeclInfo? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        var tps: List<TypeParameter>? = null
+        var members: List<ClassElement>? = null
+        for (s in stmts) {
+            when (s) {
+                is InterfaceDeclaration -> if (s.name.text == headName) { tps = s.typeParameters; members = s.members }
+                is ClassDeclaration -> if (s.name?.text == headName) { tps = s.typeParameters; members = s.members }
+                is TypeAliasDeclaration -> if (s.name.text == headName) {
+                    tps = s.typeParameters
+                    members = (s.type as? TypeLiteral)?.members
+                }
+                else -> {}
+            }
+        }
+        val tpList = tps ?: return null
+        val mem = members ?: return null
+        if (tpList.isEmpty()) return null
+        // Directly-self-recursive gate (FP firewall — corpus-rare).
+        if (mem.none { vmMemberReferencesName(it, headName) }) return null
+        val variances = IntArray(tpList.size)
+        for (i in tpList.indices) {
+            val acc = mutableSetOf<Int>()
+            mem.forEach { vmCollectMemberPolarities(it, tpList[i].name.text, headName, 1, acc) }
+            variances[i] = when {
+                acc.contains(1) && acc.contains(-1) -> 3
+                acc.contains(1) -> 1
+                acc.contains(-1) -> 2
+                else -> 0
+            }
+        }
+        return VmDeclInfo(tpList.map { it.name.text }, variances, mem)
+    }
+
+    // Resolve a member type node with [tpNames] bound to [args] (guaranteed instantiation, mirroring
+    // the alias-substitution mechanism — getPropertyTypeForRelation does not reliably instantiate a
+    // nested interface member's inner type parameters).
+    private fun vmInstantiate(node: TypeNode, tpNames: List<String>, args: List<Type>): Type {
+        val saved = currentTypeAliasArgs
+        return try {
+            val map = mutableMapOf<String, Type>()
+            saved?.let { map.putAll(it) }
+            for (i in tpNames.indices) map[tpNames[i]] = args[i]
+            currentTypeAliasArgs = map
+            getTypeFromTypeNode(node)
+        } finally { currentTypeAliasArgs = saved }
+    }
+
+    // Structural chain for an INVARIANT same-generic comparison (`Foo2<string>` vs `Foo2<unknown>`),
+    // built from the declaration members instantiated for each side. Finds the first failing member
+    // and either drills into it (object/function member → "The types of 'y.x' …") or reports a
+    // property-level mismatch (primitive member → "Types of property 'x' …").
+    private fun vmInvariantStructuralChainFromDecl(
+        info: VmDeclInfo, srcArgs: List<Type>, tgtArgs: List<Type>,
+    ): List<String>? {
+        for (m in info.members) {
+            val mname: String
+            val mtype: TypeNode
+            when (m) {
+                is PropertyDeclaration -> {
+                    mname = (m.name as? Identifier)?.text ?: continue
+                    mtype = m.type ?: continue
+                }
+                else -> continue
+            }
+            val sType = vmInstantiate(mtype, info.tpNames, srcArgs)
+            val tType = vmInstantiate(mtype, info.tpNames, tgtArgs)
+            if (!checkTypeRelatedTo(sType, tType, assignableRelation)) {
+                getPropertyElaborationChain(sType, tType, mname)?.let { return it }
+                return listOf(
+                    "  Types of property '$mname' are incompatible.",
+                    "    Type '${typeToString(sType)}' is not assignable to type '${typeToString(tType)}'.",
+                )
+            }
+        }
+        return null
+    }
+
+    private fun vmResolveIdentAnnotation(name: String, fileName: String): TypeNode? {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return null
+        for (s in stmts) {
+            if (s is VariableStatement) {
+                for (vd in s.declarationList.declarations) {
+                    if ((vd.name as? Identifier)?.text == name) return vd.type
+                }
+            }
+        }
+        return null
+    }
+
+    private fun tryEmitVarianceMeasurementVarDecl(decl: VariableDeclaration, source: String, fileName: String): Boolean {
+        if (!strictNullChecks) return false
+        val name = decl.name as? Identifier ?: return false
+        val ann = decl.type as? TypeReference ?: return false
+        val head = (ann.typeName as? Identifier)?.text ?: return false
+        val tgtArgNodes = ann.typeArguments ?: return false
+        if (tgtArgNodes.isEmpty()) return false
+        val init = decl.initializer as? Identifier ?: return false
+
+        val info = vmGenericVarianceInfo(head, fileName) ?: return false
+        val variances = info.variances
+        if (variances.size != tgtArgNodes.size) return false
+
+        // RHS identifier's declared annotation must be `G<srcArgs>` (same head).
+        val srcTr = vmResolveIdentAnnotation(init.text, fileName) as? TypeReference ?: return false
+        if ((srcTr.typeName as? Identifier)?.text != head) return false
+        val srcArgNodes = srcTr.typeArguments ?: return false
+        if (srcArgNodes.size != tgtArgNodes.size) return false
+
+        val rhsType = getTypeFromTypeNode(srcTr)
+        val tgtType = getTypeFromTypeNode(ann)
+        val srcArgs = srcArgNodes.map { getTypeFromTypeNode(it) }
+        val tgtArgs = tgtArgNodes.map { getTypeFromTypeNode(it) }
+
+        for (i in variances.indices) {
+            val v = variances[i]
+            val srcArg = srcArgs[i]
+            val tgtArg = tgtArgs[i]
+            val covOk = checkTypeRelatedTo(srcArg, tgtArg, assignableRelation)
+            val contraOk = checkTypeRelatedTo(tgtArg, srcArg, assignableRelation)
+            val fails = when (v) {
+                1 -> !covOk
+                2 -> !contraOk
+                3 -> !covOk || !contraOk
+                else -> false
+            }
+            if (fails) {
+                val topLine = "Type '${typeToString(rhsType)}' is not assignable to type '${typeToString(tgtType)}'."
+                val chain: List<String> = if (v == 3) {
+                    vmInvariantStructuralChainFromDecl(info, srcArgs, tgtArgs)
+                        ?: getPropertyElaborationChain(rhsType, tgtType)
+                        ?: listOf("  Type '${typeToString(srcArg)}' is not assignable to type '${typeToString(tgtArg)}'.")
+                } else {
+                    val a = if (v == 1) srcArg else tgtArg
+                    val b = if (v == 1) tgtArg else srcArg
+                    listOf("  Type '${typeToString(a)}' is not assignable to type '${typeToString(b)}'.")
+                }
+                val (l, c) = getLineAndCharacterOfPosition(source, name.pos)
+                diagnostics.add(Diagnostic(
+                    message = topLine,
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = l, character = c,
+                    start = name.pos, length = name.text.length,
+                    messageChain = chain,
+                ))
+                return true
+            }
+        }
+        // No TP failed — claim the var-decl anyway to suppress the standard path's possible
+        // wrong emission (e.g. the covariant shortcut would error `Fn<"a">` for a contravariant A).
+        return true
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -78298,6 +78537,10 @@ interface DataView {
             }
         }
         if (name !is Identifier) return
+
+        // varianceMeasurement: own `const v: G<tgt> = ident` for a directly-self-recursive
+        // generic G (variance-aware assignability; suppresses the standard covariant-shortcut path).
+        if (tryEmitVarianceMeasurementVarDecl(decl, source, fileName)) return
 
         // B526: variadic-tuple element access `const x: T = recv[i]` — our tuple model
         // collapses the rest element to its ARRAY type (so prop `0` of `[...number[], number]`
@@ -84256,6 +84499,18 @@ interface DataView {
                                 }
                             }
                             if (constraintFails) return errorType
+                            // Lazy recursive-alias cycle-break (object-literal bodies only):
+                            // when a plain-object-body alias references itself (`type Foo3<T> =
+                            // { x: T; y: Foo3<(arg:T)=>void> }`), the inner self-reference cannot
+                            // be eagerly expanded (it diverges → depth-10 bail → spurious TS2589).
+                            // Cycle-break to errorType so the OUTER members drive variance/relation
+                            // via the normal structural engine (matching tsc's lazy resolution,
+                            // which ignores the recursive position). Gated to `TypeLiteral` bodies
+                            // so indexed-access (`{...}[T]`, limitDeepInstantiations — legitimately
+                            // expects TS2589), union, and mapped recursive aliases are untouched.
+                            if (decl.type is TypeLiteral && symbol.id in aliasObjLiteralInstantiationStack) {
+                                return errorType
+                            }
                             if (typeAliasResolutionDepth >= 10) {
                                 // B57.1: signal depth-bail to outer callers so they can
                                 // emit TS2589 at the annotation position.
@@ -84276,6 +84531,7 @@ interface DataView {
                                 }
                                 currentTypeAliasArgs = argMap
                                 typeAliasResolutionDepth++
+                                if (decl.type is TypeLiteral) aliasObjLiteralInstantiationStack.addLast(symbol.id)
                                 val result = getTypeFromTypeNode(decl.type)
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
@@ -84303,6 +84559,7 @@ interface DataView {
                             } finally {
                                 currentTypeAliasArgs = saved
                                 typeAliasResolutionDepth--
+                                if (decl.type is TypeLiteral) aliasObjLiteralInstantiationStack.removeLast()
                             }
                         }
                     }
