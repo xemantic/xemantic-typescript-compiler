@@ -79186,6 +79186,15 @@ interface DataView {
                         return
                     }
                 }
+                // Intersection target (`let e: B & C = { a: { x: 2 }, c: 5 }`): descend
+                // per-property to the deepest leaf (checkNestedObjLitPropTypes flattens the
+                // intersection via getTargetPropertyType) instead of a coarse whole-object
+                // chain at the var name (excessPropertyChecksWithNestedIntersections).
+                if (init is ObjectLiteralExpression && targetType is Type.Intersection) {
+                    if (checkNestedObjLitPropTypes(init, targetType, source, fileName)) {
+                        return
+                    }
+                }
                 val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
                 val chain = mutableListOf<String>()
                 lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
@@ -81350,7 +81359,8 @@ interface DataView {
                         // Excess property check for object literal assignments (TS2353)
                         if (canUse && expr.right is ObjectLiteralExpression) {
                             val displayTarget = excessPropDisplayTarget(tt, typeAnnotation)
-                            if (checkExcessProperties(expr.right as ObjectLiteralExpression, sourceType, tt, displayTarget, source, fileName)) {
+                            if (checkExcessProperties(expr.right as ObjectLiteralExpression, sourceType, tt, displayTarget, source, fileName,
+                                    topLevelRelatedOnly = true)) {
                                 return // TS2353 emitted
                             }
                         }
@@ -117676,6 +117686,10 @@ interface DataView {
             is Type.Intersection -> {
                 val names = mutableSetOf<String>()
                 for (constituent in type.types) {
+                    // Resolve members first — an unresolved anonymous TypeLiteral constituent
+                    // (`{ id: number } & { url: string }` from `typeof obj.photo`) has a null
+                    // member table until resolved, which would wrongly return null here.
+                    (constituent as? Type.Object)?.let { resolveStructuredTypeMembers(it) }
                     // If any constituent has a string index signature, all properties are valid
                     val constituentNames = collectTargetPropertyNames(constituent)
                     if (constituentNames == null) return null
@@ -118396,6 +118410,10 @@ interface DataView {
             val pick = pickUnionDisplayTarget(targetType)
             if (pick != null) return typeToString(pick)
         }
+        // A `typeof X` annotation displays the RESOLVED type, not the query text — tsc
+        // renders `const photo: typeof obj.photo` excess errors as the resolved intersection
+        // `{ id: number; } & { url: string; }` (excessPropertyChecksWithNestedIntersections).
+        if (typeAnnotation is TypeQuery) return typeToString(targetType)
         return typeAnnotation?.let { formatTypeForDisplay(it) } ?: typeToString(targetType)
     }
 
@@ -118640,8 +118658,18 @@ interface DataView {
         enclosingDisplayOverride: String? = null,
     ): Boolean {
         var emitted = false
-        val targetObj = targetType as? Type.Object ?: return false
-        resolveStructuredTypeMembers(targetObj)
+        // Accept a Type.Object OR an Intersection target. Per-property target types are
+        // resolved via getTargetPropertyType (which flattens intersections), so a nested
+        // fresh-object-literal mismatch against a `B & C`-style target descends to the
+        // deepest leaf (excessPropertyChecksWithNestedIntersections `let e: D = {a:{x:2}}`).
+        val targetObj = targetType as? Type.Object
+        if (targetObj == null && targetType !is Type.Intersection) return false
+        targetObj?.let { resolveStructuredTypeMembers(it) }
+        fun targetMemberSym(name: String): Symbol? = targetObj?.members?.get(name)
+            ?: (targetType as? Type.Intersection)?.types?.firstNotNullOfOrNull { c ->
+                (c as? Type.Object)?.let { resolveStructuredTypeMembers(it); it.members?.get(name) }
+            }
+        val targetDisplay = enclosingDisplayOverride ?: typeToString(targetType)
         for (prop in objLit.properties) {
             if (prop !is PropertyAssignment) continue
             val value = unwrapToObjLitValue(prop.initializer ?: continue)
@@ -118652,7 +118680,7 @@ interface DataView {
                 is NumericLiteralNode -> nameNode.text
                 else -> continue
             }
-            val tgtMemberType = getTargetPropertyType(targetObj, propName) ?: continue
+            val tgtMemberType = getTargetPropertyType(targetType, propName) ?: continue
             if (tgtMemberType === anyType || tgtMemberType === errorType) continue
             // B395: under arrayPropsOnly (direct object-literal init) skip only SIMPLE values
             // (those are owned by emitPerPropertyMismatches); object-literal values are now
@@ -118708,7 +118736,7 @@ interface DataView {
                 if (strictNullChecks && (valIsNull || valIsUndef) &&
                     !tgtMemberType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) &&
                     !tgtMemberType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
-                    val tgtSym = targetObj.members?.get(propName)
+                    val tgtSym = targetMemberSym(propName)
                     val isOptional = tgtSym != null && isOptionalProperty(tgtSym)
                     val accepted = (valIsNull && typeIncludesNull(tgtMemberType)) ||
                         (valIsUndef && (typeIncludesUndefined(tgtMemberType) || isOptional))
@@ -118724,7 +118752,7 @@ interface DataView {
                             val (l2, c2) = getLineAndCharacterOfPosition(source, keyPos2)
                             val related = createPropertyDeclaredHereRelatedInfo(tgtSym)?.let { d ->
                                 listOf(d.copy(
-                                    message = "The expected type comes from property '$propName' which is declared here on type '${enclosingDisplayOverride ?: typeToString(targetObj)}'",
+                                    message = "The expected type comes from property '$propName' which is declared here on type '$targetDisplay'",
                                     code = 6500,
                                 ))
                             } ?: emptyList()
@@ -118758,9 +118786,9 @@ interface DataView {
                 // TS6500 only on a DIRECT-property path (not when a union member was
                 // selected — matches TS, which omits it for union-disambiguated leaves).
                 val leafRelated = if (!viaUnion) {
-                    targetObj.members?.get(propName)?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { d ->
+                    targetMemberSym(propName)?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { d ->
                         listOf(d.copy(
-                            message = "The expected type comes from property '$propName' which is declared here on type '${enclosingDisplayOverride ?: typeToString(targetObj)}'",
+                            message = "The expected type comes from property '$propName' which is declared here on type '$targetDisplay'",
                             code = 6500,
                         ))
                     } ?: emptyList()
@@ -119229,18 +119257,42 @@ interface DataView {
                 val nestedInit = propNode.initializer
                 if (nestedInit !is ObjectLiteralExpression) continue
                 val nestedTargetType = getTargetPropertyType(targetType, propName) ?: continue
-                if (nestedTargetType !is Type.Object) continue
-                // B220: an object literal vs an array/tuple member is a TS2322
-                // shape in tsc, never TS2353 — don't descend.
-                if (nestedTargetType is Type.Reference &&
-                    nestedTargetType.target.symbol?.name in setOf("Array", "ReadonlyArray")) continue
-                if (nestedTargetType.tupleElementTypes != null) continue
-                resolveStructuredTypeMembers(nestedTargetType)
-                if (nestedTargetType.properties.isNullOrEmpty()) continue
+                // Resolve the nested target to an excess-checkable shape: a plain Object, an
+                // Intersection (collectTargetPropertyNames flattens it — `photo: {id}&{url}`),
+                // or a Union whose object constituent defines the valid keys
+                // (`bar: boolean | View<TypeB>` → `View<TypeB>`).
+                // (excessPropertyChecksWithNestedIntersections)
+                val nestedExcessTarget: Type
+                val nestedDisplay: String
+                when {
+                    nestedTargetType is Type.Object -> {
+                        // B220: an object literal vs an array/tuple member is a TS2322
+                        // shape in tsc, never TS2353 — don't descend.
+                        if (nestedTargetType is Type.Reference &&
+                            nestedTargetType.target.symbol?.name in setOf("Array", "ReadonlyArray")) continue
+                        if (nestedTargetType.tupleElementTypes != null) continue
+                        resolveStructuredTypeMembers(nestedTargetType)
+                        if (nestedTargetType.properties.isNullOrEmpty()) continue
+                        nestedExcessTarget = nestedTargetType
+                        nestedDisplay = typeToString(nestedTargetType)
+                    }
+                    nestedTargetType is Type.Intersection -> {
+                        if (collectTargetPropertyNames(nestedTargetType).isNullOrEmpty()) continue
+                        nestedExcessTarget = nestedTargetType
+                        nestedDisplay = typeToString(nestedTargetType)
+                    }
+                    nestedTargetType is Type.Union -> {
+                        val objConstituent = selectObjectConstituentForObjectLiteral(nestedTargetType) ?: continue
+                        resolveStructuredTypeMembers(objConstituent)
+                        if (objConstituent.properties.isNullOrEmpty()) continue
+                        nestedExcessTarget = objConstituent
+                        nestedDisplay = typeToString(objConstituent)
+                    }
+                    else -> continue
+                }
                 val nestedSourceType = getTypeOfExpression(nestedInit)
                 if (nestedSourceType !is Type.Object) continue
-                if (!canUseTypeEngine(nestedSourceType, nestedTargetType)) continue
-                val nestedDisplay = typeToString(nestedTargetType)
+                if (!canUseTypeEngine(nestedSourceType, nestedExcessTarget)) continue
                 // B220: TS6500 for the nested emission — only when THIS level's
                 // target is not a union (tsc's getPropertyOfType-on-union rule;
                 // nonObjectUnionNestedExcessPropertyCheck must stay related-free).
@@ -119259,12 +119311,15 @@ interface DataView {
                     }
                     ownerSym?.let { sym ->
                         createPropertyDeclaredHereRelatedInfo(sym)?.copy(
-                            message = "The expected type comes from property '$propName' which is declared here on type '${typeToString(targetType)}'",
+                            // Use the alias-aware displayTarget (the CURRENT level's display)
+                            // so a `type D = B & C` / `type MyType = … & …` target renders as
+                            // its alias name (`D`/`MyType`), not the expanded intersection.
+                            message = "The expected type comes from property '$propName' which is declared here on type '$displayTarget'",
                             code = 6500,
                         )
                     }
                 } else null
-                if (checkExcessProperties(nestedInit, nestedSourceType, nestedTargetType, nestedDisplay, source, fileName, buildNestedRelated, nextRelated, topLevelRelatedOnly)) {
+                if (checkExcessProperties(nestedInit, nestedSourceType, nestedExcessTarget, nestedDisplay, source, fileName, buildNestedRelated, nextRelated, topLevelRelatedOnly)) {
                     emitted = true
                 }
             }
@@ -120046,6 +120101,20 @@ interface DataView {
             val sourcePropType = getPropertyTypeForRelation(sourceType, sourceProp)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
             if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+            // Deep-leaf descent (excessPropertyChecksWithNestedIntersections): when the
+            // property VALUE is itself a FRESH object literal and the target prop type is an
+            // object/intersection, tsc descends into it and reports the deepest simple-leaf
+            // mismatch at the deepest key (`{ a: { x: 2 } }` vs `{ a: A }` → `number ≁ string`
+            // at `x`), NOT a coarse chain at THIS key. Try the descent; on emit, suppress the
+            // coarse chain here. The descent only fires for genuine simple-leaf mismatches, so
+            // a property whose value mismatch is non-leaf (function type, etc.) falls through.
+            val freshVal = unwrapToObjLitValue(propNode.initializer)
+            if (freshVal is ObjectLiteralExpression &&
+                (targetPropType is Type.Object || targetPropType is Type.Intersection) &&
+                checkNestedObjLitPropTypes(freshVal, targetPropType, source, fileName)) {
+                emitted = true
+                continue
+            }
             // B491 (deepElaborationsIntoArrowExpressions): the property value is an
             // arrow/fn returning a single expression and the target member is a
             // function type whose return is a simple/literal type that the arrow's
@@ -121514,12 +121583,34 @@ interface DataView {
                 return getTypeOfSymbolForTypeQuery(symbol)
             }
             is QualifiedName -> {
-                // typeof A.B.C — resolve chain
-                val symbol = resolveQualifiedName(exprName) ?: return anyType
-                return getTypeOfSymbolForTypeQuery(symbol)
+                // typeof A.B.C — first try a namespace/module/class symbol chain.
+                val symbol = resolveQualifiedName(exprName)
+                if (symbol != null) return getTypeOfSymbolForTypeQuery(symbol)
+                // Fallback: `typeof <value>.<prop>` (e.g. `typeof obj.photo` where `obj` is a
+                // VALUE variable) — resolve the type of the value expression. The symbol chain
+                // can't reach a property of a value, so without this it returns anyType
+                // (excessPropertyChecksWithNestedIntersections `const photo: typeof obj.photo`).
+                return resolveTypeOfValueEntityName(exprName) ?: anyType
             }
             else -> return anyType
         }
+    }
+
+    /** Resolve `typeof <value>.<prop>...` where the leftmost segment is a value variable:
+     *  type of the leftmost value, then walk the property chain via getTargetPropertyType
+     *  (which flattens intersections/unions). Returns null if any segment can't resolve. */
+    private fun resolveTypeOfValueEntityName(name: Node): Type? = when (name) {
+        is Identifier -> {
+            val sym = globals[name.text] ?: currentFileLocals?.get(name.text)
+            sym?.let { getTypeOfSymbol(it) }?.takeIf { it !== anyType && it !== errorType }
+        }
+        is QualifiedName -> {
+            resolveTypeOfValueEntityName(name.left)?.let { leftType ->
+                getTargetPropertyType(leftType, name.right.text)
+                    ?.takeIf { it !== anyType && it !== errorType }
+            }
+        }
+        else -> null
     }
 
     /** Get the type of a symbol as it appears in a typeof query.
@@ -122259,15 +122350,34 @@ interface DataView {
             val members = symbolTable()
             val properties = mutableListOf<Symbol>()
             val typeParamName = node.typeParameter.name.text
+            // Homomorphic mapped type `[K in keyof T]`: resolve the modifiers type T so each
+            // synthesized member can carry its SOURCE property's declaration (for "declared
+            // here" TS6500/TS2728 related info — excessPropertyChecksWithNestedIntersections).
+            val homomorphicSourceType: Type? = (node.nameType == null).let { noRemap ->
+                if (!noRemap) null else (constraint as? TypeOperator)
+                    ?.takeIf { it.operator == SyntaxKind.KeyOfKeyword }
+                    ?.let { try { getTypeFromTypeNode(it.type) } catch (_: Throwable) { null } }
+                    ?.takeIf { it !== anyType && it !== errorType }
+            }
             for (key in keys) {
                 val propType = if (node.type != null) {
-                    // Temporarily bind the type parameter to the current key for evaluation
-                    // This enables { [K in keyof T]: T[K] } to resolve T[K] per key
+                    // Bind the mapped key parameter K to the current key (a string literal) so
+                    // the value type `T[K]` (and conditionals over it) resolve PER KEY instead
+                    // of bailing to anyType — e.g. View<T> = { [K in keyof T]: T[K] extends
+                    // object ? boolean | View<T[K]> : boolean }
+                    // (excessPropertyChecksWithNestedIntersections). currentTypeAliasArgs
+                    // bypasses the nodeTypes cache so each key resolves freshly.
+                    val savedArgs = currentTypeAliasArgs
                     try {
+                        currentTypeAliasArgs = (savedArgs ?: emptyMap()) + (typeParamName to Type.StringLiteral(key))
                         getTypeFromTypeNode(node.type!!)
                     } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); anyType }
+                    finally { currentTypeAliasArgs = savedArgs }
                 } else anyType
                 val sym = Symbol(SymbolFlags.Property, key)
+                homomorphicSourceType?.let { srcT ->
+                    getPropertyOfType(srcT, key)?.declarations?.firstOrNull()?.let { sym.declarations.add(it) }
+                }
                 members[key] = sym
                 properties.add(sym)
                 symbolTypes[sym.id] = propType
