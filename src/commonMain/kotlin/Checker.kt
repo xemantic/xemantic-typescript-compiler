@@ -43134,9 +43134,15 @@ interface DataView {
                 caseClauses.all { it.statements.isNotEmpty() }
             }
             is TryStatement -> {
-                // Try block terminates and there's no catch that doesn't terminate
-                isBlockTerminating(stmt.tryBlock) &&
-                    (stmt.catchClause == null || isBlockTerminating(stmt.catchClause!!.block))
+                // A try statement terminates the enclosing flow when the FINALLY block
+                // terminates (it always runs, so a `return`/`throw` there exits), OR the
+                // try block terminates and every catch terminates. (Previously the finally
+                // block was ignored — tryCatchFinallyControlFlow: code after a
+                // `try {…} finally { …; return; }` is unreachable.)
+                val finallyTerminates = stmt.finallyBlock?.let { isBlockTerminating(it) } ?: false
+                finallyTerminates ||
+                    (isBlockTerminating(stmt.tryBlock) &&
+                        (stmt.catchClause == null || isBlockTerminating(stmt.catchClause!!.block)))
             }
             is ExpressionStatement -> {
                 // A call to a never-returning function terminates (e.g., fail(): never)
@@ -43262,6 +43268,37 @@ interface DataView {
         }
     }
 
+    /**
+     * Descend the unreachable-code (TS7027) check into a function-like body reachable
+     * from an expression: a bare arrow/function-expression, OR an IIFE
+     * `(() => {…})()` / `(function(){…})()` whose callee (unwrapping parens) is one.
+     * The IIFE form is needed for tryCatchFinallyControlFlow's
+     * `(() => { try {…} finally {…}; x; })()` — without it the body's unreachable
+     * code after a terminating try/finally is never checked.
+     */
+    private fun checkUnreachableInFunctionLikeExpr(
+        expr: Expression?, source: String, fileName: String, binderResult: BinderResult,
+    ) {
+        val fn: Expression = when (expr) {
+            is ArrowFunction, is FunctionExpression -> expr
+            is CallExpression -> {
+                var c: Expression = expr.expression
+                while (c is ParenthesizedExpression) c = c.expression
+                if (c is ArrowFunction || c is FunctionExpression) c else return
+            }
+            else -> return
+        }
+        when (fn) {
+            is ArrowFunction -> (fn.body as? Block)?.let {
+                checkUnreachableInStatements(it.statements, source, fileName, binderResult)
+            }
+            is FunctionExpression -> fn.body?.let {
+                checkUnreachableInStatements(it.statements, source, fileName, binderResult)
+            }
+            else -> {}
+        }
+    }
+
     private fun checkUnreachableInNestedStatement(
         stmt: Statement,
         source: String,
@@ -43362,30 +43399,13 @@ interface DataView {
             }
             is LabeledStatement -> checkUnreachableInNestedStatement(stmt.statement, source, fileName, binderResult)
             is ExpressionStatement -> {
-                // Check arrow/function expressions
-                when (val expr = stmt.expression) {
-                    is ArrowFunction -> when (val body = expr.body) {
-                        is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
-                        else -> {}
-                    }
-                    is FunctionExpression -> expr.body?.let {
-                        checkUnreachableInStatements(it.statements, source, fileName, binderResult)
-                    }
-                    else -> {}
-                }
+                // Check arrow/function expressions AND IIFEs `(() => {…})()`.
+                checkUnreachableInFunctionLikeExpr(stmt.expression, source, fileName, binderResult)
             }
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
-                    when (val init = decl.initializer) {
-                        is ArrowFunction -> when (val body = init.body) {
-                            is Block -> checkUnreachableInStatements(body.statements, source, fileName, binderResult)
-                            else -> {}
-                        }
-                        is FunctionExpression -> init.body?.let {
-                            checkUnreachableInStatements(it.statements, source, fileName, binderResult)
-                        }
-                        else -> {}
-                    }
+                    // Arrow/function-expression OR IIFE initializer (`const x = (() => {…})()`).
+                    checkUnreachableInFunctionLikeExpr(decl.initializer, source, fileName, binderResult)
                 }
             }
             is ModuleDeclaration -> {
@@ -79334,6 +79354,13 @@ interface DataView {
                 } // end else (not missing property)
                 return // Type engine handled it — skip old system
             }
+            // tryCatchFinallyControlFlow: skip the legacy varTypes widening fallback below
+            // (inferSimpleExprType: `0`→"number") when the type engine already CONFIRMED a
+            // literal initializer is assignable to a literal-union annotation
+            // (`let x: 0 | 1 | 2 | 3 = 0` — `0` ∈ union). Mirrors the assignment-path guard.
+            if (canUse && isAssignable && (init is NumericLiteralNode ||
+                    init is StringLiteralNode || init is BigIntLiteralNode ||
+                    init is NoSubstitutionTemplateLiteralNode)) return
         } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
             // Circular type resolution — fall through to old system
         }
@@ -81602,6 +81629,17 @@ interface DataView {
                                 relatedInformation = listOfNotNull(chainRelatedInfo),
                             ))
                             return // Type engine handled it — skip old system
+                        }
+                        // tryCatchFinallyControlFlow: the legacy varTypes fallback below WIDENS a
+                        // literal RHS (inferSimpleExprType: `1`→"number"), FP-emitting TS2322
+                        // against a literal-union target (`let x: 0 | 1 | 2 | 3; x = 1` — `1` ∈
+                        // union). The type engine already authoritatively confirmed THIS assignment
+                        // (canUse && isAssignable, keeping the literal via propTypeContainsLiteral),
+                        // so skip the legacy widening path for a literal RHS.
+                        if (canUse && isAssignable && (expr.right is NumericLiteralNode ||
+                                expr.right is StringLiteralNode || expr.right is BigIntLiteralNode ||
+                                expr.right is NoSubstitutionTemplateLiteralNode)) {
+                            return
                         }
                     }
                 } catch (e: StackOverflowError) { reportCheckerStackOverflow(e);
