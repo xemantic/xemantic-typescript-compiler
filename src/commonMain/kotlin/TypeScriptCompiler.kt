@@ -991,7 +991,12 @@ class TypeScriptCompiler {
                 // TS1113 (duplicate 'default' clause) joins — tsc checkGrammarSwitchStatement
                 // reports it via grammarErrorOnNode, so an escaped-keyword TS1260 (a real
                 // parse diagnostic) suppresses every TS1113 in the file.
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 }
+                // TS1019/TS1021/TS1096 (index-signature grammar: question-mark param,
+                // missing value type, parameter count) — tsc emits these via
+                // checkGrammarIndexSignature → grammarErrorOnNode, so a real parse
+                // diagnostic in the file (e.g. a recovered `()?` / `[idx]?` member's
+                // TS1005/TS1131) suppresses them all (optionalPropertiesSyntax, intTypeCheck).
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1466,7 +1471,7 @@ class TypeScriptCompiler {
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll {
                     val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113) &&
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096) &&
                         fn in filesWithRealParseDiagnostics &&
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }
@@ -2625,7 +2630,15 @@ private fun topologicalSort(
 // CHECKER (checkGrammar* via grammarErrorOnNode). They do NOT count as parse
 // diagnostics for tsc's hasParseDiagnostics suppression rule — a file whose only
 // parser emissions are these is "parse-clean" and keeps its grammar diagnostics.
-internal val GRAMMAR_CLASS_CODES = setOf(1248, 1031, 1183, 1039, 1024, 1042, 1009, 2880)
+// The index-signature grammar family (1017 rest-param, 1018 accessibility-mod,
+// 1019 question-mark, 1020 initializer, 1021 missing-type, 1025 trailing-comma,
+// 1096 param-count) are all tsc checkGrammarIndexSignature diagnostics — they do NOT
+// count as REAL parse diagnostics (so one of them must not trigger suppression of
+// another, e.g. `indexSignatureTypeCheck2` has TS1017+TS1019+TS1096 and tsc emits ALL).
+internal val GRAMMAR_CLASS_CODES = setOf(
+    1248, 1031, 1183, 1039, 1024, 1042, 1009, 2880,
+    1017, 1018, 1019, 1020, 1021, 1025, 1096,
+)
 
 private val trailingCommaRegex = Regex(",(?=\\s*[}\\]])")
 private val emptyObjectRegex = Regex("\\{\\s+\\}")

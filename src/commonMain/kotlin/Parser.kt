@@ -3021,13 +3021,34 @@ class Parser(
                     break
                 }
             }
+            // tsc parseList(TypeMembers) abort: a LEADING `?` / `:` cannot start a type
+            // member (isTypeMemberStart returns false) — `?(): any`, `? [idx]: any`, and
+            // the `:` left dangling after a `()?` recovery. Mirror tsc's
+            // abortParsingListOrMoveToNextToken: emit TS1131 "Property or signature
+            // expected." at the token (same-start-deduped against a preceding TS1005 from
+            // parseSemicolon — `()?: any` reports TS1005 at the `?`, the abort's TS1131 at
+            // the `?` is suppressed, then TS1131 fires at the `:`) and skip one token.
+            if (token == SyntaxKind.Question || token == SyntaxKind.Colon) {
+                reportError(
+                    "Property or signature expected.", code = 1131,
+                    overrideStart = getPos(),
+                    overrideLength = (getEnd() - getPos()).coerceAtLeast(1),
+                )
+                nextToken()
+                continue
+            }
             val member = parseTypeMember()
             if (member != null) members.add(member)
             // parseTypeMember can signal a member-list ABORT (malformed-type-param
             // recovery): the offending token belongs to an outer parsing context —
             // stop without consuming it; the caller skips the CloseBrace consume.
             if (interfaceMembersBailedOnKeyword) break
-            parseOptional(SyntaxKind.Semicolon) || parseOptional(SyntaxKind.Comma)
+            // tsc parseTypeMemberSemicolon: a comma OR a (possibly-ASI) semicolon. Using
+            // parseSemicolon (not a silent parseOptional) makes a same-line non-`;`
+            // follower — e.g. the `?` after a `()` call signature or `[idx:number]` index
+            // signature — report TS1005 "';' expected." (matching tsc), which then leaves
+            // the `?` for the leading-`?` abort above.
+            if (!parseOptional(SyntaxKind.Comma)) parseSemicolon()
         }
         return members
     }
@@ -3386,7 +3407,10 @@ class Parser(
             }
             parseExpected(SyntaxKind.CloseBracket)
             val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
-            parseSemicolon() // consume trailing ; if present (extends span to include it for TS1021)
+            // Only consume a trailing `;` (extends span to include it for TS1021); a
+            // non-`;` same-line follower (e.g. the `?` of `[idx:number]?`) is reported by
+            // the member loop's parseSemicolon — emitting TS1005 here too would double it.
+            parseOptional(SyntaxKind.Semicolon)
             // B68.4: Suppress TS1021 when the param type is an invalid keyword
             // (any/boolean/etc.) — the checker emits TS1268 instead, matching TypeScript
             // (TypeScript doesn't double-report TS1021 + TS1268 for the same sig).

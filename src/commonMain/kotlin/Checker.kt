@@ -30730,10 +30730,46 @@ class Checker(
             }
         }
         val byName = props.groupBy { it.name }
-        for ((_, group) in byName) {
+        for ((memberName, group) in byName) {
             if (group.size >= 2) {
                 for (prop in group) {
                     emitDuplicate2300(prop.name, prop.nameNode, source, fileName)
+                }
+                // TS2687: when same-named duplicate property declarations differ in their
+                // modifiers (visibility / readonly / OPTIONALITY), tsc additionally reports
+                // "All declarations of 'X' must have identical modifiers." at EACH member
+                // (e.g. `prop: any; prop?: any;` — required vs optional). Mirrors the
+                // merged-interface TS2687 logic; emitted after every TS2300 so both land
+                // at the same position in source order (TS2300 then TS2687).
+                fun modSig(p: PropertyDeclaration): String {
+                    val vis = when {
+                        ModifierFlag.Private in p.modifiers -> "private"
+                        ModifierFlag.Protected in p.modifiers -> "protected"
+                        else -> "public"
+                    }
+                    return "$vis|${ModifierFlag.Readonly in p.modifiers}|${p.questionToken}"
+                }
+                if (group.map { modSig(it.prop) }.distinct().size > 1) {
+                    for (info in group) {
+                        val nameNode = info.nameNode
+                        val len = when (nameNode) {
+                            is StringLiteralNode -> nameNode.text.length + 2
+                            is NumericLiteralNode -> nameNode.text.length
+                            is Identifier -> nameNode.text.length
+                            else -> info.name.length
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "All declarations of '$memberName' must have identical modifiers.",
+                            category = DiagnosticCategory.Error,
+                            code = 2687,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = len,
+                        ))
+                    }
                 }
                 // 16.4cy: TS2717 — subsequent property declarations must have the same type.
                 // Mirror the class-side TS2717 logic: compare each subsequent property's type
@@ -93757,6 +93793,13 @@ interface DataView {
                     is StringLiteralNode -> n.text
                     else -> continue
                 }
+                // Call signatures (name "") and construct signatures (name "new") are
+                // parsed as MethodDeclaration with these sentinel names; they are NOT
+                // named methods and must not group with — or against — a real same-named
+                // method. tsc keeps construct sigs (ConstructSignature) and a method named
+                // "new" (`new ?(): T`) in separate overload sets, so a `new (): T` construct
+                // sig adjacent to a `new ?(): T` method does NOT trip TS2386.
+                if (name.isEmpty() || name == "new") continue
                 methodGroups.getOrPut(name) { mutableListOf() }.add(m)
             }
         }
@@ -97923,6 +97966,33 @@ interface DataView {
                 if (sigs.size < 2) continue
                 for (sig in sigs) {
                     val start = sig.pos
+                    // A value-type-LESS index signature (`[idx: number]?: any` — the `?`
+                    // interrupts before the `: any`, so the recovered value lives in
+                    // separate tokens) spans ONLY the `[ ... ]` param list (tsc's node range
+                    // ends at the matching `]`); the `;`-scan below would wrongly absorb the
+                    // recovered `?: any;`. Bracket-match from the opening `[`.
+                    if (sig.type == null) {
+                        var depth = 0
+                        var e = start
+                        var found = -1
+                        while (e < source.length) {
+                            val c = source[e]
+                            if (c == '[') depth++
+                            else if (c == ']') { depth--; if (depth == 0) { found = e + 1; break } }
+                            e++
+                        }
+                        if (found >= 0) {
+                            val length = (found - start).coerceAtLeast(1)
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Duplicate index signature for type '$key'.",
+                                category = DiagnosticCategory.Error, code = 2374,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                            ))
+                            continue
+                        }
+                    }
                     // Span through the trailing `;` if present — matches baseline squiggle.
                     // Search from sig.pos (not sig.end) because node.end overshoots by one token
                     // and may skip past this signature's `;` into the next sig's text.
