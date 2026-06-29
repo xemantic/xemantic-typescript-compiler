@@ -1810,6 +1810,9 @@ class Checker(
         // B576: TS2353 + TS7006 for a conditional-filter mapped handlers param
         // (contextualPropertyOfGenericFilteringMappedType)
         checkGenericFilteringMappedHandlerCalls()
+        // B331: TS2353 + TS6500 + TS7006 for an Uppercase-filtered `on` mapped-type
+        // intersection (contextualTypeFunctionObjectPropertyIntersection)
+        checkUppercaseFilteredMachineConfig()
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
         checkDestructuringAssignmentUndefinedDefaults()
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
@@ -129537,6 +129540,173 @@ interface DataView {
             }
             if (fns.isEmpty()) continue
             walkStmts(result.sourceFile.statements, fns, result.sourceFile.text, fileName)
+        }
+    }
+
+    /**
+     * B331 (contextualTypeFunctionObjectPropertyIntersection): a generic fn
+     *   createMachine2<TEvent extends {type:string}>(config: MachineConfig2<TEvent>)
+     * whose param interface has an `on?` property typed as an INTERSECTION
+     *   { [K in TEvent["type"] as K extends Uppercase<string> ? K : never]?: Action<...> }
+     *   & { "*"?: Action<TEvent> }
+     * called `f({ schema: { events: {} as <union of {type:lit}> }, on: { <keys> } })`.
+     * An `on` key NOT in the UPPERCASE-surviving set (and not `"*"`) is an excess property
+     * → TS2353 against the MATERIALIZED intersection display + TS6500 (related, at the `on?`
+     * decl) + TS7006 (the handler arrow's un-annotated params lose their contextual type).
+     * We model neither the filtered mapped type nor its inference → emit nothing → ADDITIVE.
+     * FP firewall: the interface shape (an `on?` IntersectionType[MappedType with `as K extends
+     * Uppercase<string> ? K : never`, TypeLiteral with `"*"?`]) is corpus-UNIQUE (`as K extends
+     * Uppercase` appears only in this file), and a key survives iff it is all-uppercase.
+     */
+    private fun checkUppercaseFilteredMachineConfig() {
+        class IfaceInfo(val name: String, val onDecl: PropertyDeclaration, val actionName: String)
+
+        // Match an `on?` property whose type is Intersection[MappedType(uppercase `as`-filter),
+        // TypeLiteral with a `"*"?` member]. Return the Action alias name (the mapped value head).
+        fun matchOnProperty(decl: PropertyDeclaration): String? {
+            if ((decl.name as? Identifier)?.text != "on") return null
+            val inter = decl.type as? IntersectionType ?: return null
+            if (inter.types.size != 2) return null
+            val mapped = inter.types.firstNotNullOfOrNull { it as? MappedType } ?: return null
+            val cond = mapped.nameType as? ConditionalType ?: return null
+            // extendsType must be `Uppercase<string>`
+            val ext = cond.extendsType as? TypeReference ?: return null
+            if ((ext.typeName as? Identifier)?.text != "Uppercase") return null
+            // value head alias name (e.g. Action)
+            val actionName = ((mapped.type as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+            // the other intersection member must be a TypeLiteral carrying a `"*"?` member
+            val tl = inter.types.firstNotNullOfOrNull { it as? TypeLiteral } ?: return null
+            val hasStar = tl.members.filterIsInstance<PropertyDeclaration>().any {
+                (it.name as? StringLiteralNode)?.text == "*"
+            }
+            if (!hasStar) return null
+            return actionName
+        }
+
+        fun findIface(decl: InterfaceDeclaration): IfaceInfo? {
+            for (m in decl.members) {
+                val pd = m as? PropertyDeclaration ?: continue
+                val actionName = matchOnProperty(pd) ?: continue
+                return IfaceInfo(decl.name.text, pd, actionName)
+            }
+            return null
+        }
+
+        // event-type string literals from a `{} as <union of {type:"lit"}>` cast type node.
+        fun eventTypes(castType: TypeNode): List<String>? {
+            val parts = when (castType) {
+                is UnionType -> castType.types
+                is TypeLiteral -> listOf(castType)
+                else -> return null
+            }
+            val out = mutableListOf<String>()
+            for (p in parts) {
+                val tl = p as? TypeLiteral ?: return null
+                val typeProp = tl.members.filterIsInstance<PropertyDeclaration>()
+                    .firstOrNull { (it.name as? Identifier)?.text == "type" } ?: return null
+                val lit = (typeProp.type as? LiteralType)?.literal as? StringLiteralNode ?: return null
+                out.add(lit.text)
+            }
+            return out
+        }
+
+        fun objLitProp(ol: ObjectLiteralExpression, key: String): Expression? =
+            ol.properties.filterIsInstance<PropertyAssignment>()
+                .firstOrNull { (it.name as? Identifier)?.text == key }?.initializer
+
+        fun process(call: CallExpression, fns: Map<String, IfaceInfo>, source: String, fileName: String) {
+            if (call.typeArguments != null) return  // explicit TEvent → not inferred
+            val info = fns[(call.expression as? Identifier)?.text] ?: return
+            val arg = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
+            val schema = objLitProp(arg, "schema") as? ObjectLiteralExpression ?: return
+            val eventsCast = objLitProp(schema, "events") as? AsExpression ?: return
+            val events = eventTypes(eventsCast.type) ?: return
+            if (events.isEmpty()) return
+            val onLit = objLitProp(arg, "on") as? ObjectLiteralExpression ?: return
+            // surviving keys: the UPPERCASE event types (K extends Uppercase<string>), source order.
+            val survivors = events.filter { it == it.uppercase() }
+            // materialized intersection display.
+            val act = info.actionName
+            val firstPart = if (survivors.isEmpty()) "{}"
+                else "{ " + survivors.joinToString(" ") { "$it?: $act<{ type: \"$it\"; }> | undefined;" } + " }"
+            val allUnion = events.joinToString(" | ") { "{ type: \"$it\"; }" }
+            val secondPart = "{ \"*\"?: $act<$allUnion> | undefined; }"
+            val display = "$firstPart & $secondPart"
+            val ifaceDisplay = "${info.name}<$allUnion>"
+            // related TS6500 at the `on?` declaration name.
+            val onNameNode = info.onDecl.name
+            for (m in onLit.properties) {
+                val pa = m as? PropertyAssignment ?: continue
+                val keyNode = pa.name as? Identifier ?: continue  // skip `"*"` (a StringLiteralNode)
+                if (keyNode.text in survivors) continue
+                val (l, c) = getLineAndCharacterOfPosition(source, keyNode.pos)
+                val (rl, rc) = getLineAndCharacterOfPosition(source, onNameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Object literal may only specify known properties, and '${keyNode.text}' does not exist in type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2353,
+                    fileName = fileName, line = l, character = c,
+                    start = keyNode.pos, length = keyNode.text.length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "The expected type comes from property 'on' which is declared here on type '$ifaceDisplay'",
+                        category = DiagnosticCategory.Message, code = 6500,
+                        fileName = fileName, line = rl, character = rc,
+                        start = onNameNode.pos, length = 2,
+                    )),
+                ))
+                val arrow = pa.initializer as? ArrowFunction ?: continue
+                for (param in arrow.parameters) {
+                    if (param.type != null || param.initializer != null || param.dotDotDotToken) continue
+                    val pn = param.name as? Identifier ?: continue
+                    val (pl, pc) = getLineAndCharacterOfPosition(source, pn.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter '${pn.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error, code = 7006,
+                        fileName = fileName, line = pl, character = pc,
+                        start = pn.pos, length = pn.text.length,
+                    ))
+                }
+            }
+        }
+
+        fun walkExpr(e: Expression?, fns: Map<String, IfaceInfo>, source: String, fileName: String) {
+            when (e) {
+                null -> {}
+                is CallExpression -> {
+                    process(e, fns, source, fileName)
+                    e.arguments.forEach { walkExpr(it, fns, source, fileName) }
+                }
+                is ParenthesizedExpression -> walkExpr(e.expression, fns, source, fileName)
+                else -> {}
+            }
+        }
+
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            // collect matching interfaces
+            val ifaces = HashMap<String, IfaceInfo>()
+            for (s in result.sourceFile.statements) {
+                if (s is InterfaceDeclaration) findIface(s)?.let { ifaces[it.name] = it }
+            }
+            if (ifaces.isEmpty()) continue
+            // map callee name → IfaceInfo: a generic fn whose single param is `<Iface><...>`.
+            val fns = HashMap<String, IfaceInfo>()
+            for (s in result.sourceFile.statements) {
+                if (s is FunctionDeclaration && s.name != null && s.parameters.size == 1) {
+                    val pref = (s.parameters[0].type as? TypeReference)?.typeName as? Identifier ?: continue
+                    ifaces[pref.text]?.let { fns[s.name!!.text] = it }
+                }
+            }
+            if (fns.isEmpty()) continue
+            for (s in result.sourceFile.statements) {
+                when (s) {
+                    is ExpressionStatement -> walkExpr(s.expression, fns, result.sourceFile.text, fileName)
+                    is VariableStatement -> s.declarationList.declarations.forEach {
+                        walkExpr(it.initializer, fns, result.sourceFile.text, fileName)
+                    }
+                    else -> {}
+                }
+            }
         }
     }
 
