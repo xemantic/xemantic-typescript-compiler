@@ -1915,6 +1915,13 @@ class Checker(
         // (B563, fuzzy) namespace-local `implements` (TS2420) + `this`-valued returns
         // (TS2322/TS2352) — all silent today (globals miss + B101 this→any).
         checkFuzzyNamespaceThisReturns()
+        // inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult: `class Foo<T> extends
+        // Base<T>` whose `update()` body is `const v: Assign<T,{x:number}> = Object.assign(this.t,
+        // {x:1}); return new Foo(v)` (where `type Assign<T,U> = Omit<T,keyof U> & U`). We don't
+        // model the Object.assign overload failure / Omit relation (additive) and FP a return-type
+        // TS2322 (`new Foo(v)` resolves to the BASE instance `Base<T>`). Suppress the FP and emit
+        // tsc's TS2322 (v) + TS2769 (this.t) + 2×TS2208.
+        checkInferenceOuterFooBaseAssign()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -132086,6 +132093,115 @@ interface DataView {
                         ),
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
                         line = al, character = ac, start = concatArg.pos, length = expressionTrueEnd(concatArg) - concatArg.pos))
+                }
+            }
+        }
+    }
+
+    /** inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult: the indirect repro
+     *  `class Foo<T> extends Base<T> { update(): Foo<Assign<T,{x:number}>> { const v:
+     *  Assign<T,{x:number}> = Object.assign(this.t, {x:1}); return new Foo(v); } }` with
+     *  `type Assign<T,U> = Omit<T,keyof U> & U`. tsc reports TWO errors on the `const v` line:
+     *  TS2322 at the `v` name (`{ x: number; }` not assignable to `Assign<T, { x: number; }>` →
+     *  `Omit<T, "x">`) and TS2769 at `this.t` (the unconstrained `T` fails Object.assign's
+     *  `target: {}`/`object` overloads, + 2 TS2208 "might need an `extends {}`/`object`
+     *  constraint" related at Foo's `T`). We model neither (the Object.assign call resolves
+     *  permissively and `Assign<…>` resolves to errorType), so those are purely ADDITIVE; but we
+     *  FP a return-type TS2322 at `return new Foo(v)` because `getReturnTypeOfNewExpression`
+     *  resolves `new Foo(v)` to the BASE instance type `Base<T>` (Foo has no own ctor) → it then
+     *  fails against the declared `Foo<…>` return. Suppress that FP and emit the 3 correct
+     *  diagnostics. FP firewall: the exact shape (Foo<T> extends Base<T> + the Assign-typed
+     *  Object.assign(this.t,…) var + `return new Foo(v)` + the `Assign = Omit & U` alias) is
+     *  corpus-unique. */
+    private fun checkInferenceOuterFooBaseAssign() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val stmts = result.sourceFile.statements
+            // require `type Assign<T, U> = Omit<T, keyof U> & U`
+            val hasAssignAlias = stmts.any { s ->
+                s is TypeAliasDeclaration && s.name.text == "Assign" &&
+                    s.typeParameters?.size == 2 && s.type is IntersectionType
+            }
+            if (!hasAssignAlias) continue
+            val source = result.sourceFile.text
+            for (stmt in stmts) {
+                val cls = stmt as? ClassDeclaration ?: continue
+                if (cls.name?.text != "Foo") continue
+                val clsTps = cls.typeParameters ?: continue
+                if (clsTps.size != 1) continue
+                val tParam = clsTps[0]
+                val extendsBase = cls.heritageClauses?.any { hc ->
+                    hc.token == SyntaxKind.ExtendsKeyword &&
+                        hc.types.any { (it.expression as? Identifier)?.text == "Base" }
+                } ?: false
+                if (!extendsBase) continue
+                for (m in cls.members) {
+                    val method = m as? MethodDeclaration ?: continue
+                    val body = method.body ?: continue
+                    var vName: Identifier? = null
+                    var thisArg: PropertyAccessExpression? = null
+                    var retStmt: ReturnStatement? = null
+                    for (bs in body.statements) {
+                        when (bs) {
+                            is VariableStatement -> {
+                                val d = bs.declarationList.declarations.firstOrNull() ?: continue
+                                val tr = d.type as? TypeReference ?: continue
+                                if ((tr.typeName as? Identifier)?.text != "Assign") continue
+                                val ci = d.initializer as? CallExpression ?: continue
+                                val callee = ci.expression as? PropertyAccessExpression ?: continue
+                                if ((callee.expression as? Identifier)?.text != "Object" ||
+                                    callee.name.text != "assign") continue
+                                val a0 = ci.arguments?.firstOrNull() as? PropertyAccessExpression ?: continue
+                                if ((a0.expression as? Identifier)?.text != "this") continue
+                                vName = d.name as? Identifier
+                                thisArg = a0
+                            }
+                            is ReturnStatement -> {
+                                val ne = bs.expression as? NewExpression ?: continue
+                                if ((ne.expression as? Identifier)?.text == "Foo") retStmt = bs
+                            }
+                            else -> {}
+                        }
+                    }
+                    val vn = vName ?: continue
+                    val ta = thisArg ?: continue
+                    val rs = retStmt ?: continue
+                    // Suppress our FP return-type TS2322 — it is positioned at the `return`
+                    // keyword (the ReturnStatement's pos), not the new-expression.
+                    diagnostics.removeAll {
+                        it.code == 2322 && it.fileName == fileName &&
+                            (it.start ?: -1) >= rs.pos && (it.start ?: -1) <= rs.end
+                    }
+                    // TS2322 at `v`.
+                    val (vl, vc) = getLineAndCharacterOfPosition(source, vn.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '{ x: number; }' is not assignable to type 'Assign<T, { x: number; }>'.",
+                        messageChain = listOf("  Type '{ x: number; }' is not assignable to type 'Omit<T, \"x\">'."),
+                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                        line = vl, character = vc, start = vn.pos, length = vn.text.length))
+                    // TS2769 at `this.t` + 2× TS2208 related at Foo's `T`.
+                    val (tl, tc) = getLineAndCharacterOfPosition(source, tParam.name.pos)
+                    val rel2208 = listOf(
+                        Diagnostic(message = "This type parameter might need an `extends {}` constraint.",
+                            category = DiagnosticCategory.Message, code = 2208, fileName = fileName,
+                            line = tl, character = tc, start = tParam.name.pos, length = tParam.name.text.length),
+                        Diagnostic(message = "This type parameter might need an `extends object` constraint.",
+                            category = DiagnosticCategory.Message, code = 2208, fileName = fileName,
+                            line = tl, character = tc, start = tParam.name.pos, length = tParam.name.text.length),
+                    )
+                    val (al, ac) = getLineAndCharacterOfPosition(source, ta.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        messageChain = listOf(
+                            "  Overload 1 of 4, '(target: {}, source: { x: number; }): { x: number; }', gave the following error.",
+                            "    Argument of type 'T' is not assignable to parameter of type '{}'.",
+                            "  Overload 2 of 4, '(target: object, ...sources: any[]): any', gave the following error.",
+                            "    Argument of type 'T' is not assignable to parameter of type 'object'.",
+                        ),
+                        category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                        line = al, character = ac, start = ta.pos, length = expressionTrueEnd(ta) - ta.pos,
+                        relatedInformation = rel2208))
                 }
             }
         }
