@@ -81278,7 +81278,9 @@ interface DataView {
                             val missing = try { collectMissingProperties(sourceType, tt) }
                                 catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
                             if (missing.isNotEmpty()) {
-                                val displaySource = typeToString(sourceType)
+                                // inheritance1: an empty subclass source (`ImageBase extends Control {}`)
+                                // displays as its base ("Control") in the missing-property message.
+                                val displaySource = emptySubclassBaseName(sourceType) ?: typeToString(sourceType)
                                 val displayTarget = if (typeAnnotation != null)
                                     formatTypeForDisplay(typeAnnotation!!) ?: typeToString(tt) else typeToString(tt)
                                 val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
@@ -99086,14 +99088,19 @@ interface DataView {
                     }
                     val chain = mutableListOf<String>()
                     val relatedInfo: List<Diagnostic>
+                    // inheritance1: in the missing-property CHAIN line an empty-subclass class
+                    // (`class ImageBase extends Control {}`) reduces to its base ("Control"),
+                    // even though the top-level "Class 'ImageBase' incorrectly implements…"
+                    // keeps the class's own name.
+                    val chainClassName = emptySubclassBaseNameAst(classDecl) ?: className
                     if (missingProps.size >= 2) {
                         // TS2740-style chain: "Type 'D' is missing the following properties from type 'I': foo, bar"
                         val missingNames = missingProps.map { it.name }
-                        chain.add("  " + formatTs2740Message(className, ifaceName, missingNames))
+                        chain.add("  " + formatTs2740Message(chainClassName, ifaceName, missingNames))
                         relatedInfo = emptyList()
                     } else {
                         val firstMissing = missingProps[0]
-                        chain.add("  Property '${firstMissing.name}' is missing in type '$className' but required in type '$ifaceName'.")
+                        chain.add("  Property '${firstMissing.name}' is missing in type '$chainClassName' but required in type '$ifaceName'.")
                         // TS2728 related info: point to interface property declaration
                         relatedInfo = firstMissing.valueDeclaration?.let { decl ->
                             val declPos = when (decl) {
@@ -123496,6 +123503,36 @@ interface DataView {
      * whose name differs from the target type's symbol — indicating an inherited
      * property. Keeps the annotation display for directly-declared properties.
      */
+    /** inheritance1: in a missing-property message tsc reduces a class with a COMPLETELY
+     *  EMPTY body (no members declared at all — not even a constructor) that `extends` exactly
+     *  one base to the BASE's name (recursively). Returns the reduced base name, or null when
+     *  [decl] is NOT such an empty single-extends subclass. (`class ImageBase extends Control {}`
+     *  → "Control"; `class C extends B { constructor(){…} }` keeps "C" — `bases.ts`.) */
+    private fun emptySubclassBaseNameAst(decl: ClassDeclaration, depth: Int = 0): String? {
+        if (depth > 16) return null
+        if (decl.members.isNotEmpty()) return null
+        val ext = decl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return null
+        if (ext.types.size != 1) return null
+        val baseName = (ext.types[0].expression as? Identifier)?.text ?: return null
+        val baseDecl = (globals[baseName] ?: currentFileLocals?.get(baseName))
+            ?.declarations?.filterIsInstance<ClassDeclaration>()?.firstOrNull()
+        if (baseDecl != null) emptySubclassBaseNameAst(baseDecl, depth + 1)?.let { return it }
+        return baseName
+    }
+
+    /** Resolve [type] to a CLASS symbol and apply [emptySubclassBaseNameAst]; null for
+     *  non-class types (interfaces never reduce). */
+    private fun emptySubclassBaseName(type: Type): String? {
+        val sym = when (type) {
+            is Type.Reference -> type.target.symbol
+            is Type.Object -> type.symbol
+            else -> null
+        } ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Class)) return null
+        val decl = sym.declarations.filterIsInstance<ClassDeclaration>().firstOrNull() ?: return null
+        return emptySubclassBaseNameAst(decl)
+    }
+
     private fun getDeclaringTypeDisplay(
         propSymbol: Symbol?,
         targetType: Type,
@@ -123510,25 +123547,14 @@ interface DataView {
             else -> null
         } ?: return fallback
         if (targetSym === parent) return fallback
-        // 17.213: TypeScript's TS2741 message uses the displayed target type
-        // name for PUBLIC inherited properties (interfaces extending interfaces,
-        // classes extending other classes via public members). It uses the
-        // DECLARING class name only when the missing property is private or
-        // protected — those modifiers tie the property nominally to its
-        // declaring class. So for `var x: B = {}` with `interface A { x: string }
-        // interface B extends A {}`, the message is "...required in type 'B'"
-        // (uses target). For `c2 = c` with `class A { private x = 1 } class C2
-        // extends A {}`, the message is "...required in type 'A'" (uses
-        // declaring class because `x` is private).
-        val isPrivateOrProtected = propSymbol.declarations.any { decl ->
-            val mods = when (decl) {
-                is PropertyDeclaration -> decl.modifiers
-                is MethodDeclaration -> decl.modifiers
-                else -> emptySet()
-            }
-            ModifierFlag.Private in mods || ModifierFlag.Protected in mods
-        }
-        return if (isPrivateOrProtected) parentName else fallback
+        // inheritance1: tsc's TS2741/TS2420 "required in type X" name is the displayed
+        // target type name, EXCEPT when the target is an empty subclass (zero own instance
+        // members + single `extends`), which reduces to its base name. The earlier
+        // private/protected→declaring-class heuristic was a MISDIAGNOSIS of this rule: its
+        // only motivating case (`c2 = c`, C2 empty `extends A`, private `x`) is itself an
+        // empty-subclass reduction (C2 → "A"), while a NON-empty target with an inherited
+        // private member (SelectableControl, has `select`) must keep its own name.
+        return emptySubclassBaseName(targetType) ?: fallback
     }
 
     /**
