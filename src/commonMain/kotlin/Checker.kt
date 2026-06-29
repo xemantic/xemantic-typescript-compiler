@@ -109019,6 +109019,17 @@ interface DataView {
                                 // to `((x:number)=>string) | ((x:boolean)=>string)`) — record it so
                                 // calling `a(...)` reaches the union-callee combined-signature check.
                                 currentLocalTypes[nm.text] = t
+                            } else if (t is Type.Union && t.types.all {
+                                    it is Type.StringLiteral || it is Type.NumberLiteral ||
+                                        it is Type.BigIntLiteral || it === trueType || it === falseType
+                                }) {
+                                // A LITERAL-union local (`let foo: "aaa" | "bbb"`). Populate so flow
+                                // narrowing of its call-arg uses (e.g. an exhaustiveness check
+                                // `isNever(foo)` where the narrowed value is no longer `never`,
+                                // exhaustiveSwitchCheckCircularity) sees the narrowed literal type
+                                // instead of `any`. Narrow-gated to all-literal unions (rare shape)
+                                // so the new arg-check surface stays confined.
+                                currentLocalTypes[nm.text] = t
                             }
                         } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); /* circular type */ }
                     }
@@ -115928,7 +115939,17 @@ interface DataView {
                 // args, so object/named/reference arg displays are unaffected. Verified:
                 // zero baselines show a literal-arg-vs-base-param literal display.
                 val paramIsLiteral = getWidenedLiteralType(paramType) !== paramType
-                val argTypeStr = typeToString(if (paramIsLiteral) argType else getWidenedLiteralType(argType))
+                // tsc widens a FRESH literal-expression arg (`f(true)` → 'boolean')
+                // but PRESERVES the literal type of a variable/reference arg whose
+                // flow-narrowed type is a literal (`isNever(foo)` where foo: "aaa"|"bbb"
+                // narrows to '"bbb"', exhaustiveSwitchCheckCircularity). `literalTypeOfExpression`
+                // is the freshness probe (non-null only for literal expressions/keywords).
+                // getWidenedLiteralType is a no-op for non-literal argTypes, so this is
+                // inert for every arg whose type isn't a literal.
+                val argIsFreshLiteral = literalTypeOfExpression(arg) != null
+                val argTypeStr = typeToString(
+                    if (paramIsLiteral || !argIsFreshLiteral) argType else getWidenedLiteralType(argType)
+                )
                 val paramTypeStr = typeToString(paramType)
                 val start = arg.pos
                 // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
