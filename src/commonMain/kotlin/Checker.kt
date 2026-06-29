@@ -96486,19 +96486,29 @@ interface DataView {
         if (effNumberSig != null && effStringSig != null) {
             val nv = effNumberSig.valueType
             val sv = effStringSig.valueType
-            val primitive = TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
             val bothInheritedSigs = !effNumberSig.isOwn && !effStringSig.isOwn
             val sigPairAlreadyOnBase = bothInheritedSigs && baseVis.any { it.hasNumber && it.hasString }
+            // indexerConstraints2: also compare NAMED class/interface-instance value types
+            // (`[n: number]: A` vs an inherited `[s: string]: B`, A/B class instances) — the
+            // original primitive-only gate skipped them; resolveStructuredTypeMembers + the
+            // standard relation reliably detect `A` not assignable to `B`.
+            if (nv is Type.Interface) resolveStructuredTypeMembers(nv)
+            if (sv is Type.Interface) resolveStructuredTypeMembers(sv)
             if (!sigPairAlreadyOnBase &&
                 nv !== anyType && nv !== errorType && sv !== anyType && sv !== errorType &&
-                nv.flags.hasAny(primitive) && sv.flags.hasAny(primitive) &&
+                isComparableIndexValueType(nv) && isComparableIndexValueType(sv) &&
                 !checkTypeRelatedTo(nv, sv, assignableRelation)) {
                 val numDisplay = typeToString(nv)
                 val strDisplay = typeToString(sv)
                 val msg = "'number' index type '$numDisplay' is not assignable to 'string' index type '$strDisplay'."
-                // errorNode: own number sig if any, else type name.
-                val (start, len) = if (effNumberSig.isOwn) idxSigSpan(effNumberSig.pos, source)
-                    else Pair(typeNamePos, typeNameLen)
+                // errorNode: tsc reports at whichever index sig is OWN — the own NUMBER sig
+                // if present (G/K), else the own STRING sig (indexerConstraints2 I: number sig
+                // inherited from H, own string sig), else the type name.
+                val (start, len) = when {
+                    effNumberSig.isOwn -> idxSigSpan(effNumberSig.pos, source)
+                    effStringSig.isOwn -> idxSigSpan(effStringSig.pos, source)
+                    else -> Pair(typeNamePos, typeNameLen)
+                }
                 if (diagnostics.none { it.code == 2413 && it.start == start && it.message == msg }) {
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
@@ -98407,6 +98417,41 @@ interface DataView {
      * emits TS1337 ("cannot be a literal type or generic type"). Otherwise emits
      * TS1268 (the long-standing path, "must be string/number/symbol/template literal").
      */
+    /** indexerConstraints2: classify a RESOLVED index-signature parameter type — returns
+     *  0 (valid: string/number/symbol, or a union of only-valid members), 1337 (a literal type
+     *  or a generic type parameter, or a union containing one), or 1268 (any other invalid type
+     *  such as boolean / object). Unions are classified member-by-member (a union's aggregate
+     *  flags are unreliable for mixed members like `string | boolean`). */
+    private fun classifyIndexParamType(t: Type, depth: Int = 0): Int {
+        if (depth > 8) return 1268
+        return when {
+            // Unresolvable / any-resolved index type is INVALID (TS1268) — matches the prior
+            // behavior (a TypeReference param always emitted TS1268) so an unresolvable name
+            // like `[index: TypeNotFound]` still errors (declarationEmitIndexTypeNotFound).
+            t === anyType || t === errorType -> 1268
+            t is Type.Union -> {
+                val subs = t.types.map { classifyIndexParamType(it, depth + 1) }
+                when {
+                    subs.all { it == 0 } -> 0
+                    subs.any { it == 1337 } -> 1337
+                    else -> 1268
+                }
+            }
+            t is Type.TypeParam -> 1337
+            t.flags.hasAny(TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral) -> 1337
+            t.flags.hasAny(TypeFlags.String or TypeFlags.Number or
+                TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol) -> 0
+            else -> 1268
+        }
+    }
+
+    /** indexerConstraints2: an index-signature VALUE type the TS2413 (number-vs-string index
+     *  value) check can reliably compare — a primitive, or a NAMED class/interface instance. */
+    private fun isComparableIndexValueType(t: Type): Boolean =
+        t.flags.hasAny(TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt) ||
+            (t is Type.Interface && t.symbol != null)
+
     private fun checkIndexSigsInMembers(
         members: List<ClassElement>, outerTypeParamNames: Set<String>,
         source: String, fileName: String,
@@ -98417,22 +98462,48 @@ interface DataView {
             val param = sig.parameters[0]
             if (param.dotDotDotToken || param.questionToken) continue
             val pType = param.type ?: continue
-            val isAllowed = when (pType) {
+            val isAllowedSyntactic = when (pType) {
                 is KeywordTypeNode -> pType.kind in allowedIndexTypes
                 is TemplateLiteralType -> true
                 is ArrayType -> true
                 else -> false
             }
-            if (isAllowed) continue
             // TS1337: parameter type is a generic (TypeReference to a TypeParameter)
             // or a literal type — TypeScript suggests using a mapped object type instead.
             val isGeneric = pType is TypeReference && pType.typeName is Identifier &&
                 outerTypeParamNames.contains((pType.typeName as Identifier).text)
             val isLiteral = pType is LiteralType
-            val (code, message) = if (isGeneric || isLiteral) {
-                1337 to "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead."
-            } else {
-                1268 to "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type."
+            // indexerConstraints2: resolve an aliased TypeReference / a UnionType param via the
+            // type engine and classify it. Keeps every existing syntactic verdict; only adds
+            // resolution for the alias/union shapes the syntax can't see through (`AliasedNumber`
+            // = number → valid; `string | number` → valid; `"foo" | "bar"` → TS1337).
+            val resolvedCode: Int? = if (!isAllowedSyntactic && !isGeneric && !isLiteral &&
+                    (pType is TypeReference || pType is UnionType)) {
+                val rt = try { getTypeFromTypeNode(pType) } catch (_: Throwable) { null }
+                if (rt != null) classifyIndexParamType(rt) else null
+            } else null
+            if (isAllowedSyntactic || resolvedCode == 0) {
+                // VALID index param type. indexerConstraints2: a TypeReference param that
+                // resolves to a valid index key but has NO value annotation (`{ [key: Key] }`)
+                // → TS1021. The parser suppresses TS1021 for TypeReference params (B292), so
+                // the checker owns it. (Keyword params with no value already get TS1021 from
+                // the parser — gate to TypeReference to avoid a double-emit.)
+                if (resolvedCode == 0 && sig.type == null && pType is TypeReference) {
+                    val (s, l) = idxSigSpan(sig.pos, source)
+                    val (ln, ch) = getLineAndCharacterOfPosition(source, s)
+                    diagnostics.add(Diagnostic(
+                        message = "An index signature must have a type annotation.",
+                        category = DiagnosticCategory.Error, code = 1021,
+                        fileName = fileName, line = ln, character = ch, start = s, length = l,
+                    ))
+                }
+                continue
+            }
+            val (code, message) = when {
+                isGeneric || isLiteral || resolvedCode == 1337 ->
+                    1337 to "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead."
+                else ->
+                    1268 to "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type."
             }
             val start = param.name.pos
             val nameLen = when (val n = param.name) {
