@@ -247,6 +247,13 @@ class Checker(
      *  path). */
     private var currentClassForThis: ClassDeclaration? = null
 
+    /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
+     *  is currently being inferred. Set around method-return inference (both the lazy
+     *  getTypeOfVariableOrProperty path and the checkClassPropertyOverrides path) so
+     *  `inferReturnTypeFromBody`'s `return this.<member>` branch can resolve <member>
+     *  against the class's instance type. Null outside method-return inference. */
+    private var thisClassSymbolForReturnInference: Symbol? = null
+
     /** B585 (allowJscheckJsTypeParameterNoCrash): the contextual TYPE NODE of the
      *  object literal currently being walked by walkFunctionBodiesInExpr (derived from
      *  the enclosing call's resolved param type). Threaded so a nested object-literal
@@ -84575,6 +84582,11 @@ interface DataView {
                     inferenceNamespaceStack.addLast(nsAncestor)
                     true
                 } else false
+                // B-interfaceClassMerging: expose the enclosing class symbol so a
+                // `return this.<optionalMember>` body infers `T | undefined`.
+                val savedThisClsSym = thisClassSymbolForReturnInference
+                val parentClass = symbol.parent?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+                if (parentClass != null) thisClassSymbolForReturnInference = parentClass
                 try {
                 val fnType = Type.Object()
                 // Collect all method declarations for overloads (same name)
@@ -84656,6 +84668,7 @@ interface DataView {
                 fnType
                 } finally {
                     if (nsPushed) inferenceNamespaceStack.removeLast()
+                    thisClassSymbolForReturnInference = savedThisClsSym
                 }
             }
             is GetAccessor -> {
@@ -101049,6 +101062,17 @@ interface DataView {
             "$rawClassName<${classTypeParams.joinToString(", ") { it.name.text }}>"
         } else rawClassName
 
+        // B-interfaceClassMerging: the derived class's own symbol (namespace-aware),
+        // exposed during the derived-method-return inference so a `return this.<optional>`
+        // body infers `T | undefined` (matching the lazy getTypeOfVariableOrProperty path).
+        val derivedClassSymbol: Symbol? = run {
+            for (ns in enclosingNs.asReversed()) {
+                val s = ns.exports?.get(rawClassName)
+                if (s != null && s.flags.hasAny(SymbolFlags.Class)) return@run s
+            }
+            globals[rawClassName]?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+        }
+
         // Push class type params into scope so member declarations like `target: T` resolve
         // T to the class's canonical Type.TypeParam instead of errorType. Without this,
         // `class MyEvent<T> extends BaseEvent { target: T; }` would have `derivedType = errorType`
@@ -101371,7 +101395,13 @@ interface DataView {
                         // Fall through and let TS2416 fire if applicable.
                     }
 
-                    val derivedType = getTypeOfMemberDecl(member) ?: continue
+                    val savedDerivedThisCls = thisClassSymbolForReturnInference
+                    if (derivedClassSymbol != null) thisClassSymbolForReturnInference = derivedClassSymbol
+                    val derivedType = try {
+                        getTypeOfMemberDecl(member)
+                    } finally {
+                        thisClassSymbolForReturnInference = savedDerivedThisCls
+                    } ?: continue
                     // For Type.Reference bases, use getPropertyTypeForRelation to obtain the
                     // mapper-instantiated property type. `getTypeOfMemberDecl(baseDecl)` returns
                     // the raw declared type (`(x: T) => T`); we need the substituted form
@@ -102381,6 +102411,29 @@ interface DataView {
                         val f = litKind(expr.whenFalse)
                         if (t != null && t === f) t else null
                     }
+                    // B-interfaceClassMerging: `return this.<member>` where <member> is an
+                    // OPTIONAL property/method of the enclosing class — infer `T | undefined`
+                    // (under strictNullChecks). Bounded to OPTIONAL members only: a
+                    // non-optional `this.x` stays null → falls to the anyType default
+                    // (current behavior), so the blast radius is just optional-member returns.
+                    is PropertyAccessExpression -> {
+                        val recv = expr.expression
+                        val clsSym = thisClassSymbolForReturnInference
+                        val memberName = (expr.name as? Identifier)?.text
+                        if (clsSym != null && recv is Identifier && recv.text == "this" &&
+                            memberName != null && strictNullChecks) {
+                            try {
+                                val clsType = getDeclaredTypeOfSymbol(clsSym)
+                                val propSym = getPropertyOfType(clsType, memberName)
+                                if (propSym != null && isOptionalProperty(propSym)) {
+                                    val baseT = getTypeOfSymbol(propSym)
+                                    if (baseT !== anyType && baseT !== errorType)
+                                        getUnionType(listOf(baseT, undefinedType))
+                                    else null
+                                } else null
+                            } catch (_: Throwable) { null }
+                        } else null
+                    }
                     else -> null
                 }
             }
@@ -102522,6 +102575,17 @@ interface DataView {
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, assignableRelation)) {
             chain.add("    Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")
+            // Union-source return drill (interfaceClassMerging): `string | undefined` ≁
+            // `string` → append the first failing member `Type 'undefined' is not
+            // assignable to type 'string'.` one level deeper.
+            if (sourceReturn is Type.Union && targetReturn !is Type.Union) {
+                val failing = sourceReturn.types.firstOrNull {
+                    !checkTypeRelatedTo(it, targetReturn, assignableRelation)
+                }
+                if (failing != null) {
+                    chain.add("      Type '${typeToString(failing)}' is not assignable to type '${typeToString(targetReturn)}'.")
+                }
+            }
             // 17.78: When base's return is a TypeParam and derived's return is a
             // concrete type, the override is unsound — T can be instantiated to any
             // type unrelated to the concrete return. Add the "could be instantiated"
@@ -110009,6 +110073,18 @@ interface DataView {
         }
     }
 
+    /** B-interfaceClassMerging: true when the OPTIONAL-member property access `recv.m`
+     *  is flow-narrowed to EXCLUDE undefined (a `if (recv.m) recv.m()` guard). Used to
+     *  SUPPRESS the TS2722 "possibly undefined" optional-member-invoke diagnostic so a
+     *  guarded optional-method call is not a false positive. Treats the member's declared
+     *  type as `<propType> | undefined` and asks the flow narrower whether undefined
+     *  survives at the access site; if it does NOT, a guard removed it → suppress. */
+    private fun propertyAccessNarrowedNonNull(pa: PropertyAccessExpression, propType: Type): Boolean {
+        val withUndef = getUnionType(listOf(propType, undefinedType))
+        val narrowed = try { getNarrowedTypeForReference(withUndef, pa) } catch (_: Throwable) { return false }
+        return !typeIncludesUndefined(narrowed)
+    }
+
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
@@ -110140,6 +110216,45 @@ interface DataView {
         }
         // Resolve callee to get its type
         val calleeType = getCalleeType(expr.expression)
+        // TS2722: invoking a possibly-undefined OPTIONAL member. `bar.optionalMethod(1)`
+        // where `optionalMethod?` is an optional callable member — `getCalleeType`
+        // resolves to the bare callable (we don't add `| undefined` for optional-member
+        // access), so the call would otherwise validate; tsc reports TS2722 because the
+        // member is possibly `undefined`. Gated tightly (FP firewall): strictNullChecks,
+        // no optional-chaining on the call (`?.()`) or the access (`recv?.m`), the member
+        // resolves OPTIONAL + callable on the receiver type, and the access is NOT
+        // flow-narrowed to exclude undefined (a `if (recv.m) recv.m()` guard). Span =
+        // the whole `recv.m` property-access (matching tsc's squiggle).
+        if (strictNullChecks && !expr.questionDotToken && calleeExpr is PropertyAccessExpression &&
+            !calleeExpr.questionDotToken) {
+            val memberName = (calleeExpr.name as? Identifier)?.text
+            if (memberName != null) {
+                val recvType = try { getTypeOfExpression(calleeExpr.expression) } catch (_: Throwable) { null }
+                if (recvType != null && recvType !== anyType && recvType !== errorType) {
+                    val propSym = getPropertyOfType(recvType, memberName)
+                    if (propSym != null && isOptionalProperty(propSym)) {
+                        val propType = try { getTypeOfSymbol(propSym) } catch (_: Throwable) { anyType }
+                        // Member must be callable (else a different error owns it) and not
+                        // narrowed to drop undefined.
+                        if (getCallSignaturesOfType(propType).isNotEmpty() &&
+                            !propertyAccessNarrowedNonNull(calleeExpr, propType)) {
+                            val start = calleeExpr.pos
+                            val length = expressionTrueEnd(calleeExpr) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot invoke an object which is possibly 'undefined'.",
+                                    category = DiagnosticCategory.Error, code = 2722,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                ))
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // TS2347: "Untyped function calls may not accept type arguments." Fires when a
         // call like `untypedVar.method<T>(arg)` has explicit type args on a callee that
         // resolves to `any`. Narrowly gated on the chain root being an Identifier that
@@ -119818,6 +119933,22 @@ interface DataView {
                             return listOf(header)
                         }
                     }
+                }
+            }
+            // Union-source return drill: when the source return is a union (e.g.
+            // `string | undefined`) and the target is not, append the FIRST failing
+            // member so the chain shows `Type 'undefined' is not assignable to type
+            // 'string'.` after the union line (interfaceClassMerging's method-return
+            // mismatch). The caller indents these by +2 spaces.
+            if (sourceReturn is Type.Union && targetReturn !is Type.Union) {
+                val failing = sourceReturn.types.firstOrNull {
+                    !checkTypeRelatedTo(it, targetReturn, assignableRelation)
+                }
+                if (failing != null) {
+                    return listOf(
+                        "  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.",
+                        "    Type '${typeToString(failing)}' is not assignable to type '${typeToString(targetReturn)}'.",
+                    )
                 }
             }
             return listOf("  Type '${typeToString(sourceReturn)}' is not assignable to type '${typeToString(targetReturn)}'.")

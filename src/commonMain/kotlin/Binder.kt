@@ -416,6 +416,10 @@ class Binder(private val options: CompilerOptions) {
         // Interface + Function (function + interface with same name: constructor pattern)
         if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Function)) return true
         if (existing.hasAny(SymbolFlags.Function) && incoming.hasAny(SymbolFlags.Interface)) return true
+        // Class + Interface (declaration merging — interface members merge into the class
+        // instance type, e.g. `interface Foo { method(): void } class Foo { ... }`).
+        if (existing.hasAny(SymbolFlags.Class) && incoming.hasAny(SymbolFlags.Interface)) return true
+        if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Class)) return true
         // Enum + Module
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Module)) return true
         if (existing.hasAny(SymbolFlags.Module) && incoming.hasAny(SymbolFlags.Enum)) return true
