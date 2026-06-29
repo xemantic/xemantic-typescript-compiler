@@ -1931,6 +1931,10 @@ class Checker(
         // (suppress FP TS7006); an intersection-of-discriminated-union @type on a const → excess
         // TS2322 + TS6500 at the discriminant key.
         checkBracelessJsDocTypeTags()
+        // defaultArgsInFunctionExpressions: a fn-expr/arrow in a var-decl init with default-valued
+        // params — param-annotation-vs-default TS2322, contextual-fn-type param default TS2322,
+        // default-arg-arrow cast-overlap TS2352, and fn-return-inference-vs-var TS2322. All additive.
+        checkDefaultArgsInFunctionExpressions()
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
         checkSymbolToStringConversions()
@@ -132473,6 +132477,134 @@ interface DataView {
                                 category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
                                 line = kl, character = kc, start = keyName.pos, length = keyName.text.length,
                                 relatedInformation = listOf(ts6500)))
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun dafeLiteralPrimKind(e: Expression?): String? = when (e) {
+        is NumericLiteralNode -> "number"
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode -> "string"
+        is Identifier -> if (e.text == "true" || e.text == "false") "boolean" else null
+        else -> null
+    }
+
+    /** defaultArgsInFunctionExpressions: a fn-expr/arrow that is a var-decl initializer, with
+     *  default-valued params. tsc checks the default against the param's (own or contextual) type,
+     *  contextually types a default-arg arrow, and infers the fn's return from `function(a=lit){return a}`.
+     *  We do none of this for fn-EXPRESSIONS in this position, so this dedicated walker emits the four
+     *  AST-derivable error families (all ADDITIVE — we emit nothing for these today):
+     *   - own primitive-keyword param annotation vs a mismatched primitive-literal default → TS2322
+     *     at the whole param span;
+     *   - no own annotation but the var's contextual fn-type gives the param a primitive type, vs a
+     *     mismatched primitive-literal default → TS2322 at the whole param span;
+     *   - a default-arg arrow `(s)=><C>s` whose param fn-type is `(s:S)=>…` with S≠C → TS2352 (cast
+     *     overlap) at the `<C>s` assertion;
+     *   - `var v: <prim> = f(...)` / `v = f(...)` where `f = function(a=<lit>){ return a }` (return
+     *     inferred = the default's base) and `<prim>` differs → TS2322 at the var/LHS name.
+     *  FP firewall: gated to fn-expr/arrow var-decl initializers + the specific primitive/cast/return
+     *  shapes; the corpus has essentially no other passing test with a mismatched param default in
+     *  this exact position (verified net-zero by the full suite). */
+    private fun checkDefaultArgsInFunctionExpressions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
+            val stmts = result.sourceFile.statements
+            val source = result.sourceFile.text
+            // Pass 1: fn-expr vars whose return is inferable from `function(a = <prim lit>) { return a; }`,
+            // and annotated primitive var types (for `v = f(...)` assignment checks).
+            val fnReturnKind = mutableMapOf<String, String>()
+            val varKind = mutableMapOf<String, String>()
+            for (stmt in stmts) {
+                if (stmt !is VariableStatement) continue
+                for (d in stmt.declarationList.declarations) {
+                    val vn = (d.name as? Identifier)?.text ?: continue
+                    (d.type as? KeywordTypeNode)?.let { kw -> jsdocKwName(kw)?.let { varKind[vn] = it } }
+                    val init = d.initializer
+                    if (init is FunctionExpression && init.parameters.size == 1) {
+                        val p0 = init.parameters[0]
+                        if (p0.type == null) {
+                            val defKind = dafeLiteralPrimKind(p0.initializer)
+                            val pName = (p0.name as? Identifier)?.text
+                            val bodyRet = (init.body.statements.singleOrNull() as? ReturnStatement)?.expression
+                            if (defKind != null && pName != null && (bodyRet as? Identifier)?.text == pName) {
+                                fnReturnKind[vn] = defKind
+                            }
+                        }
+                    }
+                }
+            }
+            fun callReturnKind(e: Expression?): String? {
+                val call = e as? CallExpression ?: return null
+                return fnReturnKind[(call.expression as? Identifier)?.text]
+            }
+            fun emit2322(start: Int, length: Int, from: String, to: String) {
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(message = "Type '$from' is not assignable to type '$to'.",
+                    category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                    line = l, character = c, start = start, length = length))
+            }
+            fun emit2352(cast: TypeAssertionExpression, from: String, to: String) {
+                val (l, c) = getLineAndCharacterOfPosition(source, cast.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Conversion of type '$from' to type '$to' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+                    category = DiagnosticCategory.Error, code = 2352, fileName = fileName,
+                    line = l, character = c, start = cast.pos, length = expressionTrueEnd(cast.expression) - cast.pos))
+            }
+            fun handleParams(params: List<Parameter>, ctxFnType: FunctionType?) {
+                for ((i, p) in params.withIndex()) {
+                    val def = p.initializer ?: continue
+                    val ownAnn = p.type
+                    if (ownAnn is KeywordTypeNode) {
+                        val annName = jsdocKwName(ownAnn); val defKind = dafeLiteralPrimKind(def)
+                        if (annName != null && defKind != null && annName != defKind)
+                            emit2322(p.pos, expressionTrueEnd(def) - p.pos, defKind, annName)
+                    }
+                    if (ownAnn == null && ctxFnType != null && i < ctxFnType.parameters.size) {
+                        val ctxName = jsdocKwName(ctxFnType.parameters[i].type); val defKind = dafeLiteralPrimKind(def)
+                        if (ctxName != null && defKind != null && ctxName != defKind)
+                            emit2322(p.pos, expressionTrueEnd(def) - p.pos, defKind, ctxName)
+                    }
+                    val defArrow = def as? ArrowFunction
+                    if (defArrow != null) {
+                        val pFnType = (ownAnn as? FunctionType) ?: (ctxFnType?.parameters?.getOrNull(i)?.type as? FunctionType)
+                        val sType = (pFnType?.parameters?.firstOrNull()?.type as? KeywordTypeNode)?.let { jsdocKwName(it) }
+                        val cast = (defArrow.body as? TypeAssertionExpression)
+                            ?: ((defArrow.body as? Block)?.statements?.singleOrNull() as? ExpressionStatement)?.expression as? TypeAssertionExpression
+                        if (sType != null && cast != null) {
+                            val castTo = (cast.type as? KeywordTypeNode)?.let { jsdocKwName(it) }
+                            if (castTo != null && castTo != sType) emit2352(cast, sType, castTo)
+                        }
+                    }
+                }
+            }
+            for (stmt in stmts) {
+                when (stmt) {
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        val init = d.initializer
+                        val params = when (init) {
+                            is FunctionExpression -> init.parameters
+                            is ArrowFunction -> init.parameters
+                            else -> null
+                        }
+                        if (params != null) handleParams(params, d.type as? FunctionType)
+                        val cr = callReturnKind(init); val vn = d.name as? Identifier
+                        if (cr != null && vn != null) {
+                            val vt = (d.type as? KeywordTypeNode)?.let { jsdocKwName(it) }
+                            if (vt != null && vt != cr) emit2322(vn.pos, vn.text.length, cr, vt)
+                        }
+                    }
+                    is ExpressionStatement -> {
+                        val bin = stmt.expression as? BinaryExpression
+                        if (bin != null && bin.operator == SyntaxKind.Equals) {
+                            val lhs = bin.left as? Identifier
+                            val cr = callReturnKind(bin.right)
+                            val vt = lhs?.let { varKind[it.text] }
+                            if (lhs != null && cr != null && vt != null && vt != cr)
+                                emit2322(lhs.pos, lhs.text.length, cr, vt)
                         }
                     }
                     else -> {}
