@@ -381,6 +381,17 @@ class Checker(
      *  to resolve function-scoped variable types from their type annotations. */
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
+    /**
+     * Names that a function-body-local variable declaration SHADOWS from an inherited
+     * (outer/file-level) binding. Inside such a body, `currentLocalTypes[name]` holds the
+     * LOCAL type, but the assignment-LHS resolution otherwise consults `globals[name]`
+     * first (the outer declaration). Membership here tells those sites to prefer the
+     * local binding. Bounded to genuine shadows (a function-local with the same name as
+     * an outer var — rare), so the blast radius is minimal. Saved/restored per function
+     * body in BOTH the assignability and property-access passes.
+     */
+    private var currentShadowedNames: MutableSet<String> = mutableSetOf()
+
     /** B263: names declared ONLY in typeRoot package files that did NOT resolve from the
      *  `types` compiler option — stripped from the unresolved-name scope so uses of them
      *  correctly fire TS2304/TS2552. Populated by [checkTypeLibraryEntryPoints]
@@ -77331,6 +77342,46 @@ interface DataView {
         }
     }
 
+    /**
+     * Apply function-body-local variable shadowing to the (already-copied)
+     * `currentLocalTypes`/`currentShadowedNames` scope. For each TOP-LEVEL local
+     * declaration whose name is currently bound (inherited from an outer/file-level
+     * binding), record the name in `currentShadowedNames` and REPLACE the inherited
+     * type with the LOCAL annotation's type (or remove the entry so the body walk
+     * re-records it for an inferred local). Top-level only — block-scoped let/const in
+     * nested blocks do not shadow at the function level. Bounded to genuine shadows.
+     */
+    private fun applyBodyLocalShadowing(statements: List<Statement>, paramNames: Set<String>) {
+        for (s in statements) {
+            if (s !is VariableStatement) continue
+            for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                // A `var x` that redeclares a PARAM `x` of the SAME function is a
+                // redeclaration (first/param declaration wins, TS2403), NOT an
+                // outer-scope shadow — keep the param type. (functionArgShadowing:
+                // `function foo(x: A){ var x: B = ...; x.bar() }` keeps `x: A`.)
+                if (nm in paramNames) continue
+                // A genuine shadow = the name is ALSO bound at an outer level. The
+                // assignability pass records file-level vars into currentLocalTypes; the
+                // property-access pass does not (file-level vars live only in `globals`
+                // there). Check BOTH so the shadow is detected in either pass. A pure
+                // local (no outer binding) is left untouched (no member-access FP surface).
+                if (!currentLocalTypes.containsKey(nm) && !globals.containsKey(nm)) continue
+                currentShadowedNames.add(nm)
+                val ann = d.type
+                if (ann != null) {
+                    try {
+                        val t = getTypeFromTypeNode(ann)
+                        if (t !== anyType && t !== errorType) currentLocalTypes[nm] = t
+                        else currentLocalTypes.remove(nm)
+                    } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); currentLocalTypes.remove(nm) }
+                } else {
+                    currentLocalTypes.remove(nm)
+                }
+            }
+        }
+    }
+
     private fun checkFunctionBody(
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
@@ -77349,6 +77400,9 @@ interface DataView {
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
             currentLocalTypes = currentLocalTypes.toMutableMap()
+            val savedShadowed = currentShadowedNames
+            currentShadowedNames = currentShadowedNames.toMutableSet()
+            applyBodyLocalShadowing(it.statements, parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
             // 16.4dp: Non-arrow function body — `arguments` binds to the implicit
             // IArguments parameter here. `checkAssignmentExpression` consults this
             // flag to emit TS2322 for `arguments = <primitive>`.
@@ -77450,6 +77504,7 @@ interface DataView {
             }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
+            currentShadowedNames = savedShadowed
         }
     }
 
@@ -82327,14 +82382,21 @@ interface DataView {
                 try {
                     var targetType: Type? = null
                     var typeAnnotation: TypeNode? = null
-                    val symbol = globals[target.text]
-                    if (symbol != null) {
-                        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-                        typeAnnotation = (decl as? VariableDeclaration)?.type
-                            ?: (decl as? Parameter)?.type
-                            ?: (decl as? PropertyDeclaration)?.type
-                        if (typeAnnotation != null) {
-                            targetType = getTypeFromTypeNode(typeAnnotation)
+                    // Scope shadowing: a function-body-local var (tracked in
+                    // currentShadowedNames) shadows the outer/global binding of the same
+                    // name — prefer the LOCAL type, do NOT consult globals (which would
+                    // resolve the outer declaration).
+                    val isShadowed = target.text in currentShadowedNames
+                    if (!isShadowed) {
+                        val symbol = globals[target.text]
+                        if (symbol != null) {
+                            val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+                            typeAnnotation = (decl as? VariableDeclaration)?.type
+                                ?: (decl as? Parameter)?.type
+                                ?: (decl as? PropertyDeclaration)?.type
+                            if (typeAnnotation != null) {
+                                targetType = getTypeFromTypeNode(typeAnnotation)
+                            }
                         }
                     }
                     // Also check local type scope for function-local variables
@@ -105455,16 +105517,20 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     val savedEnumParams = currentEnumConstrainedParams
+                    val savedShadowed = currentShadowedNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
+                    currentShadowedNames = currentShadowedNames.toMutableSet()
                     try {
                         populateParameterLocalTypes(stmt.parameters)
+                        applyBodyLocalShadowing(body.statements, stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
                         checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
                         currentEnumConstrainedParams = savedEnumParams
+                        currentShadowedNames = savedShadowed
                     }
                 }
             }
@@ -107857,6 +107923,20 @@ interface DataView {
         val ts2576Start = ts2576SquiggleStart
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // Scope shadowing: a function-local var (currentShadowedNames) shadows an outer
+        // binding. The symbol-based branches below resolve the receiver via globals/
+        // currentFileLocals (the OUTER declaration) and would FP TS2339 for a member
+        // that exists on the LOCAL type (intersectionsAndOptionalProperties: a local
+        // `let x: To` shadowing a file-level `declare let x: {...}`). Resolve against the
+        // local type and bail when the member is present. Bounded to shadowed names.
+        if (objectExpr is Identifier && !isThisAccess && objectExpr.text in currentShadowedNames) {
+            val localType = currentLocalTypes[objectExpr.text]
+            if (localType != null && localType !== anyType && localType !== errorType) {
+                val app = try { getApparentType(localType) } catch (_: Throwable) { null }
+                if (app != null && getPropertyOfType(app, propName) != null) return
+            }
+        }
 
         // B589 (bluebirdStaticThis): a receiver Identifier that is a USER clodule (top-level
         // `class X` + `declare namespace X`) SHADOWING a builtin lib global (e.g. `Promise`)
@@ -118311,8 +118391,20 @@ interface DataView {
         if (target is Type.Intersection) {
             return target.types.all { checkTypeRelatedTo(source, it, relation) }
         }
-        // Intersection source: some constituent must be related to target
+        // Intersection source: some constituent must be related to target.
+        // BUT the "any constituent relates" shortcut is too lenient — tsc merges the
+        // intersection's members and checks them structurally. A constituent can satisfy
+        // the target while ANOTHER constituent contributes a PRESENT property whose type
+        // contradicts the target (intersectionsAndOptionalProperties: `{a:null} & {b:string}`
+        // relates via `{b:string}`, but the merged `a:null` ⊄ `number | undefined`). Catch
+        // that case: a property present in the merged intersection that fails the target is
+        // a genuine mismatch. Bounded to a plain (non-tuple) object target to keep the FP
+        // surface minimal (tuple/array targets keep the prior behavior).
         if (source is Type.Intersection) {
+            if (target is Type.Object && target.tupleElementTypes == null &&
+                intersectionMergedContradictsTarget(source, target, relation)) {
+                return false
+            }
             return source.types.any { checkTypeRelatedTo(it, target, relation) }
         }
         // Generic type references with matching target: compare type arguments directly.
@@ -118632,8 +118724,8 @@ interface DataView {
             }
             // Compare property types
             val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
-            val targetPropType = getPropertyTypeForRelation(target, targetProp)
             val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
+            val targetPropType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, effectiveSource)
             if (!checkTypeRelatedTo(effectiveSource, targetPropType, relation)) return false
         }
         return true
@@ -122288,8 +122380,8 @@ interface DataView {
                 // "Types of property 'x' are incompatible. Type 'string' is not
                 // assignable to type 'number'." instead of falling out silently.
                 val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
-                val targetPropType = getPropertyTypeForRelation(target, targetProp)
                 val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
+                val targetPropType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, effectiveSource)
                 val sourceWidened = effectiveSource !== sourcePropType
                 if (!checkTypeRelatedTo(effectiveSource, targetPropType, assignableRelation)) {
                     incompatible.add(IncompatibleProp(targetName, effectiveSource, targetPropType, sourceWidened))
@@ -122518,6 +122610,38 @@ interface DataView {
      * in the corpus). When the chain doesn't find an incompatible property, falls
      * through to the missing-property path.
      */
+    /**
+     * Returns true when the MERGED members of an intersection source contradict a target
+     * property — i.e. a property PRESENT in some constituent has a type that fails against
+     * the (optional-widened) target property type. Used to tighten the "any constituent
+     * relates" intersection-source relation (which is too lenient). Bounded to PRESENT
+     * properties: a missing property is left to the constituent/structural path, so this
+     * only ADDS failures for genuinely-incompatible present members (low FP surface).
+     */
+    private fun intersectionMergedContradictsTarget(
+        source: Type.Intersection, target: Type.Object, relation: Relation,
+    ): Boolean {
+        val mergedMembers = mutableMapOf<String, Symbol>()
+        for (c in source.types) {
+            if (c is Type.Object) {
+                try { resolveStructuredTypeMembers(c) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
+                c.members?.forEach { (n, s) -> if (n !in mergedMembers) mergedMembers[n] = s }
+            }
+        }
+        if (mergedMembers.isEmpty()) return false
+        try { resolveStructuredTypeMembers(target) } catch (e: StackOverflowError) { reportCheckerStackOverflow(e); return false }
+        val targetProps = target.properties ?: return false
+        for (targetProp in targetProps) {
+            if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            val sourceProp = mergedMembers[targetProp.name] ?: continue // missing → not a contradiction here
+            val srcType = getTypeOfSymbol(sourceProp)
+            val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+            if (srcType === errorType || tgtType === errorType || srcType === anyType || tgtType === anyType) continue
+            if (!checkTypeRelatedTo(srcType, tgtType, relation)) return true
+        }
+        return false
+    }
+
     private fun getIntersectionPropertyElaborationChain(
         source: Type.Intersection,
         target: Type.Object,
@@ -122546,7 +122670,7 @@ interface DataView {
                 val sourceProp = mergedMembers[targetProp.name] ?: continue
                 if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
                 val srcType = getTypeOfSymbol(sourceProp)
-                val tgtType = getTypeOfSymbol(targetProp)
+                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
                 if (srcType === errorType || tgtType === errorType) continue
                 if (!checkTypeRelatedTo(srcType, tgtType, assignableRelation)) {
                     val propPath = if (path.isEmpty()) targetProp.name else "$path.${targetProp.name}"
@@ -122763,6 +122887,33 @@ interface DataView {
         if (isOptionalProperty(targetProp)) return sourceType
         if (typeIncludesUndefinedOrTop(sourceType)) return sourceType
         return getUnionType(listOf(sourceType, undefinedType))
+    }
+
+    /**
+     * An OPTIONAL target property `a?: T` has the assignability type `T | undefined`
+     * under `strictNullChecks && !exactOptionalPropertyTypes` (tsc `addOptionality`).
+     * So a `null`/`string` source value is compared against — and elaborates as —
+     * `T | undefined` (intersectionsAndOptionalProperties: `null` ≁ `number | undefined`).
+     * Under exactOptionalPropertyTypes the optional `?` does NOT admit `undefined`, so the
+     * bare type is kept. FP-safe: only changes the RELATION result for an `undefined`
+     * source (which then correctly PASSES, matching tsc), and the DISPLAY to add the
+     * `| undefined` tsc shows for non-exact optional targets.
+     */
+    private fun widenOptionalTargetPropType(targetType: Type, targetProp: Symbol, sourceType: Type): Type {
+        if (!strictNullChecks) return targetType
+        if (options.exactOptionalPropertyTypes) return targetType
+        if (!isOptionalProperty(targetProp)) return targetType
+        if (typeIncludesUndefinedOrTop(targetType)) return targetType
+        // tsc surfaces the optional `| undefined` in the leaf ONLY when the SOURCE is
+        // nullish (`null` → `number | undefined`). A concrete non-nullish source
+        // elaborates against the BARE prop type (`boolean` ≁ `string`, not `string |
+        // undefined`) — intersectionsAndOptionalProperties (null source, widened) vs
+        // intersectionPropertyCheck (boolean source, bare). It is also the right RELATION
+        // type: an `undefined` source then correctly passes against `T | undefined`.
+        val srcNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) ||
+            (sourceType is Type.Union && sourceType.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) })
+        if (!srcNullish) return targetType
+        return getUnionType(listOf(targetType, undefinedType))
     }
 
     /**
