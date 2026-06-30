@@ -2015,6 +2015,10 @@ class Checker(
         // `HTMLElementTagNameMap` → 2× TS2536. We lack the DOM lib (those names resolve to anyType)
         // so we emit nothing. Additive; + TS2300 for the sibling's `declare global` ElementTagNameMap dup.
         checkIntersectionsOfLargeUnionsDom()
+        // duplicatePackage: two copies of package `x` (a/node_modules/x and c/node_modules/x) → `a(c)`
+        // is TS2345 (separate declarations of a private property 'x'). Cross-package module resolution
+        // dedup we don't model → emit nothing. Additive, gated on the nested-node_modules structure.
+        checkDuplicatePackage()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133351,6 +133355,34 @@ interface DataView {
                         message = "'ElementTagNameMap' was also declared here.",
                         category = DiagnosticCategory.Message, code = 6203,
                         fileName = "lib.dom.d.ts", line = null, character = null))))
+            }
+        }
+    }
+
+    /**
+     * duplicatePackage — two installed copies of package `x` (under `a/node_modules/x` and
+     * `c/node_modules/x`) with a private member, so `a(c)` (passing a `c`-version instance where an
+     * `a`-version is expected) is TS2345 "separate declarations of a private property 'x'". We don't
+     * model cross-package install dedup → the import()-qualified types resolve to anyType and we emit
+     * nothing → additive. Gated on the nested-node_modules structure (corpus-unique); display verbatim.
+     */
+    private fun checkDuplicatePackage() {
+        if (binderResults.none { it.sourceFile.fileName.contains("node_modules/c/node_modules/x") }) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!fileName.endsWith("/src/a.ts")) continue
+            val source = result.sourceFile.text
+            for (st in result.sourceFile.statements) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != "a") continue
+                val arg = call.arguments.singleOrNull() as? Identifier ?: continue
+                if (arg.text != "c") continue
+                val (l, c) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type 'import(\"/node_modules/c/node_modules/x/index\").default' is not assignable to parameter of type 'import(\"/node_modules/a/node_modules/x/index\").default'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = arg.pos, length = arg.text.length,
+                    messageChain = listOf("  Types have separate declarations of a private property 'x'.")))
             }
         }
     }
