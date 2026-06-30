@@ -5185,18 +5185,40 @@ class Parser(
         // NOT consume `{` — leave it for parseJsxAttributes to treat as a
         // (malformed) spread attribute `{...expr}`, which will then emit
         // TS1005 "'...' expected." against whatever follows the `{`.
+        val afterLt = scanner.getPrevTokenEnd() // position right after the consumed `<`
+        var tagFailed = false
         val tagName = if (token == SyntaxKind.OpenBrace) {
             val emptyTagPos = scanner.getPrevTokenEnd()
             reportError("Identifier expected.", code = 1003)
             Identifier(text = "", pos = emptyTagPos, end = emptyTagPos + 1)
+        } else if (!isIdentifierToken(token) && !isKeyword()) {
+            // tsc parseJsxTagName → parseIdentifierName: a tag token that is NOT an
+            // identifier-or-keyword (a number, `<`, EOF, string, …) emits TS1003
+            // "Identifier expected." at the offending token and leaves it UNCONSUMED,
+            // yielding a zero-width missing tag. The element recovers as self-closing
+            // and the offending token re-parses as an ordinary expression.
+            reportError("Identifier expected.", code = 1003)
+            tagFailed = true
+            Identifier(text = "", pos = afterLt, end = afterLt)
         } else {
             parseJsxTagName()
         }
 
-        // Parse attributes
-        val attributes = parseJsxAttributes()
+        // Parse attributes. tsc's parseList(JsxAttributes) aborts immediately on a
+        // non-`{`/non-identifier token, so a failed tag never consumes the offending
+        // token as a boolean-attribute shorthand.
+        val attributes = if (tagFailed) emptyList() else parseJsxAttributes()
 
-        return if (token == SyntaxKind.Slash) {
+        return if (tagFailed) {
+            // tsc else-branch: a failed tag → self-closing element. `/`- and `>`-expected
+            // both land at the (unconsumed) offending token, sharing the TS1003's start,
+            // so the same-start dedup suppresses both — no extra diagnostics. The token
+            // stays unconsumed for the surrounding expression parser to re-scan.
+            parseExpected(SyntaxKind.Slash)
+            parseExpected(SyntaxKind.GreaterThan)
+            emitTs17004IfNeeded(pos, isOutermostJsx)
+            JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = afterLt)
+        } else if (token == SyntaxKind.Slash) {
             // Self-closing: <Tag attrs/>
             nextToken() // consume /
             parseExpected(SyntaxKind.GreaterThan)
