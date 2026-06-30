@@ -5186,19 +5186,23 @@ class Parser(
         // (malformed) spread attribute `{...expr}`, which will then emit
         // TS1005 "'...' expected." against whatever follows the `{`.
         val afterLt = scanner.getPrevTokenEnd() // position right after the consumed `<`
-        var tagFailed = false
+        // A JSX tag token that is NOT an identifier/keyword nor `{` (a number, `<`, EOF,
+        // string, …) is a FAILED tag: tsc parseJsxElementName→parseIdentifierName emits
+        // TS1003 "Identifier expected." at the offending token, leaves it UNCONSUMED, and
+        // recovers as a self-closing element; the token re-parses as an ordinary
+        // expression. The TS17004 span is end-of-`<` whether emitted before or after the
+        // (non-advancing) parseExpected recovery, so emit it FIRST here: tsc emits TS17004
+        // from the CHECKER, keeping its TS1003 and any later same-position diagnostic (e.g.
+        // a const-decl `;`-expected) adjacent so they same-start-dedup. Emitting our
+        // parser-side TS17004 AFTER the TS1003 would interleave it and break that dedup.
+        val tagFailed = token != SyntaxKind.OpenBrace && !isIdentifierToken(token) && !isKeyword()
+        if (tagFailed) emitTs17004IfNeeded(pos, isOutermostJsx)
         val tagName = if (token == SyntaxKind.OpenBrace) {
             val emptyTagPos = scanner.getPrevTokenEnd()
             reportError("Identifier expected.", code = 1003)
             Identifier(text = "", pos = emptyTagPos, end = emptyTagPos + 1)
-        } else if (!isIdentifierToken(token) && !isKeyword()) {
-            // tsc parseJsxTagName → parseIdentifierName: a tag token that is NOT an
-            // identifier-or-keyword (a number, `<`, EOF, string, …) emits TS1003
-            // "Identifier expected." at the offending token and leaves it UNCONSUMED,
-            // yielding a zero-width missing tag. The element recovers as self-closing
-            // and the offending token re-parses as an ordinary expression.
+        } else if (tagFailed) {
             reportError("Identifier expected.", code = 1003)
-            tagFailed = true
             Identifier(text = "", pos = afterLt, end = afterLt)
         } else {
             parseJsxTagName()
@@ -5216,7 +5220,6 @@ class Parser(
             // stays unconsumed for the surrounding expression parser to re-scan.
             parseExpected(SyntaxKind.Slash)
             parseExpected(SyntaxKind.GreaterThan)
-            emitTs17004IfNeeded(pos, isOutermostJsx)
             JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = afterLt)
         } else if (token == SyntaxKind.Slash) {
             // Self-closing: <Tag attrs/>

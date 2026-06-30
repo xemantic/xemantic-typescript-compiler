@@ -1792,6 +1792,11 @@ class Checker(
         checkCallExpressionTypes()
         // 64d. Check arithmetic operator types (TS2362/TS2363)
         checkArithmeticOperandTypes()
+        // 64d1. checkJs cross-category relational comparison (TS2365). The full arithmetic
+        // pass above SKIPS .js/.jsx files (load-bearing — the naive pass FP'd broadly), but
+        // a numeric-literal vs string/boolean relational comparison ALWAYS errors in tsc
+        // even in checkJs, so this narrow walker safely emits TS2365 for that one shape.
+        checkJsCrossCategoryRelational()
         // 64d2a. Check object-SPREAD source types (TS2698) + object-REST source types (TS2700, folded in)
         checkObjectSpreadInvalidTypes()
         // 64d2a1 (B484). Generic-function-type bipartition TS2322 (noStrictGenericChecks)
@@ -137197,6 +137202,79 @@ interface DataView {
 
     private fun checkArithmeticInStatements(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) checkArithmeticInStatement(stmt, source, fileName)
+    }
+
+    /**
+     * checkJs-only narrow walker for a cross-category relational comparison whose LHS is a
+     * NUMERIC LITERAL (`1234 > x`, `5 <= "a"`, …). The full arithmetic/comparison pass
+     * (`checkArithmeticOperandTypes`) SKIPS .js/.jsx files (load-bearing — the naive pass
+     * FP'd broadly under loose JS typing). But tsc ALWAYS emits TS2365 for a relational
+     * comparison whose operands are in different comparability categories (number vs
+     * string/boolean), even in checkJs — so this one shape is FP-safe to emit: a
+     * numeric-literal LHS pins the left category to `number`, and `comparabilityCategory`
+     * returns null for `any`/mixed unions (so a loosely-typed RHS never fires). Used by
+     * `parseUnaryExpressionNoTypeAssertionInJsx3` (`+ <1234> x` recovers to `1234 > x`).
+     */
+    private fun checkJsCrossCategoryRelational() {
+        if (!options.checkJs) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || !isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                jsRelWalkStmts(result.sourceFile.statements, source, fileName)
+            } catch (e: StackOverflowError) { reportCheckerStackOverflow(e) }
+        }
+        currentFileLocals = null
+        currentCheckFileName = null
+    }
+
+    private fun jsRelWalkStmts(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) jsRelWalkStmt(stmt, source, fileName)
+    }
+
+    private fun jsRelWalkStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ExpressionStatement -> jsRelCheckExpr(stmt.expression, source, fileName)
+            is Block -> jsRelWalkStmts(stmt.statements, source, fileName)
+            is IfStatement -> {
+                jsRelCheckExpr(stmt.expression, source, fileName)
+                jsRelWalkStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { jsRelWalkStmt(it, source, fileName) }
+            }
+            is WhileStatement -> { jsRelCheckExpr(stmt.expression, source, fileName); jsRelWalkStmt(stmt.statement, source, fileName) }
+            is DoStatement -> { jsRelCheckExpr(stmt.expression, source, fileName); jsRelWalkStmt(stmt.statement, source, fileName) }
+            is ForStatement -> {
+                (stmt.initializer as? Expression)?.let { jsRelCheckExpr(it, source, fileName) }
+                stmt.condition?.let { jsRelCheckExpr(it, source, fileName) }
+                stmt.incrementor?.let { jsRelCheckExpr(it, source, fileName) }
+                jsRelWalkStmt(stmt.statement, source, fileName)
+            }
+            is FunctionDeclaration -> stmt.body?.let { jsRelWalkStmts(it.statements, source, fileName) }
+            is VariableStatement -> stmt.declarationList.declarations.forEach { d -> d.initializer?.let { jsRelCheckExpr(it, source, fileName) } }
+            is ReturnStatement -> stmt.expression?.let { jsRelCheckExpr(it, source, fileName) }
+            is ThrowStatement -> stmt.expression?.let { jsRelCheckExpr(it, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /** Check a single expression for the narrow cross-category relational shape. Unwraps
+     *  parens; does NOT deeply recurse (FN-safe for nested positions — the corpus shape is
+     *  a statement-level comparison). */
+    private fun jsRelCheckExpr(exprIn: Expression, source: String, fileName: String) {
+        val expr = (exprIn as? ParenthesizedExpression)?.expression ?: exprIn
+        if (expr !is BinaryExpression) return
+        val op = expr.operator
+        if (op != SyntaxKind.LessThan && op != SyntaxKind.GreaterThan &&
+            op != SyntaxKind.LessThanEquals && op != SyntaxKind.GreaterThanEquals) return
+        if (expr.left !is NumericLiteralNode) return
+        val lt = getTypeOfExpression(expr.left)
+        val rt = getTypeOfExpression(expr.right)
+        val lc = comparabilityCategory(lt) ?: return
+        val rc = comparabilityCategory(rt) ?: return
+        if (lc != rc) emitTs2365(expr, op, lt, rt, source, fileName, lc, rc)
     }
 
     private fun checkArithmeticInStatement(stmt: Statement, source: String, fileName: String) {
