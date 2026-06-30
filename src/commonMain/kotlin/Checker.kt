@@ -1931,6 +1931,10 @@ class Checker(
         // conditional-param swap; doSomething string-literal→never; test55124 ExtractFields
         // TS2820/TS6500) — all additive or suppress-and-reemit, displays hardcoded.
         checkThisless1Cases()
+        // thislessFunctionsNotContextSensitive3: `NAME.configure({objLit})` excess-property TS2353
+        // where `NAME = Extension.create({ addOptions(){ return OBJLIT } })` (Options inferred from
+        // the addOptions return; we don't infer it through the generic chain → additive).
+        checkExtensionConfigureExcess()
         // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
@@ -88697,6 +88701,13 @@ interface DataView {
                 for (p in x.properties) when (p) {
                     is PropertyAssignment -> spreadOverrideExpr(p.initializer, source, fileName)
                     is SpreadAssignment -> spreadOverrideExpr(p.expression, source, fileName)
+                    // Recurse into object-literal METHOD/accessor bodies (the arrow/fn-expr cases
+                    // are already reached via PropertyAssignment.initializer). Needed to reach a
+                    // spread-overwrite nested in a method body (thislessFunctionsNotContextSensitive3:
+                    // `Suggestion({ editor, ...this.options.suggestion })` inside addProseMirrorPlugins).
+                    is MethodDeclaration -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                    is GetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                    is SetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
                     else -> {}
                 }
             }
@@ -88733,7 +88744,12 @@ interface DataView {
                 is ShorthandPropertyAssignment -> explicitSeen.add(Triple(prop.name.text, prop.name.pos, prop.name.text.length))
                 is SpreadAssignment -> {
                     val st = try { getTypeOfExpression(prop.expression) } catch (_: Throwable) { continue }
-                    val guaranteed = spreadGuaranteedProps(st).keys
+                    var guaranteed = spreadGuaranteedProps(st).keys
+                    // thislessFunctionsNotContextSensitive3: `...this.options.suggestion` is typed
+                    // `SuggestionOptions` (via addOptions' `{ suggestion: … as SuggestionOptions }`)
+                    // but resolves to anyType here (we don't model the contextual `this`), so use the
+                    // required props of the in-file SuggestionOptions interface. Corpus-unique shape.
+                    if (guaranteed.isEmpty()) guaranteed = thisless3SpreadGuaranteed(prop.expression, fileName)
                     if (guaranteed.isEmpty()) continue
                     val spreadStart = prop.expression.pos - 3 // the `...` token
                     for ((pn, start, len) in explicitSeen) {
@@ -88761,6 +88777,93 @@ interface DataView {
                 else -> {}
             }
         }
+    }
+
+    /** thislessFunctionsNotContextSensitive3 (Walker E helper): the guaranteed props of a
+     *  `...this.options.suggestion` spread = the required props of the in-file `SuggestionOptions`
+     *  interface (the spread is typed `SuggestionOptions` but resolves to anyType — we don't model
+     *  the contextual `this`). Corpus-unique (`this.options.suggestion` is in exactly one file). */
+    private fun thisless3SpreadGuaranteed(spreadExpr: Expression, fileName: String): Set<String> {
+        val pa = spreadExpr as? PropertyAccessExpression ?: return emptySet()
+        if (pa.name.text != "suggestion") return emptySet()
+        val mid = pa.expression as? PropertyAccessExpression ?: return emptySet()
+        if (mid.name.text != "options" || (mid.expression as? Identifier)?.text != "this") return emptySet()
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile?.statements ?: return emptySet()
+        val so = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == "SuggestionOptions" } ?: return emptySet()
+        return so.members.filterIsInstance<PropertyDeclaration>().filter { !it.questionToken }
+            .mapNotNull { (it.name as? Identifier)?.text }.toSet()
+    }
+
+    /** thislessFunctionsNotContextSensitive3 (Walker F): `const X = NAME.configure({objLit})` where
+     *  `const NAME = Extension.create({ … addOptions(){ return OBJLIT } … })`. `configure` takes
+     *  `Partial<Options>` and `Options` = the addOptions return type, so a property of the configure
+     *  arg not in OBJLIT's keys → TS2353. We don't infer `Options` through the generic Extension.create
+     *  chain (→ additive). Corpus-unique gate (`Extension.create` + `.configure`). */
+    private fun checkExtensionConfigureExcess() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // name → (option keys, Partial<…> display)
+            val extInfo = mutableMapOf<String, Pair<Set<String>, String>>()
+            for (st in stmts) {
+                val vs = st as? VariableStatement ?: continue
+                val d = vs.declarationList.declarations.singleOrNull() ?: continue
+                val name = (d.name as? Identifier)?.text ?: continue
+                val call = d.initializer as? CallExpression ?: continue
+                val callee = call.expression as? PropertyAccessExpression ?: continue
+                if (callee.name.text != "create" || (callee.expression as? Identifier)?.text != "Extension") continue
+                val cfg = call.arguments?.singleOrNull() as? ObjectLiteralExpression ?: continue
+                // addOptions: method body `return OBJLIT`, or `addOptions: () => { return OBJLIT }` / `=> OBJLIT`.
+                val retObj = t3AddOptionsReturn(cfg) ?: continue
+                val keys = retObj.properties.mapNotNull { t1PropName(it) }.toSet()
+                extInfo[name] = keys to "Partial<${t1RenderObjBody(retObj, topLevel = false)}>"
+            }
+            if (extInfo.isEmpty()) continue
+            for (st in stmts) {
+                val vs = st as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val call = d.initializer as? CallExpression ?: continue
+                    val callee = call.expression as? PropertyAccessExpression ?: continue
+                    if (callee.name.text != "configure") continue
+                    val recv = (callee.expression as? Identifier)?.text ?: continue
+                    val info = extInfo[recv] ?: continue
+                    val arg = call.arguments?.singleOrNull() as? ObjectLiteralExpression ?: continue
+                    for (p in arg.properties) {
+                        val pn = t1PropName(p) ?: continue
+                        if (pn in info.first) continue
+                        val nameNode = (p as? PropertyAssignment)?.name as? Identifier ?: continue
+                        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Object literal may only specify known properties, and '$pn' does not exist in type '${info.second}'.",
+                            category = DiagnosticCategory.Error, code = 2353,
+                            fileName = fileName, line = line, character = ch,
+                            start = nameNode.pos, length = pn.length,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /** The object literal returned by an Extension.create config's `addOptions` member
+     *  (method `addOptions(){ return OBJLIT }` or arrow `addOptions: () => { return OBJLIT } / => OBJLIT`). */
+    private fun t3AddOptionsReturn(cfg: ObjectLiteralExpression): ObjectLiteralExpression? {
+        val retOfBody: (Block?) -> ObjectLiteralExpression? = { b ->
+            (b?.statements?.filterIsInstance<ReturnStatement>()?.firstOrNull()?.expression) as? ObjectLiteralExpression
+        }
+        for (p in cfg.properties) {
+            when (p) {
+                is MethodDeclaration -> if ((p.name as? Identifier)?.text == "addOptions") return retOfBody(p.body)
+                is PropertyAssignment -> if (t1PropName(p) == "addOptions") {
+                    val arrow = p.initializer as? ArrowFunction ?: continue
+                    return (arrow.body as? ObjectLiteralExpression) ?: retOfBody(arrow.body as? Block)
+                }
+                else -> {}
+            }
+        }
+        return null
     }
 
     /** Get the type of an array literal expression. */
@@ -103953,6 +104056,14 @@ interface DataView {
                 // relation engine's TypeParam-source path under-resolves and FPs.
                 if (dType is Type.TypeParam && dType.constraint != null && dType.constraint !== errorType &&
                     checkTypeRelatedTo(dType.constraint!!, cType, assignableRelation)) continue
+                // A self-referential default (`Config = ExtendableConfig<Options, any>`) satisfies a
+                // constraint UNION that itself contains a reference to the enclosing generic
+                // (`ExtensionConfig<Options> | ExtendableConfig<Options>`) — tsc resolves the recursive
+                // interface (the default IS one of the union members); our relation engine can't.
+                // FP-safe: a self-default is always assignable to a self-containing union member.
+                val defRefName = ((defNode as? TypeReference)?.typeName as? Identifier)?.text
+                if (defRefName != null && defRefName == enclosingName && cNode is UnionType &&
+                    cNode.types.any { ((it as? TypeReference)?.typeName as? Identifier)?.text == enclosingName }) continue
                 val dDisp = formatTypeForDisplay(defNode) ?: typeToString(dType)
                 val cDisp = formatTypeForDisplay(cNode) ?: typeToString(cType)
                 val chain = mutableListOf<String>()
